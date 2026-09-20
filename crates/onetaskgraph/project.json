@@ -27,7 +27,7 @@
       "options": {
         "command": "cargo test --quiet -p onetaskgraph --all-features --locked --no-run"
       },
-      "//": "The one build of target/debug/onetaskgraph. It is the test target's own command with --no-run, so it builds the very unit that command links: a `cargo build` of this package resolves a different unit (dev-dependencies widen the feature set the dependencies are built with) and every switch between the two replaces the file. Both SDKs' tests and generators, the distribution journey and the Rust integration tests spawn this file, so each of those targets depends on this one and none of them runs cargo itself; cargo then finds the binary fresh and leaves it in place while they run concurrently. scripts/check-workspace-config.sh holds all of that."
+      "//": "The one build of target/debug/onetaskgraph, which every target that spawns the file depends on. It is the test command with --no-run because `cargo build` of this package links a different unit — dev-dependencies widen the features its dependencies are built with — and every switch replaces the file. scripts/check-workspace-config.sh holds the arrangement."
     },
     "format": {
       "executor": "nx:run-commands",
@@ -61,7 +61,7 @@
       "options": {
         "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
       },
-      "//": "Shares target/debug with every other gate target, as .cargo/config.toml declares. The integration tests spawn CARGO_BIN_EXE_onetaskgraph, and what keeps another target from replacing that file between a test resolving it and spawning it is the build target above: this command is that one plus the run, so its own build step is a no-op, and every other spawner depends on the same build and never runs cargo."
+      "//": "The integration tests spawn CARGO_BIN_EXE_onetaskgraph; depending on build, whose command this is without --no-run, means the file is already there and fresh when they start."
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -71,7 +71,7 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached and shared: every crate's run writes its raw profiles into cargo-llvm-cov's own target/llvm-cov-target under one naming, so a cache hit here would restore a sibling's profiles from an older binary beside its fresh ones. The clear step it depends on empties that directory once before the fan-out, and workspace:coverage depends on every crate's run to enforce the floor over the union. scripts/rust-coverage.sh says why --no-report is what lets these run in parallel."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
     }
   }
 }

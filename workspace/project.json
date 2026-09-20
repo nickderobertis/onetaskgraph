@@ -161,7 +161,7 @@
         "command": "bash scripts/rust-coverage.sh --clear"
       },
       "cache": false,
-      "//": "Every crate's coverage target depends on this one, so Nx runs it once before the fan-out: it removes the raw profiles an earlier run left in target/llvm-cov-target and nothing else. A stale profile counts lines a since-changed binary no longer runs, and no crate can clear only its own because cargo-llvm-cov names every profile after the workspace. Uncached: its whole effect is on a directory no input describes."
+      "//": "Every crate's coverage target depends on this one, so Nx runs it once before the fan-out; no crate can clear only its own profiles, because cargo-llvm-cov names them after the workspace. Uncached: its whole effect is on a directory no input describes."
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -189,7 +189,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "The one place the Rust line floor is enforced: the report over the union of every crate's instrumented run, all of which this target depends on by name \u2014 scripts/check-coverage-enforced.sh reconciles that list against the crates in the tree, both ways, so a crate cannot fall out of the union in silence. Uncached because what it reads is the profile directory those runs just wrote, which no input glob describes. That dependency is what makes every crate's coverage run whenever this project is affected, which is whenever anything is; AGENTS.md records why that cost was accepted with the shared target directory."
+      "//": "The one place the Rust line floor is enforced, over every crate's run; check-coverage-enforced.sh reconciles the list above against the crates in the tree both ways. Uncached: what it reads is the profile directory those runs just wrote, which no input describes."
     },
     "deny": {
       "executor": "nx:run-commands",

@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
-# The three steps of the Rust line-coverage floor, over one shared profile directory.
+# The Rust line-coverage floor in three steps over one profile directory, cargo-llvm-cov's
+# own target/llvm-cov-target:
 #
-#   rust-coverage.sh --clear     remove the raw profiles an earlier run left behind
-#   rust-coverage.sh <crate>     run one crate's tests instrumented, keeping its profiles
+#   rust-coverage.sh --clear     what a plain `cargo llvm-cov` does before every run
+#   rust-coverage.sh <crate>     one crate's tests instrumented, profiles kept (--no-report)
 #   rust-coverage.sh --report    the one report over every crate's run, held to the floor
 #
-# Every crate's `coverage` target runs the middle step and every one of them writes into
-# cargo-llvm-cov's own `target/llvm-cov-target`, under the shared target directory
-# `.cargo/config.toml` declares — no directory a script chose. `--no-report` is what makes
-# that safe to run in parallel under Nx: a plain `cargo llvm-cov` clears every raw profile
-# in the directory before it starts, so two crates sharing it deleted each other's
-# coverage, while a `--no-report` run clears nothing and leaves its profiles for the
-# report. The profiles are cleared once instead, before the fan-out, by the target every
-# crate's run depends on; and the floor is enforced once, over the union, by the
-# `workspace` project's target that depends on every crate's run — never per crate and
-# never lowered. AGENTS.md records what the union costs.
+# `--no-report` is the whole reason the crates can share the directory under Nx's parallel
+# fan-out: a plain run clears every raw profile in it first, so two crates deleted each
+# other's coverage. AGENTS.md records what one report over the union costs.
 #
 # On Windows every step is skipped with a printed notice: LLVM instrumentation there does
 # not attribute coverage from the binary the e2e journeys spawn, so the number would
@@ -22,7 +16,7 @@
 # typecheck, test) still run on all three platforms, so Windows is still gated.
 set -euo pipefail
 
-readonly STEP="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report}"
+readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report}"
 readonly MIN_LINES=95
 
 # ONE live session per run of the gate, and this is where the second one would come from.
@@ -43,7 +37,7 @@ unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32*)
-    echo "rust-coverage: $STEP skipped on Windows (instrumentation there does not attribute subprocess coverage); the functional lanes still gate this platform" >&2
+    echo "rust-coverage: $REQUEST skipped on Windows (instrumentation there does not attribute subprocess coverage); the functional lanes still gate this platform" >&2
     exit 0
     ;;
 esac
@@ -54,13 +48,13 @@ if ! cargo llvm-cov --version >/dev/null 2>&1; then
   exit 1
 fi
 
-# Raw profiles only: the instrumented build stays, so the next run is incremental. Nothing
-# reads them across runs — a stale profile counts lines a since-changed binary no longer
-# runs — which is why every crate's run depends on this step rather than trusting it.
-if [ "$STEP" = "--clear" ]; then
-  if ! output="$(cargo llvm-cov clean --workspace --profraw-only 2>&1)"; then
+# The raw profiles, the merged profile and the workspace crates' own instrumented artifacts
+# — dependencies stay. A stale profile counts lines a since-changed binary no longer runs,
+# and a stale merged profile is what `report` would silently re-read had no run happened.
+if [ "$REQUEST" = "--clear" ]; then
+  if ! output="$(cargo llvm-cov clean --workspace 2>&1)"; then
     printf '%s\n' "$output" >&2
-    echo "rust-coverage: could not clear the raw profiles under target/llvm-cov-target; fix what cargo-llvm-cov reports above, then re-run." >&2
+    echo "rust-coverage: could not clear target/llvm-cov-target; fix what cargo-llvm-cov reports above, then re-run." >&2
     exit 1
   fi
   exit 0
@@ -68,8 +62,8 @@ fi
 
 # The per-file table and the uncovered line numbers are exactly what you need when the
 # union is under the bar, and noise when it is over — so they are held and replayed only
-# on failure.
-if [ "$STEP" = "--report" ]; then
+# on failure. With no run behind it the report refuses in cargo-llvm-cov's own words.
+if [ "$REQUEST" = "--report" ]; then
   if ! report="$(cargo llvm-cov report \
     --summary-only \
     --show-missing-lines \
@@ -83,7 +77,7 @@ if [ "$STEP" = "--report" ]; then
   exit 0
 fi
 
-readonly CRATE="$STEP"
+readonly CRATE="$REQUEST"
 
 # Validate the crate name against the real workspace before it is used as a Cargo
 # selector. Unchecked, a typo becomes a silent "measured nothing".
@@ -121,7 +115,7 @@ fi
 
 # The e2e journeys spawn the built binary; cargo-llvm-cov exports the profile path into
 # that subprocess, so its coverage is attributed rather than lost. A failing test is the
-# only failure here — the floor is the report's to enforce.
+# only failure here; the floor is the report's.
 if ! run="$(cargo llvm-cov \
   --no-report \
   --package "$CRATE" \

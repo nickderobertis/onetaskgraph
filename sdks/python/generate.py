@@ -143,10 +143,7 @@ BINARY = (
 )
 """The executable `onetaskgraph:build` produces, which is the artifact under generation.
 
-Nothing here builds it: the Nx target that runs this generator depends on that build, and a
-cargo invocation of the package from here would resolve a different unit from the one the
-Rust integration tests link and replace this file while those tests are spawning it.
-scripts/check-workspace-config.sh holds every spawner of it to that dependency.
+Nothing here builds it: scripts/check-workspace-config.sh says why a spawner never does.
 """
 
 

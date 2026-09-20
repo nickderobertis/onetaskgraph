@@ -3,7 +3,7 @@
   "name": "onetaskgraph-status-options",
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin-operation"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`, which is what it is about: the 95% line floor is enforced once over the union of every crate's instrumented run, and workspace:coverage depends on all of them, so an affected change runs this crate's instrumented tests whether or not it reached this crate. That is the recorded cost of one report over one shared profile directory, stated in AGENTS.md; `test` still selects by the graph.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
   "implicitDependencies": ["onetaskgraph-github-projects", "onetaskgraph-plugin-api"],
   "targets": {
     "bootstrap": {
@@ -47,7 +47,7 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached and shared: every crate's run writes its raw profiles into cargo-llvm-cov's own target/llvm-cov-target under one naming, so a cache hit here would restore a sibling's profiles from an older binary beside its fresh ones. The clear step it depends on empties that directory once before the fan-out, and workspace:coverage depends on every crate's run to enforce the floor over the union. scripts/rust-coverage.sh says why --no-report is what lets these run in parallel."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
     }
   }
 }

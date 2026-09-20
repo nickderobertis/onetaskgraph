@@ -84,23 +84,16 @@ for path in project_files:
             "silently dropped from that root command."
         )
 
-# One file, target/debug/onetaskgraph, is spawned by the Rust integration tests, both
-# SDKs' tests and generators and the distribution journey, and every gate target builds
-# into the one target directory .cargo/config.toml declares. Cargo replaces that file
-# whenever an invocation links a different unit of the package into it, and `cargo build`
-# and `cargo test` of this package ARE different units — dev-dependencies widen the feature
-# set the dependencies are built with — so a build from any concurrent target lands between
-# a test resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS). The
-# structure that closes it is held here, beside the project-shape checks, so a future
-# consumer cannot quietly reopen it by embedding a `cargo build` in its own command:
-#   1. exactly one target produces the file, onetaskgraph:build, and it is the test
-#      target's own command with --no-run — the same unit, so the tests' own build step
-#      finds the file fresh and leaves it in place;
-#   2. every target that spawns the file depends, directly or through its dependsOn chain,
-#      on that build, so the file exists before any of them starts and is never written
-#      while they run concurrently;
-#   3. no other target invokes cargo on this package, no target names a target directory
-#      of its own, and no source a spawner runs invokes cargo at all.
+# target/debug/onetaskgraph is spawned by the Rust integration tests, both SDKs and the
+# distribution journey, out of the one target directory .cargo/config.toml declares, and
+# cargo replaces it whenever an invocation links a different unit of the package — which
+# `cargo build` and `cargo test` of it are, dev-dependencies widening the features the
+# dependencies are built with. A build from a concurrent target therefore lands between a
+# test resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS). Held here:
+#   1. onetaskgraph:build alone produces the file, as the test command with --no-run;
+#   2. every target that spawns it depends on that build, directly or through a chain;
+#   3. no other target invokes cargo on the package or names a target directory of its
+#      own, and no source a spawner runs invokes cargo at all.
 BINARY_PROJECT = "onetaskgraph"
 BINARY_BUILD = (BINARY_PROJECT, "build")
 BINARY_FILE = "target/debug/onetaskgraph"
@@ -133,7 +126,11 @@ SPAWNERS = {
 }
 SPAWNER_SUFFIXES = {".py", ".ts", ".sh", ".js", ".mjs"}
 SPAWNER_SKIPPED_PARTS = {"node_modules", ".venv", "dist", "_generated"}
-THIS_GUARD = Path("scripts/check-workspace-config.sh")
+# This guard and the journey that watches it refuse both name the path in diagnostics.
+GUARD_SOURCES = {
+    Path("scripts/check-workspace-config.sh"),
+    Path("scripts/check-workspace-config-enforced.sh"),
+}
 
 path_by_name = {name: path for name, path in names.items()}
 
@@ -262,7 +259,7 @@ for tree in (Path("sdks"), Path("scripts")):
     for candidate in sorted(tree.rglob("*")):
         if not candidate.is_file() or candidate.suffix not in SPAWNER_SUFFIXES:
             continue
-        if SPAWNER_SKIPPED_PARTS & set(candidate.parts) or candidate == THIS_GUARD:
+        if SPAWNER_SKIPPED_PARTS & set(candidate.parts) or candidate in GUARD_SOURCES:
             continue
         if DEBUG_DIRECTORY_PATTERN.search(candidate.read_text(encoding="utf-8", errors="replace")):
             scanned_spawners.add(candidate.as_posix())

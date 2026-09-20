@@ -22,10 +22,7 @@ CONFIGURATION_PREFIX = "ONETASKGRAPH_"
 def binary() -> Path:
     """Return the real workspace executable, which `onetaskgraph:build` produced.
 
-    Nothing here builds it. Every target that spawns target/debug/onetaskgraph depends on
-    that one Nx target, because a cargo invocation of the package from inside a test
-    resolves a different unit from the one the Rust integration tests link and replaces the
-    file while those tests are spawning it. scripts/check-workspace-config.sh holds that.
+    Nothing here builds it: scripts/check-workspace-config.sh says why a spawner never does.
     """
     return workspace_binary()
 
