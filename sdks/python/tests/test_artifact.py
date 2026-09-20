@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This is the sdk-python
+# project's own installed-wheel journey: it builds this package's wheel and installs it into
+# a scratch environment, in seconds, from the project's own lockfile. A project of its own
+# would carry exactly this project's inputs and so be selected in exactly the same cases;
+# the split would add an Nx project and buy no edge.
 def test_wheel_installs_and_queries_through_public_import(tmp_path: Path, binary: Path) -> None:
     """Install a wheel cleanly and drive a real configured query through it."""
     package = Path(__file__).parents[1]
@@ -63,6 +68,9 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path, binary
     child_environment = dict(os.environ)
     child_environment["ONETASKGRAPH_SDK_BINARY"] = str(binary)
     subprocess.run([str(python), "-c", script], env=child_environment, check=True)
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_the_generated_package_carries_every_type_of_the_documents_contract() -> None:

@@ -277,9 +277,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   directory deleted each other's coverage — `--no-report`, which clears nothing, is what
   makes one directory safe, and one directory means one report. The costs are stated rather
   than discovered: the union is a weaker bar than nine floors, and because `workspace`
-  depends on every project, any affected project runs every crate's coverage — the `test`
-  phase still selects, and the credentials are cleared for coverage, so the live sessions do
-  not multiply with it. `scripts/check-coverage-enforced.sh` holds the wiring: the floor,
+  depends on every project, **an affected change now runs every crate's instrumented tests
+  rather than its own crate's** — the `test` phase still selects by the graph, and the
+  credentials are cleared for coverage, so the live sessions do not multiply with it. `scripts/check-coverage-enforced.sh` holds the wiring: the floor,
   the `--no-report`, the `--fail-under-lines` on the report, and the aggregate's dependency
   list reconciled against the crates in the tree both ways, so a crate cannot fall out of
   the union in silence. The *measurement* is skipped on Windows with a printed notice

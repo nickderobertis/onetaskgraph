@@ -3,7 +3,7 @@
   "name": "onetaskgraph-core",
   "projectType": "library",
   "tags": ["lang:rust", "layer:engine"],
-  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree.",
+  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`, which is what it is about: the 95% line floor is enforced once over the union of every crate's instrumented run, and workspace:coverage depends on all of them, so an affected change runs this crate's instrumented tests whether or not it reached this crate. That is the recorded cost of one report over one shared profile directory, stated in AGENTS.md; `test` still selects by the graph.",
   "implicitDependencies": [
     "onetaskgraph-github-projects",
     "onetaskgraph-in-memory",
