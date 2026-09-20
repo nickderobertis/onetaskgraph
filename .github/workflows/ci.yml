@@ -112,6 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] Only the macOS lane is withheld from a proven push, on purpose: it is the one lane on the account's contended runner pool, which is the whole of what #1991 accepted. The Linux and Windows copies on main are the default branch's own record of green, and whether they are worth their (uncontended) minutes is a separate decision for the workflow's owner, drafted as a follow-up rather than taken here.
         os: ${{ fromJson(needs.macos-lanes.outputs.os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v7

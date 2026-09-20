@@ -12,7 +12,8 @@
 #   2. an empty location is refused naming the tool, the version, the path and the install
 #      command — and never with the host-prerequisite marker, which is the hook's alone;
 #   3. `ensure` provisions through cargo-binstall when it is there and `cargo install` when
-#      it is not, into that location and nowhere else, and proves the result by asking it;
+#      it is not — or when binstall could not fetch the binary — into that location and
+#      nowhere else, and proves the result by asking it;
 #   4. a provisioned location is found again without installing — from the same checkout,
 #      and from a fresh one on the same host;
 #   5. residue of another version there is replaced, and an installer that lands the wrong
@@ -78,6 +79,10 @@ destination=""
 version=""
 case "${1:-}" in
   binstall)
+    if [ "${STANDIN_BINSTALL_FAILS:-}" = yes ]; then
+      echo "cargo stand-in: binstall could not fetch the published binary" >&2
+      exit 1
+    fi
     shift
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -236,6 +241,25 @@ fi
 resolver "$ROOT" "$home" "" resolve
 [ "$STATUS" -eq 0 ] && [ "$OUTPUT" = "$expected" ] || report "after the source build, resolve answered '$OUTPUT' (status $STATUS) rather than $expected"
 
+# 3c. cargo-binstall is there but cannot fetch the binary: the build from source recovers,
+#     into the same place, saying in one line which installer it fell back from.
+home="$scratch/home-2b"
+expected="$home/release-plz/$pin/bin/release-plz"
+rm -f "$INSTALL_LOG"
+OUTPUT="$(cd "$ROOT" && PATH="$WITH_BINSTALL:$STANDIN_BIN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" STANDIN_BINSTALL_FAILS=yes \
+  bash "$RESOLVER" ensure 2>&1)" && STATUS=0 || STATUS=$?
+if [ "$STATUS" -ne 0 ] || [ "$(installer_calls)" != 2 ] || ! grep -qF -- "install release-plz --version $pin --locked --root $home/release-plz/$pin" "$INSTALL_LOG"; then
+  report "ensure with a failing cargo-binstall exited $STATUS with $(installer_calls) installer call(s); it has to fall back to 'cargo install --root <scoped root>'. It said:"
+  quote "$OUTPUT"
+  quote "$(cat "$INSTALL_LOG" 2>/dev/null)"
+fi
+[ "$(printf '%s\n' "$OUTPUT" | grep -c .)" -eq 1 ] && grep -qF -- "building it from source instead" <<<"$OUTPUT" || {
+  report "ensure recovered from a failing cargo-binstall but did not say so in exactly one line. It said:"
+  quote "$OUTPUT"
+}
+resolver "$ROOT" "$home" "" resolve
+[ "$STATUS" -eq 0 ] && [ "$OUTPUT" = "$expected" ] || report "after the fallback build, resolve answered '$OUTPUT' (status $STATUS) rather than $expected"
+
 # 5a. Residue of another version at the scoped path is replaced.
 printf '#!/usr/bin/env bash\necho "release-plz 0.0.0"\n' > "$expected"
 resolver "$ROOT" "$home" "" resolve
@@ -282,6 +306,12 @@ if grep -v -- "$home/" "$INSTALL_LOG" | grep -q .; then
 fi
 OUTPUT="$(cd "$ROOT" && PATH="$GLOBAL_BIN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" bash "$RESOLVER" resolve 2>&1)" || true
 [ "$OUTPUT" = "$home/release-plz/$pin/bin/release-plz" ] || report "resolve answered '$OUTPUT' rather than the scoped copy, with the pinned version on PATH"
+
+# A tool home that is not an absolute path names nothing this may create or clear under.
+resolver "$ROOT" "relative/tools" "" path
+[ "$STATUS" -eq 69 ] && grep -qF -- "not an absolute path" <<<"$OUTPUT" || report "a relative ONETASKGRAPH_TOOLS_HOME was not refused (status $STATUS): $OUTPUT"
+resolver "$ROOT" "relative/tools" "$WITH_BINSTALL" ensure
+[ "$STATUS" -eq 69 ] && [ ! -e "$ROOT/relative" ] || report "ensure under a relative tool home exited $STATUS and left $ROOT/relative behind"
 
 # Usage.
 resolver "$ROOT" "$home" "" frobnicate

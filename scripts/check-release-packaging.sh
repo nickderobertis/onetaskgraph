@@ -63,6 +63,13 @@ fi
 # What the workflow hands the step: the job-level TARGETS and the step's own EXT and TAG.
 targets="$(cd "$ROOT" && sed -n 's/^      TARGETS: \(.*\)$/\1/p' "$WORKFLOW" | head -n1)"
 [ -n "$targets" ] || fatal "the macOS job declares no job-level TARGETS" "restore 'TARGETS: <target>=<npm> ...' under the job's env"
+# Each pair is used as two path components below, so each is held to the grammar of a
+# Rust target triple and an npm platform name before anything is created from it.
+for pair in $targets; do
+  [[ $pair =~ ^[a-z0-9_]+(-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+$ ]] || fatal \
+    "the macOS job's TARGETS entry '$pair' is not <rust target triple>=<npm platform>" \
+    "restore the job's TARGETS to pairs like x86_64-apple-darwin=darwin-x64"
+done
 
 # A stand-in binary per target, and a `gh` that records each upload rather than making it.
 readonly TREE="$scratch/tree"

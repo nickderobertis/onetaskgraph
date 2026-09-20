@@ -39,6 +39,12 @@
 set -euo pipefail
 
 readonly RELEASE_PLZ_VERSION=0.3.160
+# The version is a path component below, and `ensure` clears the directory named by it.
+[[ $RELEASE_PLZ_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "scoped-release-plz: RELEASE_PLZ_VERSION is '$RELEASE_PLZ_VERSION', not an exact X.Y.Z version" >&2
+  echo "scoped-release-plz: next: restore the exact pin in scripts/scoped-release-plz.sh" >&2
+  exit 70
+}
 
 usage() {
   echo "scoped-release-plz: $1" >&2
@@ -71,6 +77,18 @@ else
   echo "scoped-release-plz: next: run this from a login environment that sets HOME, or set XDG_CACHE_HOME" >&2
   exit 69
 fi
+# The root comes from the environment and `ensure` removes a directory two levels beneath
+# it, so it has to be an absolute path — `/…`, or `C:/…` and `C:\…` from a Windows shell —
+# before anything is created or cleared under it. A relative one would resolve against
+# whatever directory the caller happened to be in.
+case "$tools_home" in
+  /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
+  *)
+    echo "scoped-release-plz: the tool home '$tools_home' is not an absolute path, so nothing is provisioned or removed under it" >&2
+    echo "scoped-release-plz: next: set ONETASKGRAPH_TOOLS_HOME, XDG_CACHE_HOME or HOME to an absolute directory" >&2
+    exit 69
+    ;;
+esac
 readonly scoped_root="$tools_home/release-plz/$RELEASE_PLZ_VERSION"
 readonly scoped_bin="$scoped_root/bin/release-plz"
 
@@ -153,18 +171,20 @@ mkdir -p "$scoped_root/bin" || {
 # nothing else, so neither touches the global cargo bin directory — and binstall is also told
 # `--no-track`, because by default it records what it installed in the GLOBAL
 # .crates.toml, which is what a later `cargo install` of the same crate reads.
-install_output=""
+binstall_output=""
 installed_by=""
 if command -v cargo-binstall >/dev/null 2>&1; then
-  if install_output="$(cargo binstall release-plz --version "$RELEASE_PLZ_VERSION" \
+  if binstall_output="$(cargo binstall release-plz --version "$RELEASE_PLZ_VERSION" \
     --install-path "$scoped_root/bin" --no-confirm --no-track 2>&1)"; then
     installed_by="cargo binstall"
   else
     # A binstall that could not fetch the published binary is not the end: the build from
-    # source below is what a host without cargo-binstall does anyway. Its diagnostic is
-    # kept, so a fallback that then fails names both causes.
-    printf '%s\n' "$install_output" >&2
-    echo "scoped-release-plz: cargo binstall could not install release-plz $RELEASE_PLZ_VERSION (see above); building it from source instead" >&2
+    # source below is what a host without cargo-binstall does anyway. One line says why
+    # the minutes are being spent; binstall's own output is shown only if the build fails
+    # too, so a provisioning that succeeds does not end under a diagnostic for a path it
+    # recovered from.
+    # llmlint: ignore[tool_output_is_signal] The one line is the signal: a bootstrap that takes eight minutes rather than eight seconds has to say which installer it fell back from, or the slow path reads as the tool hanging.
+    echo "scoped-release-plz: cargo binstall could not install release-plz $RELEASE_PLZ_VERSION; building it from source instead" >&2
   fi
 fi
 if [ -z "$installed_by" ]; then
@@ -173,8 +193,10 @@ if [ -z "$installed_by" ]; then
     echo "scoped-release-plz: next: install the Rust toolchain from https://rustup.rs, then rerun '$install_command'" >&2
     exit 1
   }
+  install_output=""
   install_output="$(cargo install release-plz --version "$RELEASE_PLZ_VERSION" --locked \
     --root "$scoped_root" 2>&1)" || {
+    [ -z "$binstall_output" ] || printf '%s\n' "$binstall_output" >&2
     printf '%s\n' "$install_output" >&2
     echo "scoped-release-plz: release-plz $RELEASE_PLZ_VERSION installation into $scoped_root failed" >&2
     echo "scoped-release-plz: next: fix the installer diagnostic above and rerun '$install_command'" >&2

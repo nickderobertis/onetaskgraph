@@ -37,6 +37,7 @@ usage() {
 }
 
 # Print the reason, answer `run`, and stop.
+# llmlint: ignore-block[tool_output_is_signal] stdout is the answer the workflow compares a word against; the one line of stderr beside it is the signal rather than chatter, as it is for scripts/live-lane-selection.sh. A lane that is not scheduled has to say on what evidence — a required lane's copy was skipped on it — and a fail-open has to say what it could not answer, or a decision that quietly spends the runner looks exactly like one that was asked to.
 run_because() {
   echo "macos-lane-selection: $1" >&2
   printf 'run\n'
@@ -125,3 +126,4 @@ print("every named check passed on its most recent run")
 
 echo "macos-lane-selection: pull request #$number was merged as $commit with the same tree, and $verdict; the macOS lanes are already proven" >&2
 printf 'proven\n'
+# llmlint: ignore-end[tool_output_is_signal]
