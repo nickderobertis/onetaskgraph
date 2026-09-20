@@ -217,7 +217,7 @@ cp "$STUB_BIN/just" "$CLEAN_BIN/just" || fatal \
 # Everything the hook and the provisioner reach for, except bun. `env` and `bash` are here
 # because the hook is a bash script run through this PATH; the rest is what
 # scripts/provision-gate.sh looks up.
-for tool in env bash sed grep git python3 uv cargo cargo-llvm-cov cargo-deny cargo-machete node; do
+for tool in env bash sed grep git python3 uv cargo cargo-llvm-cov cargo-nextest cargo-deny cargo-machete node; do
   resolved="$(command -v "$tool" 2>/dev/null)" || continue
   shim "$CLEAN_BIN" "$tool" "$resolved" || fatal \
     "could not shim $tool into $CLEAN_BIN" \

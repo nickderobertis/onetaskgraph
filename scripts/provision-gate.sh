@@ -64,6 +64,7 @@ require cargo "install the Rust toolchain from https://rustup.rs"
 require uv "install it from https://docs.astral.sh/uv/ — it drives the Python SDK's targets"
 require python3 "install Python 3; every check under scripts/ reads its data through it"
 require cargo-llvm-cov "cargo binstall cargo-llvm-cov — 'just coverage' measures with it"
+require cargo-nextest "cargo binstall cargo-nextest — 'just coverage' runs each crate's tests through it"
 require cargo-deny "cargo binstall cargo-deny — 'just deny' is the supply-chain gate"
 require cargo-machete "cargo binstall cargo-machete — 'just deny' runs it for unused dependencies"
 

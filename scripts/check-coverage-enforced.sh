@@ -65,7 +65,8 @@ def names_in(value: object) -> list[str]:
 # threshold once and enforces it once — in its `--report` step, over the union of every
 # crate's run. So the floor is only as whole as the set of runs the report follows: the
 # `workspace` project's coverage target has to depend on every crate's, the crates' runs
-# have to keep their profiles for it, and the report has to pass the floor to llvm-cov.
+# have to keep their profiles for it and go through nextest, and the report has to pass
+# the floor to llvm-cov.
 # Comment lines out, so a flag a comment names is not read as one the invocation passes.
 coverage_script = "\n".join(
     line
@@ -89,6 +90,11 @@ if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_scr
     problems.append(
         "scripts/rust-coverage.sh: a crate's run no longer passes --no-report, so it clears "
         "every sibling's profiles before it starts and the report is over one crate at best"
+    )
+if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
+    problems.append(
+        "scripts/rust-coverage.sh: a crate's run is no longer `cargo llvm-cov --no-report "
+        "nextest`, the one shape the coverage runs share with every repository of this host"
     )
 
 # A crate is named by its directory, which is what the coverage command and the

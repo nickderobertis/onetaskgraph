@@ -138,7 +138,7 @@ jobs:
       # dev-dependency edge to the engine, so without it here that guard cannot run.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-machete,cargo-deny
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny
 
       - name: Bootstrap
         run: just bootstrap

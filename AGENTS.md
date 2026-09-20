@@ -265,8 +265,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   difference is the whole of what the journey is for.
 - **Coverage: 95% lines over the union of every crate's run, enforced once, and that
   reverses an earlier decision.** Each crate's `coverage` target runs its own tests
-  instrumented and keeps its raw profiles (`cargo llvm-cov --no-report`) in cargo-llvm-cov's
-  one `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
+  instrumented and keeps its raw profiles (`cargo llvm-cov --no-report nextest -p <crate>`,
+  the one shape every Rust repository of this host measures with) in cargo-llvm-cov's one
+  `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
   one of those runs and enforces the floor over `cargo llvm-cov report`. Each SDK still
   measures itself. The floor was per crate, each measuring only its own files in a target
   directory of its own — because a union lets a weak crate hide behind a strong one, and
@@ -453,8 +454,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **Two things still hold one session per lane per run, and the second is the one a fold
   that stops at the test target gets wrong**: `scripts/rust-coverage.sh` clearing the
   credentials, because `just check` performs the affected `test` target **and** the affected
-  `coverage` target, and coverage is `cargo llvm-cov --no-report --package <crate>`, which
-  re-runs the very same integration tests — so a fold that stops at `test` opens a second session per
+  `coverage` target, and coverage is `cargo llvm-cov --no-report nextest --package <crate>`,
+  which re-runs the very same integration tests — so a fold that stops at `test` opens a second session per
   lane; and `.github/workflows/ci.yml` handing the credentials to exactly one leg of its
   three-platform matrix, so the count is one session per run rather than six. If you are
   changing the matrix or the coverage target, that pair is what has to stay true, and the

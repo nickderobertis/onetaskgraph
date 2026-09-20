@@ -3,7 +3,7 @@
 # own target/llvm-cov-target:
 #
 #   rust-coverage.sh --clear     what a plain `cargo llvm-cov` does before every run
-#   rust-coverage.sh <crate>     one crate's tests instrumented, profiles kept (--no-report)
+#   rust-coverage.sh <crate>     one crate's tests under nextest, instrumented, profiles kept
 #   rust-coverage.sh --report    the one report over every crate's run, held to the floor
 #
 # `--no-report` is the whole reason the crates can share the directory under Nx's parallel
@@ -20,8 +20,8 @@ readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | 
 readonly MIN_LINES=95
 
 # ONE live session per run of the gate, and this is where the second one would come from.
-# `just check` runs `test` AND `coverage`, and `cargo llvm-cov --no-report --package <crate>`
-# below re-runs those same integration tests — so credentials left set here would open a
+# `just check` runs `test` AND `coverage`, and `cargo llvm-cov --no-report nextest --package
+# <crate>` below re-runs those same integration tests — so credentials left set here would open a
 # second session against the shared external fixture the first may still be writing to.
 # Neither session would delete the other's work — every artifact carries its writing run's
 # own process id and the sweep that recovers an interrupted run's is decided by that stamp,
@@ -45,6 +45,11 @@ esac
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "rust-coverage: cargo-llvm-cov is not installed." >&2
   echo "rust-coverage: install it with 'cargo binstall cargo-llvm-cov' and re-run." >&2
+  exit 1
+fi
+if ! cargo nextest --version >/dev/null 2>&1; then
+  echo "rust-coverage: cargo-nextest is not installed, and a crate's instrumented run goes through it." >&2
+  echo "rust-coverage: install it with 'cargo binstall cargo-nextest' and re-run." >&2
   exit 1
 fi
 
@@ -123,9 +128,11 @@ fi
 
 # The e2e journeys spawn the built binary; cargo-llvm-cov exports the profile path into
 # that subprocess, so its coverage is attributed rather than lost. A failing test is the
-# only failure here; the floor is the report's.
+# only failure here; the floor is the report's. Doctests are not run: nextest has none,
+# and cargo-llvm-cov leaves them uninstrumented anyway.
 if ! run="$(cargo llvm-cov \
   --no-report \
+  nextest \
   --package "$CRATE" \
   --all-features \
   --locked 2>&1)"; then

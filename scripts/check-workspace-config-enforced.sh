@@ -208,6 +208,11 @@ expect check-coverage-enforced.sh "a crate run without --no-report" \
   "no longer passes --no-report"
 restore "$COVERAGE_SCRIPT"
 
+mutate "$COVERAGE_SCRIPT" 'text = text.replace("  nextest \\\n", "")'
+expect check-coverage-enforced.sh "a crate run not under nextest" \
+  "no longer \`cargo llvm-cov --no-report nextest\`"
+restore "$COVERAGE_SCRIPT"
+
 printf '{\n' > "$scratch/$CORE_PROJECT"
 expect check-coverage-enforced.sh "a project file that is not JSON" \
   "crates/onetaskgraph-core/project.json: could not be read as JSON"
