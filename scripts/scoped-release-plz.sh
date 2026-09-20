@@ -95,10 +95,11 @@ esac
 readonly scoped_root="$tools_home/release-plz/$RELEASE_PLZ_VERSION"
 readonly scoped_bin="$scoped_root/bin/release-plz"
 
-# `cargo install` writes `release-plz.exe` on Windows, and `[ -x ]` there does not add the
-# suffix the way the shell does when it runs a command.
+# `cargo install` writes `release-plz.exe` on Windows, where bash's `[ -x ]` answers for the
+# suffixed file under the bare name too, so the suffixed name is asked first: the path this
+# prints is the file that is there, on every platform, never a name the shell resolves.
 binary_path() {
-  if [ ! -x "$scoped_bin" ] && [ -x "$scoped_bin.exe" ]; then
+  if [ -x "$scoped_bin.exe" ]; then
     printf '%s\n' "$scoped_bin.exe"
   else
     printf '%s\n' "$scoped_bin"

@@ -386,9 +386,9 @@ else
   chmod u+w "$home/release-plz"
 fi
 
-# 5g. The Windows layout: `cargo install` writes release-plz.exe there, and `[ -x ]` does
-#     not add the suffix, so the resolver has to. Posed with a file of that name, which is
-#     the whole of what the resolution reads.
+# 5g. The Windows layout: `cargo install` writes release-plz.exe there, and the resolver
+#     names that file rather than the bare name bash would resolve to it on Windows alone.
+#     Posed with a file of that name, which is the whole of what the resolution reads.
 home="$scratch/home-3f"
 mkdir -p "$home/release-plz/$pin/bin"
 printf '#!/usr/bin/env bash\necho "release-plz %s"\n' "$pin" > "$home/release-plz/$pin/bin/release-plz.exe"
