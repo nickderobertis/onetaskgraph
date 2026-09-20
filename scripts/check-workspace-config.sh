@@ -104,9 +104,12 @@ for path in project_files:
 BINARY_PROJECT = "onetaskgraph"
 BINARY_BUILD = (BINARY_PROJECT, "build")
 BINARY_FILE = "target/debug/onetaskgraph"
-# `target/debug` as a shell or TypeScript string, and `"target" / "debug"` as pathlib
-# spells it, across the line break a formatter may put between the two.
-BINARY_PATH_PATTERN = re.compile(r"target\W{1,12}debug")
+# A reference to the debug directory, where onetaskgraph:build puts the binary: `target/debug`
+# as a shell or TypeScript string, and `"target" / "debug"` as pathlib spells it, across the
+# line break a formatter may put between the two. Under sdks/ and scripts/ that directory
+# holds nothing else a source would reach for, so a reference to it is a spawner until it is
+# registered.
+DEBUG_DIRECTORY_PATTERN = re.compile(r"target\W{1,12}debug")
 # A cargo invocation that links: as a shell command (`cargo build`, `cargo +stable test`)
 # and as an argument list (`["cargo", "run", ...]`), which is how a test or a generator
 # spells it.
@@ -261,18 +264,19 @@ for tree in (Path("sdks"), Path("scripts")):
             continue
         if SPAWNER_SKIPPED_PARTS & set(candidate.parts) or candidate == THIS_GUARD:
             continue
-        if BINARY_PATH_PATTERN.search(candidate.read_text(encoding="utf-8", errors="replace")):
+        if DEBUG_DIRECTORY_PATTERN.search(candidate.read_text(encoding="utf-8", errors="replace")):
             scanned_spawners.add(candidate.as_posix())
 for unregistered in sorted(scanned_spawners - set(SPAWNERS)):
     problems.append(
-        f"{unregistered}: resolves {BINARY_FILE} but is not registered in SPAWNERS in "
-        "scripts/check-workspace-config.sh; name the Nx targets that run it there, and make "
-        "each depend on onetaskgraph:build"
+        f"{unregistered}: reaches into target/debug, where {BINARY_FILE} is, but is not "
+        "registered in SPAWNERS in scripts/check-workspace-config.sh; name the Nx targets "
+        "that run it there and make each depend on onetaskgraph:build, or take the reference "
+        "out"
     )
 for stale in sorted(set(SPAWNERS) - scanned_spawners):
     problems.append(
         f"{stale}: is registered in SPAWNERS in scripts/check-workspace-config.sh but no "
-        f"longer resolves {BINARY_FILE}; remove the entry, or restore the resolution"
+        "longer reaches into target/debug; remove the entry, or restore the reference"
     )
 for spawner, spawner_targets in sorted(SPAWNERS.items()):
     if spawner not in scanned_spawners:
