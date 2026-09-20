@@ -263,12 +263,43 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   destination pre-populated as the copy would leave it and an assertion that nothing
   changed.** That proves what a copy *would* write; it does not prove one landed, and the
   difference is the whole of what the journey is for.
-- **Coverage: 95% lines, per project, and each project measures only its own crate.**
-  A workspace average lets a weak crate hide behind a strong one — and, decisively, a
-  workspace-wide pass runs every crate's tests on every change, which is what affected
-  selection exists to avoid. The *measurement* is skipped on Windows with a printed
-  notice (instrumentation there does not attribute subprocess coverage); the functional
-  lanes still gate that platform.
+- **Coverage: 95% lines over the union of every crate's run, enforced once, and that
+  reverses an earlier decision.** Each crate's `coverage` target runs its own tests
+  instrumented and keeps its raw profiles (`cargo llvm-cov --no-report`) in cargo-llvm-cov's
+  one `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
+  one of those runs and enforces the floor over `cargo llvm-cov report`. Each SDK still
+  measures itself. The floor was per crate, each measuring only its own files in a target
+  directory of its own — because a union lets a weak crate hide behind a strong one, and
+  because a workspace-wide pass runs every crate's tests on every change. What ended that
+  is the build configuration `.cargo/config.toml` declares: **every cargo invocation in a
+  clone builds into that clone's one `target`**, and a plain `cargo llvm-cov` clears every
+  raw profile in the directory before it starts, so two crates measured in parallel in one
+  directory deleted each other's coverage — `--no-report`, which clears nothing, is what
+  makes one directory safe, and one directory means one report. The costs are stated rather
+  than discovered: the union is a weaker bar than nine floors, and because `workspace`
+  depends on every project, any affected project runs every crate's coverage — the `test`
+  phase still selects, and the credentials are cleared for coverage, so the live sessions do
+  not multiply with it. `scripts/check-coverage-enforced.sh` holds the wiring: the floor,
+  the `--no-report`, the `--fail-under-lines` on the report, and the aggregate's dependency
+  list reconciled against the crates in the tree both ways, so a crate cannot fall out of
+  the union in silence. The *measurement* is skipped on Windows with a printed notice
+  (instrumentation there does not attribute subprocess coverage); the functional lanes
+  still gate that platform.
+- **One target directory per clone, and the binary the journeys spawn is built once.**
+  `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
+  builds dev and test at `debug = 1`; nothing in the tree names a target directory of its
+  own. The Rust integration tests, both SDKs' tests and generators and the distribution
+  journey all spawn `target/debug/onetaskgraph`, and the binary crate's `test` target once
+  kept a private directory because another target's `cargo build` could replace that file
+  between a test resolving it and spawning it. What replaced the private directory is
+  structure, held by `scripts/check-workspace-config.sh`: `onetaskgraph:build` is the test
+  target's own command with `--no-run`, so it links the very unit the tests link and their
+  own build step finds it fresh — `cargo build` and `cargo test` of that package are
+  *different* units, because dev-dependencies widen the features the dependencies are built
+  with, and every switch between them replaces the file; every target that spawns the file
+  depends on that build; no other target invokes cargo on the package; and no source a
+  spawner runs invokes cargo at all. The inventory of spawners lives in that guard and is
+  reconciled against a scan of `sdks/` and `scripts/` for the path, both ways.
 - **The tests that reach a real API are ordinary tests, and that reverses an earlier
   decision.** They were a separate `test-live` target on every project, run by a workflow of
   their own on a schedule and on every pull request, deliberately outside the required set —
@@ -422,8 +453,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **Two things still hold one session per lane per run, and the second is the one a fold
   that stops at the test target gets wrong**: `scripts/rust-coverage.sh` clearing the
   credentials, because `just check` performs the affected `test` target **and** the affected
-  `coverage` target, and coverage is `cargo llvm-cov --package <crate>`, which re-runs the
-  very same integration tests — so a fold that stops at `test` opens a second session per
+  `coverage` target, and coverage is `cargo llvm-cov --no-report --package <crate>`, which
+  re-runs the very same integration tests — so a fold that stops at `test` opens a second session per
   lane; and `.github/workflows/ci.yml` handing the credentials to exactly one leg of its
   three-platform matrix, so the count is one session per run rather than six. If you are
   changing the matrix or the coverage target, that pair is what has to stay true, and the

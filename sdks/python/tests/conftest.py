@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -21,14 +20,26 @@ CONFIGURATION_PREFIX = "ONETASKGRAPH_"
 
 @pytest.fixture(scope="session")
 def binary() -> Path:
-    """Build and return the real workspace executable."""
-    subprocess.run(
-        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
-        cwd=WORKSPACE,
-        check=True,
-    )
+    """Return the real workspace executable, which `onetaskgraph:build` produced.
+
+    Nothing here builds it. Every target that spawns target/debug/onetaskgraph depends on
+    that one Nx target, because a cargo invocation of the package from inside a test
+    resolves a different unit from the one the Rust integration tests link and replaces the
+    file while those tests are spawning it. scripts/check-workspace-config.sh holds that.
+    """
+    return workspace_binary()
+
+
+def workspace_binary() -> Path:
+    """Resolve the executable, refusing with the target to run when it is absent."""
     suffix = ".exe" if sys.platform == "win32" else ""
-    return (WORKSPACE / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
+    binary = (WORKSPACE / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
+    if not binary.is_file():
+        pytest.fail(
+            f"{binary} is missing; run `scripts/nx.sh run onetaskgraph:build` from the "
+            "workspace root, which is what every Nx target that spawns it depends on"
+        )
+    return binary
 
 
 @pytest.fixture(scope="session")

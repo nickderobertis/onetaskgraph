@@ -74,17 +74,22 @@ test:
     @{{nx}} affected -t test $(bash scripts/live-lane-selection.sh --nx-exclusions)
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
-# Each project measures its own crate and fails below 95% lines. The measurement is
-# skipped on Windows with a printed notice (see scripts/rust-coverage.sh), where
-# instrumentation does not attribute subprocess coverage; the functional lanes still
-# gate that platform.
+# Every crate's coverage target runs its tests instrumented into the one shared profile
+# directory and keeps its profiles (`--no-report`); the `workspace` project's coverage
+# target depends on all of them and enforces the 95% line floor once, over the union. The
+# crates' runs depend in turn on workspace:coverage-clear, which empties that directory
+# first. Because `workspace` depends on every project, any affected project selects the
+# aggregate and so every crate's run — the cost AGENTS.md records for the shared target
+# directory. Each SDK still measures itself. The measurement is skipped on Windows with a
+# printed notice (see scripts/rust-coverage.sh), where instrumentation does not attribute
+# subprocess coverage; the functional lanes still gate that platform.
 #
 # `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so live
 # credentials left set here would open a SECOND session per lane against one shared external
 # fixture. scripts/rust-coverage.sh clears them; read the note there before changing this
 # recipe or the platform matrix in .github/workflows/ci.yml.
 
-# Coverage only, for the affected projects. Fails below 95% lines.
+# Coverage only, for the affected projects. Fails below 95% lines over the union of the crates.
 coverage:
     @{{nx}} affected -t coverage
 

@@ -42,10 +42,12 @@
     },
     "generate-check": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
         "command": "uv run --frozen python generate.py --check",
         "cwd": "sdks/python"
-      }
+      },
+      "//": "The generator executes target/debug/onetaskgraph. Depend on the binary's shared build target rather than building here: a cargo invocation of this package from any other target replaces that file while the Rust integration tests are spawning it. scripts/check-workspace-config.sh holds every spawner to this."
     },
     "typecheck": {
       "executor": "nx:run-commands",
@@ -56,17 +58,21 @@
     },
     "test": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
         "command": "uv run --frozen pytest -q --no-cov",
         "cwd": "sdks/python"
-      }
+      },
+      "//": "The tests spawn target/debug/onetaskgraph, for the same reason and on the same terms as generate-check above."
     },
     "coverage": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
         "command": "uv run --frozen pytest -q",
         "cwd": "sdks/python"
-      }
+      },
+      "//": "The same tests as `test`, measured; the same dependency for the same reason."
     }
   }
 }

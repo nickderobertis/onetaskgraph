@@ -84,75 +84,252 @@ for path in project_files:
             "silently dropped from that root command."
         )
 
-# These two targets execute the same onetaskgraph binary. They must share one completed
-# build: independent Cargo build/test processes can replace the executable between
-# assert_cmd resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS).
-# Keep this assertion beside the project-shape checks so a future consumer cannot quietly
-# reintroduce that race by embedding another `cargo build` in its own command.
-binary_project_path = Path("crates/onetaskgraph/project.json")
-typescript_project_path = Path("sdks/typescript/project.json")
-binary_targets = targets_by_path.get(binary_project_path, {})
-typescript_targets = targets_by_path.get(typescript_project_path, {})
-if "build" not in binary_targets:
+# One file, target/debug/onetaskgraph, is spawned by the Rust integration tests, both
+# SDKs' tests and generators and the distribution journey, and every gate target builds
+# into the one target directory .cargo/config.toml declares. Cargo replaces that file
+# whenever an invocation links a different unit of the package into it, and `cargo build`
+# and `cargo test` of this package ARE different units — dev-dependencies widen the feature
+# set the dependencies are built with — so a build from any concurrent target lands between
+# a test resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS). The
+# structure that closes it is held here, beside the project-shape checks, so a future
+# consumer cannot quietly reopen it by embedding a `cargo build` in its own command:
+#   1. exactly one target produces the file, onetaskgraph:build, and it is the test
+#      target's own command with --no-run — the same unit, so the tests' own build step
+#      finds the file fresh and leaves it in place;
+#   2. every target that spawns the file depends, directly or through its dependsOn chain,
+#      on that build, so the file exists before any of them starts and is never written
+#      while they run concurrently;
+#   3. no other target invokes cargo on this package, no target names a target directory
+#      of its own, and no source a spawner runs invokes cargo at all.
+BINARY_PROJECT = "onetaskgraph"
+BINARY_BUILD = (BINARY_PROJECT, "build")
+BINARY_FILE = "target/debug/onetaskgraph"
+# `target/debug` as a shell or TypeScript string, and `"target" / "debug"` as pathlib
+# spells it, across the line break a formatter may put between the two.
+BINARY_PATH_PATTERN = re.compile(r"target\W{1,12}debug")
+# A cargo invocation that links: as a shell command (`cargo build`, `cargo +stable test`)
+# and as an argument list (`["cargo", "run", ...]`), which is how a test or a generator
+# spells it.
+CARGO_LINK_PATTERN = re.compile(
+    r"\bcargo\b[\"',\s]+(?:\+\S+[\"',\s]+)?[\"']?(build|run|test|bench|rustc)\b"
+)
+# Every source under sdks/ and scripts/ that resolves the file, and the Nx targets that run
+# it. Reconciled below against a scan of those trees for the path, both ways: a new spawner
+# cannot land without naming its targets here, and an entry that no longer resolves the
+# file cannot stand.
+SDK_PYTHON_TESTS = [("sdk-python", "test"), ("sdk-python", "coverage")]
+SDK_TYPESCRIPT_TESTS = [("sdk-typescript", "test"), ("sdk-typescript", "coverage")]
+SPAWNERS = {
+    "sdks/python/tests/conftest.py": SDK_PYTHON_TESTS,
+    "sdks/python/generate.py": [("sdk-python", "generate-check")],
+    "sdks/typescript/scripts/generate.ts": [("sdk-typescript", "generate-check")],
+    "sdks/typescript/tests/client.test.ts": SDK_TYPESCRIPT_TESTS,
+    "sdks/typescript/tests/generator.test.ts": SDK_TYPESCRIPT_TESTS,
+    "sdks/typescript/scripts/test-packed.sh": [("sdk-typescript", "pack")],
+    "scripts/test-distribution.sh": [("scripts", "distribution-test")],
+}
+SPAWNER_SUFFIXES = {".py", ".ts", ".sh", ".js", ".mjs"}
+SPAWNER_SKIPPED_PARTS = {"node_modules", ".venv", "dist", "_generated"}
+THIS_GUARD = Path("scripts/check-workspace-config.sh")
+
+path_by_name = {name: path for name, path in names.items()}
+
+
+def target_of(project: str, target: str) -> dict:
+    path = path_by_name.get(project)
+    return targets_by_path.get(path, {}).get(target, {}) if path else {}
+
+
+def commands_of(target: dict) -> list[str]:
+    options = target.get("options", {})
+    if not isinstance(options, dict):
+        return []
+    found = []
+    single = options.get("command")
+    if isinstance(single, str):
+        found.append(single)
+    for entry in options.get("commands", []) if isinstance(options.get("commands"), list) else []:
+        if isinstance(entry, str):
+            found.append(entry)
+        elif isinstance(entry, dict) and isinstance(entry.get("command"), str):
+            found.append(entry["command"])
+    return found
+
+
+def dependencies_of(project: str, target: str) -> list[tuple[str, str]]:
+    """The (project, target) pairs one target's dependsOn names outright.
+
+    `^target` and `{"dependencies": true}` reach the project graph's dependencies, which
+    an edge from a spawner to the binary's build never is; both are left unresolved here,
+    so a spawner that reaches the build only that way is reported as not reaching it.
+    """
+    found = []
+    for entry in target_of(project, target).get("dependsOn", []) or []:
+        if isinstance(entry, str):
+            if entry.startswith("^"):
+                continue
+            found.append(tuple(entry.split(":", 1)) if ":" in entry else (project, entry))
+        elif isinstance(entry, dict) and isinstance(entry.get("target"), str):
+            if entry.get("dependencies") is True:
+                continue
+            projects = entry.get("projects")
+            if isinstance(projects, str):
+                projects = [projects]
+            for name in projects if isinstance(projects, list) else [project]:
+                if isinstance(name, str):
+                    found.append((name, entry["target"]))
+    return found
+
+
+def reaches_build(project: str, target: str) -> bool:
+    seen = set()
+    frontier = [(project, target)]
+    while frontier:
+        pair = frontier.pop()
+        if pair in seen:
+            continue
+        seen.add(pair)
+        if pair == BINARY_BUILD:
+            return True
+        frontier.extend(dependencies_of(*pair))
+    return False
+
+
+def cargo_selection_reaches_binary(command: str) -> bool:
+    """Whether a cargo build/run/test/bench command links the onetaskgraph package."""
+    tokens = command.split()
+    selected = []
+    for index, token in enumerate(tokens):
+        if token in {"-p", "--package"} and index + 1 < len(tokens):
+            selected.append(tokens[index + 1])
+        elif token.startswith("--package=") or token.startswith("-p="):
+            selected.append(token.split("=", 1)[1])
+        elif token in {"--workspace", "--all"}:
+            return True
+    return not selected or BINARY_PROJECT in selected
+
+
+binary_targets = targets_by_path.get(path_by_name.get(BINARY_PROJECT), {})
+binary_project_display = "crates/onetaskgraph/project.json"
+build_target = binary_targets.get("build")
+test_target = binary_targets.get("test", {})
+if not isinstance(build_target, dict):
     problems.append(
-        "crates/onetaskgraph/project.json: is missing the shared binary build target; "
-        "restore it so executable consumers cannot race independent Cargo builds"
+        f"{binary_project_display}: is missing the build target that produces {BINARY_FILE}; "
+        "restore it as the test target's command with --no-run, so every target that spawns "
+        "the binary can depend on one completed build"
     )
-binary_test = binary_targets.get("test", {})
-binary_test_dependencies = binary_test.get("dependsOn", [])
-if not isinstance(binary_test_dependencies, list) or not all(
-    isinstance(name, str) for name in binary_test_dependencies
-):
+    build_target = {}
+if build_target.get("cache") is True:
     problems.append(
-        'crates/onetaskgraph/project.json: test "dependsOn" must contain a JSON list of target names'
+        f"{binary_project_display}: build is cached; a replayed build restores no binary, so "
+        "every spawner would start against a file nothing produced"
     )
-    binary_test_dependencies = []
-if "build" not in binary_test_dependencies:
+test_dependencies = test_target.get("dependsOn", [])
+if not isinstance(test_dependencies, list) or not all(isinstance(name, str) for name in test_dependencies):
+    problems.append(f'{binary_project_display}: test "dependsOn" must contain a JSON list of target names')
+    test_dependencies = []
+if "build" not in test_dependencies:
     problems.append(
-        "crates/onetaskgraph/project.json: test does not depend on build; add that dependency "
-        "so integration tests start with the executable present"
+        f"{binary_project_display}: test does not depend on build; add that dependency so the "
+        "integration tests start with the executable present and find it fresh"
     )
-binary_test_options = binary_test.get("options", {})
-if not isinstance(binary_test_options, dict):
-    problems.append('crates/onetaskgraph/project.json: test "options" must contain a JSON object')
-    binary_test_options = {}
-binary_test_command = binary_test_options.get("command", "")
-if not isinstance(binary_test_command, str):
-    problems.append('crates/onetaskgraph/project.json: test command must be a string')
-    binary_test_command = ""
-if "--target-dir target/tests/onetaskgraph" not in binary_test_command:
+build_commands = commands_of(build_target)
+test_commands = commands_of(test_target)
+if len(build_commands) != 1 or len(test_commands) != 1:
     problems.append(
-        "crates/onetaskgraph/project.json: test does not use its private Cargo target directory; "
-        "restore '--target-dir target/tests/onetaskgraph' so concurrent gate targets cannot "
-        "replace the binary while integration tests are spawning it"
+        f"{binary_project_display}: build and test must each run exactly one command, the "
+        "test command and that command with --no-run"
     )
-generator = typescript_targets.get("generate-check", {})
-generator_dependencies = generator.get("dependsOn", [])
-if not isinstance(generator_dependencies, list) or not all(
-    isinstance(name, str) for name in generator_dependencies
-):
+else:
+    build_tokens = build_commands[0].split()
+    test_tokens = test_commands[0].split()
+    if "--no-run" not in build_tokens or sorted(
+        token for token in build_tokens if token != "--no-run"
+    ) != sorted(test_tokens):
+        problems.append(
+            f"{binary_project_display}: test and build resolve different units of the package "
+            f"(build: {build_commands[0]!r}; test: {test_commands[0]!r}). Make build the test "
+            "command plus --no-run, or the tests' own build step relinks "
+            f"{BINARY_FILE} while another target that depends on build is spawning it"
+        )
+
+scanned_spawners = set()
+for tree in (Path("sdks"), Path("scripts")):
+    for candidate in sorted(tree.rglob("*")):
+        if not candidate.is_file() or candidate.suffix not in SPAWNER_SUFFIXES:
+            continue
+        if SPAWNER_SKIPPED_PARTS & set(candidate.parts) or candidate == THIS_GUARD:
+            continue
+        if BINARY_PATH_PATTERN.search(candidate.read_text(encoding="utf-8", errors="replace")):
+            scanned_spawners.add(candidate.as_posix())
+for unregistered in sorted(scanned_spawners - set(SPAWNERS)):
     problems.append(
-        'sdks/typescript/project.json: generate-check "dependsOn" must contain a JSON list of target names'
+        f"{unregistered}: resolves {BINARY_FILE} but is not registered in SPAWNERS in "
+        "scripts/check-workspace-config.sh; name the Nx targets that run it there, and make "
+        "each depend on onetaskgraph:build"
     )
-    generator_dependencies = []
-if "onetaskgraph:build" not in generator_dependencies:
+for stale in sorted(set(SPAWNERS) - scanned_spawners):
     problems.append(
-        "sdks/typescript/project.json: generate-check does not depend on onetaskgraph:build; "
-        "share that build rather than relinking the binary beside integration tests"
+        f"{stale}: is registered in SPAWNERS in scripts/check-workspace-config.sh but no "
+        f"longer resolves {BINARY_FILE}; remove the entry, or restore the resolution"
     )
-generator_options = generator.get("options", {})
-if not isinstance(generator_options, dict):
-    problems.append('sdks/typescript/project.json: generate-check "options" must contain a JSON object')
-    generator_options = {}
-generator_command = generator_options.get("command", "")
-if not isinstance(generator_command, str):
-    problems.append('sdks/typescript/project.json: generate-check command must be a string')
-    generator_command = ""
-if "cargo build" in generator_command:
+for spawner, spawner_targets in sorted(SPAWNERS.items()):
+    if spawner not in scanned_spawners:
+        continue
+    source = Path(spawner).read_text(encoding="utf-8", errors="replace")
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("//") or stripped.startswith("*"):
+            continue
+        if CARGO_LINK_PATTERN.search(line):
+            problems.append(
+                f"{spawner}: runs cargo itself ({stripped}); a spawner of {BINARY_FILE} depends "
+                "on onetaskgraph:build through its Nx target and never builds, because its "
+                "unit differs from the one the Rust integration tests link and cargo replaces "
+                "the file on every switch"
+            )
+    for project, target in spawner_targets:
+        display = path_by_name[project].as_posix() if project in path_by_name else project
+        if project not in path_by_name or target not in targets_by_path.get(path_by_name[project], {}):
+            problems.append(
+                f"{display}: has no target {target!r}, which SPAWNERS in "
+                f"scripts/check-workspace-config.sh names as running {spawner}; restore the "
+                "target or correct the entry"
+            )
+        elif not reaches_build(project, target):
+            problems.append(
+                f"{display}: {target} spawns {BINARY_FILE} (through {spawner}) but does not "
+                "depend on onetaskgraph:build; add that dependency, directly or through a "
+                "target that carries it, so the binary is built once before it starts and is "
+                "not being written while it runs"
+            )
+if not reaches_build(BINARY_PROJECT, "test"):
     problems.append(
-        "sdks/typescript/project.json: generate-check runs its own cargo build; remove it and "
-        "depend on onetaskgraph:build so the generator cannot replace a binary under test"
+        f"{binary_project_display}: test spawns {BINARY_FILE} as CARGO_BIN_EXE_onetaskgraph "
+        "but does not depend on build"
     )
+
+for path, targets in sorted(targets_by_path.items()):
+    project = projects_by_path[path].get("name")
+    for target_name, target in sorted(targets.items()):
+        for command in commands_of(target):
+            if "--target-dir" in command or "CARGO_TARGET_DIR" in command or "CARGO_LLVM_COV_TARGET_DIR" in command:
+                problems.append(
+                    f"{path.as_posix()}: {target_name} names a cargo target directory of its own "
+                    f"({command!r}); every cargo invocation in this clone builds into the one "
+                    "directory .cargo/config.toml declares, and what a private directory once "
+                    "isolated is held by the dependencies this check asserts instead"
+                )
+            if (project, target_name) in {BINARY_BUILD, (BINARY_PROJECT, "test")}:
+                continue
+            if CARGO_LINK_PATTERN.search(command) and cargo_selection_reaches_binary(command):
+                problems.append(
+                    f"{path.as_posix()}: {target_name} invokes cargo on the {BINARY_PROJECT} "
+                    f"package ({command!r}), which would relink {BINARY_FILE} while a target "
+                    "that depends on onetaskgraph:build is spawning it; depend on that build "
+                    "instead, and select a package by name if this command builds another"
+                )
 
 # The `workspace` project depends on every other project so the cross-cutting checks run
 # whenever anything they check can change. That list is a hand-mirrored inventory of the

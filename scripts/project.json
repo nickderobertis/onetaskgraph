@@ -99,6 +99,7 @@
     },
     "distribution-test": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
         "commands": [
           "bash scripts/test-distribution.sh",
@@ -108,7 +109,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate."
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph into the release archives it serves, so it depends on the binary's shared build target rather than building the binary itself — a task dependency, which is not an edge of the project graph and so selects nothing this project's note above refuses; scripts/check-workspace-config.sh holds every spawner of that file to the same build."
     }
   }
 }

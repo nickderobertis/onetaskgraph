@@ -25,9 +25,9 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph --locked"
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --no-run"
       },
-      "//": "Integration tests and both SDK generators execute this binary. Making it an Nx target lets every consumer depend on one completed build instead of racing independent Cargo commands that replace the executable on macOS."
+      "//": "The one build of target/debug/onetaskgraph. It is the test target's own command with --no-run, so it builds the very unit that command links: a `cargo build` of this package resolves a different unit (dev-dependencies widen the feature set the dependencies are built with) and every switch between the two replaces the file. Both SDKs' tests and generators, the distribution journey and the Rust integration tests spawn this file, so each of those targets depends on this one and none of them runs cargo itself; cargo then finds the binary fresh and leaves it in place while they run concurrently. scripts/check-workspace-config.sh holds all of that."
     },
     "format": {
       "executor": "nx:run-commands",
@@ -59,15 +59,19 @@
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --target-dir target/tests/onetaskgraph"
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
       },
-      "//": "Cargo builds CARGO_BIN_EXE_onetaskgraph once in this target's private directory before starting any integration-test executable. Gate targets run concurrently, so sharing target/debug lets another Cargo invocation replace the binary between a test resolving and spawning it on macOS."
+      "//": "Shares target/debug with every other gate target, as .cargo/config.toml declares. The integration tests spawn CARGO_BIN_EXE_onetaskgraph, and what keeps another target from replacing that file between a test resolving it and spawning it is the build target above: this command is that one plus the run, so its own build step is a no-op, and every other spawner depends on the same build and never runs cargo."
     },
     "coverage": {
       "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph"
-      }
+      },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "cache": false,
+      "//": "Uncached and shared: every crate's run writes its raw profiles into cargo-llvm-cov's own target/llvm-cov-target under one naming, so a cache hit here would restore a sibling's profiles from an older binary beside its fresh ones. The clear step it depends on empties that directory once before the fan-out, and workspace:coverage depends on every crate's run to enforce the floor over the union. scripts/rust-coverage.sh says why --no-report is what lets these run in parallel."
     }
   }
 }

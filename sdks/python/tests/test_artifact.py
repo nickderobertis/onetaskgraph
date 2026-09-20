@@ -8,15 +8,9 @@ import sys
 from pathlib import Path
 
 
-def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> None:
+def test_wheel_installs_and_queries_through_public_import(tmp_path: Path, binary: Path) -> None:
     """Install a wheel cleanly and drive a real configured query through it."""
     package = Path(__file__).parents[1]
-    workspace = package.parents[1]
-    subprocess.run(
-        ["cargo", "build", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph"],
-        cwd=workspace,
-        check=True,
-    )
     subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path)], cwd=package, check=True)
     venv = tmp_path / "venv"
     subprocess.run(["uv", "venv", "--python", sys.executable, str(venv)], check=True)
@@ -61,8 +55,6 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path) -> Non
         '"labels":[]}]}}}}',
         encoding="utf-8",
     )
-    suffix = ".exe" if os.name == "nt" else ""
-    binary = (workspace / "target" / "debug" / f"onetaskgraph{suffix}").resolve()
     script = (
         "import asyncio; from onetaskgraph_sdk import Client; "
         f"r=asyncio.run(Client(cwd={str(config)!r}).task_list()); "
@@ -232,7 +224,9 @@ def test_an_omitted_location_and_an_omitted_documents_capability_read_as_their_d
     assert listing.root.capabilities.documents == "unsupported"
 
 
-def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects() -> None:
+def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
+    binary: Path,
+) -> None:
     """The bundle version is what lets an SDK refuse a bundle it was not generated for.
 
     Version 8 published the documents contract's four types; version 9 published the two
@@ -248,10 +242,8 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     sys.path.insert(0, str(Path(__file__).parents[1]))
     import generate
 
-    workspace = Path(__file__).parents[3]
     emitted = subprocess.run(
-        ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--", "schema"],
-        cwd=workspace,
+        [str(binary), "schema"],
         check=True,
         capture_output=True,
         text=True,

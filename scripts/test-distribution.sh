@@ -64,7 +64,6 @@ version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$root/crates/onetaskgraph/Carg
 }
 tag="v$version"
 mkdir -p "$tmp/releases/$tag" "$tmp/canonical/$tag" "$tmp/bin"
-RUSTFLAGS='-D warnings' cargo build --manifest-path "$root/Cargo.toml" --locked -p onetaskgraph --quiet
 target=x86_64-unknown-linux-gnu
 ext=tar.gz
 binary=onetaskgraph
@@ -75,6 +74,10 @@ case "$(uname -s):$(uname -m)" in
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
+# The binary is what onetaskgraph:build produced and this target depends on; nothing here
+# builds it, because a cargo invocation of that package from anywhere else replaces the
+# file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
+[[ -f "$root/target/debug/$binary" ]] || { echo "distribution test found no $root/target/debug/$binary; next: run 'scripts/nx.sh run onetaskgraph:build' from the workspace root, then rerun scripts/test-distribution.sh" >&2; exit 1; }
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 install_output=$(ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh")
@@ -354,15 +357,18 @@ import sys
 path = sys.argv[1]
 with open(path) as stream:
     project = json.load(stream)
-project["targets"]["test"]["options"]["command"] = (
-    "cargo test --quiet -p onetaskgraph --all-features --locked"
-)
+# The test target's command with one flag dropped resolves a different unit of the binary
+# from the one the build target links, so cargo would relink target/debug/onetaskgraph when
+# the tests start while a target that depends on that build is spawning it.
+command = project["targets"]["test"]["options"]["command"]
+assert " --all-features" in command, command
+project["targets"]["test"]["options"]["command"] = command.replace(" --all-features", "")
 with open(path, "w") as stream:
     json.dump(project, stream)
 PY
 # llmlint: ignore[work_goes_through_command_surface] This failure journey drives the workspace validator against a scratch project whose test target has lost its binary-isolation guarantee.
-if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted integration tests sharing Cargo's target directory; next: inspect binary isolation validation" >&2; exit 1; fi
-grep -q 'test does not use its private Cargo target directory' "$tmp/error" || { cat "$tmp/error" >&2; echo "shared test target-directory failure omitted its reason; next: inspect workspace diagnostics" >&2; exit 1; }
+if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a test target linking a different unit of the binary from its build target; next: inspect binary isolation validation" >&2; exit 1; fi
+grep -q 'test and build resolve different units of the package' "$tmp/error" || { cat "$tmp/error" >&2; echo "binary unit mismatch failure omitted its reason; next: inspect workspace diagnostics" >&2; exit 1; }
 cp "$root/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json"
 if (cd "$tmp/version-repo" && python3 scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
 [[ $helper_usage_status -eq 2 ]] || { echo "product-version helper usage failure exited $helper_usage_status, expected 2; next: inspect argument validation" >&2; exit 1; }

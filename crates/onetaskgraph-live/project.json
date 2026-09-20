@@ -49,9 +49,13 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-live"
-      }
+      },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "cache": false,
+      "//": "Uncached and shared: every crate's run writes its raw profiles into cargo-llvm-cov's own target/llvm-cov-target under one naming, so a cache hit here would restore a sibling's profiles from an older binary beside its fresh ones. The clear step it depends on empties that directory once before the fan-out, and workspace:coverage depends on every crate's run to enforce the floor over the union. scripts/rust-coverage.sh says why --no-report is what lets these run in parallel."
     }
   }
 }
