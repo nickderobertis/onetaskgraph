@@ -52,6 +52,7 @@ failures=0
 # as mutated, must refuse and must name the reason.
 expect() {
   local guard="$1" case="$2" fragment="$3" output status
+  # llmlint: ignore[work_goes_through_command_surface] Every case runs the guard over a deliberately broken scratch tree; the recipes that own these guards address the working tree.
   output="$(cd "$scratch" && bash "scripts/$guard" 2>&1)" && status=0 || status=$?
   if [ "$status" -eq 0 ]; then
     echo "check-workspace-config-enforced: $guard accepted $case" >&2
@@ -100,6 +101,7 @@ restore() {
 # The guards accept the working tree before anything is planted, or the cases below prove
 # nothing about the mutation.
 for guard in check-workspace-config.sh check-coverage-enforced.sh; do
+  # llmlint: ignore[work_goes_through_command_surface] The baseline is the guard over the scratch copy every case below mutates, not the working tree the recipes address.
   if ! output="$(cd "$scratch" && bash "scripts/$guard" 2>&1)"; then
     printf '%s\n' "$output" >&2
     fatal "scripts/$guard refuses the working tree before any case is planted" \
@@ -214,6 +216,7 @@ restore "$CORE_PROJECT"
 # --- Every spawner refuses, naming the build target, when the binary is not there. The
 # scratch tree has no target directory, so each resolves a path nothing built.
 
+# llmlint: ignore[work_goes_through_command_surface] The journey is run over a scratch tree that has no binary, which its Nx target would build first.
 output="$(cd "$scratch" && bash scripts/test-distribution.sh 2>&1)" && status=0 || status=$?
 if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF "run 'scripts/nx.sh run onetaskgraph:build'"; then
   printf '%s\n' "$output" >&2
@@ -221,6 +224,7 @@ if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF "run 'scripts/nx.
   failures=$((failures + 1))
 fi
 
+# llmlint: ignore[work_goes_through_command_surface] The scratch copy of the generator resolves a binary nothing built, which sdk-python:generate-check would build first.
 output="$(cd "$scratch/sdks/python" && uv run --frozen --project "$ROOT/sdks/python" python generate.py --check 2>&1)" && status=0 || status=$?
 if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF 'run `scripts/nx.sh run onetaskgraph:build`'; then
   printf '%s\n' "$output" >&2
@@ -228,6 +232,7 @@ if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF 'run `scripts/nx.
   failures=$((failures + 1))
 fi
 
+# llmlint: ignore[work_goes_through_command_surface] One test of the scratch copy, whose fixture resolves a binary nothing built; sdk-python:test would build it first.
 output="$(cd "$scratch/sdks/python" && uv run --frozen --project "$ROOT/sdks/python" pytest -q --no-cov -p no:cacheprovider tests/test_artifact.py -k schema_bundle 2>&1)" && status=0 || status=$?
 if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF 'run `scripts/nx.sh run onetaskgraph:build`'; then
   printf '%s\n' "$output" >&2

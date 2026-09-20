@@ -232,6 +232,10 @@ def test_an_omitted_location_and_an_omitted_documents_capability_read_as_their_d
     assert listing.root.capabilities.documents == "unsupported"
 
 
+# llmlint: ignore-block[async_typed_clients_at_boundaries] The one call here reads the schema
+# bundle the binary emits, exactly as generate.py does under its own directive: a build-time
+# artifact read once, with no service on the other end and nothing to overlap. The async typed
+# client this rule asks for is the package's own `Client`, which the rest of this suite drives.
 def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     binary: Path,
 ) -> None:
@@ -276,3 +280,6 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     assert generate.RESPONSE_ROOTS["document_list"] == "QueryResponseOfQualifiedDocument"
     assert generate.RESPONSE_ROOTS["document_show"] == "QueryResponseOfQualifiedDocument"
     assert generate.RESPONSE_ROOTS["document_copy"] == "CopyReport"
+
+
+# llmlint: ignore-end[async_typed_clients_at_boundaries]
