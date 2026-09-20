@@ -62,16 +62,24 @@ fi
 
 # The per-file table and the uncovered line numbers are exactly what you need when the
 # union is under the bar, and noise when it is over — so they are held and replayed only
-# on failure. With no run behind it the report refuses in cargo-llvm-cov's own words.
+# on failure. A failure that printed the table is the floor; one that did not is the report
+# itself — no run behind it, or a tool that could not read what a run wrote — and it is
+# named as such rather than as coverage to add.
 if [ "$REQUEST" = "--report" ]; then
   if ! report="$(cargo llvm-cov report \
     --summary-only \
     --show-missing-lines \
     --fail-under-lines "$MIN_LINES" 2>&1)"; then
     printf '%s\n' "$report" >&2
-    echo "rust-coverage: the workspace is below ${MIN_LINES}% line coverage over every crate's run." >&2
-    echo "rust-coverage: the uncovered lines are listed above — cover them with a test that" >&2
-    echo "rust-coverage: drives the real behaviour, not one written to move the number." >&2
+    if printf '%s\n' "$report" | grep -q '^TOTAL '; then
+      echo "rust-coverage: the workspace is below ${MIN_LINES}% line coverage over every crate's run." >&2
+      echo "rust-coverage: the uncovered lines are listed above — cover them with a test that" >&2
+      echo "rust-coverage: drives the real behaviour, not one written to move the number." >&2
+    else
+      echo "rust-coverage: the report could not be produced; cargo-llvm-cov's reason is above." >&2
+      echo "rust-coverage: a report follows every crate's run — run 'just coverage', which clears," >&2
+      echo "rust-coverage: runs each crate and reports, rather than this step on its own." >&2
+    fi
     exit 1
   fi
   exit 0
