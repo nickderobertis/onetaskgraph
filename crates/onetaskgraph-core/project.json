@@ -51,8 +51,13 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph-core --all-features --locked"
-      }
+        "commands": [
+          "cargo test --quiet -p onetaskgraph-core --all-features --locked",
+          "cargo test --quiet -p onetaskgraph-core --locked --test plugin_features"
+        ],
+        "parallel": false
+      },
+      "//": "Twice, because the network plugins are features no default enables: the first run is every suite with both compiled, and the second is tests/plugin_features.rs in the default build, which is the only build where a configuration naming one of them is refused with the feature that enables it. Serial so the two cargo invocations do not contend for one target directory."
     },
     "coverage": {
       "executor": "nx:run-commands",

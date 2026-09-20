@@ -342,6 +342,30 @@ prepared_version() {
   printf '%s' "$version"
 }
 
+# Every requirement one published crate of the tree holds on another is exact, `=` and the
+# version that sibling carries, whenever a rewrite of the versions has run — and, given a
+# version, that one version for every sibling. These pre-1.0 crates are lock-step, so a caret
+# would let a consumer resolve one against another's newer patch, and the exact pin only
+# protects anyone if every rewrite — release-plz's and scripts/set-version.sh's — keeps it.
+# siblings_required_exactly <what rewrote the versions> [the one version every sibling holds]
+siblings_required_exactly() {
+  local what="$1" version="${2:-}" inexact
+  inexact="$(cd "$repo" && cargo metadata --no-deps --format-version 1 | VERSION="$version" python3 -c '
+import json, os, sys
+packages = {package["name"]: package for package in json.load(sys.stdin)["packages"]}
+for package in packages.values():
+    for dependency in package["dependencies"]:
+        sibling = packages.get(dependency["name"])
+        if sibling is None or sibling.get("publish") == [] or package.get("publish") == []:
+            continue
+        wanted = "=" + (os.environ["VERSION"] or sibling["version"])
+        if dependency["req"] != wanted:
+            print(package["name"], "requires", dependency["name"], "as", dependency["req"], "rather than", wanted)
+' | tr -d '\r')" || fail "could not read the sibling requirements $what left" "repair Cargo metadata and rerun"
+  [ -z "$inexact" ] || fail "$what left sibling requirements that are not exact and in step: ${inexact//$'\n'/; }" \
+    "keep every [workspace.dependencies] sibling as '=<its version>' through the bump — release-plz keeps the operator, and scripts/product_versions.py has to as well"
+}
+
 # A release is never described twice, and never under a version the pull request does not
 # propose: an entry release-plz writes while a version is still being selected is headed by
 # that package's own next version, which set-version.sh then normalises away.
@@ -387,6 +411,7 @@ grep -qF "proposed release pull request" "$case_log" || fail \
   "run scripts/set-version.sh with the selected version and carry every changed manifest"
 tooling_version="$(prepared_version "$case_log")"
 tooling_branch="release-plz-$tooling_version"
+siblings_required_exactly "the tooling-only preparation" "$tooling_version"
 changelogs_describe_this_release_at_most_once "$tooling_base" "$tooling_branch" "$tooling_version"
 tooling_tree="$(git -C "$repo" rev-parse "$tooling_branch^{tree}")" || fail \
   "could not read the tree the tooling-only run put on $tooling_branch" "check the scratch repository and rerun"
@@ -417,9 +442,55 @@ grep -qF "updated release pull request #41" "$case_log" || fail \
   "preparing again over the same base proposed $(prepared_version "$case_log") where the first preparation proposed $tooling_version" \
   "regenerate the release from the base, so a rerun decides what a single run decided"
 changelogs_describe_this_release_at_most_once "$tooling_base" "$tooling_branch" "$tooling_version"
+siblings_required_exactly "preparing again over the same base" "$tooling_version"
 [ "$(git -C "$repo" rev-parse "$tooling_branch^{tree}")" = "$tooling_tree" ] || fail \
   "preparing again over the same base put a different tree on $tooling_branch than a single preparation leaves" \
   "regenerate the release from the base rather than adding to what the last run left"
+
+# The one rewrite the other cases never reach: release-plz selecting a package bump itself.
+# Each of them ends in a version set-version.sh chose, and a head where the real tool bumps
+# a crate would send preparation on to `release-pr`, which this fixture cannot serve — so
+# the selector is driven on its own, over a package change since the released baseline, and
+# what the pinned tool wrote is read before anything normalises it.
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture before the package-bump case" "check the scratch repository and rerun"
+git -C "$repo" switch --quiet --force-create package-bump-fixture "$tooling_base" || fail \
+  "could not return to the released baseline's tooling head for the package-bump case" "check the scratch repository and rerun"
+# A line of content rather than a bare newline, which the pinned tool does not count as a
+# change to the package.
+printf '// a package change\n' >> "$repo/crates/onetaskgraph-plugin-api/src/lib.rs" || fail \
+  "could not modify the package-bump fixture" "check scratch-directory permissions"
+git -C "$repo" add crates/onetaskgraph-plugin-api/src/lib.rs || fail \
+  "could not stage the package-bump fixture" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "fix(api): a package change release-plz selects a version for" || fail \
+  "could not commit the package-bump fixture" "check the scratch repository and rerun"
+# Attached, and its own upstream: release-plz refuses a detached head, and it reads the
+# upstream branch rather than the checkout, so an upstream lacking this commit is a head
+# with no package change at all.
+git -C "$repo" push --quiet --set-upstream origin package-bump-fixture || fail \
+  "could not publish the package-bump branch to the fixture origin" "check the scratch repository and rerun"
+package_log="$scratch/package-bump-selector.log"
+if ! (cd "$repo" && scripts/select-release-version.sh) > "$package_log" 2>&1; then
+  sed 's/^/    /' "$package_log" >&2
+  fail "the real selector failed over a package change" "fix what it reports above and rerun"
+fi
+guard_hermetic
+package_version="$(sed -n "s/^select-release-version: release-plz selected $released_version -> \([0-9][0-9.]*\)$/\1/p" "$package_log")"
+[ -n "$package_version" ] || fail \
+  "the package change reached some decision other than release-plz selecting a version: $(cat "$package_log")" \
+  "keep this case a package change after the released baseline, so the pinned tool itself rewrites the versions"
+# release-plz bumps each package on its own, so the pins it wrote need not share a version
+# yet — each has to be exact and equal to the version of the crate it names.
+siblings_required_exactly "release-plz's own package bump"
+(cd "$repo" && scripts/set-version.sh "$package_version" && scripts/set-version.sh --check) > "$scratch/package-bump-sync.log" 2>&1 || {
+  sed 's/^/    /' "$scratch/package-bump-sync.log" >&2
+  fail "the manifests release-plz bumped do not come into agreement at $package_version" \
+    "fix what set-version.sh reports above; it is what preparation runs next"
+}
+siblings_required_exactly "set-version.sh over release-plz's own package bump" "$package_version"
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture after the package-bump case" "check the scratch repository and rerun"
 
 git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the partial-publish case" "check the scratch repository and rerun"
 (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
@@ -479,6 +550,7 @@ grep -qF "proposed release pull request" "$case_log" || fail \
 [ "$(wc -l < "$scratch/state/proposals")" -eq 1 ] || fail \
   "the partly published run created a duplicate pull request" "reuse the existing release pull request during recovery"
 changelogs_describe_this_release_at_most_once "$recovery_base" "release-plz-$recovery_version" "$recovery_version"
+siblings_required_exactly "the registry-recovery preparation" "$recovery_version"
 
 # The other head the same registry lag describes: merging a release pull request pushes the
 # default branch, `release-plz release` tags a version seconds before any registry can hold
@@ -590,6 +662,7 @@ grep -qF "proposed release pull request" "$case_log" || fail \
   "the remote-only boundary run did not select $remote_only_version" \
   "advance every crate to the patch after the attempted release"
 changelogs_describe_this_release_at_most_once "$remote_boundary_base" "release-plz-$remote_only_version" "$remote_only_version"
+siblings_required_exactly "the remote-only boundary preparation" "$remote_only_version"
 
 # A boundary neither the checkout nor the origin holds is genuinely unknown, and is still
 # refused naming both places it was looked for: guessing one proposes a version against
@@ -614,3 +687,4 @@ grep -qF "v$loop_version is in neither this checkout nor origin, so the release 
 [ ! -s "$scratch/state/proposals" ] || fail \
   "the missing-boundary head opened a pull request from a boundary nothing holds" \
   "propose nothing when the release boundary cannot be resolved"
+

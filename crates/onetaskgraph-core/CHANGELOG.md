@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.40](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.39...onetaskgraph-core-v0.2.40) - 2026-09-19
+
+### Fixed
+
+- *(build)* make the network destinations optional core features and pin sibling crates exactly ([#2113](https://github.com/nickderobertis/onetaskgraph/pull/2113))
+
 ## [0.2.39](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.38...onetaskgraph-core-v0.2.39) - 2026-09-18
 
 ### Fixed
