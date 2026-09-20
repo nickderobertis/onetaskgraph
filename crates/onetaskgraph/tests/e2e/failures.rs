@@ -469,3 +469,86 @@ fn a_reserved_dependency_key_holding_what_it_must_not_is_refused_with_a_next_act
         }
     }
 }
+
+/// A folder of Markdown holding two projects' tasks, and — under the other project's folder —
+/// a note with no front matter and a record that names that project but does not parse, which
+/// is the shape a store shared by several writers ends up in.
+fn two_projects(sandbox: &Sandbox, boundary: SourceBoundary) -> std::path::PathBuf {
+    let root = sandbox.subdirectory("notes");
+    for (relative, text) in [
+        ("tasks/mine/a.md", "---\ntitle: Mine\nproject: mine\n---\n"),
+        (
+            "tasks/theirs/b.md",
+            "---\ntitle: Theirs\nproject: theirs\n---\n",
+        ),
+        (
+            "tasks/theirs/replies/note.md",
+            "A reply to a ticket, and no front matter.\n",
+        ),
+        (
+            "tasks/theirs/odd.md",
+            "---\ntitle: Odd\nproject: theirs\nnot_a_task_key: 1\n---\n",
+        ),
+    ] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("a folder")).expect("folders");
+        std::fs::write(path, text).expect("a file");
+    }
+    sandbox.project_document(&document(
+        &json!({"notes": boundary.source("local-md", json!({"root": root}))}),
+    ));
+    root
+}
+
+#[test]
+fn a_task_list_scoped_to_a_project_is_not_failed_by_a_record_of_another_project() {
+    for boundary in SOURCE_BOUNDARIES {
+        let who = format!("{boundary:?}");
+        let sandbox = Sandbox::new();
+        two_projects(&sandbox, boundary);
+        let output = run(
+            &sandbox,
+            &["task", "list", "--project", "notes:mine", "--json"],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{who}: the scoped list failed:\n{}",
+            stderr(&output)
+        );
+        let listed: Value = serde_json::from_str(&stdout(&output)).expect("one JSON document");
+        let ids: Vec<&str> = listed["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|task| task["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(ids, ["notes:mine/a"], "{who}");
+
+        // The whole folder is still the unscoped list's business.
+        let output = run(&sandbox, &["task", "list"]);
+        refused(&output, "odd.md", "fix the source(s) named above");
+        assert_eq!(output.status.code(), Some(4), "{who}");
+        assert!(stderr(&output).contains("not_a_task_key"), "{who}");
+    }
+}
+
+#[test]
+fn a_record_of_the_scoped_project_that_does_not_parse_still_fails_the_list_naming_it() {
+    for boundary in SOURCE_BOUNDARIES {
+        let who = format!("{boundary:?}");
+        let sandbox = Sandbox::new();
+        let root = two_projects(&sandbox, boundary);
+        std::fs::write(
+            root.join("tasks/mine/broken.md"),
+            "---\ntitle: Broken\nproject: mine\nnot_a_task_key: 1\n---\n",
+        )
+        .expect("a broken record");
+        let output = run(&sandbox, &["task", "list", "--project", "notes:mine"]);
+        refused(&output, "broken.md", "fix the source(s) named above");
+        assert_eq!(output.status.code(), Some(4), "{who}");
+        let complaint = stderr(&output);
+        assert!(complaint.contains("not_a_task_key"), "{who}: {complaint}");
+        assert!(!complaint.contains("odd.md"), "{who}: {complaint}");
+    }
+}

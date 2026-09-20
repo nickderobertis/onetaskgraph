@@ -52,9 +52,10 @@
 //! Beside a copy's whole-file write, three narrow writes edit a file that is already there
 //! and leave every byte they do not own as it was: a task's `status:` line, its
 //! `delivered_by:` entry, and one entry of the `metadata:` block of a task, a project or a
-//! document. The last replaces the file through a staging file and a rename, is verified
-//! by reading the edited text back before anything is written, and refuses rather than
-//! reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
+//! document. All three replace the file through a staging file and a rename, so a reader
+//! sees the record before the write or after it and never part of either. The last is also
+//! verified by reading the edited text back before anything is written, and refuses rather
+//! than reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
 #![deny(missing_docs)]
 
 use std::{
@@ -204,8 +205,7 @@ struct FrontMatter {
     status: String,
     #[serde(default)]
     labels: Vec<LabelInput>,
-    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
-    project: Option<String>,
+    project: FiledUnder,
     #[serde(default)]
     depends_on: Vec<Dependency>,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Task::url` and `Project::url` are frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
@@ -221,6 +221,19 @@ struct FrontMatter {
     /// Every task that delivers this one, read on the terms `delivers` is.
     delivered_by: Option<serde_json::Value>,
 }
+/// What a front matter's `project:` key is read into, by every kind of record and by the
+/// scoped read's look at that key alone — one type, so what the two accept cannot part. It is
+/// the contract's own project id, which a record carries through unchanged.
+type FiledUnder = Option<NativeId>;
+
+/// The one key a scoped read looks at before it parses a record, read into the type the
+/// record's own parse reads it into and ignoring every other key.
+#[derive(Deserialize)]
+struct Filing {
+    #[serde(default)]
+    project: FiledUnder,
+}
+
 fn default_status() -> String {
     "backlog".to_owned()
 }
@@ -234,7 +247,7 @@ fn default_status() -> String {
 struct SharedFront {
     title: Option<String>,
     labels: Vec<LabelInput>,
-    project: Option<String>,
+    project: FiledUnder,
     url: Option<String>,
     metadata: BTreeMap<String, serde_json::Value>,
     repositories: Vec<Repository>,
@@ -342,8 +355,7 @@ struct DocumentFrontMatter {
     title: Option<String>,
     #[serde(default)]
     labels: Vec<LabelInput>,
-    // llmlint: ignore[invalid_states_unrepresentable] `NativeId` is deliberately an opaque, unvalidated string in the frozen plugin contract (`onetaskgraph-plugin-api/src/id.rs`); replacing this wire value with a stricter local identifier would reject values the public type expressly permits.
-    project: Option<String>,
+    project: FiledUnder,
     // llmlint: ignore[invalid_states_unrepresentable, boundary_inputs_validated] `Document::url` is frozen as `Option<String>` in the plugin contract, which permits source-native URL-like values; parsing here would narrow that approved boundary and is the contract owner's decision.
     url: Option<String>,
     #[serde(default)]
@@ -506,9 +518,14 @@ impl LocalMdSource {
                     message: format!("directory cycle reaches {}", dir.display()),
                 });
             }
-            for entry in fs::read_dir(dir).map_err(|e| SourceError::Unavailable {
-                message: format!("cannot read {}: {e}", dir.display()),
-            })? {
+            let entries = match fs::read_dir(dir) {
+                // A folder removed since it was listed holds nothing to list.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                entries => entries.map_err(|e| SourceError::Unavailable {
+                    message: format!("cannot read {}: {e}", dir.display()),
+                })?,
+            };
+            for entry in entries {
                 // llmlint: ignore[changed_behavior_has_e2e] An iterator failing after
                 // `read_dir` succeeds is an OS/filesystem race that cannot be induced
                 // deterministically without mocking the layer under test.
@@ -525,18 +542,56 @@ impl LocalMdSource {
                 {
                     continue;
                 }
-                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
-                    message: format!("{}: {e}", path.display()),
-                })?;
-                if !canonical.starts_with(root) {
-                    return Err(SourceError::Config {
-                        message: format!(
-                            "{} escapes configured root {}",
-                            path.display(),
-                            root.display()
-                        ),
-                    });
-                }
+                // Only a link is resolved to confine it. Anything else is named by the folder
+                // it was listed in — already resolved and confined — and its own name, which
+                // is its resolved path already. Resolving a plain file instead would ask the
+                // filesystem to spell a path while a replacement is renamed over it, and
+                // Windows can answer that instant with a spelling that is not under the root.
+                //
+                // An entry removed between the listing and here — another process deleting
+                // or renaming it — is skipped: it is not a record of this folder any more,
+                // and nothing about it was read to call malformed.
+                // llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] The
+                // window between classifying an entry and reading it by path is the one the
+                // code this replaces had between `canonicalize` and the read, not a new one:
+                // an entry swapped for a link in between is followed either way. Closing it
+                // needs a no-follow open relative to the folder's handle, which `std` does not
+                // offer on every platform this ships on; and a process that can swap entries
+                // under the root can already write whatever a record says. Forcing that swap
+                // into that instant deterministically needs a double of the filesystem, which
+                // the repository's test rules forbid.
+                let linked = match entry.file_type() {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    file_type => file_type
+                        .map_err(|e| SourceError::Unavailable {
+                            message: format!("cannot read {}: {e}", path.display()),
+                        })?
+                        .is_symlink(),
+                };
+                let canonical = if linked {
+                    let canonical = match fs::canonicalize(&path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound && vanished(&path) => {
+                            continue;
+                        }
+                        // A link that is still there and leads nowhere is the author's to
+                        // mend, so it is reported rather than skipped.
+                        canonical => canonical.map_err(|e| SourceError::Malformed {
+                            message: format!("{}: {e}", path.display()),
+                        })?,
+                    };
+                    if !canonical.starts_with(root) {
+                        return Err(SourceError::Config {
+                            message: format!(
+                                "{} escapes configured root {}",
+                                path.display(),
+                                root.display()
+                            ),
+                        });
+                    }
+                    canonical
+                } else {
+                    dir.join(entry.file_name())
+                };
                 if canonical.is_dir() {
                     visit(root, &canonical, visited, out)?;
                 } else if canonical
@@ -565,6 +620,22 @@ impl LocalMdSource {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+
+    /// One listed file's whole text, or `None` when it has been removed since it was listed.
+    fn read_listed(path: &Path) -> Result<Option<String>, SourceError> {
+        let _replacement = replacement_reader();
+        // llmlint: ignore[boundary_inputs_validated] This read by path is the other end of the
+        // window `paths` states where it classifies the entry: the code this replaces read by
+        // path after `canonicalize` and followed a swapped-in link just the same. Closing it
+        // needs a no-follow open relative to the folder's handle, which `std` does not offer
+        // on every platform this ships on.
+        match fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            text => text.map(Some).map_err(|e| SourceError::Malformed {
+                message: format!("{}: {e}", path.display()),
+            }),
+        }
     }
 
     /// One file's whole text.
@@ -630,8 +701,7 @@ impl LocalMdSource {
             title: front.title.unwrap_or(fallback),
             body: (!body.is_empty()).then(|| body.to_owned()),
             labels: labels_of(front.labels),
-            // llmlint: ignore[boundary_inputs_validated] Project references use the frozen contract's deliberately opaque, unvalidated `NativeId`; rejecting a value here would narrow that public contract.
-            project: front.project.map(NativeId),
+            project: front.project,
             url: front.url,
             location: Location::Path(path.to_str().ok_or_else(not_utf8)?.to_owned()),
             metadata: front.metadata,
@@ -784,17 +854,39 @@ impl LocalMdSource {
         })
     }
 
-    fn parse_work_records(&self, kind: WorkKind) -> Result<Vec<Entry>, SourceError> {
+    /// Every record of `kind` that `scope` could admit, read in full.
+    ///
+    /// A file removed since the folder was listed is skipped. A file whose front matter
+    /// files it outside `scope` is skipped before it is parsed, so a record another project
+    /// holds cannot fail a query about this one; a file that cannot be shown to be outside it
+    /// is parsed, and fails the read when it does not parse. `scope` is only ever a
+    /// narrowing, and the caller still applies it to what comes back.
+    fn parse_work_records(
+        &self,
+        kind: WorkKind,
+        scope: &ProjectFilter,
+    ) -> Result<Vec<Entry>, SourceError> {
         self.paths(kind.kind())?
             .into_iter()
-            .map(|p| self.parse(kind, &p))
+            .filter_map(|path| match Self::read_listed(&path) {
+                Ok(Some(text)) if outside(&text, scope) => None,
+                Ok(Some(text)) => Some(self.parse_text(kind, &path, &text)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect()
     }
 
-    fn parse_document_records(&self) -> Result<Vec<Document>, SourceError> {
+    /// As [`Self::parse_work_records`], for the files under `documents/`.
+    fn parse_document_records(&self, scope: &ProjectFilter) -> Result<Vec<Document>, SourceError> {
         self.paths(Kind::Document)?
             .into_iter()
-            .map(|p| self.parse_document(&p))
+            .filter_map(|path| match Self::read_listed(&path) {
+                Ok(Some(text)) if outside(&text, scope) => None,
+                Ok(Some(text)) => Some(self.parse_document_text(&path, &text)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect()
     }
 
@@ -935,7 +1027,7 @@ impl TaskSource for LocalMdSource {
     }
     async fn query_tasks(&self, q: &TaskQuery, p: &PageRequest) -> Result<Page<Task>, SourceError> {
         let items = self
-            .parse_work_records(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task, &q.project)?
             .into_iter()
             .map(task)
             .filter(|t| {
@@ -959,7 +1051,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let items = self
-            .parse_work_records(WorkKind::Project)?
+            .parse_work_records(WorkKind::Project, &ProjectFilter::Any)?
             .into_iter()
             .map(project)
             .filter(|x| {
@@ -982,7 +1074,7 @@ impl TaskSource for LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let items = self
-            .parse_document_records()?
+            .parse_document_records(&q.project)?
             .into_iter()
             .filter(|d| {
                 labels_match(&d.labels, &q.labels)
@@ -1008,12 +1100,12 @@ impl TaskSource for LocalMdSource {
         // Documents too: a label a document carries is a label of this source, and reading
         // one more folder that is already on disk is the same read as the other two.
         let mut items: Vec<Label> = self
-            .parse_work_records(WorkKind::Task)?
+            .parse_work_records(WorkKind::Task, &ProjectFilter::Any)?
             .into_iter()
-            .chain(self.parse_work_records(WorkKind::Project)?)
+            .chain(self.parse_work_records(WorkKind::Project, &ProjectFilter::Any)?)
             .flat_map(|d| d.common.labels)
             .chain(
-                self.parse_document_records()?
+                self.parse_document_records(&ProjectFilter::Any)?
                     .into_iter()
                     .flat_map(|d| d.labels),
             )
@@ -1505,6 +1597,34 @@ fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String
     })
 }
 
+/// Whether the entry at `path`, which could not be resolved, is gone from its folder rather
+/// than a link that leads nowhere.
+fn vanished(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Whether the file whose contents are `text` provably files its record outside `scope`.
+///
+/// Read far more leniently than a record is: only the front matter's `project` key, through
+/// [`Filing`], ignoring every other key. A file with no front matter names no project. Front
+/// matter whose `project` key [`Filing`] cannot read — or that is not YAML at all — is not
+/// provably outside, so the caller parses it in full and it fails as itself.
+fn outside(text: &str, scope: &ProjectFilter) -> bool {
+    let wanted = match scope {
+        ProjectFilter::Any => return false,
+        ProjectFilter::Orphans => None,
+        ProjectFilter::Is(id) => Some(id),
+    };
+    let project = match front_matter(text) {
+        None => None,
+        Some((yaml, _)) => match serde_norway::from_str::<Filing>(yaml) {
+            Ok(filing) => filing.project,
+            Err(_) => return false,
+        },
+    };
+    project.as_ref() != wanted
+}
+
 /// The refusal for a file with no front matter this source can find.
 fn unfronted(path: &Path) -> SourceError {
     SourceError::Malformed {
@@ -1757,7 +1877,7 @@ impl LocalMdSource {
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         let edges = self
-            .parse_work_records(kind)?
+            .parse_work_records(kind, &ProjectFilter::Any)?
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
@@ -2127,6 +2247,10 @@ impl LocalMdSource {
 
     /// Replace one top-level entry of a task file's front matter, leaving every other byte
     /// of the file as it was, and refuse a result this source could not read back.
+    ///
+    /// The file is replaced the way a metadata write replaces one — a staging file and a
+    /// rename, by the rules [`STAGING_SUFFIX`] states — so a reader sees the task as it was
+    /// or as it is now, and never part of either.
     fn rewrite_front_entry(
         &self,
         path: &Path,
@@ -2147,9 +2271,7 @@ impl LocalMdSource {
                 path.display()
             ),
         })?;
-        fs::write(path, rewritten).map_err(|e| SourceError::Unavailable {
-            message: format!("cannot write {}: {e}", path.display()),
-        })
+        replace_atomically(path, &rewritten)
     }
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.

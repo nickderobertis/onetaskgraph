@@ -425,20 +425,156 @@ async fn a_record_the_filesystem_will_not_let_this_source_write_is_reported_rath
     use std::os::unix::fs::PermissionsExt as _;
     let original = "---\ntitle: Locked\nstatus: todo\n---\n";
     let (root, source) = folder(&[("tasks/locked.md", original)], json!({}));
-    let path = root.path().join("tasks/locked.md");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).expect("read-only");
+    // The write replaces the file through a staging file beside it and a rename, so what it
+    // needs is a folder it may add a file to and rename one in.
+    let tasks = root.path().join("tasks");
+    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o555)).expect("read-only");
     let refused = source
         .set_task_status(&id("locked"), StatusCategory::Done)
         .await;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("writable again");
+    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o755)).expect("writable again");
     // A process running as root writes through the mode bits, which is the one host where
     // this refusal cannot be provoked; everywhere else it is reported, and nothing is lost.
     match refused {
         Err(SourceError::Unavailable { message }) => {
             assert!(message.starts_with("cannot write "), "{message}");
+            assert!(message.contains("locked.md"), "{message}");
             assert_eq!(read(&root, "tasks/locked.md"), original);
+            assert_eq!(
+                listing(root.path()),
+                [
+                    std::path::PathBuf::from("tasks"),
+                    std::path::PathBuf::from("tasks/locked.md")
+                ]
+                .into(),
+                "no staging file is left behind"
+            );
         }
-        Ok(_) if fs::metadata(&path).is_ok() && std::env::var("USER").as_deref() == Ok("root") => {}
+        Ok(_) if std::env::var("USER").as_deref() == Ok("root") => {}
         other => panic!("expected the write to be reported unavailable, got {other:?}"),
     }
+}
+
+/// Every path under `root`, relative to it, directories included.
+fn listing(root: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
+    fn visit(root: &Path, dir: &Path, out: &mut std::collections::BTreeSet<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).expect("a folder lists") {
+            let path = entry.expect("an entry").path();
+            out.insert(path.strip_prefix(root).unwrap().to_path_buf());
+            if path.is_dir() {
+                visit(root, &path, out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    visit(root, root, &mut out);
+    out
+}
+
+/// Two sources over one folder: one sets `tasks/a.md`'s status and then its `delivered_by`
+/// over and over, while the other lists and reads it on a thread of its own, and every read
+/// must be the whole record — its title, its body to the last line, and a status and a list
+/// those writes could have left there.
+///
+/// Both writes share one test rather than one each: the plugin holds every replacement apart
+/// from every read in its process, so two such tests running side by side queue behind each
+/// other's writes and take many times as long as the two writes interleaved here.
+#[test]
+fn a_reader_never_sees_a_record_part_written_by_a_status_set_or_a_delivered_by_write() {
+    // A long body makes a non-atomic write's window wide enough to land in.
+    let body = "Prose that makes the file long enough to be caught half written.\n".repeat(400);
+    let text = format!("---\ntitle: Busy\nstatus: todo\n---\n{body}The last line.\n");
+    let (root, writer) = folder(&[("tasks/a.md", &text)], json!({}));
+    let reader = onetaskgraph_local_md::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &json!({ "root": root.path() }),
+            &NoSecrets,
+        )
+        .expect("a second source over the same folder");
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reading = {
+        let done = std::sync::Arc::clone(&done);
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let whole = |task: &Task| {
+                assert_eq!(task.title, "Busy");
+                assert!(
+                    task.content
+                        .as_deref()
+                        .is_some_and(|content| content.ends_with("The last line.")),
+                    "the body was cut short"
+                );
+                assert!(
+                    matches!(
+                        task.status.category,
+                        StatusCategory::Todo | StatusCategory::Done
+                    ),
+                    "{:?}",
+                    task.status
+                );
+                assert!(task.delivered_by.len() <= 1, "{:?}", task.delivered_by);
+            };
+            let mut reads = 0_u32;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) || reads == 0 {
+                let task = runtime
+                    .block_on(reader.get_task(&id("a")))
+                    .expect("the record always reads")
+                    .expect("the record is always there");
+                whole(&task);
+                let listed = runtime
+                    .block_on(reader.query_tasks(
+                        &onetaskgraph_plugin_api::TaskQuery::default(),
+                        &onetaskgraph_plugin_api::PageRequest {
+                            limit: 200,
+                            cursor: None,
+                        },
+                    ))
+                    .expect("the folder always lists");
+                assert_eq!(listed.items.len(), 1, "the record is always listed, once");
+                whole(&listed.items[0]);
+                reads += 1;
+            }
+            reads
+        })
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    for round in 1..=150 {
+        let category = if round % 2 == 0 {
+            StatusCategory::Todo
+        } else {
+            StatusCategory::Done
+        };
+        let status = runtime
+            .block_on(writer.set_task_status(&id("a"), category))
+            .unwrap()
+            .expect("held");
+        assert_eq!(status.category, category);
+        let delivered_by = if round % 2 == 0 {
+            Vec::new()
+        } else {
+            vec![entry(&format!("plan:P-{round}"))]
+        };
+        runtime
+            .block_on(writer.set_delivered_by(&id("a"), &delivered_by))
+            .unwrap()
+            .expect("held");
+    }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let reads = reading
+        .join()
+        .expect("the reader never saw a broken record");
+    assert!(reads > 0);
+    assert_eq!(
+        listing(root.path()),
+        [
+            std::path::PathBuf::from("tasks"),
+            std::path::PathBuf::from("tasks/a.md")
+        ]
+        .into()
+    );
 }

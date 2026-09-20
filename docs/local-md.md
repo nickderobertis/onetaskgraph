@@ -109,6 +109,33 @@ sources:
       status_mapping: { next: todo, active: in-progress, shipped: done }
 ```
 
+## What a read reads
+
+A task's project is its `project:` key, not the folder it sits in, so every task query lists
+the whole of `tasks/` — and a document query the whole of `documents/` — however the files
+are arranged in subfolders. What a query then does with each file depends on whether it
+names a project:
+
+- **Unscoped** (`task list` with no `--project`, the source's labels, a dependency read):
+  every listed file is read and parsed in full, and one that does not
+  parse fails the query as **malformed**, naming the file and what is wrong with it.
+- **Scoped to a project** (`--project <id>`, or `--no-project` for tasks filed under none):
+  every listed file is read, but only its front matter's `project:` key is looked at first.
+  A file that key files under another project — or, for `--no-project`, under any project —
+  is passed over without being parsed, so a record another project holds cannot fail a
+  query about this one, however broken it is. A file with no front matter names no project.
+  Every other file is parsed in full, and one that does not parse fails the query naming it
+  — including a file whose front matter is not YAML at all, or whose `project:` cannot be
+  read as a project id, because nothing shows it is not in the project asked about.
+
+A file that is **gone** by the time the walk resolves or reads it — another process deleted
+or renamed it after its folder was listed — is skipped, in every query: nothing of it was
+read, so there is nothing to call malformed. A link that is still there and leads nowhere is
+not a vanish; it is reported as malformed, because it is the author's to mend. A link is
+followed, and one that resolves outside `root` is refused as a configuration error; any
+other entry is named by the folder it was listed in, so a record being replaced in place by
+another process at that moment is never mistaken for one outside `root`.
+
 ## Setting a status on its own
 
 `onetaskgraph task status set <source>:<id> <category>` rewrites the one `status:` line of
@@ -122,6 +149,11 @@ already in the category is left byte for byte, word and all. A category the mapp
 with no word is refused in the words a copy of that status is refused with — `this source
 reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
 last line of its front matter.
+
+A status write, and the `delivered_by:` write a copy makes, replace the file the way a
+metadata write does — through a staging file beside it and a rename, described under the next
+heading — so a reader listing or reading the folder while either lands sees the task as it was
+or as it is now, never part of it.
 
 ## Setting one metadata key on its own
 
