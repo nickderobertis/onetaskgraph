@@ -187,6 +187,13 @@ fixture "$SQUASH" "$(pull '"2026-09-19T00:00:00Z"' "$SQUASH" "$HEAD_SHA")" "$HEA
 decide "$SQUASH" "${NAMES[@]}"
 expect proven "a re-run that passed after an earlier failure"
 
+# 8b. Entries of the check-run array that are not check runs — a bare string, an object
+#     with no numeric id — are passed over rather than ordered.
+fixture "$SQUASH" "$(pull '"2026-09-19T00:00:00Z"' "$SQUASH" "$HEAD_SHA")" "$HEAD_SHA" \
+  "$(runs "\"not a run\",{\"name\": \"check (macos-latest)\", \"conclusion\": \"failure\"},$BOTH_PASSED")"
+decide "$SQUASH" "${NAMES[@]}"
+expect proven "a check-run array carrying entries that are not check runs"
+
 # 9. A check still running has no conclusion yet.
 fixture "$SQUASH" "$(pull '"2026-09-19T00:00:00Z"' "$SQUASH" "$HEAD_SHA")" "$HEAD_SHA" \
   "$(runs "$(run_json 1 "check (macos-latest)" null),$(run_json 2 "install path (macos-latest)" '"success"')")"

@@ -34,8 +34,11 @@
 #   scripts/scoped-release-plz.sh run ...  run the resolved binary with the arguments given
 #
 # Exit codes: 0; 64 (EX_USAGE) for a call this does not understand; 69 (EX_UNAVAILABLE)
-# from `resolve` and `run` when the scoped binary is missing or answers another version;
-# 1 from `ensure` when provisioning was attempted and failed.
+# from `resolve` and `run` when the scoped binary is missing or answers another version,
+# and from every subcommand but `pin` when there is no absolute cache home to scope it
+# under; 70 (EX_SOFTWARE) when RELEASE_PLZ_VERSION below is not an exact X.Y.Z version,
+# which is this script's own defect; 1 from `ensure` when provisioning was attempted and
+# failed.
 set -euo pipefail
 
 readonly RELEASE_PLZ_VERSION=0.3.160

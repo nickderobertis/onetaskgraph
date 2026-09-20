@@ -117,10 +117,14 @@ try:
 except ValueError as problem:
     print(f"the check-run answer is not JSON: {problem}")
     raise SystemExit(1)
+# A third party wrote this document too: only an object with a numeric id and a string
+# name is a check run this can order, and anything else in the array is not one.
 latest = {}
 for run in answer.get("check_runs", []) if isinstance(answer, dict) else []:
-    name = run.get("name")
-    if name in names and (name not in latest or run.get("id", 0) > latest[name].get("id", 0)):
+    if not isinstance(run, dict) or not isinstance(run.get("id"), int) or not isinstance(run.get("name"), str):
+        continue
+    name = run["name"]
+    if name in names and (name not in latest or run["id"] > latest[name]["id"]):
         latest[name] = run
 for name in names:
     run = latest.get(name)
