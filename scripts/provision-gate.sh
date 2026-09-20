@@ -15,9 +15,19 @@
 #     environment — it heals, because both are one command over files already committed
 #     here and neither asks anything of the machine.
 #   * What only the machine can supply — a Rust toolchain, bun, uv, the three cargo
-#     subcommands the gate invokes — it refuses to guess at. Installing a toolchain from a
-#     git hook is how a hook starts writing outside the tree it was asked about, so each
-#     absent one is named with the command that installs it and nothing is attempted.
+#     subcommands the gate invokes, and the pinned release-plz in this repository's scoped
+#     tool location — it refuses to guess at. Installing a toolchain from a git hook is how
+#     a hook starts writing outside the tree it was asked about, so each absent one is named
+#     with the command that installs it and nothing is attempted.
+#
+# The release-plz refusal carries one more line than the others, and its spelling is a
+# contract rather than a style: `onevcs: host-prerequisite: <what is missing and how to
+# install it>` is the marker onevcs's docs/contract.md states for a merge-path hook refusing
+# on a missing host tool, which lets the engine on this host settle it as a host problem
+# rather than spend a worker's retries on a tree that was never checked
+# (https://github.com/nickderobertis/onepipeline/issues/360). It is printed exactly once,
+# for that tool alone, and never by a check that reads the candidate tree: a missing tool
+# is a fact about the machine, and a check that reads the tree fails about the tree.
 #
 # Exit codes: 0 provisioned; 69 (EX_UNAVAILABLE) something is missing that this script must
 # not install for you; 74 (EX_IOERR) provisioning was attempted and failed.
@@ -62,6 +72,19 @@ if [ -n "$missing" ]; then
   echo "provision-gate: toolchain is not something a git hook should do for you:" >&2
   printf '%s' "$missing" | sed 's/^/provision-gate:   /' >&2
   echo "provision-gate: next: install the tools above, then push again." >&2
+  exit 69
+fi
+
+# The pinned release-plz, which `just distribution-check` drives for real. It is resolved
+# from the repository-scoped location scripts/scoped-release-plz.sh owns and never from
+# PATH — the global command is what other repositories on this host pin other versions of.
+# Provisioning it is `just bootstrap`'s job, for the reason the header gives, so an absent
+# or wrong-version binary is refused here with the marker line and the install command.
+if ! release_plz_refusal="$(bash scripts/scoped-release-plz.sh resolve 2>&1 >/dev/null)"; then
+  release_plz_pin="$(bash scripts/scoped-release-plz.sh pin)"
+  echo "onevcs: host-prerequisite: release-plz $release_plz_pin is not provisioned in this repository's scoped tool location; install it with 'bash scripts/scoped-release-plz.sh ensure' from a checkout of this repository (or 'just bootstrap')" >&2
+  printf '%s\n' "$release_plz_refusal" | sed 's/^/provision-gate:   /' >&2
+  echo "provision-gate: next: run that install command, then push again." >&2
   exit 69
 fi
 

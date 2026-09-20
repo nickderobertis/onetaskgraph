@@ -747,9 +747,61 @@ all.
   and hands the whole tree to `release-pr --allow-dirty`, whose uncommitted changes become
   the release commit. `scripts/check-release-pr-sync.sh` drives that end to end on every
   `check` and refuses a workflow that goes around it. It stands in for release-plz rather
-  than installing it — a required check must not depend on crates.io — so the workflow pins
-  the release-plz version and that check fails when the pin and the version the stand-in was
-  recorded from part. Moving the pin means re-observing the real tool.
+  than installing it — a required check must not depend on crates.io — so
+  `scripts/scoped-release-plz.sh` pins the release-plz version, in one place for the
+  workflow, for bootstrap and for every script, and that check fails when the pin and the
+  version the stand-in was recorded from part. Moving the pin means re-observing the real
+  tool.
+- **release-plz is never the host's, and never on PATH.** Bootstrap used to install the pin
+  into the global cargo bin directory, and other repositories on this host pin other
+  versions of the same command there, so bootstrapping or publishing one repository
+  invalidated another's gate until a person put the right version back (#1990). Now
+  `scripts/scoped-release-plz.sh` is the one implementation of which release-plz this
+  repository runs and where: a directory namespaced by tool and version under the user's
+  cache home, which a fresh worktree and a publication's scratch clone both find without
+  installing again, and which no other repository's pin can overwrite. Every recipe, hook
+  and script resolves the binary through it, `just bootstrap` provisions it through it,
+  the hosted release workflow provisions and runs it through it, and whatever `release-plz`
+  is on PATH is neither consulted nor touched. `scripts/check-scoped-release-plz.sh`, a
+  command in `scripts:test`, drives the provisioning against a stand-in tool location and
+  installer, and refuses any invocation in `scripts/`, the justfile, the hooks or the
+  workflows that goes around the resolver.
+  **When the scoped binary is missing or at the wrong version where the `pre-push` gate
+  needs it, `scripts/provision-gate.sh` prints exactly one line `onevcs: host-prerequisite:
+  <what is missing and how to install it>` before refusing.** That spelling is the marker
+  onevcs's `docs/contract.md` states for a merge-path hook refusing on a missing host tool,
+  which is how the engine on this host settles it as a host problem rather than spending a
+  worker's retries on a tree that was never checked
+  (https://github.com/nickderobertis/onepipeline/issues/360). It is that tool's alone: a
+  check that reads the candidate tree — `scripts/check-real-release-preparation.sh` among
+  them — refuses an empty location in its own words and never prints it, because a marker
+  from a tree-sensitive check would tell the engine to stop retrying a tree it never
+  finished checking. `scripts/check-pre-push-provisioning.sh` holds the hook to exactly
+  one such line when the tool is missing or wrong and to none when it is there.
+- **Both macOS architectures are one release job, and a push to main schedules no macOS
+  lane the pull request already proved.** The account has one small macOS runner pool,
+  shared by every push to main and every release, and `.github/workflows/release.yml`
+  used to put two macOS rows in the native-asset matrix and two more in `build-wheels`
+  behind it — four sequential jobs that queued a merge-to-PyPI behind itself for hours
+  (#1991). `macos-assets-carriers-and-wheels` now builds both apple targets in one cargo
+  build on the one arm64 runner, attaches both archives, packs both carriers and builds
+  both wheels, under exactly the artifact names the publish jobs download;
+  `scripts/check-distribution-contract.sh` holds that shape and
+  `scripts/check-release-packaging.sh` runs the packaging step, read out of the workflow,
+  over both targets. On the CI side `scripts/macos-lane-selection.sh` is the ONE
+  implementation of whether a push to main needs its macOS lanes: `proven` only when
+  GitHub lists a pull request merged AS that commit, `refs/pull/<n>/head` still names the
+  head it reports and that head's tree is byte-for-byte the pushed tree, and the most
+  recent run of every macOS check on that head concluded success — and **any question it
+  cannot answer is `run`**, because a runner spent is recoverable and a lane skipped is
+  not. `.github/workflows/ci.yml` consults it in a push-only `macos-lanes` job whose
+  output both matrices read through `fromJson(... || <the full list>)` under
+  `if: ${{ !cancelled() }}`, so on every pull request — where that job is skipped — the
+  matrices are the full list and the required check names are exactly what they were, and
+  a decision that fails schedules everything rather than nothing.
+  `scripts/check-macos-lane-selection.sh`, a command in `scripts:test`, drives the decision
+  over real git states and a stand-in GitHub, holds the workflow to that shape, and runs
+  the workflow's own selection step over both answers.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
   policy — the single declared one, read rather than restated — accepts a commit since the

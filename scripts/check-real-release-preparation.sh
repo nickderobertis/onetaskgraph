@@ -32,14 +32,18 @@ source "$ROOT/scripts/scratch-clone.sh"
 # -C`. Clear them before the first git command so this check addresses its scratch clone
 # even when distribution-check is running inside pre-push.
 scratch_clone_strip_git_env
-pinned="$(sed -n 's/.*release-plz@\([^ ,]*\).*/\1/p' "$ROOT/.github/workflows/release-plz.yml" | head -n1)" || fail \
-  "could not read the workflow's release-plz pin" "restore the readable workflow and rerun"
-[[ $pinned =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "the release workflow has no exact X.Y.Z release-plz pin ('$pinned')" "restore its exact tool pin and rerun"
-[ "$(release-plz --version 2>/dev/null || true)" = "release-plz $pinned" ] || fail \
-  "release-plz $pinned is not installed, so the real preparation cannot be exercised" \
-  "run 'just bootstrap', which installs the workflow's pinned tool, then rerun"
-release_plz_bin="$(command -v release-plz)" || fail \
-  "could not resolve the installed release-plz" "run 'just bootstrap', then rerun"
+# The real pinned tool, from the repository-scoped location scripts/scoped-release-plz.sh
+# owns — never from PATH, where another repository's pin may sit. A refusal here is about
+# this machine and says so, without the host-prerequisite marker: this check reads the
+# candidate tree, and that marker is scripts/provision-gate.sh's alone.
+pinned="$(bash "$ROOT/scripts/scoped-release-plz.sh" pin)" || fail \
+  "could not read the release-plz pin from scripts/scoped-release-plz.sh" "restore that script and rerun"
+[[ $pinned =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "scripts/scoped-release-plz.sh has no exact X.Y.Z release-plz pin ('$pinned')" "restore its exact tool pin and rerun"
+release_plz_bin="$(bash "$ROOT/scripts/scoped-release-plz.sh" resolve 2>&1)" || {
+  printf '%s\n' "$release_plz_bin" >&2
+  fail "release-plz $pinned is not provisioned in this repository's scoped tool location, so the real preparation cannot be exercised" \
+    "run 'just bootstrap', which installs the pinned tool there, then rerun"
+}
 for tool in git gh perl python3 uv; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not on PATH" "run 'just bootstrap', then rerun"
 done
@@ -53,7 +57,11 @@ cleanup() {
   rm -rf "$scratch"
 }
 trap cleanup EXIT
-mkdir -p "$scratch/bin" "$scratch/state" || fail "could not create fixture state directories" "check scratch-directory permissions"
+# The launcher below stands where the scripts under test resolve release-plz: the scoped
+# location, relocated into the fixture through ONETASKGRAPH_TOOLS_HOME, so the production
+# resolution is what is driven and the real tool is what answers.
+scoped_launcher_dir="$scratch/tools/release-plz/$pinned/bin"
+mkdir -p "$scratch/bin" "$scratch/state" "$scoped_launcher_dir" || fail "could not create fixture state directories" "check scratch-directory permissions"
 # Every destination this journey is allowed to reach is inside the fixture, and all of them
 # are filesystem paths: the bare origin next door, the `gh` shim, the released tree the
 # registry lookup now reads. So nothing legitimate ever opens an HTTP connection, and a
@@ -234,7 +242,7 @@ git -C "$repo" remote set-head origin "$fixture_base" || fail \
 git -C "$repo" switch --quiet --detach "$fixture_base" || fail \
   "could not detach the tooling-only checkout" "check the scratch repository and rerun"
 
-if ! cat > "$scratch/bin/release-plz" <<'RELEASE_PLZ'
+if ! cat > "$scoped_launcher_dir/release-plz" <<'RELEASE_PLZ'
 #!/usr/bin/env bash
 set -euo pipefail
 read_manifest_version() {
@@ -278,8 +286,9 @@ GH
 then
   fail "could not create the gh fixture" "check scratch-directory permissions and free space"
 fi
-chmod +x "$scratch/bin/release-plz" "$scratch/bin/gh" || fail \
+chmod +x "$scoped_launcher_dir/release-plz" "$scratch/bin/gh" || fail \
   "could not make the command fixtures executable" "check scratch-directory permissions"
+export ONETASKGRAPH_TOOLS_HOME="$scratch/tools"
 export GH_FIXTURE_STATE="$scratch/state"
 export GIT_TOKEN=fixture-token
 export GITHUB_REF_NAME="$fixture_base"
