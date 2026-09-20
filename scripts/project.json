@@ -81,6 +81,7 @@
           "bash scripts/set-version.sh --check",
           "bash scripts/check-distribution-contract.sh",
           "bash scripts/check-distribution-contract-enforced.sh",
+          "bash scripts/check-release-packaging.sh",
           "bash scripts/check-release-targets.sh",
           "bash scripts/check-release-probe.sh",
           "bash scripts/check-crate-sibling-resolution.sh",
