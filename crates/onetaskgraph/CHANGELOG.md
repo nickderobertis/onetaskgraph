@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.41](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.40...v0.2.41) - 2026-09-20
+
+### Fixed
+
+- *(local-md)* atomic status writes, listing stable across a replacement, and a project-scoped walk ([#2128](https://github.com/nickderobertis/onetaskgraph/pull/2128))
+
 ## [0.2.40](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.39...v0.2.40) - 2026-09-19
 
 ### Fixed
