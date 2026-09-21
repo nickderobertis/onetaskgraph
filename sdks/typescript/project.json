@@ -32,7 +32,7 @@
       "options": {
         "command": "bun run --cwd sdks/typescript generate:check"
       },
-      "//": "The generator executes target/debug/onetaskgraph. Depend on the binary's shared build target so this target cannot relink it while Rust integration tests are spawning it."
+      "//": "The generator executes target/debug/onetaskgraph, which onetaskgraph:build alone may produce; test, coverage and pack reach that build through this target, and scripts/check-workspace-config.sh holds every spawner to it."
     },
     "build": {
       "executor": "nx:run-commands",

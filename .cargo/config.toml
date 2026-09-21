@@ -1,3 +1,12 @@
+# Build configuration every cargo invocation anywhere inside this clone reads.
+#
+# `target-dir` here is resolved relative to the directory holding `.cargo/`, so
+# every crate in this clone — workspace members and any crate outside the
+# workspace alike — builds into `<clone>/target`, and a second clone or worktree
+# of this repository, carrying its own copy of this file, builds into its own
+# root. Never point this outside the clone: concurrent worktrees must not share
+# one target directory.
+#
 # Warnings are errors for every cargo invocation in this workspace — check, test, build
 # and coverage alike, not just clippy. A diagnostic is an error or a suppression with a
 # stated reason; there is no warnings-only mode.
@@ -6,4 +15,11 @@
 # with `--cap-lints=allow` of its own accord, so an upstream warning cannot break this
 # build and the denial lands on this workspace's own crates.
 [build]
+target-dir = "target"
 rustflags = ["-D", "warnings"]
+
+# Line tables only for dev and test builds (`test` inherits `dev`): backtraces and
+# coverage keep file:line, and the full debuginfo cargo writes by default
+# (`debug = 2`) stays off the disk. `release` is untouched.
+[profile.dev]
+debug = 1

@@ -7,6 +7,7 @@ import json
 import keyword
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import TypedDict
@@ -134,20 +135,37 @@ class SchemaBundle(TypedDict):
     roots: dict[str, JsonValue]
 
 
+BINARY = (
+    ROOT.parent.parent
+    / "target"
+    / "debug"
+    / ("onetaskgraph.exe" if sys.platform == "win32" else "onetaskgraph")
+)
+"""The executable `onetaskgraph:build` produces, which is the artifact under generation.
+
+Nothing here builds it: scripts/check-workspace-config.sh says why a spawner never does.
+"""
+
+
 # llmlint: ignore-block[async_typed_clients_at_boundaries] This is a build-time generator, not
-# a client: one ordered pass that drives `cargo` as a subprocess and consumes its stdout as
-# the schema bundle the next step reads. There is no concurrent work to overlap and no service
-# on the other end, and nothing in this file ships in the wheel. The async typed boundary this
-# rule asks of this package is `src/onetaskgraph_sdk/client.py`, which is exactly that.
+# a client: one ordered pass that drives the built binary as a subprocess and consumes its
+# stdout as the schema bundle the next step reads. There is no concurrent work to overlap and
+# no service on the other end, and nothing in this file ships in the wheel. The async typed
+# boundary this rule asks of this package is `src/onetaskgraph_sdk/client.py`, which is
+# exactly that.
 def run_workspace_binary(*args: str) -> str:
-    """Run the workspace binary, building the exact artifact under generation.
+    """Run the workspace binary that `onetaskgraph:build` produced.
 
     A failure reports what the subprocess said. `check=True` raises with the command line
     alone, and the output this captures — stdout because it IS the answer, stderr with it —
     goes into that exception rather than to the terminal, so the whole diagnosis is lost.
     """
-    command = ["cargo", "run", "--quiet", "-p", "onetaskgraph", "--bin", "onetaskgraph", "--"]
-    command.extend(args)
+    if not BINARY.is_file():
+        raise SystemExit(
+            f"{BINARY} is missing; run `scripts/nx.sh run onetaskgraph:build` from the "
+            "workspace root, which is what every Nx target that spawns it depends on"
+        )
+    command = [str(BINARY), *args]
     # The binary writes UTF-8 whatever the platform, and its schema descriptions carry
     # characters outside ASCII: decoding in the platform's code page, which `text=True` alone
     # does on the Windows runner, would hand every later step a mangled description.

@@ -44,6 +44,7 @@
         "commands": [
           "bash scripts/check-bash4-array-builtins-enforced.sh",
           "bash scripts/check-copy-pagination-guards-enforced.sh",
+          "bash scripts/check-workspace-config-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-live-decline-reading.sh",
@@ -99,6 +100,7 @@
     },
     "distribution-test": {
       "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
         "commands": [
           "bash scripts/test-distribution.sh",
@@ -108,7 +110,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate."
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
     }
   }
 }

@@ -25,9 +25,9 @@
     "build": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cargo build --quiet -p onetaskgraph --bin onetaskgraph --locked"
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --no-run"
       },
-      "//": "Integration tests and both SDK generators execute this binary. Making it an Nx target lets every consumer depend on one completed build instead of racing independent Cargo commands that replace the executable on macOS."
+      "//": "The one build of target/debug/onetaskgraph, which every target that spawns the file depends on. It is the test command with --no-run because `cargo build` of this package links a different unit — dev-dependencies widen the features its dependencies are built with — and every switch replaces the file. scripts/check-workspace-config.sh holds the arrangement."
     },
     "format": {
       "executor": "nx:run-commands",
@@ -59,15 +59,19 @@
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "cargo test --quiet -p onetaskgraph --all-features --locked --target-dir target/tests/onetaskgraph"
+        "command": "cargo test --quiet -p onetaskgraph --all-features --locked"
       },
-      "//": "Cargo builds CARGO_BIN_EXE_onetaskgraph once in this target's private directory before starting any integration-test executable. Gate targets run concurrently, so sharing target/debug lets another Cargo invocation replace the binary between a test resolving and spawning it on macOS."
+      "//": "The integration tests spawn CARGO_BIN_EXE_onetaskgraph; depending on build, whose command this is without --no-run, means the file is already there and fresh when they start."
     },
     "coverage": {
       "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph"
-      }
+      },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "cache": false,
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
     }
   }
 }
