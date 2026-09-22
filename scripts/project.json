@@ -47,6 +47,7 @@
           "bash scripts/check-workspace-config-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",
           "bash scripts/check-line-reads.sh",
+          "bash scripts/check-loopback-registries.sh",
           "bash scripts/check-live-decline-reading.sh",
           "bash scripts/check-live-lane-enforced.sh",
           "bash scripts/check-live-lane-selection.sh",
