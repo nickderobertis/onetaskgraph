@@ -8,6 +8,18 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 python_bin=$(command -v python3 || command -v python || true)
 [[ -n $python_bin ]] || { echo "distribution test requires Python 3; next: install python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
+# An absolute interpreter, because the cases below run it from inside a scratch clone.
+# `command -v` answers with the PATH entry it matched, and an entry may be relative — a
+# virtualenv activation, a direnv, or an orchestration host that has no absolute worktree
+# path to write when it builds a PATH all produce one. A relative answer is resolved against
+# whatever directory the command runs in, and bash caches it besides, so the first
+# `(cd "$tmp/version-repo" && ...)` case below dies with `No such file or directory` and exit
+# 127 where it is reading the helper's own exit status — a portability failure wearing the
+# costume of the thing it was proving.
+case $python_bin in
+  /* | ?:[\\/]*) ;;
+  *) python_bin=$(cd "$(dirname "$python_bin")" && pwd)/$(basename "$python_bin") ;;
+esac
 command -v npm >/dev/null || { echo "distribution test requires the npm client; next: install Node.js and rerun scripts/test-distribution.sh" >&2; exit 1; }
 "$python_bin" -c 'import sys; raise SystemExit(sys.version_info < (3, 8))' || { echo "distribution test requires Python 3.8 or newer; next: install a supported python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
 stop_server() {
@@ -334,7 +346,7 @@ grep -q 'crates/onetaskgraph/project.json: is not valid JSON' "$tmp/error" || { 
 if grep -q 'Traceback' "$tmp/error"; then cat "$tmp/error" >&2; echo "malformed project failure leaked a Python traceback; next: reuse the workspace validator's guarded project parse" >&2; exit 1; fi
 mv "$tmp/version-repo/crates/onetaskgraph/project.json.valid" "$tmp/version-repo/crates/onetaskgraph/project.json"
 cp "$tmp/version-repo/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json.valid"
-python3 - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
+"$python_bin" - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
 import json
 import sys
 
@@ -350,7 +362,7 @@ if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/er
 grep -q 'crates/onetaskgraph/project.json: "targets" must contain a JSON object' "$tmp/error" || { cat "$tmp/error" >&2; echo "malformed targets failure omitted its location and reason; next: inspect workspace diagnostics" >&2; exit 1; }
 if grep -q 'Traceback' "$tmp/error"; then cat "$tmp/error" >&2; echo "malformed targets failure leaked a Python traceback; next: guard nested project values before using them" >&2; exit 1; fi
 mv "$tmp/version-repo/crates/onetaskgraph/project.json.valid" "$tmp/version-repo/crates/onetaskgraph/project.json"
-python3 - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
+"$python_bin" - "$tmp/version-repo/crates/onetaskgraph/project.json" <<'PY'
 import json
 import sys
 
@@ -370,15 +382,15 @@ PY
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a test target linking a different unit of the binary from its build target; next: inspect binary isolation validation" >&2; exit 1; fi
 grep -q 'test and build resolve different units of the package' "$tmp/error" || { cat "$tmp/error" >&2; echo "binary unit mismatch failure omitted its reason; next: inspect workspace diagnostics" >&2; exit 1; }
 cp "$root/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py) 2>"$tmp/error"; then helper_usage_status=0; else helper_usage_status=$?; fi
 [[ $helper_usage_status -eq 2 ]] || { echo "product-version helper usage failure exited $helper_usage_status, expected 2; next: inspect argument validation" >&2; exit 1; }
 grep -q 'usage: scripts/product_versions.py' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper usage failure omitted its reason; next: inspect argument diagnostics" >&2; exit 1; }
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 01.2.3) 2>"$tmp/error"; then helper_version_status=0; else helper_version_status=$?; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py set 01.2.3) 2>"$tmp/error"; then helper_version_status=0; else helper_version_status=$?; fi
 [[ $helper_version_status -eq 2 ]] || { echo "product-version helper invalid version exited $helper_version_status, expected 2; next: inspect version validation" >&2; exit 1; }
 grep -q 'invalid semantic version' "$tmp/error" || { cat "$tmp/error" >&2; echo "product-version helper invalid version omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
 cp "$tmp/version-repo/Cargo.toml" "$tmp/version-repo/Cargo.toml.valid"
 perl -pi -e 'if (/^\[workspace\.package\]/ .. /^version = /) { s/^version = "[^"]+"/version = "01.2.3"/ }' "$tmp/version-repo/Cargo.toml"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted an invalid manifest version; next: inspect manifest validation" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted an invalid manifest version; next: inspect manifest validation" >&2; exit 1; fi
 grep -q 'Cargo.toml has None; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "invalid manifest version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
 # llmlint: ignore[work_goes_through_command_surface] This journey must check the scratch tree directly; the just recipe addresses the outer working tree.
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted an invalid semantic product version; next: inspect workspace version validation" >&2; exit 1; fi
@@ -386,7 +398,7 @@ grep -q 'Cargo.toml: no product version could be read' "$tmp/error" || { cat "$t
 mv "$tmp/version-repo/Cargo.toml.valid" "$tmp/version-repo/Cargo.toml"
 cp "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py" "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py.valid"
 perl -pi -e 's/^__version__ = "[^"]+"/__version__ = "9.9.9"/' "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted a mismatched module version; next: inspect version comparison" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.0) 2>"$tmp/error"; then echo "product-version helper accepted a mismatched module version; next: inspect version comparison" >&2; exit 1; fi
 grep -q 'sdks/python/src/onetaskgraph_sdk/__init__.py has 9.9.9; expected 0.1.0' "$tmp/error" || { cat "$tmp/error" >&2; echo "module-version mismatch omitted its location and values; next: inspect version diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py.valid" "$tmp/version-repo/sdks/python/src/onetaskgraph_sdk/__init__.py"
 node -e 'const fs=require("fs"),f=process.argv[1],p=JSON.parse(fs.readFileSync(f));p.version="9.9.9";fs.writeFileSync(f,JSON.stringify(p,null,2)+"\n")' "$tmp/version-repo/npm/cli/package.json"
@@ -441,19 +453,19 @@ done
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted malformed product JSON; next: inspect workspace manifest validation" >&2; exit 1; fi
 grep -q 'product version files could not be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "workspace check malformed-manifest failure omitted recovery guidance; next: inspect workspace diagnostics" >&2; exit 1; }
 printf '[]\n' > "$tmp/version-repo/sdks/typescript/package.json"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a non-object package manifest; next: inspect JSON boundary validation" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a non-object package manifest; next: inspect JSON boundary validation" >&2; exit 1; fi
 grep -q 'package manifest must be a JSON object' "$tmp/error" || { cat "$tmp/error" >&2; echo "non-object manifest failure omitted its reason; next: inspect JSON diagnostics" >&2; exit 1; }
 printf '{}\n' > "$tmp/version-repo/sdks/typescript/package.json"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing JSON version; next: inspect version-field validation" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing JSON version; next: inspect version-field validation" >&2; exit 1; fi
 grep -q 'sdks/typescript/package.json has None' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing JSON version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
 printf '{"version": {}}\n' > "$tmp/version-repo/sdks/typescript/package.json"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a non-string JSON version; next: inspect version-field validation" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a non-string JSON version; next: inspect version-field validation" >&2; exit 1; fi
 grep -q 'sdks/typescript/package.json has None' "$tmp/error" || { cat "$tmp/error" >&2; echo "non-string JSON version failure omitted its location; next: inspect version diagnostics" >&2; exit 1; }
 printf '{}\n' > "$tmp/version-repo/sdks/typescript/package.json"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote a tree with a missing JSON version; next: inspect pre-write validation" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote a tree with a missing JSON version; next: inspect pre-write validation" >&2; exit 1; fi
 grep -q 'no valid semantic product version could be read' "$tmp/error" || { cat "$tmp/error" >&2; echo "set failure for a missing version omitted its reason; next: inspect version diagnostics" >&2; exit 1; }
 mv "$tmp/version-repo/sdks/typescript/package.json" "$tmp/version-repo/sdks/typescript/package.json.missing"
-if (cd "$tmp/version-repo" && python3 scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
+if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then echo "product-version helper accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
 grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-manifest helper failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
 # llmlint: ignore[work_goes_through_command_surface] The missing-manifest state exists only in the scratch tree, which the outer just recipe cannot address.
 if (cd "$tmp/version-repo" && bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then echo "workspace check accepted a missing product manifest; next: inspect filesystem error handling" >&2; exit 1; fi
@@ -468,7 +480,7 @@ case "${OS:-}${OSTYPE:-}" in
   *)
     for readonly_manifest in Cargo.toml sdks/typescript/package.json; do
       chmod 444 "$tmp/version-repo/$readonly_manifest"
-      if (cd "$tmp/version-repo" && python3 scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
+      if (cd "$tmp/version-repo" && "$python_bin" scripts/product_versions.py set 0.1.2) 2>"$tmp/error"; then echo "product-version helper rewrote read-only $readonly_manifest; next: inspect write error handling" >&2; exit 1; fi
       grep -q 'product version files could not be processed' "$tmp/error" || { cat "$tmp/error" >&2; echo "read-only manifest failure omitted recovery guidance; next: inspect version diagnostics" >&2; exit 1; }
       grep -q '^version = "0.1.1"' "$tmp/version-repo/Cargo.toml" || { echo "failed product-version update partially rewrote the workspace manifest; next: inspect write preflight" >&2; exit 1; }
       chmod 644 "$tmp/version-repo/$readonly_manifest"
