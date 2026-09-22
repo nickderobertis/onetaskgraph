@@ -1,30 +1,17 @@
 #!/usr/bin/env bash
 # Prove the gate's python-bearing scripts survive a relative interpreter entry on PATH.
 #
-# `command -v python3` answers with the PATH entry it matched, and that entry may be
-# relative: a virtualenv activation, a direnv, or an orchestration host with no absolute
-# worktree path to write when it builds a PATH all produce one. Bash then caches the answer
-# and carries it into every subshell, including the ones these scripts open with a working
-# directory of their own — where the same spelling names nothing and the invocation dies
-# `No such file or directory`, exit 127.
+# AGENTS.md records that defect and what it cost. What it cannot record is whether these
+# scripts still have it — and no required lane can see: their PATHs are absolute, so every
+# one of them passes either way.
 #
-# That is not a warning. It is indistinguishable from the command being absent, and each of
-# these three scripts reported it as its own subject having failed: a product-version helper
-# that exited 127 "expected 2", a path-spelling scan that "did not name" what it was looking
-# for, and live-session paths that "do not all consult the decision". The first of those
-# refused this repository's own merge path.
+# So this is the real scripts, run again from the directory the gate runs them in, with a
+# relative entry first on PATH. Nothing stands in for the scripts; the shim stands in only
+# for the host, which is the variable under test. Case 1 refuses to let the rest pass
+# vacuously, because a simulation that did not take would look exactly like a pass.
 #
-# So each script is resolved once and absolutely, and this is where that is proven — by
-# running the real scripts, from the directory the gate runs them in, with a relative entry
-# first on PATH. Nothing stands in for the scripts; the shim stands in only for the host,
-# which is the variable under test. Case 1 refuses to let the rest pass vacuously, because a
-# simulation that did not take would look exactly like a pass.
-#
-# The cost is stated rather than discovered: this runs three real checks a second time, about
-# five minutes, of which scripts/test-distribution.sh is half. It buys the only evidence there
-# is — the defect is invisible to every host whose PATH is absolute, which is all three of the
-# required lanes, so nothing else in this gate can see it — and it is paid only when scripts/
-# changes, which is what selects the project this check belongs to.
+# The cost is stated rather than discovered: about five minutes, half of it
+# scripts/test-distribution.sh, paid only when scripts/ changes.
 set -euo pipefail
 
 fatal() {
@@ -109,6 +96,10 @@ case $probe_status in
 esac
 
 # Cases 2-4: the real scripts, from the directory the gate runs them in.
+# llmlint: ignore[work_goes_through_command_surface] What is under test is each script under
+# a PATH of this check's making, which is neither an input of the recipes that own them nor
+# something Nx can key a cache on — so a cached hit from `just distribution-test` or `just
+# script-check` would be a claim about a run made under some other PATH entirely.
 failures=0
 for script in \
   scripts/test-distribution.sh \

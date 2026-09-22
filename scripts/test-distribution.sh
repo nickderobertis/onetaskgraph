@@ -8,14 +8,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 python_bin=$(command -v python3 || command -v python || true)
 [[ -n $python_bin ]] || { echo "distribution test requires Python 3; next: install python3 and rerun scripts/test-distribution.sh" >&2; exit 1; }
-# An absolute interpreter, because the cases below run it from inside a scratch clone.
-# `command -v` answers with the PATH entry it matched, and an entry may be relative — a
-# virtualenv activation, a direnv, or an orchestration host that has no absolute worktree
-# path to write when it builds a PATH all produce one. A relative answer is resolved against
-# whatever directory the command runs in, and bash caches it besides, so the first
-# `(cd "$tmp/version-repo" && ...)` case below dies with `No such file or directory` and exit
-# 127 where it is reading the helper's own exit status — a portability failure wearing the
-# costume of the thing it was proving.
+# Absolute, because the cases below run it from inside a scratch clone, where the relative
+# answer `command -v` can give resolves against the wrong directory. AGENTS.md records what
+# that cost here; scripts/check-relative-interpreter.sh is what holds it.
 case $python_bin in
   /* | ?:[\\/]*) ;;
   *) python_bin=$(cd "$(dirname "$python_bin")" && pwd)/$(basename "$python_bin") ;;

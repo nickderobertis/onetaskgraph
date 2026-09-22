@@ -38,12 +38,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
 readonly ROOT
 
 # The interpreter, resolved once and absolutely, because several cases below run it from
-# inside the scratch clone rather than from here. `command -v` answers with the PATH entry
-# it matched, and an entry may be relative — a virtualenv activation, a direnv, or an
-# orchestration host with no absolute worktree path to write when it builds a PATH all
-# produce one. Left relative it resolves against whatever directory the command runs in,
-# and bash caches it besides, so `(cd "$REPO" && python3 ...)` dies with `No such file or
-# directory` and exit 127 — read as this check's own subject having failed.
+# inside the scratch clone rather than from here. AGENTS.md records what the relative answer
+# `command -v` can give cost here.
 PYTHON="$(command -v python3)" || fatal \
   "no python3 on PATH, and every case below reports through it" \
   "install python3, or run 'just bootstrap', then rerun"
