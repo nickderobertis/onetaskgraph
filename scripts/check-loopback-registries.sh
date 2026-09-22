@@ -151,9 +151,18 @@ log_file="$scratch/stock.log"
 launch "$scratch/stock-registry.py" "$port_file"
 if ! await "$called_file"; then
   stop
-  fatal \
-    "the stock stand-in neither reported the reverse lookup nor exited saying why, so this check cannot tell a launcher that binds without the lookup from one that does" \
-    "read $log_file — but it is deleted with the scratch tree, so rerun with 'bash -x scripts/check-loopback-registries.sh' to keep the trace"
+  # The stand-in's own output rather than the path it is at: that path is inside the
+  # scratch tree the EXIT trap removes, so naming it would send the reader somewhere that
+  # no longer exists by the time they look.
+  echo "check-loopback-registries: the stock stand-in neither reported the reverse lookup" >&2
+  echo "check-loopback-registries: nor exited saying why, so this check cannot tell a" >&2
+  echo "check-loopback-registries: launcher that binds without the lookup from one that" >&2
+  echo "check-loopback-registries: does. It said:" >&2
+  sed 's/^/    /' <"$log_file" >&2
+  echo "check-loopback-registries: next: that stand-in is written by this check itself, as" >&2
+  echo "check-loopback-registries: is the resolver shim it runs under — repair whichever of" >&2
+  echo "check-loopback-registries: the two its output above names, then rerun." >&2
+  exit 1
 fi
 if reports_a_port; then
   fail "a registry bound the stock way reported a port although socket.getfqdn never answered — so cases 2 and 3 below would pass for a launcher that binds through the reverse lookup, which is the whole of what they are for"
