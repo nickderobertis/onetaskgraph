@@ -65,6 +65,17 @@ cp -a "$ROOT/scripts" "$scratch/scripts" || fatal \
 real_python3="$(command -v python3)" || fatal \
   "no python3 on PATH, and the guard under test reports through it" \
   "install python3, or run 'just bootstrap', then rerun"
+# Absolute, because the shim below runs it from the scratch tree rather than from here, and
+# because every `by absolute path` this file promises is a promise about this variable.
+# `command -v` answers with the PATH entry it matched, and an entry may be relative — a
+# virtualenv activation, a direnv, or an orchestration host with no absolute worktree path
+# to write when it builds a PATH all produce one. Left relative it resolves against whatever
+# directory the caller happens to be in, and the shim dies with `No such file or directory`
+# and exit 127 — which reads as the scan under test having failed, not as this line.
+case $real_python3 in
+  /* | ?:[\\/]*) ;;
+  *) real_python3=$(cd "$(dirname "$real_python3")" && pwd)/$(basename "$real_python3") ;;
+esac
 readonly real_python3
 
 failures=0
