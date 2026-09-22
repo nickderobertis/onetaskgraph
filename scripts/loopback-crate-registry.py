@@ -4,20 +4,9 @@
 Called as `loopback-crate-registry.py <port file> <index root>`: it binds a port the kernel
 picks, writes that port to the file, and serves the index root until it is killed.
 
-It is a server of this repository's own rather than `python3 -m http.server`. That one
-binds through `http.server.HTTPServer.server_bind`, which names itself with
-`socket.getfqdn(host)` BEFORE printing the banner the check used to read the port out of —
-and on the macOS runner that reverse lookup of 127.0.0.1 outlasted the whole wait, so a
-registry that had in fact bound was reported as one that never reported a port, with an
-empty log where the reason belonged. So this binds without the lookup, as
-scripts/loopback-npm-registry.py does for the same reason, and writes its port to a file of
-its own the moment it has one: the same report on every platform, read from nothing a
-platform's resolver can delay.
-
-It is a file rather than a heredoc inside that check because that requirement is invisible
-in the code that meets it — a cleanup back to the stock bind passes every Linux check and
-hangs the macOS release lane. scripts/check-loopback-registries.sh runs this very launcher
-with `socket.getfqdn` replaced by a function that blocks, which is what holds it.
+It is a file rather than a heredoc inside that check so that
+scripts/check-loopback-registries.sh can run this very launcher against the bind `Loopback`
+below states — a requirement nothing about the code that meets it makes visible.
 """
 
 import functools
@@ -29,7 +18,12 @@ port_file, root = sys.argv[1:]
 
 
 class Loopback(http.server.ThreadingHTTPServer):
-    """Bound without the reverse DNS lookup `HTTPServer.server_bind` does on its own account."""
+    """Bound without the reverse DNS lookup `HTTPServer.server_bind` does on its own account.
+
+    That lookup of 127.0.0.1 outlasted the whole start-up window on the macOS release
+    runner, so a registry that had in fact bound was reported as one that never reported a
+    port — which is why the port below goes to a file rather than to a banner.
+    """
 
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)

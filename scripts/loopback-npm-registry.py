@@ -3,27 +3,23 @@
 
 Called as `loopback-npm-registry.py <published jsonl> <port file> <mode file>`: it binds a
 port the kernel picks, writes that port to the file, and answers the publication until it
-is killed.
+is killed. Recording, it answers a read 404 until that exact version has been published to
+it and 200 afterwards — which is what makes the re-run of a partly finished publication
+readable — and records each publication as one JSON line.
 
-Recording, it answers a read 404 until that exact version has been published to it and 200
-afterwards — which is what makes the re-run of a partly finished publication readable — and
-records each publication as one JSON line naming the package, the version and the tarball
-it carried.
-
-It is a file rather than a heredoc inside that check because the bind below is a
-requirement invisible in the code that meets it — a cleanup back to the stock bind passes
-every Linux check and hangs the macOS release lane.
-scripts/check-loopback-registries.sh runs this very launcher with `socket.getfqdn` replaced
-by a function that blocks, which is what holds it.
+It is a file rather than a heredoc inside that check so that
+scripts/check-loopback-registries.sh can run this very launcher against the bind `Loopback`
+below states — a requirement nothing about the code that meets it makes visible.
 """
 
+import enum
 import json
 import socketserver
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-published, port_file, mode_file = sys.argv[1], sys.argv[2], sys.argv[3]
+published, port_file, mode_file = sys.argv[1:]
 
 # package name -> the versions this registry has been sent. A publication asks about a
 # version before sending it, and a registry that forgets what it was given cannot tell
@@ -31,29 +27,54 @@ published, port_file, mode_file = sys.argv[1], sys.argv[2], sys.argv[3]
 holdings = {}
 
 
+class Mode(enum.Enum):
+    """The registries this one server stands in for, a member per case the check drives."""
+
+    RECORD = "record"
+    REFUSE_READS = "refuse-reads"
+    REFUSE_WRITES = "refuse-writes"
+
+
+class UnknownMode(Exception):
+    """The mode file holds a word this registry stands in for no registry as."""
+
+
 def mode():
     """Which registry this is standing in for right now.
 
     Read per request rather than once at startup: the check moves this one server between
-    modes, and a mode read once would answer every later case as the first one.
+    modes, and a mode read once would answer every later case as the first one. A word that
+    is no mode raises rather than recording, because recording is what the check reads as a
+    publication having landed.
     """
     try:
         with open(mode_file, encoding="utf-8") as handle:
-            return handle.read().strip() or "record"
+            written = handle.read().strip()
     except FileNotFoundError:
-        return "record"
+        written = ""
+    if not written:
+        return Mode.RECORD
+    try:
+        return Mode(written)
+    except ValueError as error:
+        raise UnknownMode(f"{mode_file} holds {written!r}, which is no mode of this registry") from error
 
 
 def shape_of(document):
     """What is wrong with this publication document, or `None` when nothing is."""
     if not isinstance(document, dict):
         return f"the publication is not a JSON object: {type(document).__name__}"
-    if not isinstance(document.get("name"), str):
-        return f"the publication names no package: {document.get('name')!r}"
+    name = document.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return f"the publication names no package: {name!r}"
     versions = document.get("versions") or {}
     if not isinstance(versions, dict):
         return f"'versions' is not an object: {versions!r}"
     for version, manifest in versions.items():
+        # Non-empty, and no stricter: this registry records what it is sent, and a grammar
+        # invented here would refuse a name or a version npm itself takes.
+        if not isinstance(version, str) or not version.strip():
+            return f"a version of {name} is not a version: {version!r}"
         if not isinstance(manifest, dict):
             return f"the manifest for version {version!r} is not an object: {manifest!r}"
     if not isinstance(document.get("_attachments") or {}, dict):
@@ -73,13 +94,28 @@ class Registry(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _mode_or_refuse(self):
+        """This registry's mode, or `None` once it has answered that it was given no mode.
+
+        Answered rather than raised, for the reason every other refusal here is: a handler
+        that raises closes the connection, and npm reads that as the registry being
+        unreachable rather than as the refusal it is.
+        """
+        try:
+            return mode()
+        except UnknownMode as unknown:
+            self._answer(500, {"error": str(unknown)})
+            return None
+
     def do_GET(self):
-        current = mode()
-        if current == "refuse-reads":
+        current = self._mode_or_refuse()
+        if current is None:
+            return
+        if current is Mode.REFUSE_READS:
             self._answer(403, {"error": "Forbidden"})
             return
         name = urllib.parse.unquote(self.path.split("?", 1)[0].lstrip("/"))
-        versions = [] if current == "refuse-writes" else holdings.get(name, [])
+        versions = [] if current is Mode.REFUSE_WRITES else holdings.get(name, [])
         if not versions:
             # Absent, which is the answer that tells the publication to send it.
             self._answer(404, {"error": "Not found"})
@@ -117,7 +153,10 @@ class Registry(BaseHTTPRequestHandler):
         # arriving closes the connection under npm, which reports it as the registry
         # being unreachable rather than as the refusal it is.
         body = self.rfile.read(length)
-        if mode() == "refuse-writes":
+        current = self._mode_or_refuse()
+        if current is None:
+            return
+        if current is Mode.REFUSE_WRITES:
             self._answer(403, {"error": "Forbidden"})
             return
         try:
@@ -161,13 +200,11 @@ class Registry(BaseHTTPRequestHandler):
 
 
 class Loopback(HTTPServer):
-    """Bound without the reverse DNS lookup `HTTPServer` does on its own account.
+    """Bound without the reverse DNS lookup `HTTPServer.server_bind` does on its own account.
 
-    `HTTPServer.server_bind` calls `socket.getfqdn(host)` to name itself, and on the
-    macOS runner that lookup of 127.0.0.1 outlasted the start-up window the check that
-    launches this waits out — so a registry that had in fact bound was reported as one
-    that never reported a port, and the whole install-path lane failed on a name nothing
-    reads.
+    That lookup of 127.0.0.1 outlasted the start-up window on the macOS release runner, so a
+    registry that had in fact bound was reported as one that never reported a port and the
+    whole install-path lane failed on a name nothing reads.
     """
 
     def server_bind(self):

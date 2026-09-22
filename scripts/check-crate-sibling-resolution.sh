@@ -85,14 +85,11 @@ version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml
   "crates/onetaskgraph/Cargo.toml has no plain X.Y.Z version ('$version')" "restore that manifest's version and rerun"
 newer="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 
-# Served over loopback on a port the kernel picks, by a server of this repository's own
-# rather than `python3 -m http.server`: scripts/loopback-crate-registry.py, which binds
-# without the reverse DNS lookup the stock one does and writes its port to a file of its
-# own the moment it has one. That file says why, and
-# scripts/check-loopback-registries.sh holds it to it. It is launched from $ROOT rather
-# than from the copy below because it is this check's own instrument rather than part of
-# the tree under test. This is the one process this check starts, so it is the one it
-# stops.
+# Served over loopback by scripts/loopback-crate-registry.py, which says what its bind
+# owes this check and writes its port to a file of its own the moment it has one. It is
+# launched from $ROOT rather than from the copy below because it is this check's own
+# instrument rather than part of the tree under test, and it is the one process this check
+# starts, so it is the one it stops.
 registry_launcher="$ROOT/scripts/loopback-crate-registry.py"
 [ -r "$registry_launcher" ] || fatal \
   "could not read $registry_launcher, which is the loopback index this check resolves against" \
