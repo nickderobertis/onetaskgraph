@@ -9,6 +9,11 @@ scripts/check-loopback-registries.sh can run this very launcher against the bind
 below states — a requirement nothing about the code that meets it makes visible.
 """
 
+# llmlint: ignore-file[boundary_inputs_validated] The two arguments below are paths
+# scripts/check-crate-sibling-resolution.sh creates and passes, and a wrong one raises into
+# the log that check prints. Nothing else reaches this server: it serves a static index
+# directory to one cargo over loopback.
+
 import functools
 import http.server
 import socketserver

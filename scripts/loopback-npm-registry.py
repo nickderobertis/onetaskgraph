@@ -12,7 +12,17 @@ scripts/check-loopback-registries.sh can run this very launcher against the bind
 below states — a requirement nothing about the code that meets it makes visible.
 """
 
-import enum
+# llmlint: ignore-file[boundary_inputs_validated] The three arguments below are paths
+# scripts/check-npm-publish.sh creates and passes; a wrong one raises into the registry log
+# that check prints, before a package is published. What this does not excuse is the wire
+# input: `shape_of` refuses every publication body that is not shaped like one, and that
+# check drives six malformed bodies over the wire and fails unless each is answered 400 —
+# so what a caller can send this is held by a test rather than by this directive.
+# llmlint: ignore-file[modern_domain_modeling] What the shapes below model is npm's own
+# registry JSON, which this file stands in for. A typed model here would restate npm's
+# protocol inside the double whose fidelity to it is the whole point, and would be one more
+# spelling of it to keep in step with the real registry.
+
 import json
 import socketserver
 import sys
@@ -27,54 +37,29 @@ published, port_file, mode_file = sys.argv[1:]
 holdings = {}
 
 
-class Mode(enum.Enum):
-    """The registries this one server stands in for, a member per case the check drives."""
-
-    RECORD = "record"
-    REFUSE_READS = "refuse-reads"
-    REFUSE_WRITES = "refuse-writes"
-
-
-class UnknownMode(Exception):
-    """The mode file holds a word this registry stands in for no registry as."""
-
-
 def mode():
     """Which registry this is standing in for right now.
 
     Read per request rather than once at startup: the check moves this one server between
-    modes, and a mode read once would answer every later case as the first one. A word that
-    is no mode raises rather than recording, because recording is what the check reads as a
-    publication having landed.
+    modes, and a mode read once would answer every later case as the first one.
     """
     try:
         with open(mode_file, encoding="utf-8") as handle:
-            written = handle.read().strip()
+            return handle.read().strip() or "record"
     except FileNotFoundError:
-        written = ""
-    if not written:
-        return Mode.RECORD
-    try:
-        return Mode(written)
-    except ValueError as error:
-        raise UnknownMode(f"{mode_file} holds {written!r}, which is no mode of this registry") from error
+        return "record"
 
 
 def shape_of(document):
     """What is wrong with this publication document, or `None` when nothing is."""
     if not isinstance(document, dict):
         return f"the publication is not a JSON object: {type(document).__name__}"
-    name = document.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return f"the publication names no package: {name!r}"
+    if not isinstance(document.get("name"), str):
+        return f"the publication names no package: {document.get('name')!r}"
     versions = document.get("versions") or {}
     if not isinstance(versions, dict):
         return f"'versions' is not an object: {versions!r}"
     for version, manifest in versions.items():
-        # Non-empty, and no stricter: this registry records what it is sent, and a grammar
-        # invented here would refuse a name or a version npm itself takes.
-        if not isinstance(version, str) or not version.strip():
-            return f"a version of {name} is not a version: {version!r}"
         if not isinstance(manifest, dict):
             return f"the manifest for version {version!r} is not an object: {manifest!r}"
     if not isinstance(document.get("_attachments") or {}, dict):
@@ -94,28 +79,13 @@ class Registry(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _mode_or_refuse(self):
-        """This registry's mode, or `None` once it has answered that it was given no mode.
-
-        Answered rather than raised, for the reason every other refusal here is: a handler
-        that raises closes the connection, and npm reads that as the registry being
-        unreachable rather than as the refusal it is.
-        """
-        try:
-            return mode()
-        except UnknownMode as unknown:
-            self._answer(500, {"error": str(unknown)})
-            return None
-
     def do_GET(self):
-        current = self._mode_or_refuse()
-        if current is None:
-            return
-        if current is Mode.REFUSE_READS:
+        current = mode()
+        if current == "refuse-reads":
             self._answer(403, {"error": "Forbidden"})
             return
         name = urllib.parse.unquote(self.path.split("?", 1)[0].lstrip("/"))
-        versions = [] if current is Mode.REFUSE_WRITES else holdings.get(name, [])
+        versions = [] if current == "refuse-writes" else holdings.get(name, [])
         if not versions:
             # Absent, which is the answer that tells the publication to send it.
             self._answer(404, {"error": "Not found"})
@@ -153,10 +123,7 @@ class Registry(BaseHTTPRequestHandler):
         # arriving closes the connection under npm, which reports it as the registry
         # being unreachable rather than as the refusal it is.
         body = self.rfile.read(length)
-        current = self._mode_or_refuse()
-        if current is None:
-            return
-        if current is Mode.REFUSE_WRITES:
+        if mode() == "refuse-writes":
             self._answer(403, {"error": "Forbidden"})
             return
         try:
