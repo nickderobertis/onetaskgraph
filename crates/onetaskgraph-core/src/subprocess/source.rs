@@ -64,6 +64,17 @@ impl RequestDeadline {
     }
 }
 
+/// The two bounds a spawned plugin's exchanges are held to, carried together so that the
+/// one constructor every other reaches takes a pair rather than two arguments of one type
+/// a caller could transpose.
+#[derive(Debug, Clone, Copy)]
+struct Deadlines {
+    /// Bounds the `initialize` exchange, and so the child's own start-up with it.
+    handshake: RequestDeadline,
+    /// Bounds each exchange after the handshake, against an already running child.
+    requests: RequestDeadline,
+}
+
 /// A source served by a spawned program speaking `docs/plugin-protocol.md`.
 pub struct SubprocessSource {
     /// What the plugin called itself in the handshake.
@@ -139,6 +150,10 @@ impl SubprocessSource {
     }
 
     /// Spawn a plugin with a deadline applying independently to every exchange.
+    ///
+    /// # Errors
+    ///
+    /// What [`connect`](Self::connect) returns.
     pub fn connect_with_deadline(
         program: &str,
         args: &[String],
@@ -147,7 +162,48 @@ impl SubprocessSource {
         secrets: BTreeMap<String, String>,
         deadline: RequestDeadline,
     ) -> Result<Self, SourceError> {
-        Self::connect_from_document(program, args, name, config, secrets, deadline, None)
+        Self::connect_with_deadlines(program, args, name, config, secrets, deadline, deadline)
+    }
+
+    /// Spawn a plugin, bounding the initialization handshake and every later request
+    /// separately.
+    ///
+    /// `handshake` bounds the one `initialize` exchange of §3, and a newly spawned child
+    /// does its own starting up inside that exchange: whatever a runtime loads before it
+    /// can read its first line is counted against this bound. `requests` bounds every
+    /// exchange after the handshake succeeded, each on its own, against a child that is by
+    /// then already running. They are the same bound in
+    /// [`connect_with_deadline`](Self::connect_with_deadline) and in every configured
+    /// source, because one `deadline_ms` is what `docs/plugin-protocol.md` §1 gives a user
+    /// to set. Separating them is for a caller that means to hold a *request* to a span
+    /// shorter than a program takes to start — the engine's own probe of what a silent
+    /// child's expired request reports — where one bound would fail the handshake on a
+    /// loaded host instead of reaching the behaviour it was after.
+    ///
+    /// # Errors
+    ///
+    /// What [`connect`](Self::connect) returns.
+    pub fn connect_with_deadlines(
+        program: &str,
+        args: &[String],
+        name: &SourceName,
+        config: &Value,
+        secrets: BTreeMap<String, String>,
+        handshake: RequestDeadline,
+        requests: RequestDeadline,
+    ) -> Result<Self, SourceError> {
+        Self::connect_bounded(
+            program,
+            args,
+            name,
+            config,
+            secrets,
+            Deadlines {
+                handshake,
+                requests,
+            },
+            None,
+        )
     }
 
     /// Spawn a plugin, telling it which document's directory its settings are measured
@@ -168,6 +224,30 @@ impl SubprocessSource {
         deadline: RequestDeadline,
         document_dir: Option<&Path>,
     ) -> Result<Self, SourceError> {
+        Self::connect_bounded(
+            program,
+            args,
+            name,
+            config,
+            secrets,
+            Deadlines {
+                handshake: deadline,
+                requests: deadline,
+            },
+            document_dir,
+        )
+    }
+
+    /// Spawn a plugin under both bounds, which is what every constructor above reaches.
+    fn connect_bounded(
+        program: &str,
+        args: &[String],
+        name: &SourceName,
+        config: &Value,
+        secrets: BTreeMap<String, String>,
+        deadlines: Deadlines,
+        document_dir: Option<&Path>,
+    ) -> Result<Self, SourceError> {
         let document_dir = document_dir
             .map(|directory| {
                 DocumentDir::new(directory).map_err(|problem| SourceError::Config {
@@ -181,7 +261,12 @@ impl SubprocessSource {
             })
             .transpose()?;
         Self::adopt(
-            Peer::spawn(program, args, deadline.duration())?,
+            Peer::spawn(
+                program,
+                args,
+                deadlines.handshake.duration(),
+                deadlines.requests.duration(),
+            )?,
             name,
             config,
             secrets,

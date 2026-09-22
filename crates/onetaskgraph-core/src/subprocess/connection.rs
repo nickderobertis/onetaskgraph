@@ -334,6 +334,13 @@ fn keep_platform_state(_command: &mut Command) {}
 impl Peer {
     /// Spawn `program` and take its three streams.
     ///
+    /// `handshake` bounds the one blocking [`exchange`](Self::exchange) that initializes
+    /// the plugin — a child that has just been spawned does its own starting up inside
+    /// that exchange — and `requests` bounds each exchange the [`Connection`] makes after
+    /// it, against a child that is by then already running. They are equal for every
+    /// configured source; the pair exists for a caller holding a request to a span shorter
+    /// than a program takes to start.
+    ///
     /// # Errors
     ///
     /// Returns [`SourceError::Unavailable`] when the command cannot be spawned, naming
@@ -342,7 +349,8 @@ impl Peer {
     pub(crate) fn spawn(
         program: &str,
         args: &[String],
-        deadline: Duration,
+        handshake: Duration,
+        requests: Duration,
     ) -> Result<Self, SourceError> {
         let mut command = Command::new(program);
         command
@@ -372,8 +380,8 @@ impl Peer {
             writer,
             reader,
             stderr: Some(stderr),
-            request_deadline: deadline,
-            handshake_deadline: Some(deadline),
+            request_deadline: requests,
+            handshake_deadline: Some(handshake),
         })
     }
 

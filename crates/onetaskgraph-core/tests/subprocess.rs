@@ -379,7 +379,16 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
     let answer = json!({"id": "0", "result": {"protocol_version": 2,
         "kind": "silent", "capabilities": capabilities()}})
     .to_string();
-    let source = SubprocessSource::connect_with_deadline(
+    // The two spans these deadlines bound are not comparable, which is why there are two of
+    // them. Twenty milliseconds is what the request under test is held to, and it is made
+    // against a child that is already running. The handshake before it is a round trip with
+    // the child's own start-up inside it — `/bin/sh` reaching its first `read` — which is
+    // single-figure milliseconds on a quiet host and far more on a saturated one, where the
+    // pre-push gate runs every affected suite at once. One bound for both therefore failed
+    // initialization before the behaviour this test exists for had begun; the handshake
+    // takes the protocol's own default instead, and the deadline the test asserts on reaches
+    // the silent request alone.
+    let source = SubprocessSource::connect_with_deadlines(
         "/bin/sh",
         &[
             "-c".to_owned(),
@@ -390,6 +399,7 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         &name(),
         &json!({}),
         BTreeMap::new(),
+        RequestDeadline::DEFAULT,
         RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
     )
     .expect("the handshake succeeds");
@@ -407,15 +417,28 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         started.elapsed() < Duration::from_secs(1),
         "the deadline did not hang"
     );
+    // The kill is why this deadline has to expire on the connect path rather than on a pair
+    // of streams somebody else owns: `connect` owns the child, so an expired request ends
+    // it, the worker's blocked read reaches end-of-file, and every later call is refused
+    // outright. A child left alive and silent would instead answer each later call with a
+    // fresh twenty-millisecond timeout of its own, for ever — so a refusal naming no
+    // deadline is what the kill is observable as, and this bounded wait is how the two are
+    // told apart on a host where the child takes a moment to die.
     let again = Instant::now();
-    assert!(
-        matches!(source.health().await, Err(SourceError::Unavailable { .. })),
-        "the timed-out connection stays closed"
-    );
-    assert!(
-        again.elapsed() < Duration::from_secs(1),
-        "a later call did not inherit the hang"
-    );
+    loop {
+        let Err(SourceError::Unavailable { message }) = source.health().await else {
+            panic!("the timed-out connection stays closed");
+        };
+        if !message.contains("did not answer") {
+            break;
+        }
+        assert!(
+            again.elapsed() < Duration::from_secs(5),
+            "a later call kept waiting on a child the expired deadline should have \
+             killed: {message}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
