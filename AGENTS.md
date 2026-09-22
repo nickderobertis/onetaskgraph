@@ -924,6 +924,21 @@ all.
   the Windows runner's — and refuses to run when the shim did not take, or when no manifest
   a version-only diff touches carries a byte the two decodings disagree about, because
   either would look exactly like a pass.
+- **And the interpreter a script resolves is absolute, because it will be run from somewhere
+  else.** `command -v python3` answers with the PATH entry it matched, and an entry may be
+  relative — a virtualenv activation, a direnv, or an orchestration host with no absolute
+  worktree path to write when it builds a PATH all produce one. Bash caches that answer and
+  carries it into every subshell, so a script that resolves its interpreter at this
+  repository's root and then runs it inside a scratch clone dies `No such file or directory`,
+  exit 127. That is indistinguishable from the command being absent, and each script reported
+  it as its own subject having failed rather than as a portability failure: a product-version
+  helper that "exited 127, expected 2", a path-spelling scan that "did not name" what it was
+  looking for, live-session paths that "do not all consult the decision". The first of those
+  refused this repository's own merge path. Resolve it once, absolutely, where the script
+  resolves it. `scripts/check-relative-interpreter.sh`, a command in `scripts:test`, runs the
+  three scripts that need it again with a relative entry first on PATH — and refuses to run
+  at all when the host cannot reproduce the defect, because a simulation that did not take
+  would look exactly like a pass.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets
