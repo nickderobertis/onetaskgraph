@@ -452,9 +452,9 @@ copies it measures are:
 | **node count**          |      53150 |     32750 |      19452 |     14583 | 1209 | 1209 |
 
 The **after** columns are this reduction's own after, and (b) has moved once since: reading a
-board through both of GitHub's enumerations of it, below, took it to 24 requests and 34,983
-nodes. `tests/fixtures/copy-cost.txt` is what a copy costs now, and it is the record the test
-holds a copy to; the columns here are a comparison of one change and stay as they were taken.
+board through both of GitHub's enumerations of it, below, adds a search to it.
+`tests/fixtures/copy-cost.txt` is what a copy costs now and the record the test holds a copy
+to; the columns here are a comparison of one change and stay as they were taken.
 
 Per call, before, measured on the same harness against the engine as it stood at 0.2.28:
 
@@ -529,29 +529,25 @@ is a projection GitHub rebuilds behind the write, and an item added with
 within seconds. The reasoning and the measurements behind that are in the crate
 documentation, at `GitHubProjectsSource::board`. This section is only what it costs.
 
-In the two quantities this file measures offline, in the record's own frame:
+What it moves, in the two quantities this file measures offline: **one request more over the
+whole session, and 20,400 worst-case nodes more.** One row moves, `searching this board's
+issues`, by one request. Every other row of the record is byte-for-byte what it was, `reading
+the board` included. The totals are `tests/fixtures/session-cost.txt`, which is the one place
+they are written down and the one the test holds a session to.
 
-|                | before | after  |
-| -------------- | -----: | -----: |
-| **requests**   |    110 |    111 |
-| **node count** | 248169 | 268569 |
+One request rather than one per board read is the whole point of
+`GitHubProjectsSource::search_cache`. A board read and a project listing are two questions
+about the same board, and both of them now want that search: reading it once per source is
+what keeps a session that reads the board several times from buying a search each time.
+`tests/fixtures/copy-cost.txt` is where that shows most plainly — a whole project copy already
+searched once and searches once still, and what moves there is the **repeat** copy, which read
+the board without ever listing a project and so had no search to share.
 
-**One request more over the whole session, and 20,400 worst-case nodes** — one row moves,
-`searching this board's issues`, from 4 requests to 5. Every other row of the record is
-byte-for-byte what it was, `reading the board` included.
-
-One request rather than five is the whole point of `GitHubProjectsSource::search_cache`. A
-board read and a project listing are two questions about the same board, and both of them now
-want that search: reading it once per source is what keeps the session's five whole-board
-reads from buying five searches nobody asked for. `tests/fixtures/copy-cost.txt` is where that
-shows most plainly — a whole project copy already searched once and searches once still, and
-what moves there is the **repeat** copy, which read the board without ever listing a project
-and so had no search to share.
-
-The estimate in `tests/journey/budget.rs` moves with the record, as it is built to: **1042
-points to 1112** against the GraphQL budget, and the REST estimate unchanged at 5 requests.
-That is the worst-case price of one more `SEARCH_ISSUES`, and it estimates high on purpose —
-the session the record is taken from is attributed 106.
+The estimate in `tests/journey/budget.rs` moves with the record, as it is built to: one more
+`SEARCH_ISSUES` at its worst-case price against the GraphQL budget, and the REST estimate
+unchanged. It is not restated here, because it is not a figure anybody writes down — it is
+computed from the record above on every run and printed beside what the session was really
+attributed.
 
 What this does not buy is a reduction anywhere: it is a request spent to make a read correct,
 and it is spent on every command that asks a question about the whole board. A command that

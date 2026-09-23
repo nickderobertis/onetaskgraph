@@ -480,14 +480,9 @@ struct State {
     /// How many items this board's own `ProjectV2.items` connection lists, once that
     /// connection has been left behind — `None` while it lists everything this board holds.
     ///
-    /// The lag GitHub really has, as three credentialed runs of this journey and one
-    /// measurement on a second board recorded it: an issue added with
-    /// `addProjectV2ItemById` is **absent** from that connection, walked to its own
-    /// `hasNextPage: false`, for minutes — while the board-scoped issue search reports it
-    /// within seconds and `Issue.projectItems` reports it at once. So it withholds from
-    /// that one connection and from nothing else, which is what makes a drive over this
-    /// board reach the refusal a credentialed run reached and what makes the union in
-    /// `GitHubProjectsSource::board` the only thing that can answer it.
+    /// GitHub's lag, which that connection has and no other view of a board does; the crate
+    /// documentation at `GitHubProjectsSource::board` is where it is written down. So this
+    /// withholds from that one connection and from nothing else.
     ///
     /// It is deliberately permanent rather than timed: a lag that expires would let a wait
     /// outlast it, and a wait that can outlast the defect proves nothing about the source.
@@ -3112,18 +3107,10 @@ async fn a_read_taken_straight_after_a_write_answers_with_what_was_written() {
 
 /// A whole-board read reports an item `ProjectV2.items` has not caught up with.
 ///
-/// This is the defect that froze this repository's merge path: the credentialed journey
-/// created an issue, added it to the nominated board, and then asked a **freshly built**
-/// source for the board's tasks thirty times over thirty seconds. GitHub's own
-/// `ProjectV2.items` never named it, and the journey refused with *the board never reported
-/// the task this run created*. The same run's project wait, answered seconds earlier through
-/// the board-scoped issue search, converged in two or three attempts — so the board really
-/// did hold both, and one of GitHub's two enumerations of it was behind.
-///
-/// Every read here is through a source that did no writing, which is what makes this about
-/// GitHub's data rather than about `GitHubProjectsSource::created`: that record is empty in
-/// a source built after the write, and a correction it could answer would have deleted the
-/// property the journey exists for.
+/// Every read here is through a source that did none of the writing, which is what makes it
+/// about GitHub's data rather than about `GitHubProjectsSource::created`: that record is
+/// empty in a source built after the write, and a correction it could answer would have
+/// deleted the property the credentialed journey's own wait exists for.
 #[tokio::test]
 async fn a_board_read_reports_an_item_the_boards_own_item_connection_is_behind_on() {
     let fixture = board_of(1, 1);
@@ -10787,11 +10774,9 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
 #[tokio::test]
 async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says() {
     let fixture = board_with(vec![], true, false);
-    // The board GitHub really is: its own `ProjectV2.items` connection does not list what
-    // this run files on it, while its search and its `Issue.projectItems` do. The journey
-    // below is the same body of code the credentialed lane drives, and under this board it
-    // can only converge through the union in `GitHubProjectsSource::board` — take that
-    // union out and this run reaches the very refusal three credentialed runs reached.
+    // The board GitHub really is, so the journey below — the same body of code the
+    // credentialed lane drives — can only converge through the union in
+    // `GitHubProjectsSource::board`.
     fixture.items_connection_falls_behind();
     let labels = label_endpoints(&fixture.state);
     journey::against(journey::Endpoints {

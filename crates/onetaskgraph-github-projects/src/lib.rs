@@ -3022,35 +3022,17 @@ impl GitHubProjectsSource {
         self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
     }
 
-    /// Every item on the board, with the one board identity they all share.
+    /// Every item on the board: the union of both enumerations GitHub offers of one.
     ///
-    /// **The union of both enumerations GitHub offers of one board, and that is the whole
-    /// of what makes a board read report an item that was added to it a moment ago.**
-    /// `ProjectV2.items` is a projection GitHub rebuilds behind the write, and an item
-    /// added with `addProjectV2ItemById` can be missing from it for minutes — not present
-    /// with its content withheld, *absent*, with the connection walked to its own
-    /// `hasNextPage: false`. The board-scoped issue search reports the same item within
-    /// seconds, and `Issue.projectItems` — which is what [`Self::resolve_issue`] settles
-    /// membership on, and which is not an index at all — reports it at once. So an item
-    /// either enumeration names is an item this board holds, and asking only the lagging
-    /// one is what left a read of a board denying an issue that had certainly landed on it.
+    /// Neither contains the other, so neither is dropped — only `ProjectV2.items` reaches a
+    /// board **draft** and the board's own fields, and only the search reports an item that
+    /// connection is behind on. The module documentation is where the lag and the
+    /// measurements behind it are written down.
     ///
-    /// The evidence for that, rather than the reasoning: this repository's own credentialed
-    /// journey writes a project and waits for the board to report it, then writes a task and
-    /// waits for the same thing, seconds apart on one board. The project wait is answered
-    /// through the search and converged in two or three attempts in each of three runs; the
-    /// task wait is answered through `ProjectV2.items` and converged in none of them inside
-    /// thirty. Beside that, an item added to a second, larger board was read back by
-    /// `Issue.projectItems` on that board's own id while every one of that connection's nine
-    /// pages, walked to exhaustion nine minutes after the add, did not name it.
-    ///
-    /// Neither enumeration is dropped, because neither contains the other: only
-    /// `ProjectV2.items` reaches a board **draft**, which is no issue and which no search
-    /// can return, and only it carries the board's own fields; and only the search reports
-    /// an issue the projection has not caught up with. A search result is admitted on the
-    /// same terms as any other issue this source reaches directly — [`Self::resolve_issue`]
-    /// keeps it only if that issue's own `projectItems` names *this* board — so an issue the
-    /// index still believes is here after it was taken off is refused rather than reported.
+    /// A search result is admitted on the same terms as any other issue this source reaches
+    /// directly — [`Self::resolve_issue`] keeps it only if that issue's own `projectItems`
+    /// names *this* board — so an issue the index still believes is here after it was taken
+    /// off is refused rather than reported.
     ///
     /// See [`Self::board_cache`]. Both completions happen on every call rather than once,
     /// which is what the cache could otherwise have broken.
