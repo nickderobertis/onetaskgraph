@@ -112,16 +112,11 @@ GitHub and crates.io with nothing external to fetch.
 
 ## Why a generated capture is not a second statement of the contract
 
-This repository holds its README to the binary's own `--help` with a test, and a judged rule
-fires on a second spelling of any contract. A committed screenshot of CLI output *would* be
-such a spelling if it were hand-made — which is what the transcript in `### Seeing which
-plan you got` was, and it described a query nobody had run.
-
-It is not one now. Every image is produced by running the real binary, and CI refuses the
-capture the moment its bytes leave `shots/baseline/<arch>.json`. The baseline **is** the
-drift gate and the binary remains the one source: change what a verb prints and that
-scene's SVG changes, and the change is either blessed deliberately or the workflow goes
-red.
+A committed screenshot of CLI output *would* be a second spelling of this tool's surface if
+it were hand-made — which is what the transcript in `### Seeing which plan you got` was, and
+it described a query nobody had run. This is not: every image is produced by running the
+real binary, and CI refuses the capture the moment its bytes leave the committed baseline.
+The baseline **is** the drift gate and the binary remains the one source.
 
 ## Commands, and what is committed
 
@@ -153,6 +148,5 @@ Editing what a verb prints, the fixture, or the scenes in `scripts/screenshots.s
 these SVGs. That is expected: `just screenshots-bless`, then commit the new baseline with
 `docs/screenshots/`. Moving the renderer pin or the font reflows every shot; bless once.
 Adding a scene means its `scene` line, a blessed baseline, and the image placed in the
-README section that explains the surface it shows — `check-visual-docs.sh` fails on a scene
-with no baseline entry, a committed image the README embeds nowhere, and an embedded image
-that is not committed.
+README section that explains the surface it shows; `check-visual-docs.sh` refuses any two of
+those three without the rest.

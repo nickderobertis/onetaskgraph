@@ -61,12 +61,21 @@ resolves() {
 ranges=()
 if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
   # A range a caller chose, so it is validated before it reaches `git diff` exactly as the
-  # records are — but by resolution rather than by shape, because a person naming one types
-  # `origin/main..HEAD` rather than two object ids.
-  for endpoint in ${SCREENCOMP_GUARD_RANGE//../ }; do
+  # records are — by resolution rather than by shape, because a person naming one types
+  # `origin/main..HEAD` rather than two object ids, and as exactly TWO endpoints: a single
+  # revision is a different `git diff`, against the working tree rather than between two
+  # commits, which would answer a question this guard is not asking.
+  before="${SCREENCOMP_GUARD_RANGE%%..*}"
+  after="${SCREENCOMP_GUARD_RANGE##*..}"
+  if [ "$before..$after" != "$SCREENCOMP_GUARD_RANGE" ] || [ -z "$before" ] || [ -z "$after" ]; then
+    echo "pre-push: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', which is not two revisions joined by '..'" >&2
+    echo "pre-push: next: name a range, as in 'origin/main..HEAD', or unset it to use what git is pushing" >&2
+    exit 1
+  fi
+  for endpoint in "$before" "$after"; do
     git rev-parse --verify --quiet "$endpoint^{commit}" >/dev/null 2>&1 || {
       echo "pre-push: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', and '$endpoint' is not a commit this repository can resolve" >&2
-      echo "pre-push: next: name a range of two resolvable revisions, as in 'origin/main..HEAD', or unset it to use what git is pushing" >&2
+      echo "pre-push: next: name two resolvable revisions, or unset it to use what git is pushing" >&2
       exit 1
     }
   done
@@ -123,8 +132,14 @@ fi
 # `screencomp scope` exits 3 when a changed path matches [guard].paths, 0 when none does,
 # and anything else on error. Only 3 is relevance; on an error warn and let the push go,
 # because the workflow is the backstop and a guessed capture costs minutes.
+# Through a file rather than a pipeline: under `pipefail` a `printf | screencomp` whose
+# reader exits before draining reports printf's SIGPIPE as the pipeline's status, and this
+# branches on that status. A redirection has one status, screencomp's own.
+changed_list="$(mktemp)"
+trap 'rm -f "$changed_list"' EXIT
+printf '%s\n' "$changed" > "$changed_list"
 set +e
-printf '%s\n' "$changed" | screencomp scope --changed-from - --exit-code --quiet
+screencomp scope --changed-from - --exit-code --quiet < "$changed_list"
 scope_status=$?
 set -e
 case "$scope_status" in

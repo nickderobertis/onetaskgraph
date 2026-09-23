@@ -96,13 +96,12 @@ installed_version() {
 }
 
 # The prebuilt archive's binary answers `freeze version v0.2.2 (80921ba)` where one built
-# from source answers `freeze version v0.2.2`, so the build commit is accepted after the
-# version and nothing else is: another version, with or without a commit, is not this pin.
+# from source answers `freeze version v0.2.2`. So exactly those two answers are the pin: the
+# version alone, or the version and a build commit in parentheses and nothing after it.
 resolved() {
   local answer
   answer="$(installed_version)"
-  [ "$answer" = "freeze version v$FREEZE_VERSION" ] \
-    || [ "${answer#"freeze version v$FREEZE_VERSION ("}" != "$answer" ]
+  [[ "$answer" =~ ^freeze\ version\ v"$FREEZE_VERSION"( \([0-9a-f]+\))?$ ]]
 }
 
 readonly install_command="bash scripts/screenshots-freeze.sh ensure"
@@ -180,7 +179,11 @@ curl -fsSL -o "$unpacked/$archive" "$url" || {
 # into: a member naming an absolute path or walking up with `..` is refused before anything
 # is written. (The archive is fetched over TLS from the release of the pinned version, which
 # is the trust model scripts/scoped-release-plz.sh already provisions its own tool under.)
-members="$(tar -tzf "$unpacked/$archive")" || {
+# `2>/dev/null` on the listings alone: tar warns on stderr about the very member names
+# these two cases are looking for ("Removing leading `../'"), and that warning on a path
+# this script goes on to refuse would read as the refusal having gone wrong. A listing that
+# actually fails is caught by its exit status below.
+members="$(tar -tzf "$unpacked/$archive" 2>/dev/null)" || {
   echo "screenshots-freeze: could not read the contents of $unpacked/$archive" >&2
   echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2
   exit 1
@@ -188,6 +191,22 @@ members="$(tar -tzf "$unpacked/$archive")" || {
 case "$members" in
   /* | *$'\n'/* | *..*)
     echo "screenshots-freeze: $archive carries a member with an absolute path or a '..' segment, which would write outside $unpacked" >&2
+    echo "screenshots-freeze: next: do not unpack it; report the published archive for v$FREEZE_VERSION" >&2
+    exit 1
+    ;;
+esac
+# And no link member, which the name listing above cannot show: a symbolic or hard link
+# unpacked first is a door a later member writes through, outside this directory. The
+# verbose listing spells the type in the first character of each line, `l` or `h` for the
+# two kinds of link.
+detailed="$(tar -tvzf "$unpacked/$archive" 2>/dev/null)" || {
+  echo "screenshots-freeze: could not read the member types of $unpacked/$archive" >&2
+  echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2
+  exit 1
+}
+case "$detailed" in
+  [lh]* | *$'\n'[lh]*)
+    echo "screenshots-freeze: $archive carries a link member, which could redirect a later member outside $unpacked" >&2
     echo "screenshots-freeze: next: do not unpack it; report the published archive for v$FREEZE_VERSION" >&2
     exit 1
     ;;

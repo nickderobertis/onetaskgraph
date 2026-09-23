@@ -56,7 +56,11 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/check-visual-guard.sh"
+        "commands": [
+          "bash scripts/check-visual-guard.sh",
+          "bash scripts/check-visual-tools.sh"
+        ],
+        "parallel": false
       },
       "cache": false,
       "inputs": [
@@ -64,10 +68,13 @@
         "{workspaceRoot}/screencomp.toml",
         "{workspaceRoot}/.githooks/pre-push",
         "{workspaceRoot}/scripts/screenshots-guard.sh",
+        "{workspaceRoot}/scripts/screenshots-freeze.sh",
+        "{workspaceRoot}/scripts/screenshots-bless.sh",
         "{workspaceRoot}/scripts/check-visual-guard.sh",
+        "{workspaceRoot}/scripts/check-visual-tools.sh",
         "{workspaceRoot}/shots/baseline/*.json"
       ],
-      "//": "Drives the REAL pre-push guard through all four of its outcomes, with screencomp and the capture stubbed at the subprocess seam the way scripts/check-pre-push-provisioning.sh stubs `just` — so a guard that stopped blocking on drift, or started capturing on a push that cannot change a shot, fails here instead of going unnoticed until the workflow disagrees with a merged commit. Uncached for the reason the workspace project's own test target is: it clones this repository into a scratch tree and reads git history there, which no input glob in this tree describes."
+      "//": "The first drives the REAL pre-push guard and the real hook through every outcome each owes, with screencomp and the capture stubbed at the subprocess seam the way scripts/check-pre-push-provisioning.sh stubs `just` — so a guard that stopped blocking on drift, or started capturing on a push that cannot change a shot, fails here rather than when the workflow disagrees with a merged commit. The second drives the renderer resolver and the baseline writer against a stand-in tool location and a stand-in installer, as scripts/check-scoped-release-plz.sh does for the other scoped tool: no network, and nothing installed on the host is read or touched. Uncached for the reason the workspace project's own test target is: both clone this repository into a scratch tree, which no input glob in this tree describes. Serial because each clones one."
     },
     "coverage": {
       "executor": "nx:noop",

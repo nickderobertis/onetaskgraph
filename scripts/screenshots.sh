@@ -97,14 +97,18 @@ if [ ! -r "$FONT" ]; then
   exit 1
 fi
 
-# The binary the scenes drive, release like a user would run. Rebuilt unless the caller
-# says it has one; the guard and the workflow both let this build.
-if [ -z "${SCREENSHOTS_NO_BUILD:-}" ] || [ ! -x "$BINARY" ]; then
-  cargo build --release --locked --bin onetaskgraph >&2
-fi
-if [ ! -x "$BINARY" ]; then
-  echo "screenshots: $BINARY was not built, so no scene can be captured" >&2
-  echo "screenshots: next: run 'cargo build --release --locked --bin onetaskgraph' and read its diagnostic" >&2
+# The binary the scenes drive, release like a user would run. The guard and the workflow
+# both let this build; SCREENSHOTS_NO_BUILD means what it says — no build here, and a
+# refusal rather than one behind the caller's back when there is nothing to drive.
+if [ -n "${SCREENSHOTS_NO_BUILD:-}" ]; then
+  if [ ! -x "$BINARY" ]; then
+    echo "screenshots: SCREENSHOTS_NO_BUILD is set and there is no binary at $BINARY to capture" >&2
+    echo "screenshots: next: build it with 'cargo build --release --locked --bin onetaskgraph', or unset SCREENSHOTS_NO_BUILD and let this capture build it" >&2
+    exit 1
+  fi
+elif ! cargo build --release --locked --bin onetaskgraph >&2; then
+  echo "screenshots: the release binary the scenes drive did not build, so nothing was captured" >&2
+  echo "screenshots: next: read cargo's diagnostic above and re-run 'just screenshots'" >&2
   exit 1
 fi
 
@@ -169,8 +173,21 @@ freeze_flags=(
   --wrap 93
 )
 
-rm -rf "$SHOTS_OUT"
+# The lexical checks above are not enough on their own: a symlink at any component under
+# `shots/` would redirect the removal below out of this clone. So the directory is created
+# first and then RESOLVED, and what is removed is only ever a real path inside it.
 mkdir -p "$SHOTS_OUT" "$DOCS"
+resolved_out="$(cd "$SHOTS_OUT" && pwd -P)"
+case "$resolved_out/" in
+  "$ROOT/shots/"*) ;;
+  *)
+    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') resolves to $resolved_out, outside $ROOT/shots — and this capture removes what it names" >&2
+    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a real directory under shots/" >&2
+    exit 1
+    ;;
+esac
+rm -rf "$resolved_out"
+mkdir -p "$SHOTS_OUT"
 captured="$(mktemp -d)"
 trap 'rm -rf "$captured"' EXIT
 
