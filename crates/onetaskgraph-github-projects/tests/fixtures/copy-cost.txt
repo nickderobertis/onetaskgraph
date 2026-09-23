@@ -13,13 +13,14 @@ requests per call
    22       0  writing a board field
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
-requests 23
-node count 14583
+requests 24
+node count 34983
 
 requests per call
    11    2200  reading an issue's dependencies
    11    2233  reading one issue
     1   10150  reading the board
+    1   20400  searching this board's issues
 
 (c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
 requests 9

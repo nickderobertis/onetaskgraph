@@ -173,7 +173,7 @@
 //! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)` | the item |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
-//! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` | the board |
+//! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
 //! The board half of an issue — its board item's id, its `Status` option and this
@@ -269,14 +269,40 @@
 //!
 //! [node-limits]: https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api
 //!
-//! **Where a read-after-write guarantee comes from, since a search index cannot supply
-//! one.** GitHub's issue search is eventually consistent and answers a write made moments
-//! ago with the value from before it. Resolving a node id is not, so a read by id and a
-//! project's own sub-issues are already current. What closes the gap for the search is
-//! [`GitHubProjectsSource::created`]: every read this source answers is completed with
-//! what this process itself wrote, so an item created seconds ago is reported whether or
-//! not GitHub's index has caught up. Nothing else is remembered, nothing is written down,
-//! and the record dies with the process.
+//! **Where a read-after-write guarantee comes from, since neither of GitHub's two
+//! enumerations of a board can supply one alone.** Resolving a node id is strongly
+//! consistent, so a read by id and a project's own sub-issues are already current. The
+//! other two are not, and they are behind by different amounts and in different directions:
+//!
+//! - GitHub's **issue search** is an index and answers a write made moments ago with the
+//!   value from before it — usually for a second or two.
+//! - **`ProjectV2.items`** is a projection GitHub rebuilds behind the write, and an item put
+//!   on a board with `addProjectV2ItemById` can be **absent** from it — not present with its
+//!   content withheld, absent, with the connection walked to its own `hasNextPage: false` —
+//!   for *minutes*, while `Issue.projectItems` names the same membership at once.
+//!
+//! That second one is a measurement rather than a caution. This repository's own
+//! credentialed journey writes a project and waits for the board to report it, then writes a
+//! task and waits for the same thing seconds later on the same board: the project wait is
+//! answered through the search and converged in two or three attempts in each of three runs,
+//! and the task wait is answered through `ProjectV2.items` and converged in none of them
+//! inside thirty. Separately, an item added to a second and larger board was read back by
+//! `Issue.projectItems` on that board's own id while every one of that connection's nine
+//! pages, walked to exhaustion nine minutes after the add, did not name it. Reading a board
+//! through the lagging one alone is what had a board read deny an issue that had certainly
+//! landed on it.
+//!
+//! So [`GitHubProjectsSource::board`] is the **union** of both — each search result still
+//! admitted only on this board's own strongly-consistent `Issue.projectItems`, and neither
+//! enumeration dropped, because only `ProjectV2.items` reaches a board draft and the board's
+//! fields and only the search reports what the projection is behind on. What closes the last
+//! gap, the one where both are behind, is [`GitHubProjectsSource::created`]: every read this
+//! source answers is completed with what this process itself wrote, so an item created
+//! seconds ago is reported whether or not GitHub has caught up. Nothing else is remembered,
+//! nothing is written down, and the record dies with the process. **A wait that has to
+//! observe GitHub's own data cannot be answered from that record** — which is why the
+//! credentialed journey asks through a source built afresh, and why the union above rather
+//! than a longer wait is what makes such a wait converge.
 //!
 //! Filtering happens before paging, so a page of a filtered result is a page of the
 //! survivors rather than the survivors of a page. Label and text matching answer the same
@@ -1730,6 +1756,14 @@ pub struct GitHubProjectsSource {
     /// board updates the entry here too, so what this holds is the last read plus this
     /// process's own writes rather than a snapshot taken before them.
     board_cache: Mutex<Option<Board>>,
+    /// Every issue this board's own search reported, for the length of one command.
+    ///
+    /// The second half of a board read, and cached for the same reason and on the same
+    /// terms as the first: it lives and dies with the process, nothing is written down, and
+    /// a write this process makes updates the entry here exactly as it updates the one in
+    /// [`Self::board_cache`]. One read answers every question a command asks, so a command
+    /// that lists this board's projects and its tasks pays for one search rather than two.
+    search_cache: Mutex<Option<Vec<Resolved>>>,
     /// Each destination repository's node id, resolved once per repository
     /// rather than per issue created.
     ///
@@ -2219,6 +2253,7 @@ impl GitHubProjectsSource {
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
+            search_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
         })
@@ -2754,16 +2789,31 @@ impl GitHubProjectsSource {
         Ok((found, next))
     }
 
-    /// Every issue this board holds, walked to exhaustion, completed with what this run
-    /// wrote.
+    /// Every issue this board holds, completed with what this run wrote.
     ///
     /// The completion is not an optimisation and it is not a cache: GitHub's issue search
     /// is an index and is eventually consistent, so an issue this run created seconds ago
-    /// is routinely absent from it, and a project listed straight after being written would
+    /// can be absent from it, and a project listed straight after being written would
     /// otherwise be missing from its own board. What is added back is only what this
     /// process itself wrote, out of [`Self::created`], which lives and dies with the
     /// process.
     async fn board_issues(&self) -> Result<Vec<Resolved>, SourceError> {
+        let found = self.searched_issues().await?;
+        self.completed_with_written(found, |_| true)
+    }
+
+    /// Every issue this board's own search reports, walked to exhaustion, read once per
+    /// source.
+    ///
+    /// The uncompleted half of [`Self::board_issues`], separated because [`Self::board`]
+    /// needs it too and the two would otherwise walk the same search twice in one command.
+    /// See [`Self::search_cache`] for why holding it is the same bargain holding the board
+    /// is.
+    async fn searched_issues(&self) -> Result<Vec<Resolved>, SourceError> {
+        let cached = self.search_cache()?.clone();
+        if let Some(held) = cached {
+            return Ok(held);
+        }
         let mut after: Option<String> = None;
         let mut found = Vec::new();
         let search = self.board_search(None);
@@ -2777,7 +2827,21 @@ impl GitHubProjectsSource {
                 None => break,
             }
         }
-        self.completed_with_written(found, |_| true)
+        *self.search_cache()? = Some(found.clone());
+        Ok(found)
+    }
+
+    /// This process's own view of the board's issues, or the refusal a poisoned lock is.
+    fn search_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<Vec<Resolved>>>, SourceError> {
+        self.search_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of the board's issues was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
     }
 
     /// `found`, with everything this run wrote that `keep` accepts and the read did not
@@ -2958,10 +3022,20 @@ impl GitHubProjectsSource {
         self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
     }
 
-    /// Every item on the board, with the one board identity they all share.
+    /// Every item on the board: the union of both enumerations GitHub offers of one.
     ///
-    /// See [`Self::board_cache`]. The completion from `created` happens on every call
-    /// rather than once, which is what the cache could otherwise have broken.
+    /// Neither contains the other, so neither is dropped — only `ProjectV2.items` reaches a
+    /// board **draft** and the board's own fields, and only the search reports an item that
+    /// connection is behind on. The module documentation is where the lag and the
+    /// measurements behind it are written down.
+    ///
+    /// A search result is admitted on the same terms as any other issue this source reaches
+    /// directly — [`Self::resolve_issue`] keeps it only if that issue's own `projectItems`
+    /// names *this* board — so an issue the index still believes is here after it was taken
+    /// off is refused rather than reported.
+    ///
+    /// See [`Self::board_cache`]. Both completions happen on every call rather than once,
+    /// which is what the cache could otherwise have broken.
     async fn board(&self) -> Result<Board, SourceError> {
         let cached = self.board_cache()?.clone();
         let mut board = match cached {
@@ -2972,6 +3046,11 @@ impl GitHubProjectsSource {
                 read
             }
         };
+        for held in self.searched_issues().await? {
+            if !board.items.iter().any(|item| item.id == held.id) {
+                board.items.push(held);
+            }
+        }
         for own in self.created()?.iter() {
             if !board.items.iter().any(|item| item.id == own.id) {
                 board.items.push(own.clone());
@@ -2998,11 +3077,14 @@ impl GitHubProjectsSource {
     /// where it sits, so a second write of it in the same command reads its real parent
     /// rather than the one it had before the first write.
     ///
-    /// "Where it sits" is two places, and missing the first leaves a stale record that
-    /// wins: an item this same run created is held in `created` and not in the cached
+    /// "Where it sits" is three places, and missing an earlier one leaves a stale record
+    /// that wins: an item this same run created is held in `created` and not in the cached
     /// board, and `board` completes the cached board *from* `created`, so replacing only
     /// the cached copy of such an item replaces nothing and the read still reports the
-    /// title it was created with.
+    /// title it was created with. The search is the third, and it is the one an item the
+    /// board's own projection is behind on sits in *alone* — which is exactly the item this
+    /// source is least able to re-read, so leaving it out would put the stale title back on
+    /// the only items the completion in [`Self::board`] exists for.
     fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
         if created {
             self.created()?.push(item);
@@ -3018,16 +3100,24 @@ impl GitHubProjectsSource {
         if let Some(board) = self.board_cache()?.as_mut()
             && let Some(held) = board.items.iter_mut().find(|held| held.id == item.id)
         {
+            *held = item.clone();
+        }
+        if let Some(found) = self.search_cache()?.as_mut()
+            && let Some(held) = found.iter_mut().find(|held| held.id == item.id)
+        {
             *held = item;
         }
         Ok(())
     }
 
-    /// Forget one item this process has just deleted, from both halves of its own view.
+    /// Forget one item this process has just deleted, from every half of its own view.
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
         self.created()?.retain(|own| own.id != *id);
         if let Some(board) = self.board_cache()?.as_mut() {
             board.items.retain(|item| item.id != *id);
+        }
+        if let Some(found) = self.search_cache()?.as_mut() {
+            found.retain(|item| item.id != *id);
         }
         Ok(())
     }
