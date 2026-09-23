@@ -167,14 +167,10 @@ session-setup:
 setup-llmlint:
     ./scripts/setup-llmlint.sh
 
-# --- Terminal screenshots ----------------------------------------------------------------
-# Deterministic SVGs of the real CLI's output over the curated fixture, rendered by the
-# pinned `freeze` from a vendored font and gated, galleried and PR-commented by screencomp
-# (see screenshots/AGENTS.md). Informational, like a bench: NEVER a phase of `check` or
-# `gate`, and no recipe below is reachable from either. The Visual-docs workflow owns the
-# comparison in CI, and .githooks/pre-push regenerates the baseline locally on drift.
+# Informational, like a bench: no recipe below is reachable from `check` or `gate`, and
+# scripts/check-visual-docs.sh refuses one that becomes so. screenshots/AGENTS.md is why.
 
-# Provision the pinned screenshot renderer (`freeze`) into its repository-scoped location.
+# Provision the pinned screenshot renderer.
 screenshots-tools:
     @bash scripts/screenshots-freeze.sh ensure
 
@@ -182,7 +178,7 @@ screenshots-tools:
 screenshots:
     @bash scripts/screenshots.sh
 
-# After an INTENDED output change: recapture, then refresh the committed digest baseline.
+# Recapture and refresh the committed baseline, after an INTENDED output change.
 screenshots-bless: screenshots
     @bash scripts/screenshots-bless.sh
 

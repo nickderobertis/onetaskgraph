@@ -188,6 +188,32 @@ curl -fsSL -o "$unpacked/$archive" "$url" || {
   echo "screenshots-freeze: next: check the network and that the release carries $archive, then rerun '$install_command'" >&2
   exit 1
 }
+# The recorded digest for this platform, FIRST: tar below is a parser, and a response
+# nothing has authenticated should not reach one. A
+# platform with no digest recorded is not provisioned here at all, rather than provisioned
+# unverified.
+expected_digest_name="FREEZE_SHA256_${os}_${architecture}"
+expected_digest="${!expected_digest_name:-}"
+if [ -z "$expected_digest" ]; then
+  echo "screenshots-freeze: no archive digest is recorded for ${os}_${architecture}, so the download cannot be authenticated" >&2
+  echo "screenshots-freeze: next: record FREEZE_SHA256_${os}_${architecture} in scripts/screenshots-freeze.sh from the real release, or capture on a platform that has one" >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_digest="$(sha256sum "$unpacked/$archive" | cut -d' ' -f1)"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_digest="$(shasum -a 256 "$unpacked/$archive" | cut -d' ' -f1)"
+else
+  echo "screenshots-freeze: neither sha256sum nor shasum is on PATH, so $archive cannot be authenticated" >&2
+  echo "screenshots-freeze: next: install coreutils (or perl's shasum), then rerun '$install_command'" >&2
+  exit 1
+fi
+if [ "$actual_digest" != "$expected_digest" ]; then
+  echo "screenshots-freeze: $archive hashes to $actual_digest, not the recorded $expected_digest" >&2
+  echo "screenshots-freeze: next: do not unpack it. Either the download was corrupted — rerun '$install_command' — or the published archive for v$FREEZE_VERSION has changed, which is a thing to report rather than to accept" >&2
+  exit 1
+fi
+
 # What arrives over the network is not trusted to stay inside the directory it is unpacked
 # into: a member naming an absolute path or walking up with `..` is refused before anything
 # is written. (The archive is fetched over TLS from the release of the pinned version, which
@@ -224,31 +250,6 @@ case "$detailed" in
     exit 1
     ;;
 esac
-# The recorded digest for this platform, before anything reads the file's contents. A
-# platform with no digest recorded is not provisioned here at all, rather than provisioned
-# unverified.
-expected_digest_name="FREEZE_SHA256_${os}_${architecture}"
-expected_digest="${!expected_digest_name:-}"
-if [ -z "$expected_digest" ]; then
-  echo "screenshots-freeze: no archive digest is recorded for ${os}_${architecture}, so the download cannot be authenticated" >&2
-  echo "screenshots-freeze: next: record FREEZE_SHA256_${os}_${architecture} in scripts/screenshots-freeze.sh from the real release, or capture on a platform that has one" >&2
-  exit 1
-fi
-if command -v sha256sum >/dev/null 2>&1; then
-  actual_digest="$(sha256sum "$unpacked/$archive" | cut -d' ' -f1)"
-elif command -v shasum >/dev/null 2>&1; then
-  actual_digest="$(shasum -a 256 "$unpacked/$archive" | cut -d' ' -f1)"
-else
-  echo "screenshots-freeze: neither sha256sum nor shasum is on PATH, so $archive cannot be authenticated" >&2
-  echo "screenshots-freeze: next: install coreutils (or perl's shasum), then rerun '$install_command'" >&2
-  exit 1
-fi
-if [ "$actual_digest" != "$expected_digest" ]; then
-  echo "screenshots-freeze: $archive hashes to $actual_digest, not the recorded $expected_digest" >&2
-  echo "screenshots-freeze: next: do not unpack it. Either the download was corrupted — rerun '$install_command' — or the published archive for v$FREEZE_VERSION has changed, which is a thing to report rather than to accept" >&2
-  exit 1
-fi
-
 tar -xzf "$unpacked/$archive" -C "$unpacked" || {
   echo "screenshots-freeze: could not unpack $unpacked/$archive" >&2
   echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2

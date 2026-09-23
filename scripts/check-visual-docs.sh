@@ -49,12 +49,18 @@ ignored = read(".gitignore")
 # --- The lane, declared in screencomp.toml and read from there by everything else -------
 lanes = re.search(r"(?m)^arches\s*=\s*\[(.*?)\]", config)
 lane_values = re.findall(r'"([^"]+)"', lanes.group(1)) if lanes else []
+# The same charset the capture and the guard hold it to, because this check builds
+# shots/baseline/<lane>.json out of it: a lane carrying a slash or a `..` would name a file
+# outside that directory, and a lane this check cannot use is a lane they cannot either.
+lane_values = [value for value in lane_values if re.fullmatch(r"[A-Za-z0-9_]+", value)] \
+    if lane_values else []
 if len(lane_values) != 1:
     problems.append(
-        "screencomp.toml: [capture].arches must declare exactly one lane, because the "
-        "pre-push guard classifies that lane on every host and only one baseline is "
-        f"committed; it declares {lane_values or 'none'}. A second lane needs its own "
-        "baseline and its own CI job."
+        "screencomp.toml: [capture].arches must declare exactly one lane, named in "
+        "letters, digits and underscores, because the pre-push guard classifies that lane "
+        "on every host and only one baseline is committed; the usable lanes it declares "
+        f"are {lane_values or 'none'}. A second lane needs its own baseline and its own "
+        "CI job."
     )
 lane = lane_values[0] if lane_values else "x86_64"
 

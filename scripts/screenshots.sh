@@ -238,35 +238,23 @@ scene() {
   fi
 }
 
-# --- The scenes, each documenting the surface the README section it sits in explains. ----
+# --- The scenes ---------------------------------------------------------------------------
 #
-# `sync/` is a checkout with two folders of Markdown — the plans, and where the team's
-# tickets live. `board/` puts the same folder of plans beside a source that declares it
-# cannot filter by label, which is what makes the plan block show both halves of the
-# engine's bargain.
-
-# The hero: the tool's main usage, interleaved across both sources in configured order.
+# What each one documents, and why it earns a place in the README, is screenshots/AGENTS.md.
+# What is needed to READ the calls is which fixture each runs in: `sync/` is a checkout with
+# two folders of Markdown, the plans and where the team's tickets live; `board/` puts that
+# same folder of plans beside a source declaring it cannot filter by label, which is what
+# makes a plan block show both halves of the engine's bargain.
 scene task-list sync task list
-
-# The aligned field block, the body, and the one comment the fixture's task carries.
 scene task-show sync task show plans:T-1
-
-# A same-source edge and one that leaves the source, reported by qualified id and kind.
 scene task-deps sync task deps plans:T-1
-
-# Every read, no write: the action each item would have got, and the reference figures.
 scene task-copy-dry-run sync task copy plans:T-1 plans:T-2 --to work --dry-run
-
-# The rows, then the per-source plan: pushed down to the folder, applied locally for the
-# source that declares it cannot.
 scene task-list-explain board task list --label chore --explain
-
-# Each source with the capabilities it declares, which is what the plan above acts on.
 scene sources-list board sources list
 
-# Every effective setting and the layer it came from. The environment variable is set here
-# rather than cleared with the rest, because the third column naming it — beside a flag,
-# the document and a default in one shot — is the whole of what this scene documents.
+# The variable is set here rather than cleared with the rest, because the third column
+# naming it — beside a flag, the document and a default in one shot — is the whole of what
+# this scene documents.
 export ONETASKGRAPH_DEFAULT_SOURCES=plans
 scene config-show sync config show --page-size 50
 unset ONETASKGRAPH_DEFAULT_SOURCES
