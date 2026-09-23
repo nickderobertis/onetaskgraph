@@ -33,7 +33,11 @@ command -v screencomp >/dev/null 2>&1 || {
   exit 1
 }
 
-mkdir -p shots/baseline
+mkdir -p shots/baseline || {
+  echo "screenshots-bless: could not create shots/baseline, where the committed digest baseline lives" >&2
+  echo "screenshots-bless: next: check the permissions of the shots directory, then re-run 'just screenshots-bless'" >&2
+  exit 1
+}
 if ! screencomp manifest --input shots/current --arch "$LANE" \
   --output "shots/baseline/$LANE.json" --quiet; then
   echo "screenshots-bless: the baseline at shots/baseline/$LANE.json was not written" >&2

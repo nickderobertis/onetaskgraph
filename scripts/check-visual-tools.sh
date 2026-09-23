@@ -372,6 +372,13 @@ run_bless "$NO_SCREENCOMP"
 [ "$STATUS" -eq 0 ] && fail "'bless' succeeded with no screencomp installed:"
 names "screencomp" || fail "'bless' refused without naming the tool that is missing:"
 
+# The baseline the cases above deliberately removed, back: the cases below are about what a
+# capture or a mutation does to a tree that is otherwise whole, and one already failing for
+# another reason proves nothing about either.
+git -C "$CLONE" checkout -- shots/baseline || fatal \
+  "could not restore the committed baseline in the clone" \
+  "report this; the clone is scratch and can be re-created"
+
 # The capture's own input refusals, driven in the clone. Each is reached before the capture
 # builds or renders anything, which is what lets them run here for nothing — and each asks
 # for no build as well, so that a reordering which put the build first would cost a case a
@@ -409,6 +416,13 @@ run_capture shots/current/x86_64 1
 names "SCREENSHOTS_NO_BUILD" || fail "the refusal does not name the variable that asked for no build:"
 names "cargo build" || fail "the refusal does not say how to get a binary to capture:"
 
+# 21b. `shots` ITSELF is not a lane directory: `shots/.` resolves there, and the capture
+#      removes what SHOTS_OUT names — which would take the committed baseline with it.
+run_capture shots/. 1
+[ "$STATUS" -eq 0 ] && fail "the capture accepted the shots root itself as its output directory:"
+[ -f "$CLONE/shots/baseline/$LANE.json" ] \
+  || fail "the committed baseline is gone after a capture was pointed at the shots root:"
+
 # 22. Without the vendored font the renderer would fetch one over the network and the bytes
 #      would stop being reproducible, so the capture refuses rather than rendering.
 mv "$CLONE/screenshots/fonts/JetBrainsMono-Regular.ttf" "$scratch/font.ttf"
@@ -428,12 +442,6 @@ restore() {
   git -C "$CLONE" checkout -- "$1" || fatal \
     "could not restore $1 in the clone" "report this; the clone is scratch and can be re-created"
 }
-
-# The baseline the cases above deliberately removed, back: what these mutate is one file at
-# a time, and a tree already failing for another reason proves nothing about the mutation.
-git -C "$CLONE" checkout -- shots/baseline || fatal \
-  "could not restore the committed baseline in the clone" \
-  "report this; the clone is scratch and can be re-created"
 
 # A precondition: it has to pass on the tree as it stands, or the refusals below say nothing.
 run_visual_docs

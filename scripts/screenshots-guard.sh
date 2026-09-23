@@ -134,10 +134,20 @@ fi
 
 changed=""
 for range in "${ranges[@]+"${ranges[@]}"}"; do
-  changed+="$(git diff --name-only "$range")"$'\n'
+  listing="$(git diff --name-only "$range")" || {
+    echo "pre-push: git could not list what '$range' changes, so this push was not evaluated against the screenshots." >&2
+    echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
+    exit 1
+  }
+  changed+="$listing"$'\n'
 done
 for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
-  changed+="$(git ls-tree -r --name-only "$tree")"$'\n'
+  listing="$(git ls-tree -r --name-only "$tree")" || {
+    echo "pre-push: git could not list the files '$tree' carries, so this push was not evaluated against the screenshots." >&2
+    echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
+    exit 1
+  }
+  changed+="$listing"$'\n'
 done
 changed="$(printf '%s' "$changed" | sort -u)"
 
@@ -164,7 +174,11 @@ fi
 # Through a file rather than a pipeline: under `pipefail` a `printf | screencomp` whose
 # reader exits before draining reports printf's SIGPIPE as the pipeline's status, and this
 # branches on that status. A redirection has one status, screencomp's own.
-changed_list="$(mktemp)"
+changed_list="$(mktemp)" || {
+  echo "pre-push: could not create the temporary file the changed-path list is handed to screencomp in." >&2
+  echo "pre-push: next: check the permissions of \$TMPDIR and 'df -h' for free space, then push again." >&2
+  exit 1
+}
 trap 'rm -f "$changed_list"' EXIT
 printf '%s\n' "$changed" > "$changed_list"
 set +e

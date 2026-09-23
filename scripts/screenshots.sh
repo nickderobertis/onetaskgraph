@@ -89,18 +89,28 @@ readonly STAGE=/tmp/otg
 # first and then RESOLVED, and what is removed is only ever a real path inside it. All of
 # it before the renderer is resolved and the binary is built, because deciding where this
 # capture may write costs nothing and a release build costs minutes.
-mkdir -p "$SHOTS_OUT" "$DOCS"
+mkdir -p "$SHOTS_OUT" "$DOCS" || {
+  echo "screenshots: could not create $SHOTS_OUT and $DOCS, which is where this capture writes" >&2
+  echo "screenshots: next: check the permissions of $ROOT/shots and $DOCS, then re-run 'just screenshots'" >&2
+  exit 1
+}
 resolved_out="$(cd "$SHOTS_OUT" && pwd -P)"
+# `?*` rather than `*`: one character after the slash at least, so `shots` ITSELF is not a
+# value this accepts — `shots/.` resolves there, and what follows would take the committed
+# baseline with it.
 case "$resolved_out/" in
-  "$ROOT/shots/"*) ;;
+  "$ROOT/shots/"?*) ;;
   *)
-    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') resolves to $resolved_out, outside $ROOT/shots — and this capture removes what it names" >&2
-    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a real directory under shots/" >&2
+    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') resolves to $resolved_out, which is not a directory INSIDE $ROOT/shots — and this capture removes what it names" >&2
+    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a lane directory under shots/, as shots/current/$LANE" >&2
     exit 1
     ;;
 esac
-rm -rf "$resolved_out"
-mkdir -p "$SHOTS_OUT"
+rm -rf "$resolved_out" && mkdir -p "$SHOTS_OUT" || {
+  echo "screenshots: could not clear and recreate $resolved_out for this capture" >&2
+  echo "screenshots: next: check what holds it open and the permissions of $ROOT/shots, then re-run 'just screenshots'" >&2
+  exit 1
+}
 FREEZE="$(bash "$ROOT/scripts/screenshots-freeze.sh" resolve)" || {
   echo "screenshots: the pinned renderer is not provisioned, so no scene can be rendered" >&2
   echo "screenshots: next: run 'just screenshots-tools', then re-run this capture" >&2
@@ -156,9 +166,12 @@ sha256() {
 
 # Stage the fixture at the fixed path. Removed first so a previous capture's tree — or a
 # scene that wrote, should one ever be added — cannot carry into this one.
-rm -rf "$STAGE"
-mkdir -p "$STAGE/home/.config" "$STAGE/tmp"
-cp -R "$FIXTURE/." "$STAGE/"
+rm -rf "$STAGE" && mkdir -p "$STAGE/home/.config" "$STAGE/tmp" \
+  && cp -R "$FIXTURE/." "$STAGE/" || {
+  echo "screenshots: could not stage $FIXTURE at $STAGE, which is where every scene runs" >&2
+  echo "screenshots: next: check what holds $STAGE open and the free space on that filesystem, then re-run 'just screenshots'" >&2
+  exit 1
+}
 
 # The staged path has to BE the path the kernel reports, or every shot carrying one differs
 # from the committed baseline: macOS resolves /tmp through a symlink to /private/tmp, and
@@ -206,7 +219,11 @@ freeze_flags=(
   --wrap 93
 )
 
-captured="$(mktemp -d)"
+captured="$(mktemp -d)" || {
+  echo "screenshots: could not create the temporary directory each scene's output is held in" >&2
+  echo "screenshots: next: check the permissions of \$TMPDIR and 'df -h' for free space, then re-run 'just screenshots'" >&2
+  exit 1
+}
 trap 'rm -rf "$captured"' EXIT
 
 # captures.json identity is `name + JSON.stringify(toggles)`; one record per scene, sorted
@@ -290,7 +307,11 @@ unset ONETASKGRAPH_DEFAULT_SOURCES
       "$name" "$toggles" "$hash" "$image" "$comma"
   done
   printf '  ]\n}\n'
-} >"$SHOTS_OUT/captures.json"
+} >"$SHOTS_OUT/captures.json" || {
+  echo "screenshots: the shots rendered but the index at $SHOTS_OUT/captures.json could not be written, and screencomp reads the capture through it" >&2
+  echo "screenshots: next: check the permissions of $SHOTS_OUT and 'df -h' for free space, then re-run 'just screenshots'" >&2
+  exit 1
+}
 
 rm -rf "$STAGE"
 # Quiet on success. What it wrote is $SHOTS_OUT and docs/screenshots/, which is where the
