@@ -122,7 +122,9 @@ SPAWNERS = {
     "sdks/typescript/tests/client.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/generator.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/scripts/test-packed.sh": [("sdk-typescript", "pack")],
-    "scripts/test-distribution.sh": [("scripts", "distribution-test")],
+    # Two targets, because scripts:test drives this journey as well:
+    # check-relative-interpreter.sh runs the real script under a PATH of its own making.
+    "scripts/test-distribution.sh": [("scripts", "distribution-test"), ("scripts", "test")],
 }
 SPAWNER_SUFFIXES = {".py", ".ts", ".sh", ".js", ".mjs"}
 SPAWNER_SKIPPED_PARTS = {"node_modules", ".venv", "dist", "_generated"}

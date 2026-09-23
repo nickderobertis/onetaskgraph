@@ -48,6 +48,24 @@ fi
 
 failures=0
 
+# Substring membership, decided in this shell rather than by `printf | grep -q`, for the
+# reason check-affected-selection.sh decides its own: under `pipefail` that pipeline reports
+# its WRITER's status as well as the matcher's, and `grep -q` closes the pipe the instant it
+# matches, so the writer is killed by SIGPIPE — silently, exit 141 — and the pipeline fails
+# although the text was there. The case then reads as the guard having refused without its
+# reason, and prints the very fragment it says is missing.
+#
+# That is not hypothetical here. It refused the required `check (ubuntu-latest)` on a tree
+# this guard accepts (run 35807214347), and 40,000 runs of the old pipeline over this guard's
+# own 556-byte diagnostic reproduced it 6 times with the machine loaded. A substring match
+# needs no subprocess, so a case's verdict is now a function of the guard's output alone.
+contains() {
+  case "$1" in
+    *"$2"*) return 0 ;;
+  esac
+  return 1
+}
+
 # expect <guard script> <case> <diagnostic fragment>: the guard, run over the scratch tree
 # as mutated, must refuse and must name the reason.
 expect() {
@@ -57,11 +75,11 @@ expect() {
   if [ "$status" -eq 0 ]; then
     echo "check-workspace-config-enforced: $guard accepted $case" >&2
     failures=$((failures + 1))
-  elif ! printf '%s\n' "$output" | grep -qF -- "$fragment"; then
+  elif ! contains "$output" "$fragment"; then
     printf '%s\n' "$output" >&2
     echo "check-workspace-config-enforced: $guard refused $case without saying '$fragment'" >&2
     failures=$((failures + 1))
-  elif printf '%s\n' "$output" | grep -q 'Traceback'; then
+  elif contains "$output" 'Traceback'; then
     printf '%s\n' "$output" >&2
     echo "check-workspace-config-enforced: $guard refused $case with a Python traceback instead of a diagnostic" >&2
     failures=$((failures + 1))
@@ -223,7 +241,7 @@ restore "$CORE_PROJECT"
 
 # llmlint: ignore[work_goes_through_command_surface] The journey is run over a scratch tree that has no binary, which its Nx target would build first.
 output="$(cd "$scratch" && bash scripts/test-distribution.sh 2>&1)" && status=0 || status=$?
-if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF "run 'scripts/nx.sh run onetaskgraph:build'"; then
+if [ "$status" -eq 0 ] || ! contains "$output" "run 'scripts/nx.sh run onetaskgraph:build'"; then
   printf '%s\n' "$output" >&2
   echo "check-workspace-config-enforced: scripts/test-distribution.sh did not refuse a missing target/debug/onetaskgraph by naming onetaskgraph:build (exit $status)" >&2
   failures=$((failures + 1))
@@ -231,7 +249,7 @@ fi
 
 # llmlint: ignore[work_goes_through_command_surface] The scratch copy of the generator resolves a binary nothing built, which sdk-python:generate-check would build first.
 output="$(cd "$scratch/sdks/python" && uv run --frozen --project "$ROOT/sdks/python" python generate.py --check 2>&1)" && status=0 || status=$?
-if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF 'run `scripts/nx.sh run onetaskgraph:build`'; then
+if [ "$status" -eq 0 ] || ! contains "$output" 'run `scripts/nx.sh run onetaskgraph:build`'; then
   printf '%s\n' "$output" >&2
   echo "check-workspace-config-enforced: sdks/python/generate.py did not refuse a missing target/debug/onetaskgraph by naming onetaskgraph:build (exit $status)" >&2
   failures=$((failures + 1))
@@ -239,7 +257,7 @@ fi
 
 # llmlint: ignore[work_goes_through_command_surface] One test of the scratch copy, whose fixture resolves a binary nothing built; sdk-python:test would build it first.
 output="$(cd "$scratch/sdks/python" && uv run --frozen --project "$ROOT/sdks/python" pytest -q --no-cov -p no:cacheprovider tests/test_artifact.py -k schema_bundle 2>&1)" && status=0 || status=$?
-if [ "$status" -eq 0 ] || ! printf '%s\n' "$output" | grep -qF 'run `scripts/nx.sh run onetaskgraph:build`'; then
+if [ "$status" -eq 0 ] || ! contains "$output" 'run `scripts/nx.sh run onetaskgraph:build`'; then
   printf '%s\n' "$output" >&2
   echo "check-workspace-config-enforced: the Python SDK's binary fixture did not refuse a missing target/debug/onetaskgraph by naming onetaskgraph:build (exit $status)" >&2
   failures=$((failures + 1))

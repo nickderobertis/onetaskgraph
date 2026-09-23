@@ -37,6 +37,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "run the check from a checkout of this repository, as 'just script-check' does"
 readonly ROOT
 
+# The interpreter, resolved once and absolutely, because several cases below run it from
+# inside the scratch clone rather than from here. AGENTS.md records what the relative answer
+# `command -v` can give cost here.
+PYTHON="$(command -v python3)" || fatal \
+  "no python3 on PATH, and every case below reports through it" \
+  "install python3, or run 'just bootstrap', then rerun"
+case $PYTHON in
+  /* | ?:[\\/]*) ;;
+  *)
+    # Two steps, because the exit status of `x=$(a)/$(b)` is b's alone, so a guard on the
+    # one-line spelling would read the failure of the substitution that matters as a success.
+    PYTHON_directory=$(cd "$(dirname "$PYTHON")" && pwd) || fatal \
+      "could not resolve the directory of the relative interpreter $PYTHON" \
+      "check that it still exists from $PWD, or put an absolute python3 entry first on PATH, then rerun"
+    PYTHON="$PYTHON_directory/$(basename "$PYTHON")"
+    ;;
+esac
+readonly PYTHON
+
 readonly PLUGIN="onetaskgraph-github-projects"
 readonly PLUGIN_MANIFEST="crates/$PLUGIN/Cargo.toml"
 readonly PLUGIN_CHANGELOG="crates/$PLUGIN/CHANGELOG.md"
@@ -120,7 +139,7 @@ VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO/$PLUGIN_MANIFEST" | hea
 # carriage return behind. A version carrying one is written into the fixtures below as
 # `version = "0.2.24<CR>"`, which python then reads back as two lines — so every version
 # fixture answered `run` and the windows-latest lane failed on a decision that was correct.
-BUMPED="$(printf '%s' "$VERSION" | python3 -c '
+BUMPED="$(printf '%s' "$VERSION" | "$PYTHON" -c '
 import re
 import sys
 
@@ -185,7 +204,7 @@ rewrite() {
   local relative="$1" before="$2" after="$3"
   printf '%s' "$before" > "$scratch/before"
   printf '%s' "$after" > "$scratch/after"
-  python3 - "$REPO/$relative" "$scratch/before" "$scratch/after" <<'PY' || fatal \
+  "$PYTHON" - "$REPO/$relative" "$scratch/before" "$scratch/after" <<'PY' || fatal \
     "could not rewrite $relative in the scratch tree, so that fixture never landed" \
     "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 import sys
@@ -211,7 +230,7 @@ append() {
 # diff the decision is asked about rather than an approximation of it.
 bump_version_lines() {
   local relative="$1"
-  ONETASKGRAPH_OLD="$VERSION" ONETASKGRAPH_NEW="$BUMPED" python3 - "$REPO/$relative" <<'PY' \
+  ONETASKGRAPH_OLD="$VERSION" ONETASKGRAPH_NEW="$BUMPED" "$PYTHON" - "$REPO/$relative" <<'PY' \
     || fatal "could not bump the version lines of $relative" "rerun; if it persists, check 'df -h'"
 import os
 import re
@@ -474,7 +493,7 @@ reset_fixture
 
 fixture_version_only
 plugin_project="$REPO/crates/$PLUGIN/project.json"
-python3 - "$plugin_project" <<'PY'
+"$PYTHON" - "$plugin_project" <<'PY'
 import json
 import sys
 
@@ -496,7 +515,7 @@ fi
 reset_fixture
 
 fixture_version_only
-python3 - "$REPO/Cargo.toml" <<'PY'
+"$PYTHON" - "$REPO/Cargo.toml" <<'PY'
 import re
 import sys
 
@@ -535,7 +554,7 @@ fi
 # added or rewired later has to appear in one of those three, and this fails when one of
 # them reaches the live lane without reading the answer.
 
-if ! (cd "$REPO" && python3 - <<'PY'
+if ! (cd "$REPO" && "$PYTHON" - <<'PY'
 import json
 import re
 import sys
@@ -754,7 +773,7 @@ expect_unconditional_targets() {
   # `tr -d '\r'` for the reason the version above carries one: on Windows each name would
   # come back as `scripts:distribution-check<CR>`, which `grep -qx` never matches, and the
   # gate would be reported as having skipped a stage it had just run.
-  named="$(cd "$REPO" && python3 - <<'NAMED' | tr -d '\r'
+  named="$(cd "$REPO" && "$PYTHON" - <<'NAMED' | tr -d '\r'
 import json
 import re
 from pathlib import Path
@@ -853,7 +872,7 @@ readonly HEAD_SHA PREDECESSOR
 # What the hook falls back to when the records do not answer: the merge base with the very
 # ref Nx would have compared against. Left empty when this clone has no such ref, and the
 # expectations below then hold everything about the answer except its exact value.
-DEFAULT_BASE="$(cd "$REPO" && python3 -c '
+DEFAULT_BASE="$(cd "$REPO" && "$PYTHON" -c '
 import json
 import sys
 
@@ -912,7 +931,7 @@ expect_pre_push_base "no records at all" "" fallback
 # The default branch's own derivation is shell in the workflow, and the workflow is the only
 # place it lives — so it is read out of the step that declares it and run, rather than
 # restated here where it could drift from what CI does.
-if ! (cd "$REPO" && python3 - <<'PY'
+if ! (cd "$REPO" && "$PYTHON" - <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -1032,7 +1051,7 @@ case "${OS:-}${OSTYPE:-}" in
           "Nx could not compute the affected set with a test target: $(cat "$scratch/nx-stderr")" \
           "fix the project graph so 'nx show projects' runs, then rerun"
       fi
-      printf '%s' "$raw" | python3 -c '
+      printf '%s' "$raw" | "$PYTHON" -c '
 import json, sys
 print("\n".join(sorted(json.load(sys.stdin))))
 ' | tr -d '\r'

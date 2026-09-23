@@ -477,6 +477,16 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many items this board's own `ProjectV2.items` connection lists, once that
+    /// connection has been left behind — `None` while it lists everything this board holds.
+    ///
+    /// GitHub's lag, which that connection has and no other view of a board does; the crate
+    /// documentation at `GitHubProjectsSource::board` is where it is written down. So this
+    /// withholds from that one connection and from nothing else.
+    ///
+    /// It is deliberately permanent rather than timed: a lag that expires would let a wait
+    /// outlast it, and a wait that can outlast the defect proves nothing about the source.
+    items_connection_behind_from: Option<usize>,
     /// A cursor this board answers every membership page with, instead of one that
     /// advances. See [`Asked::stuck_cursor`].
     stuck_membership_cursor: Option<&'static str>,
@@ -520,6 +530,18 @@ impl Refusal {
                                    your request again later.",
                          "documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"})
                 .to_string(),
+        }
+    }
+    /// A transient unavailability, which is what GitHub answers when it is briefly unwell.
+    ///
+    /// Deliberately not a rate limit: `Limiter::classify` recognises none of it, so the
+    /// source reports it rather than waiting it out, and one scripted entry is therefore one
+    /// failed request rather than the first of a retried schedule.
+    fn unavailable() -> Self {
+        Self {
+            status: "503 Service Unavailable",
+            headers: String::new(),
+            body: json!({"message": "unavailable"}).to_string(),
         }
     }
     /// The same refusal, asking for a wait of `seconds`.
@@ -863,6 +885,20 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+
+    /// Leave this board's own `ProjectV2.items` connection behind everything filed from now
+    /// on, the way GitHub's is, and leave every other view of this board current.
+    ///
+    /// See [`State::items_connection_behind_from`] for the measurement this models. It
+    /// reaches the source's own whole-board document alone: the lane's artifact lookup in
+    /// `journey::artifact_item_ids` walks that connection too, and on GitHub what it looks
+    /// for is residue from runs long since projected — a board that hid a run's own
+    /// artifacts from that run's own cleanup would model a board nothing can ever sweep,
+    /// which is not what was observed and would fail the journey somewhere it is not about.
+    fn items_connection_falls_behind(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.items_connection_behind_from = Some(state.items.len());
+    }
     /// Give this board's `Status` field one more option, the way a person adding a column on
     /// GitHub does. The shipped board has no `Queued` option, which is what lets one case
     /// prove a status needing it is refused and another prove it lands once it is there.
@@ -930,6 +966,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        items_connection_behind_from: None,
         stuck_membership_cursor: None,
         seen: Vec::new(),
         documents: Vec::new(),
@@ -1578,7 +1615,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         other => panic!("after must be null or a string: {other}"),
     };
     let first = variables["first"].as_u64().expect("first") as usize;
-    let visible = state.items.len().saturating_sub(state.lagging_reads);
+    // What this connection lists is what it had caught up with, which is everything unless
+    // this board was left behind; see `State::items_connection_behind_from`.
+    let listed = state
+        .items_connection_behind_from
+        .unwrap_or(state.items.len())
+        .min(state.items.len());
+    let visible = listed.saturating_sub(state.lagging_reads);
     let end = (offset + first).min(visible);
     let options = state.options();
     let nodes = state.items[offset.min(end)..end]
@@ -1783,8 +1826,11 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
-            let mut request = [0_u8; 8192];
-            let _ = stream.read(&mut request).unwrap();
+            let request = read_http_json(&mut stream);
+            let (status, body) = match empty_board_search(&request) {
+                Some(empty) => ("200 OK".to_owned(), empty),
+                None => (status.clone(), body.clone()),
+            };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1793,6 +1839,26 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
         }
     });
     format!("http://{address}/graphql")
+}
+
+/// An empty board-scoped issue search, for a request that is one.
+///
+/// A whole-board read is the union of GitHub's two enumerations of one board — see
+/// `GitHubProjectsSource::board` — so a server scripting a board response is asked for the
+/// search as well. The servers below script the *board* document and every case they carry
+/// is about that response, so the search they answer holds nothing, which changes no case's
+/// subject and no case's answer: an issue a board read leaves out is one this search does
+/// not name either. It is the truthful answer for the one case where the two could disagree,
+/// too — a token that cannot see an item's content cannot find that item by searching for it.
+fn empty_board_search(request: &Value) -> Option<String> {
+    request["query"]
+        .as_str()
+        .filter(|query| query.contains("search(query:$search"))
+        .map(|_| {
+            json!({"data":{"search":{"nodes":[],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+            .to_string()
+        })
 }
 
 /// A scripted update's exchange, opened by the read of the item's own node an update now
@@ -1811,18 +1877,22 @@ fn sequence_server(bodies: Vec<Value>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     thread::spawn(move || {
-        for body in bodies {
+        let mut scripted = bodies.into_iter();
+        loop {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut bytes = Vec::new();
-            let mut chunk = [0_u8; 4096];
-            loop {
-                let count = stream.read(&mut chunk).unwrap();
-                bytes.extend_from_slice(&chunk[..count]);
-                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let body = body.to_string();
+            let request = read_http_json(&mut stream);
+            // Answered beside the script rather than out of it; see `empty_board_search`.
+            // A script is an exchange somebody wrote down to make one refusal happen, and
+            // spending one of its entries on the search would move every entry after it.
+            let body = match empty_board_search(&request) {
+                Some(empty) => empty,
+                None => match scripted.next() {
+                    Some(body) => body.to_string(),
+                    // The script is spent: the server goes away, exactly as it did before,
+                    // so a source asking for more is refused rather than answered.
+                    None => return,
+                },
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -3044,6 +3114,196 @@ async fn a_read_taken_straight_after_a_write_answers_with_what_was_written() {
             .expect("the project this run wrote")
             .title,
         "Second plan"
+    );
+}
+
+/// A whole-board read reports an item `ProjectV2.items` has not caught up with.
+///
+/// Every read here is through a source that did none of the writing, which is what makes it
+/// about GitHub's data rather than about `GitHubProjectsSource::created`: that record is
+/// empty in a source built after the write, and a correction it could answer would have
+/// deleted the property the credentialed journey's own wait exists for.
+#[tokio::test]
+async fn a_board_read_reports_an_item_the_boards_own_item_connection_is_behind_on() {
+    let fixture = board_of(1, 1);
+    fixture.items_connection_falls_behind();
+
+    let writer = source(&fixture);
+    let created = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    let reader = source(&fixture);
+    let held = selected_tasks(reader.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        held.contains(&created.0),
+        "a source that did none of the writing did not report the item the board was \
+         given: {held:?}"
+    );
+    assert!(
+        !fixture.searches().is_empty(),
+        "and the board's own issue search really was the discovery path"
+    );
+
+    // The other half, so the assertion above is about the search rather than about anything
+    // this source kept: hold the search back over the same item and the same read reports
+    // it no longer. Nothing but the board changed.
+    fixture.read_behind(1);
+    let blind = source(&fixture);
+    assert!(
+        !selected_tasks(blind.as_ref(), &TaskQuery::default())
+            .await
+            .contains(&created.0),
+        "with both of GitHub's enumerations behind there is nothing left to answer from"
+    );
+}
+
+/// What this run writes to an item only the board's search reported reaches the read.
+///
+/// The half a source keeps of that search is a third place one item can sit, beside the
+/// board it read and what it created — and for an item the board's own item connection is
+/// behind on it is the *only* place, so a write or a delete that missed it would put the
+/// stale record back on exactly the items the union in `GitHubProjectsSource::board` exists
+/// for. Both halves are driven here through one source's own reads.
+#[tokio::test]
+async fn a_write_and_a_delete_reach_an_item_only_the_boards_search_reported() {
+    async fn titled(source: &dyn TaskSource) -> Vec<String> {
+        let mut held = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect("the board answers a task query")
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect::<Vec<_>>();
+        held.sort();
+        held
+    }
+
+    let fixture = board_of(1, 1);
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    // A source that did none of the writing, whose first read is what fills its view of
+    // this board — the item connection in one half and the search in the other.
+    let reader = source(&fixture);
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step"],
+        "the first read reports the item only the search knows about"
+    );
+
+    reader
+        .write_task(&ItemWrite {
+            target: Some(created.clone()),
+            item: task(
+                "ignored",
+                "Third step, revised",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("an update of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step, revised"],
+        "and reports the title this run just wrote onto it rather than the one it read"
+    );
+
+    reader
+        .delete_task(&created)
+        .await
+        .expect("a delete of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1"],
+        "and stops reporting it once this run has taken it off"
+    );
+}
+
+/// A board read whose search fails says so, and the next read asks the search again.
+///
+/// The union in `GitHubProjectsSource::board` made the search a half of every whole-board
+/// read, where before it answered the project list alone — so a search that fails is a new
+/// way for a board read to fail, and what it must never do is answer with the half that did
+/// work. An item only the search reports is exactly the item the union exists for, so a read
+/// silently missing it would be the defect this correction was written to remove, arriving
+/// by another route.
+///
+/// The second half is the one a cache makes possible: the source holds the search for the
+/// length of a command, and a failed walk that got written down there would be permanent for
+/// that command. The refusal is a single scripted 503 — the shape a publication of this
+/// repository was really refused in — so the same source, asked again, has a working search
+/// to reach.
+#[tokio::test]
+async fn a_board_read_whose_search_fails_is_refused_rather_than_answered_short() {
+    let fixture = board_of(1, 1);
+    // Only the search can report what this run is about to write; see
+    // `State::items_connection_behind_from`.
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    fixture.script_for("search", vec![Refusal::unavailable()]);
+
+    // A source that did none of the writing, so the only place the item above sits is the
+    // search this board is about to refuse.
+    let reader = source(&fixture);
+    let message = refusal(
+        reader
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a board read whose search failed is a failure, not a short answer"),
+    );
+    assert!(
+        message.contains("503"),
+        "and says what GitHub answered rather than something of its own: {message}"
+    );
+
+    // The scripted refusal is spent, so the very same source asking again reaches a working
+    // search — which it only does if the failed walk was not kept.
+    let held = selected_tasks(reader.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        held.contains(&created.0),
+        "the retried search reports the item the board's own item connection is behind on, \
+         and it is the very item this run created: {held:?}"
+    );
+    assert_eq!(
+        fixture.searches().len(),
+        2,
+        "and the second read really did ask the search again rather than answer from a \
+         record of the walk that failed"
     );
 }
 
@@ -10666,6 +10926,10 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
 #[tokio::test]
 async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says() {
     let fixture = board_with(vec![], true, false);
+    // The board GitHub really is, so the journey below — the same body of code the
+    // credentialed lane drives — can only converge through the union in
+    // `GitHubProjectsSource::board`.
+    fixture.items_connection_falls_behind();
     let labels = label_endpoints(&fixture.state);
     journey::against(journey::Endpoints {
         graphql: fixture.endpoint.clone(),

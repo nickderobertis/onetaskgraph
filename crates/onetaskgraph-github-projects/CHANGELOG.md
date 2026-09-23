@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.43](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.42...onetaskgraph-github-projects-v0.2.43) - 2026-09-23
+
+### Fixed
+
+- *(github-projects)* converge the live journey's wait for a board item it just created ([#2415](https://github.com/nickderobertis/onetaskgraph/pull/2415))
+
 ## [0.2.40](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.2.39...onetaskgraph-github-projects-v0.2.40) - 2026-09-19
 
 ### Fixed
