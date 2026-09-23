@@ -217,6 +217,26 @@ if not re.search(r"(?m)^\s*fail-on-drift:\s*true\s*$", workflow):
         ".github/workflows/visual-docs.yml: must pass `fail-on-drift: true`. Without it a "
         "drifted capture is a warning, and the pictures can quietly stop being true."
     )
+# The workflow captures by running the same scripts the recipes wrap, because the capture
+# container carries no `just`. So the two spellings of "capture" are reconciled here: a
+# recipe body that stopped naming one of these scripts, or a workflow step that reached for
+# something else, would have CI and a person capturing differently.
+capture_command = re.search(r"(?ms)^\s*capture-command:\s*\|(.*?)(?=\n\s*\w[\w-]*:|\Z)", workflow)
+for script in ("scripts/screenshots-freeze.sh ensure", "scripts/screenshots.sh"):
+    if not capture_command or script not in capture_command.group(1):
+        problems.append(
+            ".github/workflows/visual-docs.yml: its capture-command does not run "
+            f"`{script}`, which is what `just screenshots-tools` and `just screenshots` "
+            "run. CI and a person have to capture by the same route, or the baseline is "
+            "gated against bytes nobody can reproduce locally."
+        )
+    if script not in justfile:
+        problems.append(
+            f"justfile: no recipe runs `{script}`. The recipes are the surface a person "
+            "uses, and the workflow's capture-command runs the same scripts because its "
+            "container has no `just`; one of the two moving alone parts them."
+        )
+
 container = re.search(r"(?m)^\s*container:\s*rust:([0-9]+\.[0-9]+\.[0-9]+)-", workflow)
 channel = re.search(r'(?m)^channel\s*=\s*"([0-9.]+)"', read("rust-toolchain.toml"))
 if not container:

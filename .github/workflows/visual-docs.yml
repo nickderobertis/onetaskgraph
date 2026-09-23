@@ -63,6 +63,14 @@ jobs:
       # Provision the pinned renderer through the one script that owns which `freeze` this
       # repository runs and where, then capture. The reusable workflow exports $SHOTS_OUT
       # as shots/current/<arch>; the capture writes captures.json and the SVGs there.
+      # llmlint: ignore-block[work_goes_through_command_surface] These two lines run INSIDE
+      # the container above, which is a plain Rust image with no `just` on it. The recipes
+      # that wrap them — `just screenshots-tools` and `just screenshots` — are one line
+      # each, and fetching a task runner into the capture so that a workflow could call a
+      # wrapper would add a host tool to the one step that has to stay minimal. The two
+      # cannot part: scripts/check-visual-docs.sh reconciles this capture-command against
+      # the recipes' own bodies.
       capture-command: |
         bash scripts/screenshots-freeze.sh ensure
         bash scripts/screenshots.sh
+      # llmlint: ignore-end[work_goes_through_command_surface]

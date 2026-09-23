@@ -23,6 +23,8 @@
 #                                         host-prerequisite marker, which is one tool's
 #   6. screencomp absent and required   — the same skip turned into a refusal
 #   7. CI                               — the workflow owns it there, so the guard is inert
+#   8. the real hook, with real records — the gate runs and the guard receives the very
+#                                         records the base was derived from
 set -euo pipefail
 
 fatal() {
@@ -229,6 +231,70 @@ run_guard "$RECORDS" "$NO_SCREENCOMP" 3 3 1
 run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3 "" 1
 [ "$GUARD_STATUS" -eq 0 ] || fail "the guard refused a push under CI, where the workflow owns the comparison:"
 captured && fail "the guard captured under CI, where the visual-docs workflow does that:"
+
+# 8. The hook itself. It reads git's ref records ONCE into a variable and replays them to
+#    two consumers — the base the gate selects against, and the guard's range — so a change
+#    that dropped either half would leave the gate sweeping every project or the guard
+#    blind, and neither shows up in the guard's own cases above. This drives the REAL
+#    .githooks/pre-push in a clone of its own, with `just`, the provisioner and the guard
+#    stubbed: provisioning is scripts/check-pre-push-provisioning.sh's subject, and a real
+#    `just gate` here would be this repository's whole gate run from inside itself.
+readonly HOOK_CLONE="$scratch/hook-repo"
+scratch_clone "$ROOT" "$HOOK_CLONE" || fatal \
+  "could not clone this repository into $HOOK_CLONE" \
+  "check 'git status' here and the free space on \$TMPDIR, then rerun"
+(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$HOOK_CLONE" || fatal \
+  "could not copy $ROOT's tracked files over the clone at $HOOK_CLONE" \
+  "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
+
+readonly HOOK_MARKERS="$scratch/hook-markers"
+mkdir -p "$HOOK_MARKERS" || fatal "could not create $HOOK_MARKERS" \
+  "check the permissions of \$TMPDIR, then rerun"
+cat > "$HOOK_CLONE/scripts/provision-gate.sh" <<STUB
+#!/usr/bin/env bash
+exit 0
+STUB
+cat > "$HOOK_CLONE/scripts/screenshots-guard.sh" <<STUB
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$HOOK_MARKERS/guard.stdin"
+printf '%s\n' "\${NX_BASE:-unset}" > "$HOOK_MARKERS/guard.nx-base"
+STUB
+readonly HOOK_STUB_BIN="$scratch/hook-bin"
+mkdir -p "$HOOK_STUB_BIN" || fatal "could not create $HOOK_STUB_BIN" \
+  "check the permissions of \$TMPDIR, then rerun"
+cat > "$HOOK_STUB_BIN/just" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$HOOK_MARKERS/gate"
+STUB
+chmod +x "$HOOK_CLONE/scripts/provision-gate.sh" \
+  "$HOOK_CLONE/scripts/screenshots-guard.sh" "$HOOK_STUB_BIN/just" || fatal \
+  "could not make the hook stubs executable" "check the permissions of \$TMPDIR, then rerun"
+
+# From INSIDE the clone, because the hook finds its root with `git rev-parse
+# --show-toplevel`: run from anywhere else and it would cd to whichever repository the
+# working directory belongs to and drive that one's gate and guard instead.
+hook_records="refs/heads/main $(git -C "$HOOK_CLONE" rev-parse HEAD) refs/heads/main $REMOTE_SHA"
+hook_output="$(cd "$HOOK_CLONE" && printf '%s\n' "$hook_records" \
+  | env -u CI PATH="$HOOK_STUB_BIN:$PATH" bash .githooks/pre-push 2>&1)" \
+  && hook_status=0 || hook_status=$?
+
+if [ "$hook_status" -ne 0 ]; then
+  GUARD_OUTPUT="$hook_output"
+  fail "the real hook refused a push whose gate and guard both succeed:"
+fi
+if ! grep -qF "gate" "$HOOK_MARKERS/gate" 2>/dev/null; then
+  GUARD_OUTPUT="$hook_output"
+  fail "the hook never ran 'just gate', so the bar it already had has stopped running:"
+fi
+if [ "$(cat "$HOOK_MARKERS/guard.stdin" 2>/dev/null)" != "$hook_records" ]; then
+  GUARD_OUTPUT="$hook_output"
+  fail "the hook did not replay git's ref records to the screenshot guard, which then has no range and captures nothing whatever the push carries:"
+fi
+if [ "$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null)" != "$REMOTE_SHA" ]; then
+  GUARD_OUTPUT="$hook_output"
+  fail "the hook did not derive the gate's base from those same records (the guard saw NX_BASE=$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null), expected $REMOTE_SHA):"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-guard: $failures expectation(s) failed." >&2

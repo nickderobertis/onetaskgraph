@@ -48,6 +48,16 @@ readonly CURRENT="shots/current"
 readonly GALLERY="shots/review"
 
 # --- 1. What is being pushed --------------------------------------------------
+# git writes one record per ref, `<local ref> <local sha> <remote ref> <remote sha>`, and
+# what arrives on this stdin is external input: it is whatever the caller piped. So each
+# sha is held to the shape git writes AND resolved in this repository before it becomes
+# half of a range — an unresolvable one would make `git diff` fail and read as the guard
+# having broken rather than as a record it could not use.
+resolves() {
+  [[ "$1" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] \
+    && git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1
+}
+
 ranges=()
 if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
   ranges+=("$SCREENCOMP_GUARD_RANGE")
@@ -57,7 +67,15 @@ else
     [ -z "${local_sha:-}" ] && continue
     if [[ "$local_sha" =~ $zero ]]; then
       continue # a branch being deleted pushes nothing to capture
-    elif [[ "$remote_sha" =~ $zero ]]; then
+    fi
+    if ! resolves "$local_sha"; then
+      echo "pre-push: the screenshot guard cannot read '$local_sha' as a commit of this repository, so it skipped this ref." >&2
+      echo "pre-push: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
+      continue
+    fi
+    if [[ "$remote_sha" =~ $zero ]] || ! resolves "$remote_sha"; then
+      # A branch the remote has never seen, or one whose tip this clone cannot resolve:
+      # what the push adds is what it added since it forked from the default branch.
       base="$(git merge-base origin/HEAD "$local_sha" 2>/dev/null || true)"
       if [ -n "$base" ]; then ranges+=("${base}..${local_sha}"); else ranges+=("$local_sha"); fi
     else
@@ -124,15 +142,26 @@ if [ "$status" -eq 0 ]; then
   echo "pre-push: screenshots unchanged against $MANIFEST — ok to push" >&2
   exit 0
 elif [ "$status" -ne 3 ]; then
-  echo "pre-push: 'screencomp classify' failed (exit $status), so the capture was not evaluated." >&2
-  echo "pre-push: next: read its diagnostic above and re-run 'git push'." >&2
-  exit "$status"
+  echo "pre-push: 'screencomp classify' failed (exit $status), so this push was not evaluated" >&2
+  echo "pre-push: against $MANIFEST." >&2
+  echo "pre-push: next: read its diagnostic above, check that screencomp is current, then push again." >&2
+  # 1 rather than screencomp's own status: this script's exit codes are its own contract,
+  # and passing a third party's through would make an unknown number the hook's answer.
+  exit 1
 fi
 
 # --- On drift: regenerate the baseline, build a gallery, BLOCK the push -------
-screencomp manifest --input "$CURRENT" --arch "$LANE" --output "$MANIFEST"
-screencomp gallery --input "$CURRENT" --arch "$LANE" \
-  --output "$GALLERY" --title "Pre-push screenshot review" >/dev/null
+if ! screencomp manifest --input "$CURRENT" --arch "$LANE" --output "$MANIFEST"; then
+  echo "pre-push: the capture drifted and the refreshed baseline could not be written to $MANIFEST." >&2
+  echo "pre-push: next: read the diagnostic above, then run 'just screenshots-bless' by hand and commit it." >&2
+  exit 1
+fi
+if ! screencomp gallery --input "$CURRENT" --arch "$LANE" \
+  --output "$GALLERY" --title "Pre-push screenshot review" >/dev/null; then
+  echo "pre-push: the capture drifted and the review gallery could not be built at $GALLERY." >&2
+  echo "pre-push: next: read the diagnostic above; the refreshed baseline and the README images are written, so 'git diff' is the other way to review them." >&2
+  exit 1
+fi
 
 {
   echo

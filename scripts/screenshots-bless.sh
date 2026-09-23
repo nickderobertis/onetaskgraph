@@ -34,5 +34,10 @@ command -v screencomp >/dev/null 2>&1 || {
 }
 
 mkdir -p shots/baseline
-screencomp manifest --input shots/current --arch "$LANE" --output "shots/baseline/$LANE.json" --quiet
+if ! screencomp manifest --input shots/current --arch "$LANE" \
+  --output "shots/baseline/$LANE.json" --quiet; then
+  echo "screenshots-bless: the baseline at shots/baseline/$LANE.json was not written" >&2
+  echo "screenshots-bless: next: read the diagnostic above, then re-run 'just screenshots-bless'; the capture in shots/current/$LANE is still there" >&2
+  exit 1
+fi
 echo "screenshots-bless: refreshed shots/baseline/$LANE.json; commit it with docs/screenshots/" >&2

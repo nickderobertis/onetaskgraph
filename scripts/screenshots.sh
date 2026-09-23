@@ -52,6 +52,25 @@ if ! [[ "$LANE" =~ ^[A-Za-z0-9_]+$ ]]; then
 fi
 readonly LANE
 readonly SHOTS_OUT="${SHOTS_OUT:-shots/current/$LANE}"
+# The reusable workflow and the guard both export this, so it is external input — and the
+# capture removes it and everything under it below. It has to be a relative path inside
+# `shots/` with no `..` segment before anything is deleted: an absolute or escaping value
+# would name a directory this capture does not own.
+case "$SHOTS_OUT" in
+  shots/?*) ;;
+  *)
+    echo "screenshots: SHOTS_OUT is '$SHOTS_OUT', which is not a path under shots/ — and this capture removes what it names" >&2
+    echo "screenshots: next: unset it to use shots/current/$LANE, or set it to a path under shots/ as the visual-docs workflow does" >&2
+    exit 1
+    ;;
+esac
+case "$SHOTS_OUT" in
+  *..*)
+    echo "screenshots: SHOTS_OUT is '$SHOTS_OUT', which walks out of shots/ with '..' — and this capture removes what it names" >&2
+    echo "screenshots: next: name the lane directory outright, as shots/current/$LANE" >&2
+    exit 1
+    ;;
+esac
 readonly FONT="$ROOT/screenshots/fonts/JetBrainsMono-Regular.ttf"
 readonly FIXTURE="$ROOT/screenshots/fixture"
 readonly DOCS="$ROOT/docs/screenshots"
@@ -163,25 +182,43 @@ entries=()
 # Drive one scene and render it. `directory` is the staged fixture the command runs in,
 # which is what decides the configuration document it discovers.
 #
-# Every scene exits 0 today; a non-zero exit is captured rather than swallowed, because a
-# shot of a diagnostic would still be the tool's real output — but an EMPTY capture is
-# refused, since freeze renders one as a blank window that classifies as a clean shot.
+# Every scene here is a successful invocation, and one that stops being successful is
+# REFUSED rather than photographed: a shot of a diagnostic is still real output, but it
+# would sail through the digest gate as a scene that merely changed. An empty capture is
+# refused for the same reason — freeze renders one as a blank window.
 scene() {
   local name="$1" directory="$2"
   shift 2
-  local output="$captured/$name.txt"
-  (cd "$STAGE/$directory" && "$BINARY" "$@") >"$output" 2>&1 || true
+  local output="$captured/$name.txt" status=0
+  (cd "$STAGE/$directory" && "$BINARY" "$@") >"$output" 2>&1 || status=$?
+  if [ "$status" -ne 0 ]; then
+    {
+      echo "screenshots: scene '$name' exited $status, so what it wrote is a diagnostic rather than the surface this scene documents."
+      echo "---- what it wrote ----"
+      cat "$output"
+    } >&2
+    echo "screenshots: next: run 'onetaskgraph $*' in $STAGE/$directory and fix what it reports, or change the scene" >&2
+    exit 1
+  fi
   if [ ! -s "$output" ]; then
     echo "screenshots: scene '$name' produced no output, so there is nothing to render" >&2
-    echo "screenshots: next: run '$BINARY $*' in $STAGE/$directory and read its diagnostic" >&2
+    echo "screenshots: next: run 'onetaskgraph $*' in $STAGE/$directory and read what it does print" >&2
     exit 1
   fi
   # `< /dev/null`: freeze reads stdin whenever it is not a character device, so under a
   # piped stdin it ignores the file argument and renders "No input".
-  "$FREEZE" "$output" "${freeze_flags[@]}" -o "$SHOTS_OUT/$name.svg" </dev/null >&2
+  if ! "$FREEZE" "$output" "${freeze_flags[@]}" -o "$SHOTS_OUT/$name.svg" </dev/null >&2; then
+    echo "screenshots: the renderer failed on scene '$name', so that shot was not written" >&2
+    echo "screenshots: next: read its diagnostic above; 'just screenshots-tools' reinstalls the pinned renderer" >&2
+    exit 1
+  fi
   entries+=("$name|{}|$(sha256 "$SHOTS_OUT/$name.svg")|$name.svg")
   # The committed copy: the same bytes, outside the gitignored shots/ tree.
-  cp "$SHOTS_OUT/$name.svg" "$DOCS/$name.svg"
+  if ! cp "$SHOTS_OUT/$name.svg" "$DOCS/$name.svg"; then
+    echo "screenshots: scene '$name' rendered but could not be copied to $DOCS, which is what the README embeds" >&2
+    echo "screenshots: next: check the permissions of $DOCS, then re-run 'just screenshots'" >&2
+    exit 1
+  fi
 }
 
 # --- The scenes, each documenting the surface the README section it sits in explains. ----

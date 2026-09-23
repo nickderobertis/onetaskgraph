@@ -183,9 +183,14 @@ tar -xzf "$unpacked/$archive" -C "$unpacked" || {
 }
 extracted="$unpacked/freeze_${FREEZE_VERSION}_${os}_${architecture}/freeze"
 [ -f "$extracted" ] || extracted="$unpacked/freeze"
+[ -f "$extracted" ] || {
+  echo "screenshots-freeze: $archive unpacked but carries no freeze binary at $extracted" >&2
+  echo "screenshots-freeze: next: check the published archive's layout for v$FREEZE_VERSION, then rerun '$install_command'" >&2
+  exit 1
+}
 install -m 0755 "$extracted" "$scoped_bin" || {
-  echo "screenshots-freeze: $archive unpacked but carried no freeze binary at $extracted" >&2
-  echo "screenshots-freeze: next: check the published archive's layout, then rerun '$install_command'" >&2
+  echo "screenshots-freeze: could not install $extracted as $scoped_bin" >&2
+  echo "screenshots-freeze: next: check the permissions and free space of $scoped_root, then rerun '$install_command'" >&2
   exit 1
 }
 
