@@ -74,13 +74,22 @@ readonly MARKERS="$scratch/markers"
 
 # The stub capture. It records that it ran and writes the index the guard's classify step
 # would read, so a case can assert on whether a capture happened at all.
+#
+# Written by a function because it is NOT committed: a case that moves the clone's branch
+# restores the real capture script over it, and the real one builds this repository.
+write_capture_stub() {
 cat > "$CLONE/scripts/screenshots.sh" <<STUB
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "\${SHOTS_OUT:-unset}" >> "$MARKERS/captured"
+[ -z "\${STUB_CAPTURE_FAILS:-}" ] || exit 1
 mkdir -p "\${SHOTS_OUT:?the guard has to name where the capture goes}"
 printf '{"schema":1,"shots":[]}\n' > "\$SHOTS_OUT/captures.json"
 STUB
+chmod +x "$CLONE/scripts/screenshots.sh"
+}
+write_capture_stub || fatal "could not write the stub capture into $CLONE" \
+  "check the permissions of \$TMPDIR, then rerun"
 
 # The stub screencomp. Each subcommand records its arguments and its stdin, and answers
 # with the exit code the case chose — which is the whole of what the guard branches on.
@@ -99,6 +108,7 @@ case "\$subcommand" in
     ;;
   classify) exit "\${STUB_CLASSIFY_EXIT:-0}" ;;
   manifest)
+    [ -z "\${STUB_MANIFEST_FAILS:-}" ] || exit 1
     while [ \$# -gt 0 ]; do
       [ "\$1" = "--output" ] && { printf '{"schema":1,"shots":[]}\n' > "\$2"; break; }
       shift
@@ -106,6 +116,7 @@ case "\$subcommand" in
     exit 0
     ;;
   gallery)
+    [ -z "\${STUB_GALLERY_FAILS:-}" ] || exit 1
     while [ \$# -gt 0 ]; do
       [ "\$1" = "--output" ] && { mkdir -p "\$2" && : > "\$2/index.html"; break; }
       shift
@@ -115,8 +126,8 @@ case "\$subcommand" in
   *) exit 64 ;;
 esac
 STUB
-chmod +x "$CLONE/scripts/screenshots.sh" "$STUB_BIN/screencomp" || fatal \
-  "could not make the stubs executable" "check the permissions of \$TMPDIR, then rerun"
+chmod +x "$STUB_BIN/screencomp" || fatal \
+  "could not make the stub screencomp executable" "check the permissions of \$TMPDIR, then rerun"
 
 # A commit whose diff is what each case's ref records point at. Its content does not decide
 # relevance — the stub screencomp answers that — but the guard has to compute a real diff
@@ -134,6 +145,11 @@ readonly HOST_PREREQUISITE="onevcs: host-prerequisite: "
 failures=0
 GUARD_OUTPUT=""
 GUARD_STATUS=0
+# The switches each case sets, declared once so `set -u` can read them unset.
+GUARD_RANGE=""
+STUB_CAPTURE_FAILS=""
+STUB_MANIFEST_FAILS=""
+STUB_GALLERY_FAILS=""
 
 # Run the real guard out of the scratch clone, under the PATH and the stub answers this
 # case chose. `CI` is cleared for every case but the one about it, because this check runs
@@ -147,6 +163,10 @@ run_guard() {
   GUARD_OUTPUT="$(printf '%s\n' "$records" | env -u CI -u SCREENCOMP_GUARD_RANGE \
     PATH="$path" "STUB_SCOPE_EXIT=${3:-0}" "STUB_CLASSIFY_EXIT=${4:-0}" \
     "SCREENCOMP_GUARD_REQUIRE=${5:-}" "CI=${6:-}" \
+    "STUB_CAPTURE_FAILS=${STUB_CAPTURE_FAILS:-}" \
+    "STUB_MANIFEST_FAILS=${STUB_MANIFEST_FAILS:-}" \
+    "STUB_GALLERY_FAILS=${STUB_GALLERY_FAILS:-}" \
+    "SCREENCOMP_GUARD_RANGE=${GUARD_RANGE:-}" \
     bash "$CLONE/scripts/screenshots-guard.sh" 2>&1)" && GUARD_STATUS=0 || GUARD_STATUS=$?
 }
 
@@ -260,6 +280,10 @@ done
 git -C "$CLONE" checkout --quiet - >/dev/null 2>&1 || fatal \
   "could not return $CLONE to the branch the earlier cases used" \
   "report this; the clone is scratch and can be re-created"
+# That checkout restored the real capture script over the stub, and the real one builds
+# this repository. Back it goes, before any case below reaches a capture.
+write_capture_stub || fatal "could not restore the stub capture in $CLONE" \
+  "check the permissions of \$TMPDIR, then rerun"
 
 # 9. The hook itself. It reads git's ref records ONCE into a variable and replays them to
 #    two consumers — the base the gate selects against, and the guard's range — so a change
@@ -324,6 +348,79 @@ if [ "$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null)" != "$REMOTE_SHA" ]; then
   GUARD_OUTPUT="$hook_output"
   fail "the hook did not derive the gate's base from those same records (the guard saw NX_BASE=$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null), expected $REMOTE_SHA):"
 fi
+
+# 10. A ref being deleted pushes nothing to capture.
+run_guard "refs/heads/gone 0000000000000000000000000000000000000000 refs/heads/gone $REMOTE_SHA" \
+  "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] || fail "a branch deletion was refused:"
+captured && fail "a branch deletion was captured:"
+
+# 11. A local sha this repository cannot resolve is a record to skip, not a range to build:
+#     `git diff` would fail on it and read as the guard having broken.
+run_guard "refs/heads/main 1234567890123456789012345678901234567890 refs/heads/main $REMOTE_SHA" \
+  "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] || fail "a record naming an unresolvable commit refused the push:"
+captured && fail "a record naming an unresolvable commit was captured against nothing:"
+grep -qF "cannot read" <<<"$GUARD_OUTPUT" \
+  || fail "an unresolvable record was skipped without saying so:"
+
+# 12. An explicit range: refused when it is not two revisions, and when either end does not
+#     resolve. It reaches `git diff` exactly as the records do, so it is checked as they are.
+GUARD_RANGE="not-a-range"
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "a range override that is not a range was accepted:"
+GUARD_RANGE="nonesuch..HEAD"
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "a range override naming an unresolvable revision was accepted:"
+GUARD_RANGE="$REMOTE_SHA..$LOCAL_SHA"
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 0
+[ "$GUARD_STATUS" -eq 0 ] || fail "a valid range override was refused:"
+captured || fail "a valid range override did not reach the capture:"
+GUARD_RANGE=""
+
+# 13. An undecidable SCREENCOMP_GUARD_REQUIRE: whether a missing screencomp refuses the push
+#     is not something to guess at.
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3 maybe
+[ "$GUARD_STATUS" -eq 0 ] && fail "SCREENCOMP_GUARD_REQUIRE='maybe' was read as a boolean:"
+grep -qF "SCREENCOMP_GUARD_REQUIRE" <<<"$GUARD_OUTPUT" \
+  || fail "an undecidable SCREENCOMP_GUARD_REQUIRE was refused without naming it:"
+
+# 14. `screencomp scope` failing for its own reasons is not this push being refused: the
+#     workflow is the backstop, and a guessed capture costs minutes.
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 7 3
+[ "$GUARD_STATUS" -eq 0 ] || fail "a scope error refused the push, where CI is the backstop:"
+captured && fail "a scope error was read as relevance and captured:"
+grep -qF "scope" <<<"$GUARD_OUTPUT" || fail "a scope error was skipped silently:"
+
+# 15. A capture that cannot be made is a push that cannot be evaluated.
+STUB_CAPTURE_FAILS=1
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 0
+[ "$GUARD_STATUS" -eq 0 ] && fail "a failed capture let the push through unevaluated:"
+called classify && fail "a failed capture was classified anyway:"
+grep -qF "screenshots-tools" <<<"$GUARD_OUTPUT" \
+  || fail "a failed capture did not name how to provision the renderer:"
+STUB_CAPTURE_FAILS=""
+
+# 16. `screencomp classify` failing for anything but drift: this script's exit codes are its
+#     own contract, so a third party's status does not become the hook's answer.
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 7
+[ "$GUARD_STATUS" -eq 1 ] || fail "a classify error exited $GUARD_STATUS, where this guard's contract names 1:"
+called manifest && fail "a classify error rewrote the committed baseline:"
+
+# 17. Drift, and the regeneration itself failing: the push is still refused, and the reader
+#     is told which half did not happen.
+STUB_MANIFEST_FAILS=1
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "the baseline refresh failed and the push went through:"
+grep -qF "screenshots-bless" <<<"$GUARD_OUTPUT" \
+  || fail "a failed baseline refresh did not name the command that writes one:"
+STUB_MANIFEST_FAILS=""
+STUB_GALLERY_FAILS=1
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "the gallery could not be built and the push went through:"
+grep -qF "git diff" <<<"$GUARD_OUTPUT" \
+  || fail "a failed gallery did not name the other way to review the change:"
+STUB_GALLERY_FAILS=""
 
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-guard: $failures expectation(s) failed." >&2

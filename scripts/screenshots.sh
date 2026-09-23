@@ -84,6 +84,23 @@ readonly BINARY="$ROOT/target/release/onetaskgraph"
 # temporary path can reach a shot.
 readonly STAGE=/tmp/otg
 
+# The lexical checks above are not enough on their own: a symlink at any component under
+# `shots/` would redirect the removal below out of this clone. So the directory is created
+# first and then RESOLVED, and what is removed is only ever a real path inside it. All of
+# it before the renderer is resolved and the binary is built, because deciding where this
+# capture may write costs nothing and a release build costs minutes.
+mkdir -p "$SHOTS_OUT" "$DOCS"
+resolved_out="$(cd "$SHOTS_OUT" && pwd -P)"
+case "$resolved_out/" in
+  "$ROOT/shots/"*) ;;
+  *)
+    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') resolves to $resolved_out, outside $ROOT/shots — and this capture removes what it names" >&2
+    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a real directory under shots/" >&2
+    exit 1
+    ;;
+esac
+rm -rf "$resolved_out"
+mkdir -p "$SHOTS_OUT"
 FREEZE="$(bash "$ROOT/scripts/screenshots-freeze.sh" resolve)" || {
   echo "screenshots: the pinned renderer is not provisioned, so no scene can be rendered" >&2
   echo "screenshots: next: run 'just screenshots-tools', then re-run this capture" >&2
@@ -173,21 +190,6 @@ freeze_flags=(
   --wrap 93
 )
 
-# The lexical checks above are not enough on their own: a symlink at any component under
-# `shots/` would redirect the removal below out of this clone. So the directory is created
-# first and then RESOLVED, and what is removed is only ever a real path inside it.
-mkdir -p "$SHOTS_OUT" "$DOCS"
-resolved_out="$(cd "$SHOTS_OUT" && pwd -P)"
-case "$resolved_out/" in
-  "$ROOT/shots/"*) ;;
-  *)
-    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') resolves to $resolved_out, outside $ROOT/shots — and this capture removes what it names" >&2
-    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a real directory under shots/" >&2
-    exit 1
-    ;;
-esac
-rm -rf "$resolved_out"
-mkdir -p "$SHOTS_OUT"
 captured="$(mktemp -d)"
 trap 'rm -rf "$captured"' EXIT
 

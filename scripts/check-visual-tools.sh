@@ -372,6 +372,43 @@ run_bless "$NO_SCREENCOMP"
 [ "$STATUS" -eq 0 ] && fail "'bless' succeeded with no screencomp installed:"
 names "screencomp" || fail "'bless' refused without naming the tool that is missing:"
 
+# The capture's own input refusals, driven in the clone. Each is reached before the capture
+# builds or renders anything, which is what lets them run here for nothing — and each asks
+# for no build as well, so that a reordering which put the build first would cost a case a
+# release build rather than quietly passing.
+run_capture() {
+  OUTPUT="$(cd "$CLONE" && SHOTS_OUT="$1" SCREENSHOTS_NO_BUILD="${2:-}" \
+    ONETASKGRAPH_TOOLS_HOME="${3:-$HOME_GOOD}" bash scripts/screenshots.sh 2>&1)" \
+    && STATUS=0 || STATUS=$?
+}
+
+# 18. An absolute SHOTS_OUT names a directory outside this clone.
+run_capture /tmp/not-under-shots 1
+[ "$STATUS" -eq 0 ] && fail "the capture accepted an absolute SHOTS_OUT it would then remove:"
+names "shots/" || fail "an out-of-tree SHOTS_OUT was refused without naming where one may point:"
+[ -d /tmp/not-under-shots ] && fail "the capture created /tmp/not-under-shots before refusing it:"
+
+# 19. And one that walks back out with `..`.
+run_capture shots/../../elsewhere 1
+[ "$STATUS" -eq 0 ] && fail "the capture accepted a SHOTS_OUT walking out of shots/:"
+names ".." || fail "an escaping SHOTS_OUT was refused without naming what is wrong with it:"
+
+# 20. A symlink at a component under shots/ redirects the removal, which the lexical checks
+#     above cannot see: the resolved path is what decides.
+mkdir -p "$scratch/elsewhere" "$CLONE/shots"
+ln -sfn "$scratch/elsewhere" "$CLONE/shots/redirected"
+run_capture shots/redirected/x86_64 1
+[ "$STATUS" -eq 0 ] && fail "the capture wrote through a symlinked component under shots/:"
+names "resolves to" || fail "a redirected SHOTS_OUT was refused without saying where it resolved:"
+rm -f "$CLONE/shots/redirected"
+
+# 21. SCREENSHOTS_NO_BUILD means no build, so with nothing to drive it refuses rather than
+#     building behind the caller's back.
+run_capture shots/current/x86_64 1
+[ "$STATUS" -eq 0 ] && fail "the capture succeeded with SCREENSHOTS_NO_BUILD and no binary:"
+names "SCREENSHOTS_NO_BUILD" || fail "the refusal does not name the variable that asked for no build:"
+names "cargo build" || fail "the refusal does not say how to get a binary to capture:"
+
 # The reconciliation check, watched refusing. Each case mutates ONE governed file in the
 # clone, runs the real check there, and restores it: a check that stopped noticing would
 # otherwise pass every gate while the copies it exists for drifted apart.
@@ -394,7 +431,7 @@ git -C "$CLONE" checkout -- shots/baseline || fatal \
 run_visual_docs
 [ "$STATUS" -eq 0 ] || fail "check-visual-docs.sh does not pass on this tree, so the mutations below prove nothing:"
 
-# 22. The two screencomp versions in the workflow part.
+# 25. The two screencomp versions in the workflow part.
 sed -i.bak 's/^\( *screencomp-version: \)v.*/\1v0.0.1/' "$CLONE/.github/workflows/visual-docs.yml"
 rm -f "$CLONE/.github/workflows/visual-docs.yml.bak"
 run_visual_docs
@@ -402,14 +439,14 @@ run_visual_docs
 names "screencomp" || fail "the check refused the parted screencomp pins without naming the tool:"
 restore .github/workflows/visual-docs.yml
 
-# 23. An image the README embeds is not committed.
+# 26. An image the README embeds is not committed.
 rm -f "$CLONE/docs/screenshots/task-list.svg"
 run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "the README embeds an image this tree does not carry and the check passed:"
 names "task-list.svg" || fail "the check refused the missing image without naming it:"
 restore docs/screenshots
 
-# 24. The renderer pin gets a second spelling.
+# 27. The renderer pin gets a second spelling.
 printf '\n# freeze 9.9.9 is what this repository renders with\nfreeze-version := "9.9.9"\n' >> "$CLONE/justfile"
 run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "a second spelling of the renderer pin landed in the justfile and the check passed:"
