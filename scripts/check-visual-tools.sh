@@ -508,6 +508,21 @@ run_visual_docs
 names "arches" || fail "the check refused a second lane without naming where the lane is declared:"
 restore screencomp.toml
 
+# 26a. A second lane that is not a usable lane NAME. This is the one a filter-then-count
+#      read as a single-lane file: the invalid entry vanished and `["x86_64", "bad/lane"]`
+#      passed, while the capture, the guard and the bless step — whose one shared pattern
+#      matches a single-entry array only — read no lane at all out of it and refused every
+#      push. So the check that owns the one-lane contract has to refuse it too.
+sed -i.bak 's|^\(arches *= *\[.*\)\]|\1, "bad/lane"]|' "$CLONE/screencomp.toml"
+rm -f "$CLONE/screencomp.toml.bak"
+grep -q 'bad/lane' "$CLONE/screencomp.toml" || fatal \
+  "could not add an unusable second lane to the clone's screencomp.toml" \
+  "report this; the case needs [capture].arches to carry two entries"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "screencomp.toml declared a second lane that cannot name a baseline file and the check passed:"
+names "arches" || fail "the check refused an unusable second lane without naming where the lane is declared:"
+restore screencomp.toml
+
 # 27. The workflow restates the lane. screencomp reads [capture].arches itself to fan out
 #     its matrix, so a copy there is a second statement nothing reconciles.
 printf '\n# the %s lane is the one this workflow captures\n' "$LANE" >> "$CLONE/.github/workflows/visual-docs.yml"

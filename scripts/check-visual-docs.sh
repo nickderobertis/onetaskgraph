@@ -57,20 +57,27 @@ ignored = read(".gitignore")
 
 lanes = re.search(r"(?m)^arches\s*=\s*\[(.*?)\]", config)
 lane_values = re.findall(r'"([^"]+)"', lanes.group(1)) if lanes else []
-# The same charset the capture and the guard hold it to, because this check builds
-# shots/baseline/<lane>.json out of it: a lane carrying a slash or a `..` would name a file
-# outside that directory, and a lane this check cannot use is a lane they cannot either.
-lane_values = [value for value in lane_values if re.fullmatch(r"[A-Za-z0-9_]+", value)] \
-    if lane_values else []
-if len(lane_values) != 1:
+# Every DECLARED lane is held to the same charset the capture and the guard hold it to,
+# because this check builds shots/baseline/<lane>.json out of it: a lane carrying a slash or
+# a `..` would name a file outside that directory, and a lane this check cannot use is a
+# lane they cannot either.
+#
+# None is discarded BEFORE the count, which is the whole of the difference. Filtering first
+# read `["x86_64", "bad/lane"]` as one usable lane and said nothing — while the capture, the
+# guard and the bless step, whose one shared pattern matches a single-entry array only, got
+# no lane at all out of it and refused every push. The check that owns this contract must
+# not be the one thing that accepts a file the tools it governs cannot read.
+unusable = [value for value in lane_values if not re.fullmatch(r"[A-Za-z0-9_]+", value)]
+if unusable or len(lane_values) != 1:
     problems.append(
         "screencomp.toml: [capture].arches must declare exactly one lane, named in "
         "letters, digits and underscores, because the pre-push guard classifies that lane "
-        "on every host and only one baseline is committed; the usable lanes it declares "
-        f"are {lane_values or 'none'}. A second lane needs its own baseline and its own "
-        "CI job."
+        "on every host and only one baseline is committed; it declares "
+        f"{lane_values or 'none'}"
+        + (f", of which {unusable} cannot name a baseline file" if unusable else "")
+        + ". A second lane needs its own baseline and its own CI job."
     )
-lane = lane_values[0] if lane_values else "x86_64"
+lane = lane_values[0] if len(lane_values) == 1 and not unusable else "x86_64"
 
 # Nothing may restate it — the workflow included, where the lane is a matrix screencomp
 # reads from that same file and a prose copy is one nothing reconciles.
