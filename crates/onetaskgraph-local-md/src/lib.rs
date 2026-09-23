@@ -3128,11 +3128,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_file_windows_is_part_way_through_removing_is_skipped_and_a_denied_one_is_reported() {
-        use std::os::windows::ffi::OsStrExt;
         use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
 
+        use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::Storage::FileSystem::{
-            DeleteFileW, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            DELETE, FILE_DISPOSITION_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FileDispositionInfo, SetFileInformationByHandle,
         };
 
         let (root, source) = folder(&[
@@ -3143,18 +3145,31 @@ mod tests {
             ),
         ]);
         let vanishing = root.path().join("tasks/mine/vanishing.md");
-        // Held open with delete sharing and then deleted: Windows marks the file and leaves
-        // its name in the folder until this handle closes.
         let held = fs::OpenOptions::new()
-            .read(true)
+            .access_mode(DELETE)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .open(&vanishing)
             .expect("the record opens");
-        let wide: Vec<u16> = vanishing.as_os_str().encode_wide().chain(Some(0)).collect();
-        // SAFETY: `wide` is a NUL-terminated UTF-16 spelling of the path and outlives the call.
+        // The deletion is asked for through this handle rather than with `DeleteFile`,
+        // because `DeleteFile` on a current Windows takes the name out of the folder at once
+        // — it asks for POSIX semantics, and the GitHub runner's NTFS gives them, which left
+        // this test with an outright removal and nothing for the probe to answer about. The
+        // classic disposition is what every deleter that does not ask for POSIX semantics
+        // still gets, and it is the state this whole change exists for: the file is marked,
+        // the folder goes on naming it, and every open of it is refused until `held` closes.
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: `held` is an open handle carrying DELETE access, and `disposition` is one
+        // whole `FILE_DISPOSITION_INFO` whose length is passed with it; both outlive the call.
         assert!(
-            unsafe { DeleteFileW(wide.as_ptr()) } != 0,
-            "DeleteFileW: {}",
+            unsafe {
+                SetFileInformationByHandle(
+                    held.as_raw_handle() as HANDLE,
+                    FileDispositionInfo,
+                    (&raw const disposition).cast(),
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } != 0,
+            "SetFileInformationByHandle: {}",
             std::io::Error::last_os_error()
         );
         // The state this test is for, rather than an outright removal — without both of
@@ -3190,6 +3205,9 @@ mod tests {
             denied.exists(),
             "the record was not removed by being reported"
         );
+        permit(&denied);
+        // The mark is lifted by the last handle closing, which is what leaves the folder
+        // clearable when this test is done with it.
         drop(held);
     }
 }
