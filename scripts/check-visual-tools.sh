@@ -421,12 +421,23 @@ names ".." || fail "an escaping SHOTS_OUT was refused without naming what is wro
 
 # 20. A symlink at a component under shots/ redirects the removal, which the lexical checks
 #     above cannot see: the resolved path is what decides.
+#
+#     Refusing is only half of it, and the half that was passing while the other half was
+#     broken. `mkdir -p` follows a symlink, so a capture that created the directory and
+#     resolved it afterwards had already made one outside the clone by the time it refused
+#     — with this case green throughout, because it only ever read the diagnostic. So the
+#     directory the symlink points at is asserted EMPTY afterwards, which is what makes
+#     this a test of the containment rather than of the wording.
 mkdir -p "$scratch/elsewhere" "$CLONE/shots"
 ln -sfn "$scratch/elsewhere" "$CLONE/shots/redirected"
 run_capture shots/redirected/x86_64 1
 [ "$STATUS" -eq 0 ] && fail "the capture wrote through a symlinked component under shots/:"
 names "resolves to" || fail "a redirected SHOTS_OUT was refused without saying where it resolved:"
+escaped="$(ls -A "$scratch/elsewhere")" || escaped="unreadable"
+[ -z "$escaped" ] \
+  || fail "the capture created [$escaped] through the symlink before refusing it, outside the clone entirely:"
 rm -f "$CLONE/shots/redirected"
+rm -rf "$scratch/elsewhere"
 
 # 21. SCREENSHOTS_NO_BUILD means no build, so with nothing to drive it refuses rather than
 #     building behind the caller's back.

@@ -94,10 +94,38 @@ readonly BINARY="$ROOT/target/release/onetaskgraph"
 readonly STAGE=/tmp/otg
 
 # The lexical checks above are not enough on their own: a symlink at any component under
-# `shots/` would redirect the removal below out of this clone. So the directory is created
-# first and then RESOLVED, and what is removed is only ever a real path inside it. All of
-# it before the renderer is resolved and the binary is built, because deciding where this
-# capture may write costs nothing and a release build costs minutes.
+# `shots/` redirects this path out of the clone without a `..` or a leading slash anywhere
+# in it, and only resolving it can see that. So it is resolved BEFORE anything is created.
+#
+# What is resolved is the deepest ancestor of SHOTS_OUT that already exists, because a path
+# that does not exist yet cannot be resolved at all — and resolving it after creating it,
+# which is what this did until it was watched, has `mkdir -p` follow the symlink and make a
+# directory outside the clone in the moment before the refusal. An empty directory is a far
+# smaller harm than the removal below, but it is a write outside this tree that nobody
+# asked for, and the containment check exists to make those impossible rather than brief.
+#
+# All of it before the renderer is resolved and the binary is built, because deciding where
+# this capture may write costs nothing and a release build costs minutes.
+existing="$SHOTS_OUT"
+while [ ! -d "$existing" ]; do
+  parent="$(dirname "$existing")"
+  if [ "$parent" = "$existing" ]; then
+    break
+  fi
+  existing="$parent"
+done
+# `$ROOT/shots/`* rather than `?*` here: this is an ANCESTOR, so `shots` itself is the
+# legitimate answer for a lane directory that does not exist yet. The resolution of the
+# full path below is the one that refuses `shots` as a destination.
+resolved_existing="$(cd "$existing" 2>/dev/null && pwd -P)" || resolved_existing=""
+case "${resolved_existing}/" in
+  "$ROOT/shots/"*) ;;
+  *)
+    echo "screenshots: SHOTS_OUT ('$SHOTS_OUT') has $existing as its deepest existing directory, which resolves to ${resolved_existing:-nothing readable} — outside $ROOT/shots. Nothing was created." >&2
+    echo "screenshots: next: take the symlink out of that path, or point SHOTS_OUT at a lane directory under shots/, as shots/current/$LANE" >&2
+    exit 1
+    ;;
+esac
 mkdir -p "$SHOTS_OUT" "$DOCS" || {
   echo "screenshots: could not create $SHOTS_OUT and $DOCS, which is where this capture writes" >&2
   echo "screenshots: next: check the permissions of $ROOT/shots and $DOCS, then re-run 'just screenshots'" >&2
