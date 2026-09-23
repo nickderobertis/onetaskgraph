@@ -20,8 +20,10 @@
 # a drift whose baseline or gallery could not be written, and one where a step reported
 # writing it and did not); what happens when a step fails
 # (screencomp absent and required or not, a scope error, a capture that failed, a classify
-# that failed for anything but drift); and the hook's own half, which reads git's records
-# once and hands them to both the gate's base and this guard.
+# that failed for anything but drift, and a changed-path list that could not be written);
+# which spelling of a changed path screencomp is handed (one git quotes, and one carrying a
+# newline that it must not be asked about at all); and the hook's own half, which reads
+# git's records once and hands them to both the gate's base and this guard.
 #
 # llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
 # under scripts/ because three commands of that project enumerate that one directory, so a
@@ -505,6 +507,77 @@ else
     }
   done
 fi
+
+# 19. A changed path holding a byte outside printable ASCII reaches screencomp as its own
+#     bytes. `git diff --name-only` QUOTES such a path — it arrives as
+#     "crates/…/uni\342\200\223dash.rs", quotation marks and octal escapes part of the
+#     string — and that name matches no [guard].paths glob, so a file that really does
+#     change a shot would read as irrelevant and the capture would be skipped silently.
+odd_path="crates/onetaskgraph/src/uni–dash.rs"
+mkdir -p "$CLONE/crates/onetaskgraph/src" || fatal \
+  "could not create the source directory this case commits into" \
+  "check the permissions of \$TMPDIR, then rerun"
+printf 'x\n' > "$CLONE/$odd_path"
+git -C "$CLONE" add -A >/dev/null
+git -C "$CLONE" commit --quiet --no-verify -m "test: a changed path outside ASCII" >/dev/null
+odd_sha="$(git -C "$CLONE" rev-parse HEAD)"
+# The premise, asserted rather than assumed: on a git that did NOT quote it, this case
+# would pass while proving nothing about the guard.
+git -C "$CLONE" diff --name-only "$odd_sha~1..$odd_sha" | grep -q '^"' || fatal \
+  "git did not quote the non-ASCII path, so this case cannot pose its question" \
+  "report this; the case needs 'git diff --name-only' to quote a path outside ASCII"
+GUARD_RANGE="$odd_sha~1..$odd_sha"
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 0 3
+GUARD_RANGE=""
+called scope || fail "the guard never asked screencomp about a push carrying a non-ASCII path:"
+grep -qF "$odd_path" "$MARKERS/scope.stdin" 2>/dev/null \
+  || fail "screencomp was handed no path matching the non-ASCII file this push changed:"
+grep -q '\\342' "$MARKERS/scope.stdin" 2>/dev/null \
+  && fail "screencomp was handed git's QUOTED spelling of the path, which matches no [guard].paths glob:"
+
+# 20. A changed path carrying a literal newline. `screencomp scope` reads its candidates
+#     newline-delimited and has no NUL-safe form, so such a path cannot be asked about at
+#     all — handed over it would arrive as two names, neither of them the file, and both
+#     would likely miss. So the guard captures WITHOUT asking, which is the direction every
+#     selection decision in this repository fails in.
+nl_path="$(printf 'docs/two\nlines.md')"
+mkdir -p "$CLONE/docs" || fatal "could not create $CLONE/docs" \
+  "check the permissions of \$TMPDIR, then rerun"
+printf 'x\n' > "$CLONE/$nl_path"
+git -C "$CLONE" add -A >/dev/null
+git -C "$CLONE" commit --quiet --no-verify -m "test: a changed path carrying a newline" >/dev/null
+nl_sha="$(git -C "$CLONE" rev-parse HEAD)"
+GUARD_RANGE="$nl_sha~1..$nl_sha"
+# scope answers 0 — "nothing relevant" — so a guard that DID consult it would exit without
+# capturing, and the assertion below separates the two outcomes rather than reading one.
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 0 0
+GUARD_RANGE=""
+called scope \
+  && fail "a path carrying a newline was handed to screencomp, which can only read it as two names:"
+captured \
+  || fail "a path screencomp cannot be asked about did not fall back to capturing, so the drift would reach the workflow:"
+
+# 21. The changed-path list is written to a temporary file, and that write can fail — a
+#     full \$TMPDIR is the one that happens. Without its own handler `set -e` would end the
+#     script on the shell's redirection message alone, which reads as the guard having gone
+#     wrong rather than as the disk being full. The stub mktemp answers with a DIRECTORY, so
+#     mktemp succeeds and the write into it is what fails.
+readonly WRITE_FAIL_BIN="$scratch/write-fail-bin"
+mkdir -p "$WRITE_FAIL_BIN" || fatal "could not create $WRITE_FAIL_BIN" \
+  "check the permissions of \$TMPDIR, then rerun"
+printf '#!%s\nexec "%s" -d "$@"\n' "$(command -v bash)" "$(command -v mktemp)" \
+  > "$WRITE_FAIL_BIN/mktemp"
+chmod +x "$WRITE_FAIL_BIN/mktemp"
+[ -d "$(PATH="$WRITE_FAIL_BIN:$PATH" mktemp)" ] || fatal \
+  "the stub mktemp did not answer with a directory, so this case cannot pose its question" \
+  "report this; the stub is written here and should shadow mktemp with 'mktemp -d'"
+run_guard "$RECORDS" "$WRITE_FAIL_BIN:$STUB_BIN:$PATH" 3 0
+[ "$GUARD_STATUS" -eq 0 ] \
+  && fail "a changed-path list that could not be written was read as a push to let through:"
+called scope \
+  && fail "the guard asked screencomp about a changed-path list it had just failed to write:"
+grep -qF "df -h" <<<"$GUARD_OUTPUT" \
+  || fail "a changed-path list that could not be written was refused without a next action:"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-guard: $failures expectation(s) failed." >&2

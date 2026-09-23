@@ -141,9 +141,24 @@ if [ "${#ranges[@]}" -eq 0 ] && [ "${#whole_trees[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# Both listings are read NUL-delimited, because `--name-only` QUOTES any path holding a
+# byte outside printable ASCII: `crates/onetaskgraph/src/uni–dash.rs` arrives as
+# "crates/onetaskgraph/src/uni\342\200\223dash.rs", the quotation marks part of the string,
+# and that name matches none of the [guard].paths globs — so a file that really does change
+# a shot would read as irrelevant and the capture would be skipped. `-z` emits the path's
+# own bytes instead.
+#
+# The two `tr`s are one pass and in this order on purpose. `screencomp scope` reads
+# NEWLINE-delimited paths and has no NUL-safe form, so a path carrying a literal newline
+# cannot be asked about at all — translating NUL to newline alone would hand it over as two
+# names, neither of them the file. Turning any newline INSIDE a record into \001 first
+# makes such a record one line that still says so, which the case below reads. Nothing is
+# written to a temporary file here: bash discards NUL bytes from a command substitution,
+# and a `mktemp` this early would refuse a push on a host whose screencomp is merely
+# missing, which is the one case this guard has to let through.
 changed=""
 for range in "${ranges[@]+"${ranges[@]}"}"; do
-  listing="$(git diff --name-only "$range")" || {
+  listing="$(git diff -z --name-only "$range" | tr '\n' '\001' | tr '\0' '\n')" || {
     echo "pre-push: git could not list what '$range' changes, so this push was not evaluated against the screenshots." >&2
     echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
     exit 1
@@ -151,7 +166,7 @@ for range in "${ranges[@]+"${ranges[@]}"}"; do
   changed+="$listing"$'\n'
 done
 for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
-  listing="$(git ls-tree -r --name-only "$tree")" || {
+  listing="$(git ls-tree -r -z --name-only "$tree" | tr '\n' '\001' | tr '\0' '\n')" || {
     echo "pre-push: git could not list the files '$tree' carries, so this push was not evaluated against the screenshots." >&2
     echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
     exit 1
@@ -159,6 +174,14 @@ for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
   changed+="$listing"$'\n'
 done
 changed="$(printf '%s' "$changed" | sort -u)"
+
+# A record still carrying the \001 above held a newline, so screencomp cannot be asked
+# about it. This captures WITHOUT asking, which is the direction every selection decision
+# in this repository fails in.
+capture_without_asking=0
+case "$changed" in
+  *$'\001'*) capture_without_asking=1 ;;
+esac
 
 # So it does not skip silently: it says what is missing and how to get it, and
 # SCREENCOMP_GUARD_REQUIRE=1 turns the skip into a refusal for a machine that wants one.
@@ -189,11 +212,24 @@ changed_list="$(mktemp)" || {
   exit 1
 }
 trap 'rm -f "$changed_list"' EXIT
-printf '%s\n' "$changed" > "$changed_list"
-set +e
-screencomp scope --changed-from - --exit-code --quiet < "$changed_list"
-scope_status=$?
-set -e
+# Guarded like the mktemp above it: a write that fails here — a full $TMPDIR is the one
+# that happens — would otherwise end the script on `set -e` with the shell's own
+# redirection message and no next action, which reads as the guard having gone wrong
+# rather than as the disk being full.
+printf '%s\n' "$changed" > "$changed_list" || {
+  echo "pre-push: could not write the changed-path list into $changed_list, so screencomp was not asked whether this push touches a shot." >&2
+  echo "pre-push: next: check the permissions of \$TMPDIR and 'df -h' for free space, then push again." >&2
+  exit 1
+}
+if [ "$capture_without_asking" -eq 1 ]; then
+  echo "pre-push: a path in this push carries a newline, which screencomp's newline-delimited scope input cannot express, so the screenshot guard captured rather than ask about a name it would have to mangle first." >&2
+  scope_status=3
+else
+  set +e
+  screencomp scope --changed-from - --exit-code --quiet < "$changed_list"
+  scope_status=$?
+  set -e
+fi
 case "$scope_status" in
   0) exit 0 ;;
   3) : ;;
