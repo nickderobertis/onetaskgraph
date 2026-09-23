@@ -63,7 +63,14 @@ if len(lane_values) != 1:
     )
 lane = lane_values[0] if lane_values else "x86_64"
 
-# Nothing may restate it. Each of these reads it out of screencomp.toml with the same sed.
+# Nothing may restate it — the workflow included, where the lane is a matrix screencomp
+# reads from that same file and a prose copy is one nothing reconciles.
+if lane and lane in workflow:
+    problems.append(
+        f".github/workflows/visual-docs.yml: names the lane {lane!r}. The one place it is "
+        "declared is [capture].arches in screencomp.toml, which screencomp reads itself to "
+        "fan out its matrix; a copy here is a second statement nothing keeps in step."
+    )
 for path, text in (
     ("scripts/screenshots.sh", capture),
     ("scripts/screenshots-guard.sh", guard),
@@ -173,6 +180,17 @@ for scene in sorted(scenes):
 
 embedded = re.findall(r"!\[([^\]]*)\]\((docs/screenshots/[^)]+)\)", readme)
 for alt, target in embedded:
+    # The target is read off a document, so it is held to the one shape a committed capture
+    # has before it is resolved against the filesystem: a `..` inside it would name a file
+    # outside the directory the capture writes, and a picture from anywhere else is not one
+    # the baseline gates.
+    if not re.fullmatch(r"docs/screenshots/[a-z0-9-]+\.svg", target):
+        problems.append(
+            f"README.md: embeds {target}, which is not a `docs/screenshots/<scene>.svg` "
+            "path. Every image in the README is a capture this baseline gates; one from "
+            "anywhere else is a picture nothing keeps true."
+        )
+        continue
     if not Path(target).is_file():
         problems.append(
             f"README.md: embeds {target}, which is not a file in this tree. Every image "

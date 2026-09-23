@@ -53,7 +53,13 @@ fi
 # consumed, which is what it expects. A base that could not be derived comes back empty
 # and leaves NX_BASE unset, so Nx falls back to its own defaultBase rather than the push
 # being refused for it.
-records="$(cat)" || records=""
+if ! records="$(cat)"; then
+  echo "pre-push: the ref records git feeds this hook could not be read, so neither the" >&2
+  echo "pre-push: gate's base nor the screenshot guard's range could be derived from them." >&2
+  echo "pre-push: nothing about this push has been checked. Re-run the push; if it persists," >&2
+  echo "pre-push: report it — an empty read here would look exactly like pushing nothing." >&2
+  exit 1
+fi
 base="$(printf '%s\n' "$records" | bash scripts/pre-push-base.sh)" || base=""
 if [ -n "$base" ]; then
   export NX_BASE="$base"

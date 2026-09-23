@@ -84,8 +84,21 @@ if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
   ranges+=("$SCREENCOMP_GUARD_RANGE")
 else
   zero='^0+$'
-  while read -r _local_ref local_sha _remote_ref remote_sha; do
-    [ -z "${local_sha:-}" ] && continue
+  while read -r record; do
+    [ -z "$record" ] && continue
+    # Four fields, or it is not one of git's records: with three, the remote sha would read
+    # as empty and the ref would be reclassified as a branch nothing bounds; with five, the
+    # last field would absorb the rest. Either way the guard would be answering about
+    # something other than what is being pushed.
+    # shellcheck disable=SC2086
+    set -- $record
+    if [ "$#" -ne 4 ]; then
+      echo "pre-push: the screenshot guard skipped a ref record with $# field(s) rather than the four git writes: '$record'" >&2
+      echo "pre-push: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
+      continue
+    fi
+    local_sha="$2"
+    remote_sha="$4"
     if [[ "$local_sha" =~ $zero ]]; then
       continue # a branch being deleted pushes nothing to capture
     fi

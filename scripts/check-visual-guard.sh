@@ -63,7 +63,14 @@ scratch_clone "$ROOT" "$CLONE" || fatal \
 # WORKING tree's tracked files go over the top of it, exactly as
 # scripts/check-pre-push-provisioning.sh does with the hook. The clone still supplies the
 # `.git` directory the ranges below are computed in.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$CLONE" || fatal \
+#
+# A function because it has to be done AGAIN after any case that moves the clone's branch:
+# a checkout restores every tracked file from the commit, which puts the committed guard
+# back over the one under test, and the cases after it would then be about the wrong script.
+overlay_working_tree() {
+  (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$CLONE"
+}
+overlay_working_tree || fatal \
   "could not copy $ROOT's tracked files over the clone at $CLONE" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
@@ -280,8 +287,11 @@ done
 git -C "$CLONE" checkout --quiet - >/dev/null 2>&1 || fatal \
   "could not return $CLONE to the branch the earlier cases used" \
   "report this; the clone is scratch and can be re-created"
-# That checkout restored the real capture script over the stub, and the real one builds
-# this repository. Back it goes, before any case below reaches a capture.
+# That checkout restored every tracked file from the commit: the guard under test is the
+# committed one again, and the real capture script is back over the stub — which builds
+# this repository. Both go back, before any case below runs.
+overlay_working_tree || fatal "could not re-apply the working tree over $CLONE" \
+  "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 write_capture_stub || fatal "could not restore the stub capture in $CLONE" \
   "check the permissions of \$TMPDIR, then rerun"
 
@@ -363,6 +373,15 @@ run_guard "refs/heads/main 1234567890123456789012345678901234567890 refs/heads/m
 captured && fail "a record naming an unresolvable commit was captured against nothing:"
 grep -qF "cannot read" <<<"$GUARD_OUTPUT" \
   || fail "an unresolvable record was skipped without saying so:"
+
+# 11b. A record that is not git's four fields: with three, the remote sha would read as
+#      empty and the ref would be reclassified as a branch nothing bounds, capturing where
+#      nothing asked. It is skipped, and said to be.
+run_guard "refs/heads/main $LOCAL_SHA refs/heads/main" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] || fail "a malformed ref record refused the push:"
+captured && fail "a malformed ref record was read as a branch nothing bounds and captured:"
+grep -qF "field" <<<"$GUARD_OUTPUT" \
+  || fail "a malformed ref record was skipped without saying what was wrong with it:"
 
 # 12. An explicit range: refused when it is not two revisions, and when either end does not
 #     resolve. It reaches `git diff` exactly as the records do, so it is checked as they are.

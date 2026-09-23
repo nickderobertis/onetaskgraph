@@ -10,9 +10,9 @@
 # can change a rendered shot.
 #
 # Which CPU arch(es) CI captures is read from [capture].arches in screencomp.toml — one
-# lane per arch, and that file is the one place the lane is declared. These shots are
+# lane per arch, and that file is the one place any lane is named. These shots are
 # deterministic SVGs (a vendored, pinned font, and a fixture staged at a fixed absolute
-# path), so a single x86_64 lane is correct for every machine.
+# path), so the single lane declared there is correct for every machine.
 name: Visual docs
 
 on:
@@ -27,17 +27,21 @@ on:
     # that branch without bound (keeps the 20 most recent versions; see below).
     - cron: "41 4 1 * *"
 
-# Least privilege, one line per grant: the reusable workflow pushes the gallery to
-# gh-pages, upserts one sticky comment on the pull request, and gates its run on the Pages
-# build that deploy triggers. It reads no secret of this repository and needs no token of
-# its own.
-permissions:
-  contents: write # push the gh-pages gallery
-  pull-requests: write # upsert the sticky before/after comment
-  pages: read # gate the run on the Pages build the deploy triggers
+# The default for everything this workflow does not grant.
+permissions: {}
 
 jobs:
   visual-docs:
+    # Least privilege, one line per grant, and on the job rather than the workflow so a
+    # second job added here inherits none of it. They cannot vary by event — GitHub takes
+    # no expression in `permissions`, and splitting the call in two to drop one grant on a
+    # push would duplicate the whole reusable-workflow invocation — so the comment grant is
+    # held by what the called workflow does with it: it upserts one sticky comment, on a
+    # pull request, through screencomp's own action.
+    permissions:
+      contents: write # push the gh-pages gallery
+      pull-requests: write # upsert the sticky before/after comment on a pull request
+      pages: read # gate the run on the Pages build the deploy triggers
     uses: nickderobertis/screencomp/.github/workflows/visual-docs-reusable.yml@v0.4.8
     with:
       # The version installed on the host runner. It is the same version the `uses:` ref
