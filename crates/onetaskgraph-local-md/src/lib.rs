@@ -566,6 +566,17 @@ impl LocalMdSource {
                 // into that instant deterministically needs a double of the filesystem, which
                 // the repository's test rules forbid.
                 let linked = match entry.file_type() {
+                    // llmlint: ignore[changed_behavior_has_e2e] The refusal this arm now
+                    // classifies cannot be posed against this call: a `DirEntry`'s file type
+                    // comes out of the listing that just named the entry — `d_type` on the
+                    // filesystems this runs on, the `FindNextFile` record on Windows — so it
+                    // opens nothing and never refuses for a pending deletion. It goes through
+                    // `gone` so this site decides an entry's fate through the one
+                    // classification the other three decide it through rather than a second
+                    // spelling of half of it, and `gone` is driven both ways, over the real
+                    // read interface, by this crate's own unit tests. Making this call open
+                    // anything needs a filesystem that answers `DT_UNKNOWN`, which the suite
+                    // cannot supply and a double would not be evidence about.
                     Err(e) if gone(&path, &e) => continue,
                     file_type => file_type
                         .map_err(|e| SourceError::Unavailable {
@@ -2890,21 +2901,26 @@ mod tests {
         }
     }
 
-    /// Refuse every read of the file at `path`, and whether this platform and this user
-    /// could: a user the permission bits do not bind cannot pose a refused read at all.
+    fn unavailable(error: SourceError) -> String {
+        match error {
+            SourceError::Unavailable { message } => message,
+            other => panic!("expected the folder to be reported unavailable, got {other:?}"),
+        }
+    }
+
+    /// Refuse every read of the file or folder at `path`.
     #[cfg(unix)]
-    fn deny_read(path: &Path) -> bool {
+    fn deny(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
 
         fs::set_permissions(path, fs::Permissions::from_mode(0o000)).expect("the mode is set");
-        fs::read_to_string(path).is_err()
     }
 
-    /// As above, through an access-control entry that denies everyone the right to read the
-    /// file. `*S-1-1-0` is the Everyone group named by its own identifier, which no locale
-    /// spells differently.
+    /// As above, through an access-control entry that denies everyone the right to read it.
+    /// `*S-1-1-0` is the Everyone group named by its own identifier, which no locale spells
+    /// differently.
     #[cfg(windows)]
-    fn deny_read(path: &Path) -> bool {
+    fn deny(path: &Path) {
         let denied = std::process::Command::new("icacls")
             .arg(path)
             .arg("/deny")
@@ -2916,17 +2932,60 @@ mod tests {
             "icacls refused: {}",
             String::from_utf8_lossy(&denied.stderr)
         );
+    }
+
+    /// Undo [`deny`], so what it was applied to can be cleared away with the folder it is in.
+    #[cfg(unix)]
+    fn permit(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+
+    #[cfg(windows)]
+    fn permit(path: &Path) {
+        let _ = std::process::Command::new("icacls")
+            .arg(path)
+            .arg("/remove:d")
+            .arg("*S-1-1-0")
+            .output();
+    }
+
+    /// [`deny`] the file at `path`, and whether this user is bound by it: one the permission
+    /// bits do not bind cannot pose a refused read at all.
+    fn deny_file(path: &Path) -> bool {
+        deny(path);
         fs::read_to_string(path).is_err()
     }
 
-    /// The stand-in probe: an answer for this test's own two records, and no opinion about
-    /// any other file in the run, which is what keeps it out of another test's way.
+    /// The same for a folder, which is refused a listing rather than a read.
+    fn deny_folder(path: &Path) -> bool {
+        deny(path);
+        fs::read_dir(path).is_err()
+    }
+
+    /// The stand-in probe: an answer for the records and folders these tests name themselves,
+    /// and no opinion about any other path in the run, which is what keeps it out of another
+    /// test's way.
     fn stand_in(path: &Path) -> Option<bool> {
         match path.file_name()?.to_str()? {
-            "going.md" => Some(true),
-            "sealed.md" => Some(false),
+            name if name.starts_with("going") => Some(true),
+            name if name.starts_with("sealed") => Some(false),
             _ => None,
         }
+    }
+
+    /// Put [`stand_in`] in the probe's place for the rest of this binary's run.
+    fn install() {
+        *super::PROBE
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stand_in);
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
     }
 
     #[test]
@@ -2938,16 +2997,12 @@ mod tests {
                 "---\ntitle: Going\nproject: mine\n---\n",
             ),
         ]);
-        if !deny_read(&root.path().join("tasks/mine/going.md")) {
+        if !deny_file(&root.path().join("tasks/mine/going.md")) {
             // A user the permission bits do not bind (root) cannot pose the case.
             return;
         }
-        *super::PROBE
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stand_in);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        install();
+        let runtime = runtime();
 
         // The probe calls it unlinked, so the record is gone rather than unreadable: the
         // listing answers, holding everything the folder still has.
@@ -2961,7 +3016,7 @@ mod tests {
         // author's to mend, so it is reported under its own path and left where it is.
         let sealed = root.path().join("tasks/mine/sealed.md");
         fs::write(&sealed, "---\ntitle: Sealed\nproject: mine\n---\n").expect("a record");
-        assert!(deny_read(&sealed), "the record refuses to be read");
+        assert!(deny_file(&sealed), "the record refuses to be read");
         let message = message_of(
             runtime
                 .block_on(source.query_tasks(&TaskQuery::default(), &page()))
@@ -2972,6 +3027,98 @@ mod tests {
             sealed.exists(),
             "the record was not removed by being reported"
         );
+    }
+
+    /// The walk's other two decisions, on the same two answers. A folder it is refused a
+    /// listing of, and a link it is refused a resolution of, are each either a thing that has
+    /// left its place — passed over, the rest of the folder answering — or a thing this
+    /// reader may not have, which is reported under its own path.
+    #[test]
+    fn a_refused_folder_listing_the_probe_calls_unlinked_is_passed_over_and_a_durable_one_is_reported()
+     {
+        let (root, source) = folder(&[
+            ("tasks/mine/a.md", "---\ntitle: A\nproject: mine\n---\n"),
+            (
+                "tasks/going-folder/b.md",
+                "---\ntitle: B\nproject: mine\n---\n",
+            ),
+        ]);
+        let going = root.path().join("tasks/going-folder");
+        if !deny_folder(&going) {
+            // A user the permission bits do not bind (root) cannot pose the case.
+            permit(&going);
+            return;
+        }
+        install();
+        let runtime = runtime();
+
+        let listed = runtime
+            .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+            .expect("a folder the probe calls unlinked holds nothing to list");
+        let ids: Vec<&str> = listed.items.iter().map(|task| task.id.0.as_str()).collect();
+        assert_eq!(ids, ["mine/a"]);
+
+        let sealed = root.path().join("tasks/sealed-folder");
+        fs::create_dir_all(&sealed).expect("a folder");
+        fs::write(sealed.join("c.md"), "---\ntitle: C\nproject: mine\n---\n").expect("a record");
+        assert!(deny_folder(&sealed), "the folder refuses to be listed");
+        let message = unavailable(
+            runtime
+                .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+                .expect_err("a folder that is merely unlistable is reported"),
+        );
+        assert!(message.contains("sealed-folder"), "{message}");
+        permit(&going);
+        permit(&sealed);
+    }
+
+    /// The link half of the same pair. The link itself is there either way — what is refused
+    /// is resolving it, because its target sits behind a folder this reader may not walk
+    /// into — so the two answers are the whole of the difference between skipping it and
+    /// reporting it. Unix alone, because a link is what poses the case and making one on
+    /// Windows needs a privilege a test runner does not have.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_cannot_be_resolved_is_passed_over_or_reported_on_the_same_two_answers() {
+        let (root, source) = folder(&[
+            ("tasks/mine/a.md", "---\ntitle: A\nproject: mine\n---\n"),
+            (
+                "elsewhere/target.md",
+                "---\ntitle: Target\nproject: mine\n---\n",
+            ),
+        ]);
+        let elsewhere = root.path().join("elsewhere");
+        let target = elsewhere.join("target.md");
+        std::os::unix::fs::symlink(&target, root.path().join("tasks/going-link.md"))
+            .expect("a link");
+        // `elsewhere` is not under `tasks/`, so the walk never lists it: the only thing this
+        // refusal reaches is the resolution of a link that points into it.
+        if !deny_folder(&elsewhere) {
+            permit(&elsewhere);
+            return;
+        }
+        install();
+        let runtime = runtime();
+
+        let listed = runtime
+            .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+            .expect("a link the probe calls unlinked is skipped, not reported");
+        let ids: Vec<&str> = listed.items.iter().map(|task| task.id.0.as_str()).collect();
+        assert_eq!(ids, ["mine/a"]);
+
+        let sealed_link = root.path().join("tasks/sealed-link.md");
+        std::os::unix::fs::symlink(&target, &sealed_link).expect("a link");
+        let message = message_of(
+            runtime
+                .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+                .expect_err("a link that is still there is reported"),
+        );
+        assert!(message.contains("sealed-link.md"), "{message}");
+        assert!(
+            sealed_link.symlink_metadata().is_ok(),
+            "the link was not removed by being reported"
+        );
+        permit(&elsewhere);
     }
 
     /// The same two outcomes on the platform that has the state, through the real probe: a
@@ -3023,9 +3170,7 @@ mod tests {
             std::io::ErrorKind::PermissionDenied
         );
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let runtime = runtime();
         let listed = runtime
             .block_on(source.query_tasks(&TaskQuery::default(), &page()))
             .expect("a file being removed is skipped, not reported");
@@ -3034,7 +3179,7 @@ mod tests {
 
         let denied = root.path().join("tasks/mine/denied.md");
         fs::write(&denied, "---\ntitle: Denied\nproject: mine\n---\n").expect("a record");
-        assert!(deny_read(&denied), "the record refuses to be read");
+        assert!(deny_file(&denied), "the record refuses to be read");
         let message = message_of(
             runtime
                 .block_on(source.query_tasks(&TaskQuery::default(), &page()))
