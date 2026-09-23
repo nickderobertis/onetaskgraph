@@ -90,15 +90,17 @@ else
     # as empty and the ref would be reclassified as a branch nothing bounds; with five, the
     # last field would absorb the rest. Either way the guard would be answering about
     # something other than what is being pushed.
-    # shellcheck disable=SC2086
-    set -- $record
-    if [ "$#" -ne 4 ]; then
-      echo "pre-push: the screenshot guard skipped a ref record with $# field(s) rather than the four git writes: '$record'" >&2
+    #
+    # Split by `read` rather than by `set -- $record`, which would glob-expand a record
+    # carrying a `*` against this working directory before anything had validated it.
+    # `extra` is what makes it exactly four: a fifth field lands there rather than being
+    # swallowed by the fourth.
+    read -r _local_ref local_sha _remote_ref remote_sha extra <<<"$record"
+    if [ -z "${remote_sha:-}" ] || [ -n "${extra:-}" ]; then
+      echo "pre-push: the screenshot guard skipped a ref record that is not the four fields git writes: '$record'" >&2
       echo "pre-push: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
       continue
     fi
-    local_sha="$2"
-    remote_sha="$4"
     if [[ "$local_sha" =~ $zero ]]; then
       continue # a branch being deleted pushes nothing to capture
     fi
