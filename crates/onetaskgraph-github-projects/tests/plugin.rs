@@ -532,6 +532,18 @@ impl Refusal {
                 .to_string(),
         }
     }
+    /// A transient unavailability, which is what GitHub answers when it is briefly unwell.
+    ///
+    /// Deliberately not a rate limit: `Limiter::classify` recognises none of it, so the
+    /// source reports it rather than waiting it out, and one scripted entry is therefore one
+    /// failed request rather than the first of a retried schedule.
+    fn unavailable() -> Self {
+        Self {
+            status: "503 Service Unavailable",
+            headers: String::new(),
+            body: json!({"message": "unavailable"}).to_string(),
+        }
+    }
     /// The same refusal, asking for a wait of `seconds`.
     fn after(mut self, seconds: u64) -> Self {
         self.headers = format!("retry-after: {seconds}\r\n");
@@ -3227,6 +3239,71 @@ async fn a_write_and_a_delete_reach_an_item_only_the_boards_search_reported() {
         titled(reader.as_ref()).await,
         ["Step 1.1"],
         "and stops reporting it once this run has taken it off"
+    );
+}
+
+/// A board read whose search fails says so, and the next read asks the search again.
+///
+/// The union in `GitHubProjectsSource::board` made the search a half of every whole-board
+/// read, where before it answered the project list alone — so a search that fails is a new
+/// way for a board read to fail, and what it must never do is answer with the half that did
+/// work. An item only the search reports is exactly the item the union exists for, so a read
+/// silently missing it would be the defect this correction was written to remove, arriving
+/// by another route.
+///
+/// The second half is the one a cache makes possible: the source holds the search for the
+/// length of a command, and a failed walk that got written down there would be permanent for
+/// that command. The refusal is a single scripted 503 — the shape a publication of this
+/// repository was really refused in — so the same source, asked again, has a working search
+/// to reach.
+#[tokio::test]
+async fn a_board_read_whose_search_fails_is_refused_rather_than_answered_short() {
+    let fixture = board_of(1, 1);
+    // Only the search can report what this run is about to write; see
+    // `State::items_connection_behind_from`.
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    fixture.script_for("search", vec![Refusal::unavailable()]);
+
+    // A source that did none of the writing, so the only place the item above sits is the
+    // search this board is about to refuse.
+    let reader = source(&fixture);
+    let message = refusal(
+        reader
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a board read whose search failed is a failure, not a short answer"),
+    );
+    assert!(
+        message.contains("503"),
+        "and says what GitHub answered rather than something of its own: {message}"
+    );
+
+    // The scripted refusal is spent, so the very same source asking again reaches a working
+    // search — which it only does if the failed walk was not kept.
+    let held = selected_tasks(reader.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        held.contains(&created.0),
+        "the retried search reports the item the board's own item connection is behind on, \
+         and it is the very item this run created: {held:?}"
+    );
+    assert_eq!(
+        fixture.searches().len(),
+        2,
+        "and the second read really did ask the search again rather than answer from a \
+         record of the walk that failed"
     );
 }
 
