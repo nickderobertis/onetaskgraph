@@ -34,6 +34,19 @@
 set -euo pipefail
 
 readonly FREEZE_VERSION=0.2.2
+# The SHA-256 of each published archive of that version, recorded from the real release, so
+# what arrives over the network is authenticated before it is unpacked and long before it is
+# run — a self-reported `--version` says nothing about what a substituted response would do
+# first. `cargo` verifies a registry checksum for the sibling tool
+# scripts/scoped-release-plz.sh provisions; this is the same guarantee for a tool that comes
+# from a release archive instead. Moving FREEZE_VERSION means re-recording all four:
+#   for a in Linux_x86_64 Linux_arm64 Darwin_x86_64 Darwin_arm64; do
+#     curl -fsSL "https://github.com/charmbracelet/freeze/releases/download/v<version>/freeze_<version>_$a.tar.gz" | sha256sum
+#   done
+readonly FREEZE_SHA256_Linux_x86_64=012fdbdd16c0c19570f9052aac34d16d93d7d0d3b565b05374cc59492f53539b
+readonly FREEZE_SHA256_Linux_arm64=ba1164c2e6d573af32df13ddc5868f7cdfc8b9992f26f53695787ca5f4274023
+readonly FREEZE_SHA256_Darwin_x86_64=7ba01bc3f7f255bee2fe84847e8beeb1caa84914a49f4cf32e0147693d5e385f
+readonly FREEZE_SHA256_Darwin_arm64=6936ebad96dda73a6c952d7e945106916c4d4345334828109b4db6ddbb9aabee
 # The version is a path component below, and `ensure` clears the directory named by it.
 [[ $FREEZE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "screenshots-freeze: FREEZE_VERSION is '$FREEZE_VERSION', not an exact X.Y.Z version" >&2
@@ -211,6 +224,31 @@ case "$detailed" in
     exit 1
     ;;
 esac
+# The recorded digest for this platform, before anything reads the file's contents. A
+# platform with no digest recorded is not provisioned here at all, rather than provisioned
+# unverified.
+expected_digest_name="FREEZE_SHA256_${os}_${architecture}"
+expected_digest="${!expected_digest_name:-}"
+if [ -z "$expected_digest" ]; then
+  echo "screenshots-freeze: no archive digest is recorded for ${os}_${architecture}, so the download cannot be authenticated" >&2
+  echo "screenshots-freeze: next: record FREEZE_SHA256_${os}_${architecture} in scripts/screenshots-freeze.sh from the real release, or capture on a platform that has one" >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_digest="$(sha256sum "$unpacked/$archive" | cut -d' ' -f1)"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_digest="$(shasum -a 256 "$unpacked/$archive" | cut -d' ' -f1)"
+else
+  echo "screenshots-freeze: neither sha256sum nor shasum is on PATH, so $archive cannot be authenticated" >&2
+  echo "screenshots-freeze: next: install coreutils (or perl's shasum), then rerun '$install_command'" >&2
+  exit 1
+fi
+if [ "$actual_digest" != "$expected_digest" ]; then
+  echo "screenshots-freeze: $archive hashes to $actual_digest, not the recorded $expected_digest" >&2
+  echo "screenshots-freeze: next: do not unpack it. Either the download was corrupted — rerun '$install_command' — or the published archive for v$FREEZE_VERSION has changed, which is a thing to report rather than to accept" >&2
+  exit 1
+fi
+
 tar -xzf "$unpacked/$archive" -C "$unpacked" || {
   echo "screenshots-freeze: could not unpack $unpacked/$archive" >&2
   echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2

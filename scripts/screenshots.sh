@@ -289,4 +289,5 @@ unset ONETASKGRAPH_DEFAULT_SOURCES
 } >"$SHOTS_OUT/captures.json"
 
 rm -rf "$STAGE"
-echo "screenshots: wrote ${#entries[@]} shots to $SHOTS_OUT and docs/screenshots/" >&2
+# Quiet on success. What it wrote is $SHOTS_OUT and docs/screenshots/, which is where the
+# caller pointed it; a refusal above is the only thing this script has to say.

@@ -61,7 +61,9 @@ jobs:
       # captured text, the pinned renderer and the vendored font, and of nothing else.
       container: rust:1.97.1-bookworm
       # Provision the pinned renderer through the one script that owns which `freeze` this
-      # repository runs and where, then capture. The reusable workflow exports $SHOTS_OUT
+      # repository runs and where, then capture. The build inside that capture is a cargo
+      # invocation in this clone, so it inherits `rustflags = ["-D", "warnings"]` from
+      # .cargo/config.toml — there is no warnings-only build here any more than in the gate. The reusable workflow exports $SHOTS_OUT
       # as shots/current/<arch>; the capture writes captures.json and the SVGs there.
       # llmlint: ignore-block[work_goes_through_command_surface] These two lines run INSIDE
       # the container above, which is a plain Rust image with no `just` on it. The recipes

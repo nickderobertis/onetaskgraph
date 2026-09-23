@@ -732,10 +732,6 @@ that hook already ran, only when what is being pushed can change a shot — so t
 bar is what it was, plus one refusal that names the gallery to review. The capture drives
 `local-md` and `in-memory` only: no credential, no socket, not even a loopback one.
 
-`screenshots/AGENTS.md` is the durable note — the scenes and what each documents, why the
-fixture is curated, the four version pins and the one source of each, and the commands to
-capture and to re-bless.
-
 ## Recorded decisions
 
 - **`SCHEMA_BUNDLE_VERSION` tracks the emitted document, not the set of root names.** A

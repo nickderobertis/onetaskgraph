@@ -152,7 +152,9 @@ case "$scope_status" in
 esac
 
 # --- 4. Re-capture, natively: the shots are byte-identical on every machine ---
-echo "pre-push: a file that can change a screenshot is in this push — re-capturing" >&2
+# No line of our own here: the capture below runs cargo and the renderer, whose own output
+# is what says a multi-minute step is under way, and a push this guard lets through has
+# nothing to report. Only a refusal speaks.
 if ! SHOTS_OUT="$CURRENT/$LANE" bash scripts/screenshots.sh; then
   echo "pre-push: the screenshot capture failed, so this push cannot be evaluated against" >&2
   echo "pre-push: $MANIFEST. Read the diagnostic above; 'just screenshots-tools' provisions" >&2

@@ -178,10 +178,7 @@ setup-llmlint:
 screenshots-tools:
     @bash scripts/screenshots-freeze.sh ensure
 
-# Drive the real release binary against screenshots/fixture/ and render every scene into
-# shots/current/<lane>/ and docs/screenshots/.
-
-# Capture the terminal screenshots.
+# Capture the terminal screenshots into shots/current/<lane>/ and docs/screenshots/.
 screenshots:
     @bash scripts/screenshots.sh
 

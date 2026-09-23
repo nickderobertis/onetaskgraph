@@ -143,12 +143,41 @@ STUB
 chmod +x "$STAND_IN/curl" || fatal "could not make the stand-in curl executable" \
   "check the permissions of \$TMPDIR, then rerun"
 
+# The resolver authenticates what it downloads against a digest recorded for the published
+# archive, which a stand-in archive of course does not match. So each case that has to get
+# PAST that check drives a COPY of the real script carrying its own archive's digest —
+# everything else about it is the real thing — and case 15 below drives the UNMODIFIED
+# script to prove the verification is not decoration.
+digest_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# A copy of the resolver that expects the archive named, with the substitution asserted:
+# a copy that silently kept the published digest would make every `ensure` case below refuse
+# for the wrong reason and prove nothing about provisioning.
+resolver_for() {
+  local archive="$1" copy digest
+  copy="$scratch/resolver-$(basename "$archive" .tgz).sh"
+  digest="$(digest_of "$archive")"
+  sed "s|^readonly FREEZE_SHA256_${os}_${architecture}=.*|readonly FREEZE_SHA256_${os}_${architecture}=$digest|" \
+    "$FREEZE" > "$copy"
+  grep -qF "readonly FREEZE_SHA256_${os}_${architecture}=$digest" "$copy" || fatal \
+    "could not point a copy of the resolver at the stand-in archive's digest" \
+    "check that scripts/screenshots-freeze.sh still records FREEZE_SHA256_${os}_${architecture} on one line"
+  printf '%s\n' "$copy"
+}
+
 # Run the resolver against a tool home of this case's choosing, with the stand-in first on
 # PATH. The real `freeze` on this machine, if any, is never consulted or touched.
 run_freeze() {
-  local home="$1" archive="${2:-}" subcommand="$3"
+  local home="$1" archive="${2:-}" subcommand="$3" script="$FREEZE"
+  [ -z "$archive" ] || script="$(resolver_for "$archive")"
   OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$home" \
-    STAND_IN_ARCHIVE="$archive" bash "$FREEZE" "$subcommand" 2>&1)" && STATUS=0 || STATUS=$?
+    STAND_IN_ARCHIVE="$archive" bash "$script" "$subcommand" 2>&1)" && STATUS=0 || STATUS=$?
 }
 
 readonly HOME_EMPTY="$scratch/tools-empty"
@@ -221,6 +250,17 @@ OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="relative/tools" \
   bash "$FREEZE" ensure 2>&1)" && STATUS=0 || STATUS=$?
 [ "$STATUS" -eq 69 ] || fail "a relative tool home exited $STATUS, expected 69:"
 names "absolute" || fail "a relative tool home was refused without saying why:"
+
+# 15. And the verification itself: the REAL script, whose recorded digest is the published
+#     archive's, refuses the stand-in response and installs nothing. This is the case the
+#     copies above would otherwise have quietly removed.
+readonly HOME_UNVERIFIED="$scratch/tools-unverified"
+OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$HOME_UNVERIFIED" \
+  STAND_IN_ARCHIVE="$ARCHIVES/good.tgz" bash "$FREEZE" ensure 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' installed an archive that does not match its recorded digest:"
+names "hashes to" || fail "'ensure' refused an unauthenticated archive without saying so:"
+[ ! -x "$HOME_UNVERIFIED/freeze/$PIN/bin/freeze" ] \
+  || fail "'ensure' refused on the digest but installed a renderer anyway:"
 
 # --- The baseline writer -----------------------------------------------------------------
 # In a clone, because it writes shots/baseline/<lane>.json.
