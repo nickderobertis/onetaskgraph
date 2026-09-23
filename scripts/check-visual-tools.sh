@@ -409,6 +409,14 @@ run_capture shots/current/x86_64 1
 names "SCREENSHOTS_NO_BUILD" || fail "the refusal does not name the variable that asked for no build:"
 names "cargo build" || fail "the refusal does not say how to get a binary to capture:"
 
+# 22. Without the vendored font the renderer would fetch one over the network and the bytes
+#      would stop being reproducible, so the capture refuses rather than rendering.
+mv "$CLONE/screenshots/fonts/JetBrainsMono-Regular.ttf" "$scratch/font.ttf"
+run_capture shots/current/x86_64 1
+[ "$STATUS" -eq 0 ] && fail "the capture ran with no vendored font to render with:"
+names "font" || fail "a missing vendored font was refused without naming it:"
+mv "$scratch/font.ttf" "$CLONE/screenshots/fonts/JetBrainsMono-Regular.ttf"
+
 # The reconciliation check, watched refusing. Each case mutates ONE governed file in the
 # clone, runs the real check there, and restores it: a check that stopped noticing would
 # otherwise pass every gate while the copies it exists for drifted apart.
@@ -431,7 +439,7 @@ git -C "$CLONE" checkout -- shots/baseline || fatal \
 run_visual_docs
 [ "$STATUS" -eq 0 ] || fail "check-visual-docs.sh does not pass on this tree, so the mutations below prove nothing:"
 
-# 25. The two screencomp versions in the workflow part.
+# 23. The two screencomp versions in the workflow part.
 sed -i.bak 's/^\( *screencomp-version: \)v.*/\1v0.0.1/' "$CLONE/.github/workflows/visual-docs.yml"
 rm -f "$CLONE/.github/workflows/visual-docs.yml.bak"
 run_visual_docs
@@ -439,14 +447,14 @@ run_visual_docs
 names "screencomp" || fail "the check refused the parted screencomp pins without naming the tool:"
 restore .github/workflows/visual-docs.yml
 
-# 26. An image the README embeds is not committed.
+# 24. An image the README embeds is not committed.
 rm -f "$CLONE/docs/screenshots/task-list.svg"
 run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "the README embeds an image this tree does not carry and the check passed:"
 names "task-list.svg" || fail "the check refused the missing image without naming it:"
 restore docs/screenshots
 
-# 27. The renderer pin gets a second spelling.
+# 25. The renderer pin gets a second spelling.
 printf '\n# freeze 9.9.9 is what this repository renders with\nfreeze-version := "9.9.9"\n' >> "$CLONE/justfile"
 run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "a second spelling of the renderer pin landed in the justfile and the check passed:"

@@ -435,6 +435,26 @@ grep -qF "git diff" <<<"$GUARD_OUTPUT" \
   || fail "a failed gallery did not name the other way to review the change:"
 STUB_GALLERY_FAILS=""
 
+# And the hook with a stdin it cannot read at all. An empty read there looks exactly like
+# pushing nothing — the gate would select against a default base and the guard would capture
+# nothing — so it refuses instead, and says nothing has been checked.
+# A write-only stdin, which is a descriptor that EXISTS and cannot be read: closing fd 0
+# instead would leave the read blocking on whatever the shell put there, which is a hang
+# rather than a case.
+hook_output="$(cd "$HOOK_CLONE" && env -u CI PATH="$HOOK_STUB_BIN:$PATH" \
+  bash .githooks/pre-push 0>/dev/null 2>&1)" && hook_status=0 || hook_status=$?
+if [ "$hook_status" -eq 0 ]; then
+  GUARD_OUTPUT="$hook_output"
+  fail "the hook accepted a push whose ref records it could not read:"
+else
+  for term in "could not be read" "has been checked"; do
+    grep -qF -- "$term" <<<"$hook_output" || {
+      GUARD_OUTPUT="$hook_output"
+      fail "an unreadable stdin was refused without saying '$term', so it reads as a rejection of the push:"
+    }
+  done
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-guard: $failures expectation(s) failed." >&2
   echo "check-visual-guard: repair scripts/screenshots-guard.sh so the local half of the" >&2

@@ -129,13 +129,29 @@ elif ! cargo build --release --locked --bin onetaskgraph >&2; then
   exit 1
 fi
 
-# Portable SHA-256 (Linux coreutils vs macOS/BSD).
+# Portable SHA-256 (Linux coreutils vs macOS/BSD), resolved once so a machine with neither
+# is told so rather than meeting `command not found` halfway through a capture.
+if command -v sha256sum >/dev/null 2>&1; then
+  digest_command=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+  digest_command=(shasum -a 256)
+else
+  echo "screenshots: neither sha256sum nor shasum is on PATH, so the hashes screencomp gates on cannot be computed" >&2
+  echo "screenshots: next: install coreutils (or perl's shasum), then re-run 'just screenshots'" >&2
+  exit 1
+fi
+
+# The digest goes straight into captures.json, so what the tool answered is held to the
+# shape a SHA-256 has: anything else would be written into the index screencomp reads.
 sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    shasum -a 256 "$1" | cut -d' ' -f1
+  local answer
+  answer="$("${digest_command[@]}" "$1" | cut -d' ' -f1)"
+  if ! [[ "$answer" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "screenshots: hashing $1 answered '${answer}', which is not a SHA-256 digest" >&2
+    echo "screenshots: next: check what '${digest_command[*]}' is on this PATH, then re-run 'just screenshots'" >&2
+    exit 1
   fi
+  printf '%s\n' "$answer"
 }
 
 # Stage the fixture at the fixed path. Removed first so a previous capture's tree — or a
