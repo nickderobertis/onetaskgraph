@@ -238,7 +238,6 @@ impl SubprocessSource {
         )
     }
 
-    /// Spawn a plugin under both bounds, which is what every constructor above reaches.
     fn connect_bounded(
         program: &str,
         args: &[String],
