@@ -125,31 +125,27 @@ red.
 
 ## Commands, and what is committed
 
-- `just screenshots-tools` — provision the pinned renderer. `just screenshots` — capture.
-  `just screenshots-bless` — after an **intended** change, recapture and refresh the
-  baseline; commit it together with `docs/screenshots/`.
-- `screencomp doctor --env` — whether the setup is wired: guard active, pin in step.
-- Committed: `shots/baseline/<arch>.json` (digests, no images) and `docs/screenshots/*.svg`
-  (what the README embeds). Regenerated and gitignored: `shots/current/`, `shots/verify/`
-  and the review gallery at `shots/review/`.
+`just screenshots` captures. `just screenshots-bless` recaptures and refreshes the
+baseline after an **intended** change, which is then committed together with
+`docs/screenshots/`. `just screenshots-tools` provisions the pinned renderer, and
+`screencomp doctor --env` says whether the setup is wired at all.
+
+Committed: the digest baseline and the images the README embeds. Regenerated and ignored:
+every other tree under `shots/`.
 
 ## The strict gate, and how its local half is activated
 
-CI (`fail-on-drift: true`) fails on a capture that has drifted.
-
-Locally the guard is `scripts/screenshots-guard.sh`, run from **the pre-push hook this
-repository already had** — `.githooks/pre-push`, activated by
-`scripts/bootstrap-workspace.sh` setting `core.hooksPath`, which is unchanged. It runs
+CI fails on a capture that has drifted. Locally the same comparison runs from **the
+pre-push hook this repository already had** — activated by
+`scripts/bootstrap-workspace.sh` setting `core.hooksPath`, which is unchanged — and
 *after* the complete gate that hook already ran, so the bar for a push is what it always
-was plus one refusal of its own: on drift it refreshes the baseline, builds
-`shots/review/index.html` and blocks the push so the new bytes are committed deliberately.
-A missing screencomp is a loud skip rather than a silent one, and never the
-`onevcs: host-prerequisite:` marker — that one belongs to the pinned release-plz, because
-it tells the engine driving this host to stop retrying, and a missing renderer is not that.
+was plus one refusal of its own. Drift refreshes the baseline and blocks the push, which
+is what makes new bytes a deliberate commit rather than a red workflow after the fact.
 
-`scripts/check-visual-guard.sh` drives the real guard and the real hook through every one
-of those outcomes with screencomp and the capture stubbed, so none of them can quietly stop
-holding.
+A missing screencomp is a loud skip and never the `onevcs: host-prerequisite:` marker:
+that one belongs to the pinned release-plz, because it tells the engine driving this host
+to stop retrying, and a missing renderer is not that.
+`scripts/check-visual-guard.sh` is what keeps any of this from quietly stopping.
 
 ## Changing the screenshots
 

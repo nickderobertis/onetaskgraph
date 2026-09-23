@@ -176,6 +176,22 @@ curl -fsSL -o "$unpacked/$archive" "$url" || {
   echo "screenshots-freeze: next: check the network and that the release carries $archive, then rerun '$install_command'" >&2
   exit 1
 }
+# What arrives over the network is not trusted to stay inside the directory it is unpacked
+# into: a member naming an absolute path or walking up with `..` is refused before anything
+# is written. (The archive is fetched over TLS from the release of the pinned version, which
+# is the trust model scripts/scoped-release-plz.sh already provisions its own tool under.)
+members="$(tar -tzf "$unpacked/$archive")" || {
+  echo "screenshots-freeze: could not read the contents of $unpacked/$archive" >&2
+  echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2
+  exit 1
+}
+case "$members" in
+  /* | *$'\n'/* | *..*)
+    echo "screenshots-freeze: $archive carries a member with an absolute path or a '..' segment, which would write outside $unpacked" >&2
+    echo "screenshots-freeze: next: do not unpack it; report the published archive for v$FREEZE_VERSION" >&2
+    exit 1
+    ;;
+esac
 tar -xzf "$unpacked/$archive" -C "$unpacked" || {
   echo "screenshots-freeze: could not unpack $unpacked/$archive" >&2
   echo "screenshots-freeze: next: delete it and rerun '$install_command'" >&2

@@ -60,6 +60,16 @@ resolves() {
 
 ranges=()
 if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
+  # A range a caller chose, so it is validated before it reaches `git diff` exactly as the
+  # records are — but by resolution rather than by shape, because a person naming one types
+  # `origin/main..HEAD` rather than two object ids.
+  for endpoint in ${SCREENCOMP_GUARD_RANGE//../ }; do
+    git rev-parse --verify --quiet "$endpoint^{commit}" >/dev/null 2>&1 || {
+      echo "pre-push: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', and '$endpoint' is not a commit this repository can resolve" >&2
+      echo "pre-push: next: name a range of two resolvable revisions, as in 'origin/main..HEAD', or unset it to use what git is pushing" >&2
+      exit 1
+    }
+  done
   ranges+=("$SCREENCOMP_GUARD_RANGE")
 else
   zero='^0+$'
@@ -94,14 +104,18 @@ changed="$(printf '%s' "$changed" | sort -u)"
 # --- 2. Without the CLI the guard cannot evaluate the push --------------------
 # So it does not skip silently: it says what is missing and how to get it, and
 # SCREENCOMP_GUARD_REQUIRE=1 turns the skip into a refusal for a machine that wants one.
+case "${SCREENCOMP_GUARD_REQUIRE:-}" in
+  "" | 0 | false | no) required=0 ;;
+  1 | true | yes) required=1 ;;
+  *)
+    echo "pre-push: SCREENCOMP_GUARD_REQUIRE is '$SCREENCOMP_GUARD_REQUIRE', which is neither true nor false, so whether a missing screencomp refuses this push is undecided" >&2
+    echo "pre-push: next: set it to 1 or 0 (or unset it, which is 0), then push again" >&2
+    exit 1
+    ;;
+esac
 if ! command -v screencomp >/dev/null 2>&1; then
-  {
-    echo "pre-push: screencomp is NOT on PATH, so the screenshot guard cannot evaluate this push."
-    echo "pre-push: install it: https://github.com/nickderobertis/screencomp#install"
-    echo "pre-push: the visual-docs workflow still gates the capture; set SCREENCOMP_GUARD_REQUIRE=1"
-    echo "pre-push: to refuse the push here instead."
-  } >&2
-  [ -n "${SCREENCOMP_GUARD_REQUIRE:-}" ] && exit 1
+  echo "pre-push: screencomp is not on PATH, so the screenshot guard cannot evaluate this push — install it (https://github.com/nickderobertis/screencomp#install), or set SCREENCOMP_GUARD_REQUIRE=1 to refuse here instead; the visual-docs workflow still gates the capture." >&2
+  [ "$required" -eq 1 ] && exit 1
   exit 0
 fi
 
@@ -117,8 +131,7 @@ case "$scope_status" in
   0) exit 0 ;;
   3) : ;;
   *)
-    echo "pre-push: 'screencomp scope' failed (exit $scope_status), so the screenshot guard is skipped." >&2
-    echo "pre-push: next: check that screencomp is current; the visual-docs workflow still gates this." >&2
+    echo "pre-push: 'screencomp scope' failed (exit $scope_status), so the screenshot guard is skipped — check that screencomp is current; the visual-docs workflow still gates this." >&2
     exit 0
     ;;
 esac
@@ -139,7 +152,8 @@ status=$?
 set -e
 
 if [ "$status" -eq 0 ]; then
-  echo "pre-push: screenshots unchanged against $MANIFEST — ok to push" >&2
+  # Quiet from here: the line above already said a capture was happening, and the push
+  # going on is the outcome. Only a refusal has more to say.
   exit 0
 elif [ "$status" -ne 3 ]; then
   echo "pre-push: 'screencomp classify' failed (exit $status), so this push was not evaluated" >&2
