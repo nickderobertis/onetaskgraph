@@ -379,15 +379,10 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
     let answer = json!({"id": "0", "result": {"protocol_version": 2,
         "kind": "silent", "capabilities": capabilities()}})
     .to_string();
-    // The two spans these deadlines bound are not comparable, which is why there are two of
-    // them. Twenty milliseconds is what the request under test is held to, and it is made
-    // against a child that is already running. The handshake before it is a round trip with
-    // the child's own start-up inside it — `/bin/sh` reaching its first `read` — which is
-    // single-figure milliseconds on a quiet host and far more on a saturated one, where the
-    // pre-push gate runs every affected suite at once. One bound for both therefore failed
-    // initialization before the behaviour this test exists for had begun; the handshake
-    // takes the protocol's own default instead, and the deadline the test asserts on reaches
-    // the silent request alone.
+    // Twenty milliseconds bounds the request under test, against a child already running.
+    // The handshake before it carries the child's own start-up — `/bin/sh` reaching its
+    // first `read` — which a loaded host stretches well past that, so it takes the
+    // protocol's default and the asserted deadline reaches the silent request alone.
     let source = SubprocessSource::connect_with_deadlines(
         "/bin/sh",
         &[
@@ -417,13 +412,10 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         started.elapsed() < Duration::from_secs(1),
         "the deadline did not hang"
     );
-    // The kill is why this deadline has to expire on the connect path rather than on a pair
-    // of streams somebody else owns: `connect` owns the child, so an expired request ends
-    // it, the worker's blocked read reaches end-of-file, and every later call is refused
-    // outright. A child left alive and silent would instead answer each later call with a
-    // fresh twenty-millisecond timeout of its own, for ever — so a refusal naming no
-    // deadline is what the kill is observable as, and this bounded wait is how the two are
-    // told apart on a host where the child takes a moment to die.
+    // An expired request kills the child this path owns, closing the connection for good; a
+    // child left alive would answer every later call with a fresh timeout of its own. So
+    // polling for a refusal that names no deadline is what tells the two apart while the
+    // child takes its moment to die.
     let again = Instant::now();
     loop {
         let Err(SourceError::Unavailable { message }) = source.health().await else {

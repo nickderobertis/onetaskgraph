@@ -334,12 +334,8 @@ fn keep_platform_state(_command: &mut Command) {}
 impl Peer {
     /// Spawn `program` and take its three streams.
     ///
-    /// `handshake` bounds the one blocking [`exchange`](Self::exchange) that initializes
-    /// the plugin — a child that has just been spawned does its own starting up inside
-    /// that exchange — and `requests` bounds each exchange the [`Connection`] makes after
-    /// it, against a child that is by then already running. They are equal for every
-    /// configured source; the pair exists for a caller holding a request to a span shorter
-    /// than a program takes to start.
+    /// `handshake` bounds the initializing [`exchange`](Self::exchange), which carries the
+    /// child's own start-up inside it; `requests` bounds each exchange after that one.
     ///
     /// # Errors
     ///
