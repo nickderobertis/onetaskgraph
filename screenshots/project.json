@@ -56,10 +56,7 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "bash scripts/check-visual-guard.sh",
-          "bash scripts/check-visual-tools.sh"
-        ],
+        "commands": ["bash scripts/check-visual-guard.sh", "bash scripts/check-visual-tools.sh"],
         "parallel": false
       },
       "cache": false,
