@@ -433,6 +433,45 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handshake_slower_than_the_request_deadline_still_connects() {
+    // The test above asserts the short bound; this one asserts that it stops where the
+    // handshake begins. Its child waits a whole second before reading — fifty times that
+    // bound, and far past any scheduler delay — so the handshake succeeding is evidence
+    // that the two spans are bounded apart, rather than evidence that this host was fast.
+    // One deadline for both is what held a real child's start-up to twenty milliseconds.
+    let answer = json!({"id": "0", "result": {"protocol_version": 2,
+        "kind": "slow-to-start", "capabilities": capabilities()}})
+    .to_string();
+    let source = SubprocessSource::connect_with_deadlines(
+        "/bin/sh",
+        &[
+            "-c".to_owned(),
+            "sleep 1; read -r _; printf '%s\\n' \"$1\"; while :; do :; done".to_owned(),
+            "_".to_owned(),
+            answer,
+        ],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+        RequestDeadline::DEFAULT,
+        RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
+    )
+    .expect("a handshake is not held to the request deadline");
+
+    // The generous handshake replaced nothing: what comes after it is still held to twenty
+    // milliseconds, against the same child that took a second to reach its first read.
+    let SourceError::Unavailable { message } = source.health().await.expect_err("it times out")
+    else {
+        panic!("a deadline is a reachability failure");
+    };
+    assert!(
+        message.contains("health") && message.contains("20 milliseconds"),
+        "{message}"
+    );
+}
+
 #[tokio::test]
 async fn both_dependency_directions_cross_the_wire_unchanged() {
     let here = in_process();
