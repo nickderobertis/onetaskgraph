@@ -46,7 +46,6 @@ readme = read("README.md")
 justfile = read("justfile")
 ignored = read(".gitignore")
 
-# --- The lane, declared in screencomp.toml and read from there by everything else -------
 lanes = re.search(r"(?m)^arches\s*=\s*\[(.*?)\]", config)
 lane_values = re.findall(r'"([^"]+)"', lanes.group(1)) if lanes else []
 # The same charset the capture and the guard hold it to, because this check builds
@@ -82,7 +81,6 @@ for path, text in (
             "spelling of screencomp.toml's [capture].arches; read it from there instead."
         )
 
-# --- The renderer pin, stated once in the script that owns which freeze this repo runs --
 pinned = re.search(r'(?m)^readonly FREEZE_VERSION=([0-9]+\.[0-9]+\.[0-9]+)\s*$', freeze)
 if not pinned:
     problems.append(
@@ -108,7 +106,6 @@ for path in [
                 "through that script instead."
             )
 
-# --- The vendored font, named once and present ------------------------------------------
 font = "screenshots/fonts/JetBrainsMono-Regular.ttf"
 if not Path(font).is_file():
     problems.append(
@@ -127,7 +124,6 @@ if font not in capture:
         "with the vendored font this repository commits."
     )
 
-# --- The scenes: the capture, the committed baseline and docs/screenshots agree ---------
 scenes = re.findall(r"(?m)^scene ([a-z0-9-]+) ", capture)
 if not scenes:
     problems.append(
@@ -142,7 +138,19 @@ if not baseline_path.is_file():
         "missing. Capture and bless it with 'just screenshots-bless', then commit it."
     )
 else:
-    baseline_names = re.findall(r'"name"\s*:\s*"([^"]+)"', read(baseline_path))
+    try:
+        baseline = json.loads(read(baseline_path))
+        baseline_names = [
+            shot["name"]
+            for shot in baseline["shots"]
+            if isinstance(shot, dict) and isinstance(shot.get("name"), str)
+        ]
+    except (ValueError, KeyError, TypeError) as error:
+        problems.append(
+            f"{baseline_path.as_posix()}: is not a screencomp digest manifest ({error}). "
+            "Re-bless it with 'just screenshots-bless' and commit the result; a file this "
+            "cannot read is one classify cannot gate against either."
+        )
 for absent in sorted(set(scenes) - set(baseline_names)):
     problems.append(
         f"{baseline_path.as_posix()}: has no shot named {absent!r}, which "
@@ -163,7 +171,6 @@ for scene in sorted(scenes):
             "the scene the capture renders. Run 'just screenshots' and commit it."
         )
 
-# --- The README: the hero first, every image committed, every image placed --------------
 embedded = re.findall(r"!\[([^\]]*)\]\((docs/screenshots/[^)]+)\)", readme)
 for alt, target in embedded:
     if not Path(target).is_file():
@@ -203,7 +210,6 @@ else:
         "README.md: embeds no capture at all. The hero is the first thing under the title."
     )
 
-# --- The two screencomp versions in the workflow, and the container's toolchain ----------
 used = re.search(r"visual-docs-reusable\.yml@(v[0-9]+\.[0-9]+\.[0-9]+)", workflow)
 passed = re.search(r"(?m)^\s*screencomp-version:\s*(v[0-9]+\.[0-9]+\.[0-9]+)\s*$", workflow)
 if not used or not passed:
@@ -257,7 +263,6 @@ elif channel and container.group(1) != channel.group(1):
         "version is declared; bring the image tag to it."
     )
 
-# --- What is committed and what is regenerated ------------------------------------------
 for tree in ("/shots/current/", "/shots/verify/", "/shots/review/"):
     if tree not in ignored:
         problems.append(
@@ -272,7 +277,6 @@ for kept in ("shots/baseline", "docs/screenshots"):
             "drift gate and the images are what the README embeds."
         )
 
-# --- No capture is reachable from the gate ----------------------------------------------
 # The recipe graph, read the way scripts/check-live-lane-selection.sh reads it.
 recipes = {}
 current = None
@@ -317,9 +321,14 @@ for project_file in sorted(Path(".").glob("*/project.json")) + sorted(
     except ValueError as error:
         problems.append(f"{project_file.as_posix()}: is not valid JSON ({error})")
         continue
+    if not isinstance(targets, dict):
+        problems.append(f'{project_file.as_posix()}: "targets" is not a JSON object')
+        continue
     for name, target in targets.items():
         options = target.get("options", {}) if isinstance(target, dict) else {}
+        options = options if isinstance(options, dict) else {}
         commands = options.get("commands", [])
+        commands = list(commands) if isinstance(commands, list) else []
         if isinstance(options.get("command"), str):
             commands = [*commands, options["command"]]
         for command in commands:

@@ -238,8 +238,6 @@ scene() {
   fi
 }
 
-# --- The scenes ---------------------------------------------------------------------------
-#
 # What each one documents, and why it earns a place in the README, is screenshots/AGENTS.md.
 # What is needed to READ the calls is which fixture each runs in: `sync/` is a checkout with
 # two folders of Markdown, the plans and where the team's tickets live; `board/` puts that

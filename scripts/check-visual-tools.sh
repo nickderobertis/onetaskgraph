@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Drive the two screenshot tools this repository owns through their real paths.
+# Drive the screenshot tooling this repository owns through its real paths.
 #
-# `scripts/screenshots-freeze.sh` decides which renderer the capture runs and provisions it;
-# `scripts/screenshots-bless.sh` writes the committed digest baseline. Between them they
-# carry a dozen refusals, and every one of them is a path a person meets on a bad day — a
-# renderer that is not there, an archive that would write outside the directory it is
-# unpacked into, a baseline that could not be written. So they are driven here rather than
-# read, exactly as scripts/check-scoped-release-plz.sh drives the other scoped tool: against
-# a stand-in tool location and a stand-in installer, with NO network and nothing installed
-# on the host touched.
+# `scripts/screenshots-freeze.sh` decides which renderer the capture runs and provisions it,
+# `scripts/screenshots-bless.sh` writes the committed digest baseline, and
+# `scripts/check-visual-docs.sh` is what fails when a copy of a pin or an image parts from
+# its source. Between them they carry a couple of dozen refusals, and every one is a path a
+# person meets on a bad day — a renderer that is not there, an archive that would write
+# outside the directory it unpacks into, a README embedding an image nobody committed. So
+# they are driven here rather than read, exactly as scripts/check-scoped-release-plz.sh
+# drives the other scoped tool: against a stand-in tool location and a stand-in installer,
+# with NO network and nothing installed on the host touched. The last of the three is
+# watched REFUSING, because a guard nobody has seen fail is a guard nobody knows works.
 #
 # What is stood in for is `curl` (the one thing that reaches a network) and screencomp.
 # What is real is both scripts, the archive handling, the scoped layout and the version
@@ -49,7 +51,6 @@ fail() {
 
 names() { grep -qF -- "$1" <<<"$OUTPUT"; }
 
-# --- The renderer resolver ---------------------------------------------------------------
 PIN="$(bash "$FREEZE" pin)" || fatal \
   "scripts/screenshots-freeze.sh could not answer its own pin" \
   "read its diagnostic; the pin is FREEZE_VERSION in that file"
@@ -251,7 +252,35 @@ OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="relative/tools" \
 [ "$STATUS" -eq 69 ] || fail "a relative tool home exited $STATUS, expected 69:"
 names "absolute" || fail "a relative tool home was refused without saying why:"
 
-# 15. And the verification itself: the REAL script, whose recorded digest is the published
+# 15. No curl: the archive cannot be fetched, and that is what it says.
+readonly NO_CURL="$scratch/no-curl"
+mkdir -p "$NO_CURL" || fatal "could not create $NO_CURL" \
+  "check the permissions of \$TMPDIR, then rerun"
+for tool in env bash sed grep mkdir dirname cat cut tar install rm sha256sum shasum mktemp uname; do
+  resolved="$(command -v "$tool" 2>/dev/null)" || continue
+  printf '#!%s\nexec "%s" "$@"\n' "$BASH_BIN" "$resolved" > "$NO_CURL/$tool"
+  chmod +x "$NO_CURL/$tool"
+done
+PATH="$NO_CURL" command -v curl >/dev/null 2>&1 && fatal \
+  "curl is still reachable from $NO_CURL, so this case cannot pose its question" \
+  "report this — the whitelist directory is built here and should hold no curl"
+readonly HOME_NO_CURL="$scratch/tools-no-curl"
+OUTPUT="$(PATH="$NO_CURL" ONETASKGRAPH_TOOLS_HOME="$HOME_NO_CURL" \
+  bash "$FREEZE" ensure 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' reported success with no curl to fetch the archive with:"
+names "curl" || fail "'ensure' refused without naming curl as what is missing:"
+
+# 16. A download that fails: the URL is named, and nothing is installed.
+readonly HOME_NO_DOWNLOAD="$scratch/tools-no-download"
+OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$HOME_NO_DOWNLOAD" \
+  STAND_IN_ARCHIVE="$scratch/there-is-no-such-archive.tgz" bash "$FREEZE" ensure 2>&1)" \
+  && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' reported success where the download failed:"
+names "could not download" || fail "a failed download was not named as one:"
+[ ! -x "$HOME_NO_DOWNLOAD/freeze/$PIN/bin/freeze" ] \
+  || fail "'ensure' installed a renderer after the download failed:"
+
+# 17. And the verification itself: the REAL script, whose recorded digest is the published
 #     archive's, refuses the stand-in response and installs nothing. This is the case the
 #     copies above would otherwise have quietly removed.
 readonly HOME_UNVERIFIED="$scratch/tools-unverified"
@@ -262,8 +291,7 @@ names "hashes to" || fail "'ensure' refused an unauthenticated archive without s
 [ ! -x "$HOME_UNVERIFIED/freeze/$PIN/bin/freeze" ] \
   || fail "'ensure' refused on the digest but installed a renderer anyway:"
 
-# --- The baseline writer -----------------------------------------------------------------
-# In a clone, because it writes shots/baseline/<lane>.json.
+# The baseline writer, in a clone because it writes shots/baseline/<lane>.json.
 # shellcheck source=scripts/scratch-clone.sh
 if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
   fatal "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
@@ -343,6 +371,50 @@ PATH="$NO_SCREENCOMP" command -v screencomp >/dev/null 2>&1 && fatal \
 run_bless "$NO_SCREENCOMP"
 [ "$STATUS" -eq 0 ] && fail "'bless' succeeded with no screencomp installed:"
 names "screencomp" || fail "'bless' refused without naming the tool that is missing:"
+
+# The reconciliation check, watched refusing. Each case mutates ONE governed file in the
+# clone, runs the real check there, and restores it: a check that stopped noticing would
+# otherwise pass every gate while the copies it exists for drifted apart.
+run_visual_docs() {
+  OUTPUT="$(cd "$CLONE" && bash scripts/check-visual-docs.sh 2>&1)" && STATUS=0 || STATUS=$?
+}
+
+restore() {
+  git -C "$CLONE" checkout -- "$1" || fatal \
+    "could not restore $1 in the clone" "report this; the clone is scratch and can be re-created"
+}
+
+# The baseline the cases above deliberately removed, back: what these mutate is one file at
+# a time, and a tree already failing for another reason proves nothing about the mutation.
+git -C "$CLONE" checkout -- shots/baseline || fatal \
+  "could not restore the committed baseline in the clone" \
+  "report this; the clone is scratch and can be re-created"
+
+# A precondition: it has to pass on the tree as it stands, or the refusals below say nothing.
+run_visual_docs
+[ "$STATUS" -eq 0 ] || fail "check-visual-docs.sh does not pass on this tree, so the mutations below prove nothing:"
+
+# 22. The two screencomp versions in the workflow part.
+sed -i.bak 's/^\( *screencomp-version: \)v.*/\1v0.0.1/' "$CLONE/.github/workflows/visual-docs.yml"
+rm -f "$CLONE/.github/workflows/visual-docs.yml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the workflow's two screencomp versions parted and the check passed:"
+names "screencomp" || fail "the check refused the parted screencomp pins without naming the tool:"
+restore .github/workflows/visual-docs.yml
+
+# 23. An image the README embeds is not committed.
+rm -f "$CLONE/docs/screenshots/task-list.svg"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the README embeds an image this tree does not carry and the check passed:"
+names "task-list.svg" || fail "the check refused the missing image without naming it:"
+restore docs/screenshots
+
+# 24. The renderer pin gets a second spelling.
+printf '\n# freeze 9.9.9 is what this repository renders with\nfreeze-version := "9.9.9"\n' >> "$CLONE/justfile"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "a second spelling of the renderer pin landed in the justfile and the check passed:"
+names "FREEZE_VERSION" || fail "the check refused the second pin without naming where the pin lives:"
+restore justfile
 
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-tools: $failures expectation(s) failed." >&2

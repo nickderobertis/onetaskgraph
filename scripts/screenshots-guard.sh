@@ -47,7 +47,6 @@ readonly MANIFEST="shots/baseline/$LANE.json"
 readonly CURRENT="shots/current"
 readonly GALLERY="shots/review"
 
-# --- 1. What is being pushed --------------------------------------------------
 # git writes one record per ref, `<local ref> <local sha> <remote ref> <remote sha>`, and
 # what arrives on this stdin is external input: it is whatever the caller piped. So each
 # sha is held to the shape git writes AND resolved in this repository before it becomes
@@ -127,7 +126,6 @@ for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
 done
 changed="$(printf '%s' "$changed" | sort -u)"
 
-# --- 2. Without the CLI the guard cannot evaluate the push --------------------
 # So it does not skip silently: it says what is missing and how to get it, and
 # SCREENCOMP_GUARD_REQUIRE=1 turns the skip into a refusal for a machine that wants one.
 case "${SCREENCOMP_GUARD_REQUIRE:-}" in
@@ -145,7 +143,6 @@ if ! command -v screencomp >/dev/null 2>&1; then
   exit 0
 fi
 
-# --- 3. The cheap question: is anything screenshot-relevant in it? ------------
 # `screencomp scope` exits 3 when a changed path matches [guard].paths, 0 when none does,
 # and anything else on error. Only 3 is relevance; on an error warn and let the push go,
 # because the workflow is the backstop and a guessed capture costs minutes.
@@ -168,7 +165,6 @@ case "$scope_status" in
     ;;
 esac
 
-# --- 4. Re-capture, natively: the shots are byte-identical on every machine ---
 # No line of our own here: the capture below runs cargo and the renderer, whose own output
 # is what says a multi-minute step is under way, and a push this guard lets through has
 # nothing to report. Only a refusal speaks.
@@ -179,7 +175,6 @@ if ! SHOTS_OUT="$CURRENT/$LANE" bash scripts/screenshots.sh; then
   exit 1
 fi
 
-# --- 5. Classify the capture against the committed baseline -------------------
 set +e
 screencomp classify --baseline-manifest "$MANIFEST" --current "$CURRENT" --arch "$LANE" --exit-code
 status=$?
@@ -198,7 +193,8 @@ elif [ "$status" -ne 3 ]; then
   exit 1
 fi
 
-# --- On drift: regenerate the baseline, build a gallery, BLOCK the push -------
+# On drift the baseline and the gallery are regenerated before the push is refused, so
+# that saying "yes, that is the new output" is one `git add` rather than a second run.
 if ! screencomp manifest --input "$CURRENT" --arch "$LANE" --output "$MANIFEST"; then
   echo "pre-push: the capture drifted and the refreshed baseline could not be written to $MANIFEST." >&2
   echo "pre-push: next: read the diagnostic above, then run 'just screenshots-bless' by hand and commit it." >&2
