@@ -285,7 +285,8 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):
+    roots = sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS)
+    for root in roots:
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
         rename_qualified_definitions(schema)
@@ -368,7 +369,15 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     (destination / "models.py").write_text(
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
         + "\n".join(exports)
-        + "\n",
+        + "\n\n"
+        + "# Every root is named here rather than left to the `import X as X` form alone: a\n"
+        + "# root whose generated class carries another name — every `QueryResponseOf…`, and\n"
+        + "# `PageOfDocument` — is aliased, and a strict type checker reads an aliased name as\n"
+        + "# private to this module rather than as a re-export. This list is what makes the\n"
+        + "# whole set public to one, here and through the package's own `import *`.\n"
+        + "__all__ = [\n"
+        + "".join(f'    "{root}",\n' for root in roots)
+        + "]\n",
         encoding="utf-8",
     )
 
