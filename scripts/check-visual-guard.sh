@@ -23,7 +23,9 @@
 #                                         host-prerequisite marker, which is one tool's
 #   6. screencomp absent and required   — the same skip turned into a refusal
 #   7. CI                               — the workflow owns it there, so the guard is inert
-#   8. the real hook, with real records — the gate runs and the guard receives the very
+#   8. a branch nothing bounds           — every file it carries counts, rather than a
+#                                         `git diff` against the working tree
+#   9. the real hook, with real records — the gate runs and the guard receives the very
 #                                         records the base was derived from
 set -euo pipefail
 
@@ -232,7 +234,34 @@ run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3 "" 1
 [ "$GUARD_STATUS" -eq 0 ] || fail "the guard refused a push under CI, where the workflow owns the comparison:"
 captured && fail "the guard captured under CI, where the visual-docs workflow does that:"
 
-# 8. The hook itself. It reads git's ref records ONCE into a variable and replays them to
+# 8. A branch the remote has never seen AND with no merge base to fork from — an orphan
+#    branch, or a clone with no default branch. Nothing bounds what the push adds, so every
+#    file the branch carries has to count: a `git diff` given one revision compares that
+#    commit with the WORKING TREE instead, which answers "nothing changed" for a push that
+#    adds everything, and the guard would let a whole new branch through uncaptured.
+git -C "$CLONE" checkout --quiet --orphan unbounded >/dev/null 2>&1 || fatal \
+  "could not create an orphan branch in $CLONE" \
+  "report this; the case needs a commit with no merge base against origin/HEAD"
+git -C "$CLONE" add -A >/dev/null
+git -C "$CLONE" commit --quiet --no-verify -m "test: an orphan branch" >/dev/null
+orphan_sha="$(git -C "$CLONE" rev-parse HEAD)"
+[ -z "$(git -C "$CLONE" merge-base origin/HEAD "$orphan_sha" 2>/dev/null)" ] || fatal \
+  "the orphan branch shares a merge base with origin/HEAD, so this case cannot pose its question" \
+  "report this; 'git checkout --orphan' should leave no common history"
+
+run_guard "refs/heads/unbounded $orphan_sha refs/heads/unbounded 0000000000000000000000000000000000000000" \
+  "$STUB_BIN:$PATH" 3 0
+[ "$GUARD_STATUS" -eq 0 ] || fail "a push of an unbounded branch was refused:"
+captured || fail "an unbounded branch was not captured, so a whole new branch would go out unseen:"
+for path in nx.json screencomp.toml scripts/screenshots.sh; do
+  grep -qF "$path" "$MARKERS/scope.stdin" 2>/dev/null \
+    || fail "the changed-path list for an unbounded branch does not carry $path, so it is not every file the branch holds:"
+done
+git -C "$CLONE" checkout --quiet - >/dev/null 2>&1 || fatal \
+  "could not return $CLONE to the branch the earlier cases used" \
+  "report this; the clone is scratch and can be re-created"
+
+# 9. The hook itself. It reads git's ref records ONCE into a variable and replays them to
 #    two consumers — the base the gate selects against, and the guard's range — so a change
 #    that dropped either half would leave the gate sweeping every project or the guard
 #    blind, and neither shows up in the guard's own cases above. This drives the REAL

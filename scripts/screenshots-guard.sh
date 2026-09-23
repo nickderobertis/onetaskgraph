@@ -58,7 +58,10 @@ resolves() {
     && git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1
 }
 
+# Two kinds of answer to "what is this push adding": a range between two commits, and — for
+# a branch nothing bounds — the whole of one commit's tree.
 ranges=()
+whole_trees=()
 if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
   # A range a caller chose, so it is validated before it reaches `git diff` exactly as the
   # records are — by resolution rather than by shape, because a person naming one types
@@ -96,17 +99,31 @@ else
       # A branch the remote has never seen, or one whose tip this clone cannot resolve:
       # what the push adds is what it added since it forked from the default branch.
       base="$(git merge-base origin/HEAD "$local_sha" 2>/dev/null || true)"
-      if [ -n "$base" ]; then ranges+=("${base}..${local_sha}"); else ranges+=("$local_sha"); fi
+      if [ -n "$base" ]; then
+        ranges+=("${base}..${local_sha}")
+      else
+        # Nothing bounds it — an orphan branch, or a clone with no default branch to fork
+        # from — so every file the branch carries counts. `git diff` with ONE revision
+        # would compare that commit against the working tree, which is a different question
+        # and answers "nothing changed" for a push that adds everything; this guard fails
+        # toward capturing, as every other selection decision in this repository does.
+        whole_trees+=("$local_sha")
+      fi
     else
       ranges+=("${remote_sha}..${local_sha}")
     fi
   done
 fi
-[ "${#ranges[@]}" -eq 0 ] && exit 0
+if [ "${#ranges[@]}" -eq 0 ] && [ "${#whole_trees[@]}" -eq 0 ]; then
+  exit 0
+fi
 
 changed=""
-for range in "${ranges[@]}"; do
+for range in "${ranges[@]+"${ranges[@]}"}"; do
   changed+="$(git diff --name-only "$range")"$'\n'
+done
+for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
+  changed+="$(git ls-tree -r --name-only "$tree")"$'\n'
 done
 changed="$(printf '%s' "$changed" | sort -u)"
 
