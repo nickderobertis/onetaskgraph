@@ -488,9 +488,113 @@ run_visual_docs
 names "FREEZE_VERSION" || fail "the check refused the second pin without naming where the pin lives:"
 restore justfile
 
+# 26. Two lanes in screencomp.toml. One baseline is committed and the guard classifies one
+#     lane on every host, so a second lane is one nothing gates.
+sed -i.bak 's/^\(arches *= *\[.*\)\]/\1, "aarch64"]/' "$CLONE/screencomp.toml"
+rm -f "$CLONE/screencomp.toml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "screencomp.toml declared two lanes and the check passed:"
+names "arches" || fail "the check refused a second lane without naming where the lane is declared:"
+restore screencomp.toml
+
+# 27. The workflow restates the lane. screencomp reads [capture].arches itself to fan out
+#     its matrix, so a copy there is a second statement nothing reconciles.
+printf '\n# the %s lane is the one this workflow captures\n' "$LANE" >> "$CLONE/.github/workflows/visual-docs.yml"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the workflow restated the lane and the check passed:"
+names "$LANE" || fail "the check refused the restated lane without naming it:"
+restore .github/workflows/visual-docs.yml
+
+# 28. The vendored font's licence goes missing from beside the font it covers.
+mv "$CLONE/screenshots/fonts/JetBrainsMono-OFL.txt" "$scratch/ofl.txt"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the vendored font lost its licence and the check passed:"
+names "JetBrainsMono-OFL.txt" || fail "the check refused the missing licence without naming it:"
+mv "$scratch/ofl.txt" "$CLONE/screenshots/fonts/JetBrainsMono-OFL.txt"
+
+# 29. The committed baseline stops carrying a shot a scene captures — which is what a
+#     renamed scene looks like before anyone re-blesses.
+sed -i.bak 's/"task-deps"/"task-deps-renamed"/' "$CLONE/shots/baseline/$LANE.json"
+rm -f "$CLONE/shots/baseline/$LANE.json.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the baseline lost a scene's shot and the check passed:"
+names "task-deps" || fail "the check refused the missing shot without naming the scene:"
+names "screenshots-bless" || fail "the check refused the missing shot without saying how to re-bless:"
+restore "shots/baseline/$LANE.json"
+
+# 30. A committed capture the README embeds nowhere. Every image sits in the section that
+#     explains the surface it shows, or it is not committed at all.
+cp "$CLONE/docs/screenshots/task-deps.svg" "$CLONE/docs/screenshots/task-orphan.svg"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "a capture the README embeds nowhere was committed and the check passed:"
+names "task-orphan.svg" || fail "the check refused the orphaned capture without naming it:"
+rm -f "$CLONE/docs/screenshots/task-orphan.svg"
+
+# 31. Alt text that names the command rather than describing the picture. The images carry
+#     the README's meaning for a reader who cannot see them.
+sed -i.bak 's|!\[[^]]*\](docs/screenshots/task-list\.svg)|![task list](docs/screenshots/task-list.svg)|' "$CLONE/README.md"
+rm -f "$CLONE/README.md.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "an image was left with alt text too short to describe it and the check passed:"
+names "alt text" || fail "the check refused the unusable alt text without saying what was wrong:"
+restore README.md
+
+# 32. The hero stops being the still of `task list` under the title.
+sed -i.bak 's|(docs/screenshots/task-list\.svg)|(docs/screenshots/task-deps.svg)|' "$CLONE/README.md"
+rm -f "$CLONE/README.md.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the README's first image stopped being the task-list still and the check passed:"
+names "first image" || fail "the check refused the displaced hero without naming it as the first image:"
+restore README.md
+
+# 33. Drift becomes a warning. Without `fail-on-drift` the pictures can quietly stop being
+#     true, which is the whole thing this adoption is for.
+sed -i.bak 's/^\( *fail-on-drift: *\)true/\1false/' "$CLONE/.github/workflows/visual-docs.yml"
+rm -f "$CLONE/.github/workflows/visual-docs.yml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the workflow stopped failing on drift and the check passed:"
+names "fail-on-drift" || fail "the check refused a non-blocking drift gate without naming the input:"
+restore .github/workflows/visual-docs.yml
+
+# 34. The capture container parts from the toolchain this repository pins. The capture
+#     builds the real release binary, so the compiler is an input to the rendered bytes.
+sed -i.bak 's/^\( *container: *rust:\)[0-9][0-9.]*-/\10.0.0-/' "$CLONE/.github/workflows/visual-docs.yml"
+rm -f "$CLONE/.github/workflows/visual-docs.yml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the capture container parted from rust-toolchain.toml and the check passed:"
+names "rust-toolchain.toml" || fail "the check refused the parted container without naming where the version lives:"
+restore .github/workflows/visual-docs.yml
+
+# 35. A regenerated capture tree stops being ignored, which is how one gets committed.
+sed -i.bak '\|^/shots/current/$|d' "$CLONE/.gitignore"
+rm -f "$CLONE/.gitignore.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "a regenerated capture tree stopped being ignored and the check passed:"
+names "/shots/current/" || fail "the check refused the un-ignored capture tree without naming it:"
+restore .gitignore
+
+# 36. A recipe puts the capture inside the gate. It is informational, and the gate reaching
+#     it would put a multi-minute render on every push.
+sed -i.bak 's/^check: format-check/check: screenshots format-check/' "$CLONE/justfile"
+rm -f "$CLONE/justfile.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "'just check' reached the capture and the check passed:"
+names "just check" || fail "the check refused the gate reaching the capture without naming the recipe:"
+restore justfile
+
+# 37. An Nx target runs the capture. `nx affected` reaches every target from the gate, so
+#     one that captures is the same defect one recipe deeper.
+sed -i.bak 's|bun run biome format --write screenshots|bash scripts/screenshots.sh|' "$CLONE/screenshots/project.json"
+rm -f "$CLONE/screenshots/project.json.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "an Nx target ran the capture and the check passed:"
+names "No Nx target may" || fail "the check refused the capturing target without saying no target may:"
+restore screenshots/project.json
+
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-tools: $failures expectation(s) failed." >&2
-  echo "check-visual-tools: repair scripts/screenshots-freeze.sh or scripts/screenshots-bless.sh" >&2
-  echo "check-visual-tools: so each refusal says what is wrong and what to do about it." >&2
+  echo "check-visual-tools: repair scripts/screenshots-freeze.sh, scripts/screenshots.sh," >&2
+  echo "check-visual-tools: scripts/screenshots-bless.sh or scripts/check-visual-docs.sh so that" >&2
+  echo "check-visual-tools: each refusal above happens and says what is wrong and what to do." >&2
   exit 1
 fi

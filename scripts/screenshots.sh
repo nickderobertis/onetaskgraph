@@ -240,8 +240,8 @@ trap 'rm -rf "$captured"' EXIT
 # screencomp.toml declares no `[[toggle]]`.
 entries=()
 
-# Drive one scene and render it. `directory` is the staged fixture the command runs in,
-# which is what decides the configuration document it discovers.
+# The binary discovers its configuration by the directory it is run in, which is the whole
+# of how a scene chooses between the two staged fixtures: they differ in nothing else.
 #
 # Every scene here is a successful invocation, and one that stops being successful is
 # REFUSED rather than photographed: a shot of a diagnostic is still real output, but it
