@@ -70,7 +70,14 @@ real_python3="$(command -v python3)" || fatal \
 # the relative answer `command -v` can give cost here.
 case $real_python3 in
   /* | ?:[\\/]*) ;;
-  *) real_python3=$(cd "$(dirname "$real_python3")" && pwd)/$(basename "$real_python3") ;;
+  *)
+    # Two steps, because the exit status of `x=$(a)/$(b)` is b's alone, so a guard on the
+    # one-line spelling would read the failure of the substitution that matters as a success.
+    real_python3_directory=$(cd "$(dirname "$real_python3")" && pwd) || fatal \
+      "could not resolve the directory of the relative interpreter $real_python3" \
+      "check that it still exists from $PWD, or put an absolute python3 entry first on PATH, then rerun"
+    real_python3="$real_python3_directory/$(basename "$real_python3")"
+    ;;
 esac
 readonly real_python3
 

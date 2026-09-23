@@ -45,7 +45,14 @@ PYTHON="$(command -v python3)" || fatal \
   "install python3, or run 'just bootstrap', then rerun"
 case $PYTHON in
   /* | ?:[\\/]*) ;;
-  *) PYTHON=$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON") ;;
+  *)
+    # Two steps, because the exit status of `x=$(a)/$(b)` is b's alone, so a guard on the
+    # one-line spelling would read the failure of the substitution that matters as a success.
+    PYTHON_directory=$(cd "$(dirname "$PYTHON")" && pwd) || fatal \
+      "could not resolve the directory of the relative interpreter $PYTHON" \
+      "check that it still exists from $PWD, or put an absolute python3 entry first on PATH, then rerun"
+    PYTHON="$PYTHON_directory/$(basename "$PYTHON")"
+    ;;
 esac
 readonly PYTHON
 

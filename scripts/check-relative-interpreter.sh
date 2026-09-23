@@ -24,7 +24,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
   "run the check from a checkout of this repository, as 'just script-check' does"
 readonly ROOT
-cd "$ROOT"
+cd "$ROOT" || fatal \
+  "could not enter this repository's root at $ROOT" \
+  "check that the directory still exists and is readable, then rerun"
 
 real_python3="$(command -v python3)" || fatal \
   "no python3 on PATH, and every script below reports through it" \
@@ -32,7 +34,14 @@ real_python3="$(command -v python3)" || fatal \
 # Absolute, because the shim below execs it from wherever a case has arrived at.
 case $real_python3 in
   /* | ?:[\\/]*) ;;
-  *) real_python3=$(cd "$(dirname "$real_python3")" && pwd)/$(basename "$real_python3") ;;
+  *)
+    # Two steps, because the exit status of `x=$(a)/$(b)` is b's alone, so a guard on the
+    # one-line spelling would read the failure of the substitution that matters as a success.
+    real_python3_directory=$(cd "$(dirname "$real_python3")" && pwd) || fatal \
+      "could not resolve the directory of the relative interpreter $real_python3" \
+      "check that it still exists from $PWD, or put an absolute python3 entry first on PATH, then rerun"
+    real_python3="$real_python3_directory/$(basename "$real_python3")"
+    ;;
 esac
 readonly real_python3
 
@@ -42,16 +51,26 @@ readonly real_python3
 # which on Windows may be on another drive and have none at all.
 readonly probe="target/relative-interpreter-probe"
 cleanup() {
-  rm -rf "$ROOT/$probe"
+  rm -rf "$ROOT/$probe" || {
+    echo "check-relative-interpreter: could not remove the probe interpreter at $probe" >&2
+    echo "check-relative-interpreter: next: delete $ROOT/$probe by hand; it is a relative" >&2
+    echo "check-relative-interpreter: python3 this check planted and nothing else reads" >&2
+  }
 }
 trap cleanup EXIT
 
-rm -rf "$ROOT/$probe"
+rm -rf "$ROOT/$probe" || fatal \
+  "could not remove a previous probe interpreter at $probe" \
+  "delete $ROOT/$probe by hand, then rerun"
 mkdir -p "$ROOT/$probe/bin" || fatal \
   "could not create the probe interpreter directory at $probe" \
   "check the permissions of $ROOT/target and 'df -h' for free space, then rerun"
-printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$real_python3" > "$ROOT/$probe/bin/python3"
-chmod +x "$ROOT/$probe/bin/python3"
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$real_python3" > "$ROOT/$probe/bin/python3" || fatal \
+  "could not write the probe interpreter at $probe/bin/python3" \
+  "check the permissions of $ROOT/$probe and 'df -h' for free space, then rerun"
+chmod +x "$ROOT/$probe/bin/python3" || fatal \
+  "could not make the probe interpreter at $probe/bin/python3 executable" \
+  "check the permissions of that file, then rerun"
 
 export PATH="$probe/bin:$PATH"
 
