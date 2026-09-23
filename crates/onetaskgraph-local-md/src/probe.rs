@@ -34,14 +34,18 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
-/// Whether the filesystem has already marked the entry at `path` for deletion.
+/// Whether the filesystem says the entry at `path` has been unlinked: marked for deletion
+/// and waiting on the handle that is holding it, or already gone from its folder outright.
+///
+/// Both answers are `true` because both are the same fate to a reader — the entry is not
+/// coming back — and the second is what the interval this runs in can turn the first into:
+/// the handle can close between the read that failed and this call.
 ///
 /// A question this cannot put — a path with no folder to open it relative to, a folder that
-/// will not open, a name that is not valid UTF-16 — is answered `false`, which is the read
-/// path reporting the failure it already had rather than passing a record over on a probe
-/// that never ran. An entry the probe finds is no longer there at all answers `true`: it is
-/// gone, which is the same fate as going.
-pub(crate) fn delete_pending(path: &Path) -> bool {
+/// will not open, a name whose length will not fit a `UNICODE_STRING` — is answered `false`,
+/// which is the read path reporting the failure it already had rather than passing a record
+/// over on a probe that never ran.
+pub(crate) fn unlinked(path: &Path) -> bool {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return false;
     };

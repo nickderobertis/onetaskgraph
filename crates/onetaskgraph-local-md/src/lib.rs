@@ -1609,39 +1609,39 @@ fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String
 ///
 /// This is the one place the read path decides a file's fate, and it decides it from two
 /// things: how the read failed, and — for the one failure that is ambiguous — what
-/// [`delete_pending`] answers about the path.
+/// [`unlinked`] answers about the path.
 ///
 /// *Not found* says gone on every platform. *Access is denied* is the ambiguous one, and it
 /// is ambiguous on Windows alone: a file another process has unlinked while a handle to it
 /// is still open is not removed from its folder until that handle closes, and through that
 /// interval every open of it is refused with exactly the answer an access-control entry that
 /// denies this reader gives. So that failure is put to the probe, and only a file the
-/// filesystem has already marked for deletion counts as gone. A file refused for any other
+/// filesystem says has been unlinked counts as gone. A file refused for any other
 /// reason is the error it is, and is reported under its own path rather than passed over —
 /// a record this source cannot read is the author's to mend, and silently dropping it would
 /// answer a query with less than the folder holds and say nothing about it.
 fn gone(path: &Path, error: &std::io::Error) -> bool {
     match error.kind() {
         std::io::ErrorKind::NotFound => true,
-        std::io::ErrorKind::PermissionDenied => delete_pending(path),
+        std::io::ErrorKind::PermissionDenied => unlinked(path),
         _ => false,
     }
 }
 
-/// Whether the filesystem has already marked the entry at `path` for deletion.
+/// Whether the filesystem says the entry at `path` has been unlinked — marked for deletion
+/// while a handle still holds it, or gone from its folder outright.
 ///
-/// Windows is the only platform with that state — everywhere else a deletion either has
-/// happened or has not — so [`probe::delete_pending`] is the only probe, and it is compiled
-/// only there. Elsewhere this is always `false`, which is a refused read staying the refusal
-/// it was.
-fn delete_pending(path: &Path) -> bool {
+/// Windows is the only platform where a refused read can mean either, so
+/// [`probe::unlinked`] is the only probe and it is compiled only there. Elsewhere this is
+/// always `false`, which is a refused read staying the refusal it was.
+fn unlinked(path: &Path) -> bool {
     #[cfg(test)]
     if let Some(answer) = probed(path) {
         return answer;
     }
     #[cfg(windows)]
     {
-        probe::delete_pending(path)
+        probe::unlinked(path)
     }
     #[cfg(not(windows))]
     {
@@ -1650,7 +1650,7 @@ fn delete_pending(path: &Path) -> bool {
     }
 }
 
-/// What a test answers in [`delete_pending`]'s place, so both of the read path's outcomes
+/// What a test answers in [`unlinked`]'s place, so both of the read path's outcomes
 /// can be driven wherever the suite runs rather than on Windows alone.
 ///
 /// `None` is *no opinion about this path*, which falls through to the real probe: a test
@@ -1682,7 +1682,7 @@ fn probed(path: &Path) -> Option<bool> {
 fn vanished(path: &Path) -> bool {
     match fs::symlink_metadata(path) {
         Err(e) => gone(path, &e),
-        Ok(_) => delete_pending(path),
+        Ok(_) => unlinked(path),
     }
 }
 
@@ -2930,7 +2930,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_read_the_probe_calls_a_deletion_is_skipped_and_a_durable_one_is_reported() {
+    fn a_refused_read_the_probe_calls_unlinked_is_skipped_and_a_durable_one_is_reported() {
         let (root, source) = folder(&[
             ("tasks/mine/a.md", "---\ntitle: A\nproject: mine\n---\n"),
             (
@@ -2949,11 +2949,11 @@ mod tests {
             .build()
             .unwrap();
 
-        // The probe calls it a deletion, so the record is gone rather than unreadable: the
+        // The probe calls it unlinked, so the record is gone rather than unreadable: the
         // listing answers, holding everything the folder still has.
         let listed = runtime
             .block_on(source.query_tasks(&TaskQuery::default(), &page()))
-            .expect("a record the probe calls a deletion is skipped, not reported");
+            .expect("a record the probe calls unlinked is skipped, not reported");
         let ids: Vec<&str> = listed.items.iter().map(|task| task.id.0.as_str()).collect();
         assert_eq!(ids, ["mine/a"]);
 
