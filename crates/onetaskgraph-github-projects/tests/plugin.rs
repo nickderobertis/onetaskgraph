@@ -3155,6 +3155,81 @@ async fn a_board_read_reports_an_item_the_boards_own_item_connection_is_behind_o
     );
 }
 
+/// What this run writes to an item only the board's search reported reaches the read.
+///
+/// The half a source keeps of that search is a third place one item can sit, beside the
+/// board it read and what it created — and for an item the board's own item connection is
+/// behind on it is the *only* place, so a write or a delete that missed it would put the
+/// stale record back on exactly the items the union in `GitHubProjectsSource::board` exists
+/// for. Both halves are driven here through one source's own reads.
+#[tokio::test]
+async fn a_write_and_a_delete_reach_an_item_only_the_boards_search_reported() {
+    async fn titled(source: &dyn TaskSource) -> Vec<String> {
+        let mut held = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect("the board answers a task query")
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect::<Vec<_>>();
+        held.sort();
+        held
+    }
+
+    let fixture = board_of(1, 1);
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    // A source that did none of the writing, whose first read is what fills its view of
+    // this board — the item connection in one half and the search in the other.
+    let reader = source(&fixture);
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step"],
+        "the first read reports the item only the search knows about"
+    );
+
+    reader
+        .write_task(&ItemWrite {
+            target: Some(created.clone()),
+            item: task(
+                "ignored",
+                "Third step, revised",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("an update of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step, revised"],
+        "and reports the title this run just wrote onto it rather than the one it read"
+    );
+
+    reader
+        .delete_task(&created)
+        .await
+        .expect("a delete of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1"],
+        "and stops reporting it once this run has taken it off"
+    );
+}
+
 #[tokio::test]
 async fn a_board_of_more_than_one_page_of_projects_and_of_tasks_is_read_completely() {
     // GitHub caps a connection page at 100, so a board holding more projects than that —

@@ -529,6 +529,14 @@ is a projection GitHub rebuilds behind the write, and an item added with
 within seconds. The reasoning and the measurements behind that are in the crate
 documentation, at `GitHubProjectsSource::board`. This section is only what it costs.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] What this states is a
+difference between two committed states of `tests/fixtures/session-cost.txt`, which is not a
+value any source holds and so is not a second spelling of one. The fixture itself cannot move
+in silence: `a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` fails
+on any change to it and its message names this file as the place to say what moved — which is
+the same reconciliation the directive at the head of this file records, for the same reason. A
+section of this file that may state no figure could not record what a change cost, which is
+the whole of what this file is. -->
 What it moves, in the two quantities this file measures offline: **one request more over the
 whole session, and 20,400 worst-case nodes more.** One row moves, `searching this board's
 issues`, by one request. Every other row of the record is byte-for-byte what it was, `reading
