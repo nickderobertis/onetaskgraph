@@ -1106,6 +1106,7 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "tokio",
+ "windows-sys",
 ]
 
 [[package]]
