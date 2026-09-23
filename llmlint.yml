@@ -12,6 +12,12 @@ files:
     - "**/.git/**"
     # Generated from the binary's schema; generator drift is checked deterministically.
     - "sdks/typescript/src/generated/**"
+    # Rendered by running the real CLI and gated by digest against
+    # shots/baseline/<arch>.json, so nothing here is hand-written for a judge to read.
+    # Each SVG also embeds the vendored font as base64 — about 360 KB of encoded font
+    # apiece, which alone put a diff-scoped run past the harness's input limit.
+    - "docs/screenshots/**"
+    - "screenshots/fonts/**"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-5.5

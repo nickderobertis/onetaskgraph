@@ -167,6 +167,21 @@ session-setup:
 setup-llmlint:
     ./scripts/setup-llmlint.sh
 
+# Informational, like a bench: no recipe below is reachable from `check` or `gate`, and
+# scripts/check-visual-docs.sh refuses one that becomes so. screenshots/AGENTS.md is why.
+
+# Provision the pinned screenshot renderer.
+screenshots-tools:
+    @bash scripts/screenshots-freeze.sh ensure
+
+# Capture the terminal screenshots into shots/current/<lane>/ and docs/screenshots/.
+screenshots:
+    @bash scripts/screenshots.sh
+
+# Recapture and refresh the committed baseline, after an INTENDED output change.
+screenshots-bless: screenshots
+    @bash scripts/screenshots-bless.sh
+
 # Deliberately OUT of the deterministic gate: it needs an authenticated harness and
 # makes network calls. Config is the composed llmlint.yml.
 

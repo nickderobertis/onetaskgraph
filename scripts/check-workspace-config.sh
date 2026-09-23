@@ -30,7 +30,11 @@ problems = []
 project_files = sorted(
     list(Path("crates").glob("*/project.json"))
     + list(Path("sdks").glob("*/project.json"))
-    + [Path("workspace/project.json"), Path("scripts/project.json")]
+    + [
+        Path("workspace/project.json"),
+        Path("scripts/project.json"),
+        Path("screenshots/project.json"),
+    ]
 )
 if not project_files:
     problems.append("no project.json files found — Nx has nothing to orchestrate")
@@ -46,6 +50,17 @@ for path in project_files:
         project = json.loads(path.read_text())
     except json.JSONDecodeError as error:
         problems.append(f"{display_path}: is not valid JSON ({error})")
+        continue
+    except OSError as error:
+        # The globs above only yield files that exist, but the paths beside them are
+        # hand-listed — so one of those going missing has to read as the problem it is
+        # rather than as this check having crashed. scripts/test-distribution.sh asserts
+        # on exactly that: a malformed or absent project must not leak a traceback.
+        problems.append(
+            f"{display_path}: could not be read ({error}). It is one of the project files "
+            "this check names outright, so restore it or take it out of project_files in "
+            "scripts/check-workspace-config.sh."
+        )
         continue
     if not isinstance(project, dict):
         problems.append(f"{display_path}: must contain a JSON object")
