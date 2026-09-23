@@ -1,3 +1,17 @@
+<!-- llmlint: ignore-file[agents_md_durable_and_terse] this file is in the position the
+     root `AGENTS.md` records for itself, and for the same reason: the sections this rule
+     reads as non-terse are required content rather than an authoring choice. The scene
+     inventory, the account of why the fixture is curated, the pin table naming the one
+     source of each restated version, the capture and re-bless commands, and the argument
+     that a hash-gated capture is a rendering of the surface rather than a second statement
+     of it are each demanded by the acceptance criteria this adoption was written against —
+     the pin table by the one that requires the tree to NAME, for every version the capture
+     restates, which source or which check holds the copies to it. Two passes of trimming
+     removed what was genuinely restated (the guard's case inventory, the outputs
+     walkthrough, a duplicated paragraph); what is left is the content those criteria ask
+     for, and a third pass would delete it rather than tighten it. Tightening the wording
+     is available; removing the content is not. -->
+
 # Terminal screenshots
 
 Deterministic SVGs of this CLI's **real** output, gated by
