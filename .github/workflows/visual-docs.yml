@@ -33,11 +33,15 @@ permissions: {}
 jobs:
   visual-docs:
     # Least privilege, one line per grant, and on the job rather than the workflow so a
-    # second job added here inherits none of it. They cannot vary by event — GitHub takes
-    # no expression in `permissions`, and splitting the call in two to drop one grant on a
-    # push would duplicate the whole reusable-workflow invocation — so the comment grant is
-    # held by what the called workflow does with it: it upserts one sticky comment, on a
-    # pull request, through screencomp's own action.
+    # second job added here inherits none of it. They cannot vary by event: GitHub takes no
+    # expression in `permissions`, and the two ways round that are both worse than the
+    # grant. A second job under an `if:` would duplicate this whole call — the capture
+    # command included, which scripts/check-visual-docs.sh reconciles against the recipes as
+    # ONE statement — and it would rename the check context, which is this job's id: the
+    # branch-protection context an owner adds is `visual-docs / report (<arch>)`, and a
+    # split would make it two contexts, neither of them that one. So the comment grant is
+    # held by what the called workflow does with it instead: one sticky comment, on a pull
+    # request, through screencomp's own action.
     permissions:
       contents: write # push the gh-pages gallery
       pull-requests: write # upsert the sticky before/after comment on a pull request

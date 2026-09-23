@@ -13,20 +13,14 @@
 # capture (whose bytes the committed baseline gates and which costs a release build). What
 # is real is the guard, the clone, the git history, the ref records and the diff.
 #
-# Cases:
-#   1. no ref records at all            — nothing is being pushed, so nothing is captured
-#   2. records, nothing relevant        — the capture is not run and the push goes through
-#   3. records, relevant, no drift      — the capture runs and the push goes through
-#   4. records, relevant, drift         — the baseline and the gallery are regenerated and
-#                                         the push is BLOCKED
-#   5. screencomp absent                — a loud skip, no capture, and NOT the
-#                                         host-prerequisite marker, which is one tool's
-#   6. screencomp absent and required   — the same skip turned into a refusal
-#   7. CI                               — the workflow owns it there, so the guard is inert
-#   8. a branch nothing bounds           — every file it carries counts, rather than a
-#                                         `git diff` against the working tree
-#   9. the real hook, with real records — the gate runs and the guard receives the very
-#                                         records the base was derived from
+# The cases are numbered in the body, and each says in one line what it is about. Between
+# them they cover: which pushes reach a capture and which do not (no records, a malformed
+# record, a deleted ref, an unresolvable commit, a branch nothing bounds, an explicit range,
+# nothing relevant, CI); what happens to a capture once it is made (unchanged, drifted, and
+# a drift whose baseline or gallery could not be written); what happens when a step fails
+# (screencomp absent and required or not, a scope error, a capture that failed, a classify
+# that failed for anything but drift); and the hook's own half, which reads git's records
+# once and hands them to both the gate's base and this guard.
 set -euo pipefail
 
 fatal() {
