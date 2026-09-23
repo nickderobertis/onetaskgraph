@@ -14,6 +14,13 @@
 # implicit base is how affected selection quietly starts comparing against the wrong
 # commit. The supply-chain and distribution stages stay outside selection and still run.
 #
+# After the gate comes the screencomp screenshot guard, which is the local half of the
+# STRICT visual gate (screenshots/AGENTS.md). It is deliberately the only thing beside the
+# gate in this hook and it is deliberately AFTER it: the bar this hook already ran is
+# unchanged, and the guard adds a refusal of its own only when what is being pushed can
+# change a rendered shot. It takes no screenshot on any other push, and none at all from
+# `just gate`, `just check` or CI's check job — the visual workflow is its own.
+#
 # Provisioning comes first, and its refusal is deliberately not spelled like the gate's.
 # A fresh worktree has no node_modules and no synced Python environment, so a hook that
 # went straight to `just gate` reported an unprovisioned machine as "the gate failed" —
@@ -40,11 +47,14 @@ if ! bash scripts/provision-gate.sh; then
   exit 1
 fi
 
-# git feeds the ref records on stdin, and this is the only reader of them; `just gate`
-# below inherits a stdin that has been consumed, which is what it expects. A base that
-# could not be derived comes back empty and leaves NX_BASE unset, so Nx falls back to its
-# own defaultBase rather than the push being refused for it.
-base="$(bash scripts/pre-push-base.sh)" || base=""
+# git feeds the ref records on stdin, and this is where they are read — once, into a
+# variable, because two things need them now: the base the gate selects against, and the
+# screenshot guard's range at the end. `just gate` below inherits a stdin that has been
+# consumed, which is what it expects. A base that could not be derived comes back empty
+# and leaves NX_BASE unset, so Nx falls back to its own defaultBase rather than the push
+# being refused for it.
+records="$(cat)" || records=""
+base="$(printf '%s\n' "$records" | bash scripts/pre-push-base.sh)" || base=""
 if [ -n "$base" ]; then
   export NX_BASE="$base"
   echo "pre-push: checking what this push adds since $base" >&2
@@ -55,5 +65,14 @@ if ! just gate; then
   echo "pre-push: the gate failed — see the output above." >&2
   echo "pre-push: fix it and push again. Bypassing this hook pushes work nothing has" >&2
   echo "pre-push: checked, and the required checks on main will refuse it anyway." >&2
+  exit 1
+fi
+
+# The screenshot guard, on the same ref records. It is quiet unless this push carries a
+# file that can change a rendered shot, and it blocks only on drift — so the committed
+# baseline and the README images move deliberately rather than going red in the visual
+# workflow after the fact. It is not part of `just gate` and never runs from it.
+if ! printf '%s\n' "$records" | bash scripts/screenshots-guard.sh; then
+  echo "pre-push: the screenshot guard refused this push — see the output above." >&2
   exit 1
 fi

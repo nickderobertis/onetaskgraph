@@ -1,6 +1,12 @@
 # onetaskgraph
 
+![A terminal showing five task rows — three from a folder of plans and two from the folder the team's tickets live in, interleaved in configured-name order, each row a qualified id, a status category and a title](docs/screenshots/task-list.svg)
+
 One interface over the ticketing systems your work actually lives in.
+
+Every image in this README is a real capture of this CLI's output, produced by running the
+binary against a small fixture and refused by CI the moment its bytes stop matching what
+the binary prints — so the pictures cannot drift away from the tool.
 
 Tasks, projects, labels and the dependencies between them are spread across Linear, GitHub
 Projects and a folder of Markdown files, and every tool that wants to reach them ends up
@@ -36,6 +42,12 @@ Two properties make it different from a lowest-common-denominator wrapper:
 > writes, but that is a property of that configured source rather than of these plugins.
 
 ## Using it
+
+Each source says what it can do, and `sources list` is where you read that back: the
+predicates it applies itself, how far it walks dependencies, and the largest page it will
+serve.
+
+![A terminal showing two sources, one in-memory and one local-md, each with the predicates it applies natively, the directions it walks task and project dependencies, and its maximum page size](docs/screenshots/sources-list.svg)
 
 ```bash
 onetaskgraph sources list
@@ -99,6 +111,8 @@ account themselves and refuse it rather than drop it. `task show` prints a task'
 after its body, and its `--json` carries them as a top-level `comments` list for a source
 whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
 `task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
+
+![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 
 A task's **status** is set on its own with `task status set`, which writes that one field —
 title, body, labels, metadata, dependencies and comments stay exactly as they are — and
@@ -167,23 +181,16 @@ back, so a design note copied out of a board and back returns the title it start
 
 ### Seeing which plan you got
 
-`--explain` renders the plan the query ran, per source:
+`--explain` renders the plan the query ran, per source. Here one `--label` query reaches
+two sources of differing capability — a folder of Markdown, and a source that declares it
+cannot filter by label at all:
 
-```console
-$ onetaskgraph task list --label bug --explain
-work:ENG-142   in-progress  Rate-limit the sync loop
-notes:2026-08  todo         Write up the migration
+![A terminal showing two task rows above a plan block: the source that declares it cannot filter by label is listed with `applied locally: label`, and the folder of Markdown with `pushed down: label`, each with the number of pages it served](docs/screenshots/task-list-explain.svg)
 
-plan:
-  work (linear)  1 page(s)
-    pushed down: label
-  notes (local-md)  3 page(s)
-    applied locally: label
-```
-
-Linear filtered server-side; the folder of Markdown could not, so the engine pulled pages
-and narrowed them itself. Both answers are correct and you can see which you got.
-`--json` carries the same plan as a field, so a script does not have to parse the prose.
+The folder filtered the rows itself; the other source returned the wider set and the engine
+narrowed it. One query, two plans, and the same correct answer either way — which is what
+the capability declaration above buys you and why it is worth reading. `--json` carries the
+same plan as a field, so a script does not have to parse the prose.
 
 ### Writing tasks: Markdown in, ticket out
 
@@ -254,6 +261,11 @@ copied from, which is what makes the next copy of it an update.
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
+
+`--dry-run` is how you read that table's first row before trusting it: every source is
+read, nothing is written, and each item is reported with the action it would have got.
+
+![A terminal showing a dry-run copy of two tasks into another source: the first names its counterpart there and reads `updated`, the second has none and reads `created`, followed by the line counting rewritten, unresolved and ambiguous references](docs/screenshots/task-copy-dry-run.svg)
 
 Every field a copy read is written — title, content, status, labels, project,
 repositories, metadata and the edges — except `url`, `location`, `created_at` and
@@ -477,6 +489,12 @@ something you have to reason about: it prints every setting, its value, and the 
 came from — which file, which environment variable, or which flag — and `--json` renders
 the same thing for a script.
 
+![A terminal showing every effective setting in three columns — the dotted path, the value, and the layer it came from: one row naming the environment variable that set it, one naming the command-line flag, one reading `default`, and the rest naming the configuration document, with the secrets file underneath](docs/screenshots/config-show.svg)
+
+That third column is the whole point: `default_sources` above came from an environment
+variable, `page_size` from a flag that outranks the document's own value, and every
+`sources.*` entry from the document, named by path.
+
 ### Relative paths in a configuration document
 
 **A relative filesystem path a configuration document supplies is resolved against the
@@ -536,6 +554,11 @@ they concern, and a dependency edge names both its ends by kind and qualified id
 edge may cross projects, cross the task and project levels, and cross sources.
 [`docs/metadata.md`](./docs/metadata.md) says which keys are reserved and where each source
 keeps them.
+
+![A terminal showing two dependency rows from `task deps`: the same task blocking another task of its own source, and blocking a task of a different source, each end named by kind and qualified id](docs/screenshots/task-deps.svg)
+
+The far end of the second row is in another source. It is reported by qualified id and kind
+and never followed: opening it is a command of your own.
 
 ## Writing a source in another language
 

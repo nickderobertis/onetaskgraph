@@ -460,7 +460,16 @@ if problems:
         print(f"    {problem}", file=sys.stderr)
     print(f"check-scoped-release-plz: next: resolve it through {resolver} instead, so it runs the scoped pinned binary", file=sys.stderr)
     raise SystemExit(1)
-expected = {"scripts/provision-gate.sh", "scripts/check-scoped-release-plz.sh", "scripts/check-pre-push-provisioning.sh"}
+# The provisioner that emits the marker, and the checks that read it: two that drive the
+# hook and assert it is printed exactly once when the pinned tool is missing, and
+# check-visual-guard.sh, which asserts the screenshot guard NEVER prints it — a missing
+# renderer is not a host problem the engine should stop retrying on.
+expected = {
+    "scripts/provision-gate.sh",
+    "scripts/check-scoped-release-plz.sh",
+    "scripts/check-pre-push-provisioning.sh",
+    "scripts/check-visual-guard.sh",
+}
 stray = sorted(set(marker_sites) - expected)
 if stray:
     print("check-scoped-release-plz: the host-prerequisite marker is spelled outside the provisioner and its checks:", file=sys.stderr)

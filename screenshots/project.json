@@ -1,0 +1,77 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "screenshots",
+  "projectType": "library",
+  "tags": ["lang:bash", "layer:docs"],
+  "//": "The curated fixture, the vendored renderer font and the durable note behind the README's captures are a project like everything else, so a change to one is selected by the graph rather than escaping it. Its layer is documentation: nothing here is reachable from a crate, it depends on no other project, and the only edge is the one `workspace` has to every project. Its two checks are STATIC — neither takes a screenshot, and no target here captures, which is what keeps the capture out of `just check`, `just gate` and CI's check job exactly as .github/workflows/visual-docs.yml and screenshots/AGENTS.md say. The capture itself is `just screenshots`, which is not an Nx target at all, and .githooks/pre-push runs it after the gate only when what is being pushed can change a rendered shot.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "//": "Nothing to provision, deliberately: the pinned renderer is installed on demand by `just screenshots-tools`, and putting a screenshot tool on the gate's provisioning path would make an informational tier a prerequisite of the gate."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write screenshots"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place. Only this project's own JSON is formatted — biome has no formatter for Markdown front matter, a TrueType font or an SVG."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format screenshots"
+      },
+      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/screenshots/project.json"]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-visual-docs.sh"
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/rust-toolchain.toml",
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/.gitignore",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/.github/workflows/visual-docs.yml",
+        "{workspaceRoot}/shots/baseline/*.json",
+        "{workspaceRoot}/docs/screenshots/*.svg",
+        "{workspaceRoot}/scripts/screenshots.sh",
+        "{workspaceRoot}/scripts/screenshots-freeze.sh",
+        "{workspaceRoot}/scripts/screenshots-bless.sh",
+        "{workspaceRoot}/scripts/check-visual-docs.sh"
+      ],
+      "//": "The static half, and a lint rather than a test because it reads files and reconciles them: every version this capture pins and restates, the scene inventory against the committed baseline, and every image the README embeds against what is committed. It takes no screenshot and needs neither screencomp nor the renderer, so it runs in CI's check job like every other lint. The workspaceRoot inputs are what SELECTS this project as well as what hashes it — a README that drops an image, or a workflow whose two screencomp pins part, has to re-run this."
+    },
+    "typecheck": {
+      "executor": "nx:noop",
+      "//": "Declared and empty. Target names are uniform because `nx affected` fans out by name, and there is nothing here between reading a file and running it: the capture machinery is shell, whose static analysis is the bash 3.2 scan under `scripts:lint`, and the fixture is data the real binary parses in the `test` target's own scenes."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-visual-guard.sh"
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/.githooks/pre-push",
+        "{workspaceRoot}/scripts/screenshots-guard.sh",
+        "{workspaceRoot}/scripts/check-visual-guard.sh",
+        "{workspaceRoot}/shots/baseline/*.json"
+      ],
+      "//": "Drives the REAL pre-push guard through all four of its outcomes, with screencomp and the capture stubbed at the subprocess seam the way scripts/check-pre-push-provisioning.sh stubs `just` — so a guard that stopped blocking on drift, or started capturing on a push that cannot change a shot, fails here instead of going unnoticed until the workflow disagrees with a merged commit. Uncached for the reason the workspace project's own test target is: it clones this repository into a scratch tree and reads git history there, which no input glob in this tree describes."
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script or a Markdown fixture, and what stands in its place is the guard check above driving the real guard until it refuses."
+    }
+  }
+}

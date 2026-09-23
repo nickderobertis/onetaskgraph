@@ -716,6 +716,26 @@ literal `ty` refuses. The destination is walked for counterparts **once per copy
 invocation**, and a copy whose documents hold no candidate reference makes no such walk at
 all.
 
+## The README's captures
+
+Every image in the README is a rendering of this CLI's real output, produced by
+`scripts/screenshots.sh` against the curated fixture in `screenshots/`, hashed, and refused
+by `.github/workflows/visual-docs.yml` the moment its bytes stop matching the committed
+baseline at `shots/baseline/<arch>.json`. So a hand-written transcript is a second
+statement of the surface and a hash-gated capture is not: the binary stays the one source
+and the baseline is the drift gate.
+
+**It is informational and outside every gate.** No Nx target captures, `just check` and
+`just gate` cannot reach the capture, and the visual workflow is its own. The one local
+half is the screencomp guard that `.githooks/pre-push` runs **after** the complete gate
+that hook already ran, only when what is being pushed can change a shot — so the pre-push
+bar is what it was, plus one refusal that names the gallery to review. The capture drives
+`local-md` and `in-memory` only: no credential, no socket, not even a loopback one.
+
+`screenshots/AGENTS.md` is the durable note — the scenes and what each documents, why the
+fixture is curated, the four version pins and the one source of each, and the commands to
+capture and to re-bless.
+
 ## Recorded decisions
 
 - **`SCHEMA_BUNDLE_VERSION` tracks the emitted document, not the set of root names.** A

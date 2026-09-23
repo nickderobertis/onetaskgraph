@@ -1,0 +1,22 @@
+# The same folder of plans beside a source that declares it cannot filter by label
+# itself, so `--explain` shows both halves of the engine's bargain: the predicate
+# pushed down to one source and applied by the engine for the other. `in-memory` is
+# the one plugin whose capability declaration a document chooses, and like local-md
+# it reaches no network.
+sources:
+  plans:
+    plugin: local-md
+    config: { root: ../sync/plans }
+  board:
+    plugin: in-memory
+    config:
+      capabilities: { filter_by_label: unsupported }
+      tasks:
+        - id: B-1
+          title: Ship the 0.3 release
+          status: { category: todo, name: Todo }
+          labels: [{ id: chore, name: chore }]
+        - id: B-2
+          title: Audit the retry budget
+          status: { category: in-progress, name: Doing }
+          labels: [{ id: bug, name: bug }]

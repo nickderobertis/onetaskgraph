@@ -1,0 +1,40 @@
+# screencomp configuration. See https://github.com/nickderobertis/screencomp.
+
+[capture]
+# Captures run in a Linux container in CI, but this repository's shots are deterministic
+# SVGs — the vendored, pinned font embedded into each file, and a fixture staged at a fixed
+# absolute path — so the bytes are identical on every CPU and runner. One arch lane is
+# therefore enough, and its committed baseline is shots/baseline/x86_64.json. This is the
+# ONE place the lane is declared: scripts/screenshots.sh and .githooks/pre-push both read
+# it from here rather than restating it.
+arches = ["x86_64"]
+
+[comment]
+title = "Terminal screenshots"
+marker = "screencomp"        # [A-Za-z0-9_-]; one sticky comment per marker
+embed_limit = 10             # embed images inline when <= N shots differ (0 disables)
+
+# No `[[toggle]]`: no scene here varies along a dimension. Every shot's `toggles` map in
+# captures.json is empty, so a declared key would be a gallery control with one position.
+# `screencomp doctor` is what refuses a shot using a key or value this file does not
+# declare, which is why adding a variant means adding its `[[toggle]]` in the same change.
+
+[guard]
+# Local pre-push guard (.githooks/pre-push, after the gate it already runs): re-capture
+# only when something that can change the rendered text changes. The engine and the two
+# local plugins are in scope because what the shots show is what a query of them returns —
+# a plan block, a copy report, an effective configuration, a task's fields — not only how
+# the binary lays it out.
+paths = [
+  "crates/onetaskgraph/src/**",
+  "crates/onetaskgraph-core/src/**",
+  "crates/onetaskgraph-in-memory/src/**",
+  "crates/onetaskgraph-local-md/src/**",
+  "crates/onetaskgraph-plugin-api/src/**",
+  "scripts/screenshots.sh",
+  "scripts/screenshots-freeze.sh",
+  "scripts/screenshots-guard.sh",
+  "screencomp.toml",
+  "screenshots/**",
+]
+gallery = "shots/review"

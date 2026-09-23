@@ -31,3 +31,9 @@ lcov.info
 # Composed, never committed: the repo plan and the one-time llmlint buildout tier
 /REPO_PLAN.md
 /llmlint.buildout.yml
+
+# screencomp: commit the digest baseline (shots/baseline/*.json) and the README images
+# (docs/screenshots/*.svg), never the regenerated capture trees or the review gallery.
+/shots/current/
+/shots/verify/
+/shots/review/

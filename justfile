@@ -167,6 +167,28 @@ session-setup:
 setup-llmlint:
     ./scripts/setup-llmlint.sh
 
+# --- Terminal screenshots ----------------------------------------------------------------
+# Deterministic SVGs of the real CLI's output over the curated fixture, rendered by the
+# pinned `freeze` from a vendored font and gated, galleried and PR-commented by screencomp
+# (see screenshots/AGENTS.md). Informational, like a bench: NEVER a phase of `check` or
+# `gate`, and no recipe below is reachable from either. The Visual-docs workflow owns the
+# comparison in CI, and .githooks/pre-push regenerates the baseline locally on drift.
+
+# Provision the pinned screenshot renderer (`freeze`) into its repository-scoped location.
+screenshots-tools:
+    @bash scripts/screenshots-freeze.sh ensure
+
+# Drive the real release binary against screenshots/fixture/ and render every scene into
+# shots/current/<lane>/ and docs/screenshots/.
+
+# Capture the terminal screenshots.
+screenshots:
+    @bash scripts/screenshots.sh
+
+# After an INTENDED output change: recapture, then refresh the committed digest baseline.
+screenshots-bless: screenshots
+    @bash scripts/screenshots-bless.sh
+
 # Deliberately OUT of the deterministic gate: it needs an authenticated harness and
 # makes network calls. Config is the composed llmlint.yml.
 

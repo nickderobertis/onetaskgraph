@@ -14,9 +14,10 @@
     "onetaskgraph-local-md",
     "onetaskgraph-plugin-api",
     "onetaskgraph-status-options",
+    "screenshots",
+    "scripts",
     "sdk-python",
-    "sdk-typescript",
-    "scripts"
+    "sdk-typescript"
   ],
   "targets": {
     "bootstrap": {
@@ -125,6 +126,7 @@
         "{workspaceRoot}/sdks/*/project.json",
         "{workspaceRoot}/workspace/project.json",
         "{workspaceRoot}/scripts/project.json",
+        "{workspaceRoot}/screenshots/project.json",
         "{workspaceRoot}/.github/workflows/*.yml",
         "{workspaceRoot}/scripts/check-workspace-config.sh",
         "{workspaceRoot}/sdks/**/*.py",

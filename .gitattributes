@@ -5,3 +5,7 @@
 # fails `just format-check`, and the justfile runs every recipe through bash, which
 # cannot execute a CRLF script. Neither failure is reproducible on Linux or macOS.
 * text=auto eol=lf
+
+# The vendored screenshot font is binary; `text=auto` above detects that, and this says so
+# outright so no future eol rule can be read as reaching it.
+*.ttf -text
