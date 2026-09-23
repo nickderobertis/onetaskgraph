@@ -42,10 +42,15 @@ jobs:
     # split would make it two contexts, neither of them that one. So the comment grant is
     # held by what the called workflow does with it instead: one sticky comment, on a pull
     # request, through screencomp's own action.
+    # llmlint: ignore-block[least_privilege_grants] The comment grant reaches the push and
+    # the monthly schedule as well, and cannot be conditioned: the paragraph above is why,
+    # and the grant is held by what the called workflow DOES with it — screencomp upserts
+    # one sticky comment on a pull request and writes none on either other event.
     permissions:
       contents: write # push the gh-pages gallery
       pull-requests: write # upsert the sticky before/after comment on a pull request
       pages: read # gate the run on the Pages build the deploy triggers
+    # llmlint: ignore-end[least_privilege_grants]
     uses: nickderobertis/screencomp/.github/workflows/visual-docs-reusable.yml@v0.4.8
     with:
       # The version installed on the host runner. It is the same version the `uses:` ref

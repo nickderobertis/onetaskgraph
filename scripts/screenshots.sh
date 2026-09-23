@@ -25,10 +25,19 @@
 #
 # The renderer comes from scripts/screenshots-freeze.sh, which owns the pin and the
 # location; provision it with `just screenshots-tools`.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+  echo "screenshots: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
+  echo "screenshots: next: run it from a checkout of this repository, as 'just screenshots' does" >&2
+  exit 1
+}
+readonly ROOT
 
 # Byte-determinism starts with the environment. The scenes render the real binary, and it
 # reads `ONETASKGRAPH_*` settings ahead of the configuration document — so an exported one
@@ -313,6 +322,10 @@ unset ONETASKGRAPH_DEFAULT_SOURCES
   exit 1
 }
 
-rm -rf "$STAGE"
+rm -rf "$STAGE" || {
+  echo "screenshots: every shot was written, but the staged fixture at $STAGE could not be removed — the next capture stages over it, so a file left there can reach a shot" >&2
+  echo "screenshots: next: remove $STAGE by hand, then re-run 'just screenshots' and check the shots it writes" >&2
+  exit 1
+}
 # Quiet on success. What it wrote is $SHOTS_OUT and docs/screenshots/, which is where the
 # caller pointed it; a refusal above is the only thing this script has to say.

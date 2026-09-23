@@ -23,10 +23,19 @@
 # Usage: scripts/screenshots-guard.sh < <the pre-push ref records>
 # Exit codes: 0 when there is nothing to check or the capture is unchanged; 1 on drift
 # (the push is blocked) or when a capture this guard needed could not be made.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+  echo "pre-push: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
+  echo "pre-push: next: run it from a checkout of this repository, as .githooks/pre-push does" >&2
+  exit 1
+}
+readonly ROOT
 
 # No-op under CI: .github/workflows/visual-docs.yml is the source of truth there, and the
 # gate job has no screencomp, no renderer and no business capturing.
@@ -229,10 +238,26 @@ if ! screencomp manifest --input "$CURRENT" --arch "$LANE" --output "$MANIFEST";
   echo "pre-push: next: read the diagnostic above, then run 'just screenshots-bless' by hand and commit it." >&2
   exit 1
 fi
+# A zero exit says the tool ran; the refusal below tells a reader to commit a FILE, and it
+# is the baseline every later push classifies against. So it is checked to be there and to
+# have something in it before it is named. Nothing deeper: the manifest's shape is
+# screencomp's to parse, and a malformed one fails the next push with its diagnostic.
+if [ ! -s "$MANIFEST" ]; then
+  echo "pre-push: 'screencomp manifest' succeeded but left no readable $MANIFEST, which is the refreshed baseline the refusal below names." >&2
+  echo "pre-push: next: check the permissions of the shots/baseline directory, then run 'just screenshots-bless' by hand and commit it." >&2
+  exit 1
+fi
 if ! screencomp gallery --input "$CURRENT" --arch "$LANE" \
   --output "$GALLERY" --title "Pre-push screenshot review" >/dev/null; then
   echo "pre-push: the capture drifted and the review gallery could not be built at $GALLERY." >&2
   echo "pre-push: next: read the diagnostic above; the refreshed baseline and the README images are written, so 'git diff' is the other way to review them." >&2
+  exit 1
+fi
+# The refusal below names $GALLERY/index.html as the thing to open, so a zero exit that
+# left no such file would send a reader to a path that is not there.
+if [ ! -s "$GALLERY/index.html" ]; then
+  echo "pre-push: 'screencomp gallery' succeeded but left no readable $GALLERY/index.html, which is the page the refusal below names." >&2
+  echo "pre-push: next: review the drift with 'git diff docs/screenshots' instead, and report the gallery step to screencomp." >&2
   exit 1
 fi
 

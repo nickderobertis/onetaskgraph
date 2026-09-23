@@ -15,6 +15,11 @@
 # What is stood in for is `curl` (the one thing that reaches a network) and screencomp.
 # What is real is both scripts, the archive handling, the scoped layout and the version
 # verification.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
 fatal() {
@@ -316,6 +321,9 @@ cat > "$STAND_IN/screencomp" <<STUB
 set -uo pipefail
 [ "\${1:-}" = "manifest" ] || exit 64
 [ -z "\${STAND_IN_MANIFEST_FAILS:-}" ] || exit 1
+# A zero exit that wrote nothing, which is what case 13b is about: a tool reporting
+# success is not the baseline being there.
+[ -z "\${STAND_IN_MANIFEST_EMPTY:-}" ] || exit 0
 while [ \$# -gt 0 ]; do
   [ "\$1" = "--output" ] && { printf '{"schema":1,"shots":[]}\n' > "\$2"; exit 0; }
   shift
@@ -327,7 +335,8 @@ chmod +x "$STAND_IN/screencomp" || fatal "could not make the stand-in screencomp
 
 run_bless() {
   OUTPUT="$(cd "$CLONE" && PATH="${1:-$STAND_IN:$PATH}" \
-    STAND_IN_MANIFEST_FAILS="${2:-}" bash scripts/screenshots-bless.sh 2>&1)" \
+    STAND_IN_MANIFEST_FAILS="${2:-}" STAND_IN_MANIFEST_EMPTY="${3:-}" \
+    bash scripts/screenshots-bless.sh 2>&1)" \
     && STATUS=0 || STATUS=$?
 }
 
@@ -355,6 +364,16 @@ run_bless "$STAND_IN:$PATH" 1
 names "was not written" || fail "a failed manifest step was not named as such:"
 [ ! -f "$CLONE/shots/baseline/$LANE.json" ] \
   || fail "'bless' wrote a baseline after the manifest step failed:"
+
+# 13b. And the tool REPORTING success without writing the file: a different failure from 13,
+#      because nothing exits non-zero, so the only thing between a reader and a `git add` of
+#      a path that is not there is bless checking what it is about to name.
+rm -f "$CLONE/shots/baseline/$LANE.json"
+run_bless "$STAND_IN:$PATH" "" 1
+[ "$STATUS" -eq 0 ] && fail "'bless' reported a refreshed baseline that was never written:"
+names "shots/baseline/$LANE.json" || fail "a baseline that was not written is not named:"
+[ ! -f "$CLONE/shots/baseline/$LANE.json" ] \
+  || fail "the stand-in wrote a baseline in the case that is about it not writing one:"
 
 # 14. screencomp absent: named, rather than a 'command not found' through `set -e`.
 readonly NO_SCREENCOMP="$scratch/no-screencomp"

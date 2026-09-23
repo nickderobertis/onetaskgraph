@@ -10,8 +10,12 @@
 # the capture has already written.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+  echo "screenshots-bless: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
+  echo "screenshots-bless: next: run it from a checkout of this repository, as 'just screenshots-bless' does" >&2
+  exit 1
+}
+readonly ROOT
 
 LANE="$(sed -n 's/^arches *= *\[ *"\([^"]*\)" *\].*/\1/p' screencomp.toml)"
 if ! [[ "$LANE" =~ ^[A-Za-z0-9_]+$ ]]; then
@@ -42,6 +46,17 @@ if ! screencomp manifest --input shots/current --arch "$LANE" \
   --output "shots/baseline/$LANE.json" --quiet; then
   echo "screenshots-bless: the baseline at shots/baseline/$LANE.json was not written" >&2
   echo "screenshots-bless: next: read the diagnostic above, then re-run 'just screenshots-bless'; the capture in shots/current/$LANE is still there" >&2
+  exit 1
+fi
+
+# A zero exit says the tool ran; the line below tells a reader to commit a FILE, which is
+# the gate every later push classifies against. So what it names is checked to be there and
+# to have something in it before it is named. Nothing deeper: the manifest's own shape is
+# screencomp's to parse, and a malformed one fails the next push with its diagnostic rather
+# than silently.
+if [ ! -s "shots/baseline/$LANE.json" ]; then
+  echo "screenshots-bless: 'screencomp manifest' succeeded but left no readable shots/baseline/$LANE.json, which is the baseline to commit" >&2
+  echo "screenshots-bless: next: check the permissions of shots/baseline and re-run 'just screenshots-bless'; the capture in shots/current/$LANE is still there" >&2
   exit 1
 fi
 echo "screenshots-bless: refreshed shots/baseline/$LANE.json; commit it with docs/screenshots/" >&2

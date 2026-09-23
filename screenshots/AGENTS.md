@@ -132,6 +132,23 @@ it described a query nobody had run. This is not: every image is produced by run
 real binary, and CI refuses the capture the moment its bytes leave the committed baseline.
 The baseline **is** the drift gate and the binary remains the one source.
 
+## Where this machinery lives
+
+This directory holds the *data* — the curated fixture, the vendored font, and this note —
+and `screenshots/project.json` makes it a project like any other. Every **script** of it
+lives under `scripts/`, with every other shell script of this repository, and that is
+enforcement rather than habit: three commands of the `scripts` project enumerate that one
+directory. `check-bash4-array-builtins.sh` scans it for the two bash 4 array builtins
+macOS's bash 3.2 does not have, `check-guard-path-spelling.sh` copies the whole of it into
+a scratch clone and drives the guards there, and `check-relative-interpreter.sh` names its
+subjects by that path. A capture script filed here instead would escape all three in
+silence — which is a portability defect that surfaces on the Windows or macOS lane as
+whatever it was proving having gone wrong.
+
+So `screenshots:lint` and `screenshots:test` invoke `scripts/check-visual-*.sh` by path,
+which is the same shape `workspace` has to every `scripts/check-*.sh` it runs. Each of the
+six scripts carries a one-line pointer back to this section rather than restating it.
+
 ## Commands, and what is committed
 
 `just screenshots` captures. `just screenshots-bless` recaptures and refreshes the

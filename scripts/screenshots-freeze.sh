@@ -31,6 +31,11 @@
 # every subcommand but `pin` when there is no absolute cache home to scope it under;
 # 70 (EX_SOFTWARE) when FREEZE_VERSION is not an exact X.Y.Z version, which is this
 # script's own defect; 1 from `ensure` when provisioning was attempted and failed.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
 readonly FREEZE_VERSION=0.2.2

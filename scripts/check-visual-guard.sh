@@ -17,10 +17,16 @@
 # them they cover: which pushes reach a capture and which do not (no records, a malformed
 # record, a deleted ref, an unresolvable commit, a branch nothing bounds, an explicit range,
 # nothing relevant, CI); what happens to a capture once it is made (unchanged, drifted, and
-# a drift whose baseline or gallery could not be written); what happens when a step fails
+# a drift whose baseline or gallery could not be written, and one where a step reported
+# writing it and did not); what happens when a step fails
 # (screencomp absent and required or not, a scope error, a capture that failed, a classify
 # that failed for anything but drift); and the hook's own half, which reads git's records
 # once and hands them to both the gate's base and this guard.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
 fatal() {
@@ -110,6 +116,9 @@ case "\$subcommand" in
   classify) exit "\${STUB_CLASSIFY_EXIT:-0}" ;;
   manifest)
     [ -z "\${STUB_MANIFEST_FAILS:-}" ] || exit 1
+    # A zero exit that wrote nothing, which is the outcome the guard's own file check is
+    # about: a tool reporting success is not the file being there.
+    [ -z "\${STUB_MANIFEST_EMPTY:-}" ] || exit 0
     while [ \$# -gt 0 ]; do
       [ "\$1" = "--output" ] && { printf '{"schema":1,"shots":[]}\n' > "\$2"; break; }
       shift
@@ -118,8 +127,12 @@ case "\$subcommand" in
     ;;
   gallery)
     [ -z "\${STUB_GALLERY_FAILS:-}" ] || exit 1
+    [ -z "\${STUB_GALLERY_EMPTY:-}" ] || exit 0
     while [ \$# -gt 0 ]; do
-      [ "\$1" = "--output" ] && { mkdir -p "\$2" && : > "\$2/index.html"; break; }
+      # A page with something in it, as the real tool writes: the guard checks that the
+      # index it names a reader to is there AND not empty, so a zero-byte stand-in would
+      # make this stub the one thing that cannot happen.
+      [ "\$1" = "--output" ] && { mkdir -p "\$2" && printf '<!doctype html>\n' > "\$2/index.html"; break; }
       shift
     done
     exit 0
@@ -150,7 +163,9 @@ GUARD_STATUS=0
 GUARD_RANGE=""
 STUB_CAPTURE_FAILS=""
 STUB_MANIFEST_FAILS=""
+STUB_MANIFEST_EMPTY=""
 STUB_GALLERY_FAILS=""
+STUB_GALLERY_EMPTY=""
 
 # Run the real guard out of the scratch clone, under the PATH and the stub answers this
 # case chose. `CI` is cleared for every case but the one about it, because this check runs
@@ -161,12 +176,17 @@ run_guard() {
   # `:?` because the next line removes it: an empty expansion would name the root.
   rm -rf "${MARKERS:?the marker directory is unset}"
   mkdir -p "$MARKERS"
+  # And no review gallery: the page is written by the case rather than committed, so one an
+  # earlier case left behind would make a case about a MISSING page pass on a stale one.
+  rm -rf "${CLONE:?the clone is unset}/shots/review"
   GUARD_OUTPUT="$(printf '%s\n' "$records" | env -u CI -u SCREENCOMP_GUARD_RANGE \
     PATH="$path" "STUB_SCOPE_EXIT=${3:-0}" "STUB_CLASSIFY_EXIT=${4:-0}" \
     "SCREENCOMP_GUARD_REQUIRE=${5:-}" "CI=${6:-}" \
     "STUB_CAPTURE_FAILS=${STUB_CAPTURE_FAILS:-}" \
     "STUB_MANIFEST_FAILS=${STUB_MANIFEST_FAILS:-}" \
+    "STUB_MANIFEST_EMPTY=${STUB_MANIFEST_EMPTY:-}" \
     "STUB_GALLERY_FAILS=${STUB_GALLERY_FAILS:-}" \
+    "STUB_GALLERY_EMPTY=${STUB_GALLERY_EMPTY:-}" \
     "SCREENCOMP_GUARD_RANGE=${GUARD_RANGE:-}" \
     bash "$CLONE/scripts/screenshots-guard.sh" 2>&1)" && GUARD_STATUS=0 || GUARD_STATUS=$?
 }
@@ -434,6 +454,37 @@ run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
 grep -qF "git diff" <<<"$GUARD_OUTPUT" \
   || fail "a failed gallery did not name the other way to review the change:"
 STUB_GALLERY_FAILS=""
+
+# 18. Drift, and a regeneration step that REPORTS success and wrote nothing. A different
+#     failure from 17: nothing exits non-zero, so the only thing between a reader and a path
+#     that is not there is the guard checking the file it is about to name. Both halves have
+#     to refuse rather than send that reader to a missing baseline or a missing page.
+#
+#     The baseline is committed, so the manifest half is posed where its absence is
+#     possible: a lane whose baseline is not in the tree yet, which is the first bless and a
+#     contributor who deleted the file. With one there, a manifest that wrote nothing leaves
+#     the OLD baseline standing and there is nothing for this check to see.
+mv "$CLONE/shots/baseline/x86_64.json" "$scratch/baseline-held.json" || fatal \
+  "could not move the clone's committed baseline aside for case 18" \
+  "check the permissions of $CLONE/shots, then rerun"
+STUB_MANIFEST_EMPTY=1
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "a baseline refresh that wrote nothing let the push through:"
+grep -qF "shots/baseline/x86_64.json" <<<"$GUARD_OUTPUT" \
+  || fail "a baseline that was not written is not named in the refusal:"
+called gallery && fail "the guard built a gallery after the baseline it names was not written:"
+STUB_MANIFEST_EMPTY=""
+mv "$scratch/baseline-held.json" "$CLONE/shots/baseline/x86_64.json" || fatal \
+  "could not restore the clone's committed baseline after case 18" \
+  "report this — the cases after it classify against that file"
+STUB_GALLERY_EMPTY=1
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
+[ "$GUARD_STATUS" -eq 0 ] && fail "a gallery that wrote no page let the push through:"
+grep -qF "shots/review/index.html" <<<"$GUARD_OUTPUT" \
+  || fail "a gallery page that was never written is not named in the refusal:"
+grep -qF "git diff" <<<"$GUARD_OUTPUT" \
+  || fail "a gallery page that was never written did not name the other way to review the change:"
+STUB_GALLERY_EMPTY=""
 
 # And the hook with a stdin it cannot read at all. An empty read there looks exactly like
 # pushing nothing — the gate would select against a default base and the guard would capture

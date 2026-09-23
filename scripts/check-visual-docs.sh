@@ -12,10 +12,19 @@
 # workflow (screenshots/AGENTS.md records that split and why).
 #
 # Quiet on success. On failure it names the file and the edit.
+#
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
+# under scripts/ because three commands of that project enumerate that one directory, so a
+# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
+# "Where this machinery lives", is the whole of the reasoning.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+  echo "check-visual-docs: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
+  echo "check-visual-docs: next: run it from a checkout of this repository, as 'nx run screenshots:lint' does" >&2
+  exit 1
+}
+readonly ROOT
 
 python3 - <<'PY'
 import json
