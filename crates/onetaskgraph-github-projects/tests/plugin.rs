@@ -8668,8 +8668,10 @@ async fn an_update_of_a_destination_this_board_does_not_hold_is_refused_naming_i
 
 #[tokio::test]
 async fn a_same_source_far_end_no_listing_names_yet_resolves_from_its_own_read() {
+    // The near item holds no Status value, so the write takes the board's fields from their
+    // own read — the path that once listed the board and looked the far end up in it.
     let fixture = board(vec![
-        Item::issue("I_1", "step").status("Todo"),
+        Item::issue("I_1", "step"),
         Item::issue("I_2", "the one waited on")
             .status("Todo")
             .unlisted(),
