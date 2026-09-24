@@ -118,10 +118,12 @@ if not gallery or gallery.startswith("/") or ".." in gallery.split("/") or " " i
     # Fall back to the scaffolded default, so the two reconciliations below still say
     # something useful rather than matching the empty string against every line.
     gallery = "shots/review"
-# One line, outside a comment, naming both the key and the file: a mention in a comment is
-# not a read, and the lane's own looser test — the substring anywhere in the text — is
-# satisfied by the sentence explaining why the read is there.
-if not re.search(r"(?m)^[^#\n]*\bgallery\b[^\n]*screencomp\.toml", guard):
+# An ASSIGNMENT whose right-hand side reads that file, rather than a line mentioning both.
+# The looser forms were each satisfied by something that is not a read: the substring
+# anywhere in the text — which is what the lane settles for — by the comment explaining why
+# the read is there, and a non-comment line naming both by the guard's own refusal, whose
+# message names the key and the file it came from. A guard with its read deleted passed both.
+if not re.search(r"(?m)^[A-Za-z_][A-Za-z0-9_]*=.*\bgallery\b.*screencomp\.toml", guard):
     problems.append(
         "scripts/screenshots-guard.sh: no line reads the review gallery out of "
         "[guard].gallery in screencomp.toml. That file is the one place it is declared; "
