@@ -648,6 +648,23 @@ escaped="$(ls -A "$scratch/elsewhere")" || escaped="unreadable"
 rm -f "$CLONE/shots/redirected"
 rm -rf "$scratch/elsewhere"
 
+# 20a. The renderer comes from the tool home the CALLER named, and the cases below are the
+#      reason that has to be asserted rather than assumed. Every one of them drives the
+#      capture past the point where it resolves the renderer, so each needs one provisioned
+#      — and each names $HOME_GOOD for it. The capture used to clear the whole
+#      `ONETASKGRAPH_` prefix on its way to a deterministic environment, which took this
+#      variable with it although it is no setting of the binary, so the renderer came from
+#      the AMBIENT cache home instead: green on a machine with one provisioned there, and
+#      six expectations below red on one without. That is how it reached the ubuntu lane.
+#
+#      So this case points the capture at a tool home with NOTHING in it and asserts the
+#      refusal names THAT home. It fails on every machine the moment the variable stops
+#      reaching the resolver, which is what the cases below cannot do for themselves.
+run_capture shots/current/x86_64 1 "$HOME_EMPTY"
+[ "$STATUS" -eq 0 ] && fail "the capture rendered with no renderer provisioned under the tool home it was given:"
+names "$HOME_EMPTY/freeze/$PIN/bin/freeze" \
+  || fail "the capture resolved the renderer somewhere other than the ONETASKGRAPH_TOOLS_HOME it was given:"
+
 # 21. SCREENSHOTS_NO_BUILD means no build, so with nothing to drive it refuses rather than
 #     building behind the caller's back.
 run_capture shots/current/x86_64 1

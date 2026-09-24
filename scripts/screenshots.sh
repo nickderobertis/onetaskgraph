@@ -41,6 +41,18 @@ readonly ROOT
 # prints straight into the `config show` scene as the layer it won at, and one naming a
 # source adds that source's rows to every listing. Clear every steering variable before
 # setting the two this capture itself wants.
+#
+# `ONETASKGRAPH_TOOLS_HOME` is spelled like one of those settings and is not one: it names
+# where scripts/screenshots-freeze.sh provisions the pinned renderer, and the binary never
+# reads it for anything — it reaches the environment layer only because that layer takes the
+# whole `ONETASKGRAPH_` prefix. So it is kept here, by name, and handed to the resolver
+# alone; the binary's own environment still carries no `ONETASKGRAPH_` variable this capture
+# did not set. Swept and not kept, the capture resolved the renderer from the AMBIENT cache
+# home whatever the caller named — which passes on a machine that happens to have one
+# provisioned there and refuses on one that does not, so `check (ubuntu-latest)` failed on
+# four of scripts/check-visual-tools.sh's cases while every local run passed.
+TOOLS_HOME="${ONETASKGRAPH_TOOLS_HOME:-}"
+readonly TOOLS_HOME
 for _variable in $(compgen -e); do
   case "$_variable" in
   ONETASKGRAPH_*) unset "$_variable" ;;
@@ -145,7 +157,8 @@ rm -rf "$resolved_out" && mkdir -p "$SHOTS_OUT" || {
   echo "screenshots: next: check what holds it open and the permissions of $ROOT/shots, then re-run 'just screenshots'" >&2
   exit 1
 }
-FREEZE="$(bash "$ROOT/scripts/screenshots-freeze.sh" resolve)" || {
+FREEZE="$(ONETASKGRAPH_TOOLS_HOME="$TOOLS_HOME" \
+  bash "$ROOT/scripts/screenshots-freeze.sh" resolve)" || {
   echo "screenshots: the pinned renderer is not provisioned, so no scene can be rendered" >&2
   echo "screenshots: next: run 'just screenshots-tools', then re-run this capture" >&2
   exit 1
