@@ -16,10 +16,7 @@
 # What is real is both scripts, the archive handling, the scoped layout and the version
 # verification.
 #
-# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
-# under scripts/ because three commands of that project enumerate that one directory, so a
-# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
-# "Where this machinery lives", is the whole of the reasoning.
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
 fatal() {
@@ -87,22 +84,35 @@ readonly ARCHIVES="$scratch/archives"
 mkdir -p "$ARCHIVES/good/$INNER" "$ARCHIVES/escaping/$INNER" "$ARCHIVES/linked/$INNER" \
   "$ARCHIVES/wrong/$INNER" || fatal "could not build the stand-in archives under $ARCHIVES" \
   "check the permissions of \$TMPDIR, then rerun"
-printf '#!%s\necho "freeze version v%s (abc1234)"\n' "$BASH_BIN" "$PIN" > "$ARCHIVES/good/$INNER/freeze"
-printf '#!%s\necho "freeze version v0.0.0"\n' "$BASH_BIN" > "$ARCHIVES/wrong/$INNER/freeze"
-cp "$ARCHIVES/good/$INNER/freeze" "$ARCHIVES/escaping/$INNER/freeze"
-cp "$ARCHIVES/good/$INNER/freeze" "$ARCHIVES/linked/$INNER/freeze"
-chmod +x "$ARCHIVES"/*/"$INNER"/freeze
-( cd "$ARCHIVES/good" && tar -czf "$ARCHIVES/good.tgz" "$INNER" )
-( cd "$ARCHIVES/wrong" && tar -czf "$ARCHIVES/wrong.tgz" "$INNER" )
+# One `&&` chain rather than a sequence, so a failure anywhere in it is the group's status
+# and is named below. Under `set -e` alone each of these aborts the check with nothing on
+# stderr, which reads as the renderer resolver having gone wrong rather than as this
+# machine having failed to build the archives that ask it anything.
+{
+  printf '#!%s\necho "freeze version v%s (abc1234)"\n' "$BASH_BIN" "$PIN" > "$ARCHIVES/good/$INNER/freeze" \
+    && printf '#!%s\necho "freeze version v0.0.0"\n' "$BASH_BIN" > "$ARCHIVES/wrong/$INNER/freeze" \
+    && cp "$ARCHIVES/good/$INNER/freeze" "$ARCHIVES/escaping/$INNER/freeze" \
+    && cp "$ARCHIVES/good/$INNER/freeze" "$ARCHIVES/linked/$INNER/freeze" \
+    && chmod +x "$ARCHIVES"/*/"$INNER"/freeze
+} || fatal "could not write the stand-in renderers under $ARCHIVES" \
+  "check the permissions and free space of \$TMPDIR, then rerun"
+{
+  ( cd "$ARCHIVES/good" && tar -czf "$ARCHIVES/good.tgz" "$INNER" ) \
+    && ( cd "$ARCHIVES/wrong" && tar -czf "$ARCHIVES/wrong.tgz" "$INNER" )
+} || fatal "could not pack the stand-in good and wrong archives under $ARCHIVES" \
+  "check that 'tar -czf' works here and the free space of \$TMPDIR, then rerun"
 # One member that walks up out of the directory it is unpacked into, and one that is a
 # symbolic link — the two shapes the resolver refuses before it unpacks anything. `-P` is
 # what makes the first possible at all: without it tar quietly strips the leading `../` and
 # the archive would carry nothing to refuse, which is a case that passes while posing no
 # question. Both are asserted below rather than assumed.
-printf 'outside\n' > "$ARCHIVES/outside"
-( cd "$ARCHIVES/escaping" && tar -P -czf "$ARCHIVES/escaping.tgz" "$INNER" ../outside ) 2>/dev/null
-ln -sf /etc/passwd "$ARCHIVES/linked/$INNER/link"
-( cd "$ARCHIVES/linked" && tar -czf "$ARCHIVES/linked.tgz" "$INNER" )
+{
+  printf 'outside\n' > "$ARCHIVES/outside" \
+    && ( cd "$ARCHIVES/escaping" && tar -P -czf "$ARCHIVES/escaping.tgz" "$INNER" ../outside ) 2>/dev/null \
+    && ln -sf /etc/passwd "$ARCHIVES/linked/$INNER/link" \
+    && ( cd "$ARCHIVES/linked" && tar -czf "$ARCHIVES/linked.tgz" "$INNER" )
+} || fatal "could not pack the stand-in escaping and linked archives under $ARCHIVES" \
+  "check that 'tar -P -czf' and 'ln -s' work here, then rerun; the two assertions below say what each archive owes"
 
 # The preconditions of cases 8 and 9. A stand-in that did not take would look exactly like
 # a passing case, so this refuses to run instead.
@@ -296,7 +306,194 @@ names "hashes to" || fail "'ensure' refused an unauthenticated archive without s
 [ ! -x "$HOME_UNVERIFIED/freeze/$PIN/bin/freeze" ] \
   || fail "'ensure' refused on the digest but installed a renderer anyway:"
 
+# Every platform the resolver ACCEPTS, reconciled against the digests it records. This is
+# what makes the "no digest recorded for this platform" refusal an unreachable branch rather
+# than an untested one: it is reached only by a fifth platform accepted without a digest, and
+# this is the check that would go red the moment one is. Both lists come out of the script
+# rather than being spelled again here, so a platform added on either side is seen.
+accepted_os="$(sed -n 's/^  [A-Za-z]*) os=\([A-Za-z]*\) ;;.*/\1/p' "$FREEZE")"
+accepted_arch="$(sed -n 's/^  [^)]*) architecture=\([A-Za-z0-9_]*\) ;;.*/\1/p' "$FREEZE")"
+[ -n "$accepted_os" ] && [ -n "$accepted_arch" ] || fatal \
+  "could not read the platforms scripts/screenshots-freeze.sh accepts out of its own case arms" \
+  "check that it still spells them as '  <pattern>) os=<name> ;;' and '  <pattern>) architecture=<name> ;;'"
+for accepted_os_name in $accepted_os; do
+  for accepted_arch_name in $accepted_arch; do
+    grep -q "^readonly FREEZE_SHA256_${accepted_os_name}_${accepted_arch_name}=[0-9a-f]\{64\}$" "$FREEZE" \
+      || fail "the resolver accepts ${accepted_os_name}_${accepted_arch_name} but records no 64-character digest for it, so provisioning there would refuse:"
+  done
+done
+
+# The platform and tool failures, each driven on its own. These are the paths only a machine
+# this check does not run on would otherwise witness, so they are driven through stand-ins
+# for the two tools that decide them: a guard nobody has watched refuse is a guard nobody
+# knows refuses.
+real_uname="$(command -v uname)" || fatal "uname is not on PATH" \
+  "install coreutils, then rerun"
+real_tar="$(command -v tar)" || fatal "tar is not on PATH" "install tar, then rerun"
+readonly SHIMS="$scratch/shims"
+mkdir -p "$SHIMS" || fatal "could not create $SHIMS" \
+  "check the permissions of \$TMPDIR, then rerun"
+
+# A stand-in uname answering whatever a case names, so the two platform refusals are driven
+# on a machine that is neither of them. Every other call goes to the real tool.
+cat > "$SHIMS/uname" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  -s) printf '%s\n' "\${STAND_IN_UNAME_S:-\$($real_uname -s)}" ;;
+  -m) printf '%s\n' "\${STAND_IN_UNAME_M:-\$($real_uname -m)}" ;;
+  *) exec $real_uname "\$@" ;;
+esac
+STUB
+# A stand-in tar failing the ONE mode a case names, so the three tar failures are told apart
+# rather than driven together as a single "tar is broken".
+cat > "$SHIMS/tar" <<STUB
+#!/usr/bin/env bash
+case "\${STAND_IN_TAR_FAIL:-none}:\$1" in
+  names:-tzf) echo "stand-in tar: refusing to list member names" >&2; exit 2 ;;
+  types:-tvzf) echo "stand-in tar: refusing to list member types" >&2; exit 2 ;;
+  extract:-xzf) echo "stand-in tar: refusing to unpack" >&2; exit 2 ;;
+esac
+exec $real_tar "\$@"
+STUB
+chmod +x "$SHIMS/uname" "$SHIMS/tar" || fatal \
+  "could not make the stand-in uname and tar executable" \
+  "check the permissions of \$TMPDIR, then rerun"
+
+# A stand-in that did not take looks exactly like a passing case, so both are proven first.
+[ "$(PATH="$SHIMS:$PATH" STAND_IN_UNAME_S=Plan9 uname -s)" = "Plan9" ] || fatal \
+  "the stand-in uname does not answer, so the platform cases below would prove nothing" \
+  "report this; the shim is written just above"
+PATH="$SHIMS:$PATH" STAND_IN_TAR_FAIL=names tar -tzf "$ARCHIVES/good.tgz" >/dev/null 2>&1 \
+  && fatal "the stand-in tar does not refuse, so the tar cases below would prove nothing" \
+    "report this; the shim is written just above"
+
+# The resolver pointed at the good stand-in archive, made once: the cases below vary the
+# environment around it rather than the archive.
+good_resolver="$(resolver_for "$ARCHIVES/good.tgz")"
+
+# 17a. No cache home at all: there is nowhere to scope the renderer under, and the refusal
+#      names a variable that would give it one rather than failing inside a path built from
+#      an empty string.
+OUTPUT="$(PATH="$STAND_IN:$PATH" env -u ONETASKGRAPH_TOOLS_HOME -u XDG_CACHE_HOME -u HOME \
+  bash "$FREEZE" ensure 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 69 ] || fail "'ensure' with no cache home exited $STATUS, expected 69 (EX_UNAVAILABLE):"
+names "XDG_CACHE_HOME" || fail "'ensure' refused with no cache home without naming a variable that would give it one:"
+
+# 17b. An operating system freeze publishes no archive for: refused before anything is
+#      created, and CI named as the backstop.
+OUTPUT="$(PATH="$SHIMS:$STAND_IN:$PATH" STAND_IN_UNAME_S=Plan9 \
+  ONETASKGRAPH_TOOLS_HOME="$scratch/tools-no-os" bash "$FREEZE" ensure 2>&1)" \
+  && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' provisioned on an operating system freeze publishes no archive for:"
+names "Plan9" || fail "'ensure' refused an unsupported operating system without naming it:"
+[ ! -e "$scratch/tools-no-os/freeze" ] \
+  || fail "'ensure' refused the unsupported operating system but scoped a directory anyway:"
+
+# 17c. And an architecture it publishes none for.
+OUTPUT="$(PATH="$SHIMS:$STAND_IN:$PATH" STAND_IN_UNAME_M=s390x \
+  ONETASKGRAPH_TOOLS_HOME="$scratch/tools-no-arch" bash "$FREEZE" ensure 2>&1)" \
+  && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' provisioned on an architecture freeze publishes no archive for:"
+names "s390x" || fail "'ensure' refused an unsupported architecture without naming it:"
+
+# 17d. Neither sha256sum nor shasum: the digest check is the one thing standing between an
+#      unauthenticated response and tar, so with no way to compute one nothing is unpacked.
+readonly NO_DIGEST="$scratch/no-digest"
+mkdir -p "$NO_DIGEST" || fatal "could not create $NO_DIGEST" \
+  "check the permissions of \$TMPDIR, then rerun"
+for tool in env bash sed grep mkdir dirname cat cut cp tar install rm mktemp uname; do
+  resolved="$(command -v "$tool" 2>/dev/null)" || continue
+  printf '#!%s\nexec "%s" "$@"\n' "$BASH_BIN" "$resolved" > "$NO_DIGEST/$tool"
+  chmod +x "$NO_DIGEST/$tool"
+done
+cp "$STAND_IN/curl" "$NO_DIGEST/curl" || fatal \
+  "could not put the stand-in curl in $NO_DIGEST" "report this; the stand-in is built above"
+for tool in sha256sum shasum; do
+  PATH="$NO_DIGEST" command -v "$tool" >/dev/null 2>&1 && fatal \
+    "$tool is still reachable from $NO_DIGEST, so this case cannot pose its question" \
+    "report this — the whitelist directory is built here and should hold neither digest tool"
+done
+OUTPUT="$(PATH="$NO_DIGEST" ONETASKGRAPH_TOOLS_HOME="$scratch/tools-no-digest" \
+  STAND_IN_ARCHIVE="$ARCHIVES/good.tgz" bash "$good_resolver" ensure 2>&1)" \
+  && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' reported success with neither sha256sum nor shasum to authenticate the archive with:"
+names "sha256sum" || fail "'ensure' refused without naming the digest tools it needs:"
+[ ! -x "$scratch/tools-no-digest/freeze/$PIN/bin/freeze" ] \
+  || fail "'ensure' could not authenticate the archive but installed a renderer anyway:"
+
+# 17e. The three tar failures, each on its own. A listing that FAILS is a different thing
+#      from a listing that shows nothing to refuse, and both reach the same `case` below it.
+for mode in names types extract; do
+  case "$mode" in
+    names) wanted="could not read the contents" ;;
+    types) wanted="could not read the member types" ;;
+    extract) wanted="could not unpack" ;;
+  esac
+  tar_home="$scratch/tools-tar-$mode"
+  OUTPUT="$(PATH="$SHIMS:$STAND_IN:$PATH" STAND_IN_TAR_FAIL="$mode" \
+    ONETASKGRAPH_TOOLS_HOME="$tar_home" STAND_IN_ARCHIVE="$ARCHIVES/good.tgz" \
+    bash "$good_resolver" ensure 2>&1)" && STATUS=0 || STATUS=$?
+  [ "$STATUS" -eq 0 ] && fail "'ensure' reported success where tar failed to $mode:"
+  names "$wanted" || fail "'ensure' did not name what tar failed at ($mode):"
+  [ ! -x "$tar_home/freeze/$PIN/bin/freeze" ] \
+    || fail "'ensure' installed a renderer after tar failed to $mode:"
+done
+
+# 17f. An archive that unpacks cleanly and carries no renderer: a published layout that
+#      moved is not a provisioned tool, and saying so beats a later `resolve` saying nothing.
+mkdir -p "$ARCHIVES/nobinary/$INNER" || fatal \
+  "could not build the binary-less stand-in archive" \
+  "check the permissions of \$TMPDIR, then rerun"
+{
+  printf 'not a renderer\n' > "$ARCHIVES/nobinary/$INNER/README" \
+    && ( cd "$ARCHIVES/nobinary" && tar -czf "$ARCHIVES/nobinary.tgz" "$INNER" )
+} || fatal "could not pack the binary-less stand-in archive" \
+  "check that 'tar -czf' works here and the free space of \$TMPDIR, then rerun"
+run_freeze "$scratch/tools-nobinary" "$ARCHIVES/nobinary.tgz" ensure
+[ "$STATUS" -eq 0 ] && fail "'ensure' reported success from an archive carrying no freeze binary:"
+names "no freeze binary" || fail "'ensure' did not say the archive carries no renderer:"
+
+# 17g. Nowhere to unpack into. Named here rather than left to tar, whose diagnostic would be
+#      about a path that does not exist and would read as a corrupt archive.
+cat > "$SHIMS/mktemp" <<'STUB'
+#!/usr/bin/env bash
+echo "stand-in mktemp: refusing" >&2
+exit 1
+STUB
+chmod +x "$SHIMS/mktemp" || fatal "could not make the stand-in mktemp executable" \
+  "check the permissions of \$TMPDIR, then rerun"
+PATH="$SHIMS:$PATH" mktemp -d >/dev/null 2>&1 \
+  && fatal "the stand-in mktemp does not refuse, so the case below would prove nothing" \
+    "report this; the shim is written just above"
+OUTPUT="$(PATH="$SHIMS:$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$scratch/tools-no-tmp" \
+  STAND_IN_ARCHIVE="$ARCHIVES/good.tgz" bash "$good_resolver" ensure 2>&1)" \
+  && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "'ensure' reported success with nowhere to unpack the archive:"
+names "temporary directory" || fail "'ensure' refused without naming what it could not create:"
+rm -f "$SHIMS/mktemp"
+
+# 17h. A scoped root that cannot be created. Skipped where this user can write into a
+#      directory carrying no write bit — root, and filesystems that do not enforce one —
+#      because there the case would pass while posing no question.
+readonly LOCKED="$scratch/locked"
+mkdir -p "$LOCKED" || fatal "could not create $LOCKED" \
+  "check the permissions of \$TMPDIR, then rerun"
+chmod a-w "$LOCKED" 2>/dev/null || true
+if ( : > "$LOCKED/probe" ) 2>/dev/null; then
+  rm -f "$LOCKED/probe"
+  echo "check-visual-tools: the scoped-root case is skipped here — this user writes into a directory with no write bit (root, or a filesystem that does not enforce one)" >&2
+else
+  OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$LOCKED/tools" \
+    STAND_IN_ARCHIVE="$ARCHIVES/good.tgz" bash "$good_resolver" ensure 2>&1)" \
+    && STATUS=0 || STATUS=$?
+  [ "$STATUS" -eq 0 ] && fail "'ensure' reported success where the scoped root could not be created:"
+  names "could not create" || fail "'ensure' did not name the directory it could not create:"
+fi
+chmod u+w "$LOCKED" 2>/dev/null || true
+
 # The baseline writer, in a clone because it writes shots/baseline/<lane>.json.
+# The path is assembled from $ROOT at runtime, so shellcheck cannot resolve it. Naming the
+# file has it follow and check scratch-clone.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/scratch-clone.sh
 if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
   fatal "could not load $ROOT/scripts/scratch-clone.sh, which strips the git environment" \
@@ -390,6 +587,18 @@ PATH="$NO_SCREENCOMP" command -v screencomp >/dev/null 2>&1 && fatal \
 run_bless "$NO_SCREENCOMP"
 [ "$STATUS" -eq 0 ] && fail "'bless' succeeded with no screencomp installed:"
 names "screencomp" || fail "'bless' refused without naming the tool that is missing:"
+
+# 14a. The committed baseline's directory cannot be created. The capture is still there, so
+#      what this owes a reader is which directory it could not make — not a manifest
+#      diagnostic about an output path, and not a `set -e` exit saying nothing at all.
+rm -rf "$CLONE/shots/baseline"
+printf 'not a directory\n' > "$CLONE/shots/baseline" || fatal \
+  "could not put a file where the clone's shots/baseline directory belongs" \
+  "report this; the clone is scratch and can be re-created"
+run_bless
+[ "$STATUS" -eq 0 ] && fail "'bless' reported success where shots/baseline could not be created:"
+names "shots/baseline" || fail "'bless' did not name the directory it could not create:"
+rm -f "$CLONE/shots/baseline"
 
 # The baseline the cases above deliberately removed, back: the cases below are about what a
 # capture or a mutation does to a tree that is otherwise whole, and one already failing for
@@ -546,6 +755,28 @@ run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "the baseline lost a scene's shot and the check passed:"
 names "task-deps" || fail "the check refused the missing shot without naming the scene:"
 names "screenshots-bless" || fail "the check refused the missing shot without saying how to re-bless:"
+restore "shots/baseline/$LANE.json"
+
+# 29a. The baseline carries every name a scene captures AND an entry that is not a shot.
+#      This is the one a filter-then-collect read as clean: the malformed entry vanished,
+#      all seven scenes reconciled, and the document `screencomp classify` gates against was
+#      one nothing here had read in full.
+python3 - "$CLONE/shots/baseline/$LANE.json" <<'MALFORMED' || fatal \
+  "could not add a malformed entry to the clone's committed baseline" \
+  "report this; the case needs that file to carry one beside the real shots"
+import json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    document = json.load(handle)
+document["shots"].append("this is not a shot")
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2)
+MALFORMED
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the baseline carried an entry that is not a shot and the check passed:"
+names "not an object" || fail "the check refused the malformed baseline without saying what the entry is:"
+names "screenshots-bless" || fail "the check refused the malformed baseline without saying how to re-bless:"
 restore "shots/baseline/$LANE.json"
 
 # 30. A committed capture the README embeds nowhere. Every image sits in the section that

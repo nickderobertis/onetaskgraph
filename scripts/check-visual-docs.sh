@@ -13,10 +13,7 @@
 #
 # Quiet on success. On failure it names the file and the edit.
 #
-# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
-# under scripts/ because three commands of that project enumerate that one directory, so a
-# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
-# "Where this machinery lives", is the whole of the reasoning.
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
@@ -155,6 +152,7 @@ if not scenes:
     )
 baseline_path = Path(f"shots/baseline/{lane}.json")
 baseline_names = []
+baseline_readable = False
 if not baseline_path.is_file():
     problems.append(
         f"{baseline_path.as_posix()}: the committed digest baseline for the {lane} lane is "
@@ -162,25 +160,40 @@ if not baseline_path.is_file():
     )
 else:
     try:
+        # Every entry is validated and a bad one REFUSES the manifest, rather than being
+        # filtered out of the names below. A baseline carrying all seven expected names
+        # and a malformed entry beside them would otherwise reconcile clean here while
+        # being a document `screencomp classify` cannot gate against — which is the one
+        # failure this reconciliation exists to catch before a push, not after it.
         baseline = json.loads(read(baseline_path))
-        baseline_names = [
-            shot["name"]
-            for shot in baseline["shots"]
-            if isinstance(shot, dict) and isinstance(shot.get("name"), str)
-        ]
+        shots = baseline["shots"]
+        if not isinstance(shots, list):
+            raise TypeError(f"'shots' is {type(shots).__name__}, not a list")
+        for position, shot in enumerate(shots):
+            if not isinstance(shot, dict):
+                raise TypeError(
+                    f"shot {position} is {type(shot).__name__}, not an object"
+                )
+            if not isinstance(shot.get("name"), str):
+                raise TypeError(f"shot {position} carries no string 'name'")
+            baseline_names.append(shot["name"])
+        baseline_readable = True
     except (ValueError, KeyError, TypeError) as error:
+        baseline_names = []
         problems.append(
             f"{baseline_path.as_posix()}: is not a screencomp digest manifest ({error}). "
             "Re-bless it with 'just screenshots-bless' and commit the result; a file this "
             "cannot read is one classify cannot gate against either."
         )
-for absent in sorted(set(scenes) - set(baseline_names)):
+# Only against a baseline this could read in full. One it could not is already refused just
+# above, and naming every scene as missing from it would bury that with seven more lines.
+for absent in sorted(set(scenes) - set(baseline_names)) if baseline_readable else []:
     problems.append(
         f"{baseline_path.as_posix()}: has no shot named {absent!r}, which "
         "scripts/screenshots.sh captures. Run 'just screenshots-bless' and commit the "
         "refreshed baseline."
     )
-for stale in sorted(set(baseline_names) - set(scenes)):
+for stale in sorted(set(baseline_names) - set(scenes)) if baseline_readable else []:
     problems.append(
         f"{baseline_path.as_posix()}: carries a shot named {stale!r} that no scene in "
         "scripts/screenshots.sh captures any more. Re-bless the baseline."

@@ -25,10 +25,7 @@
 # newline that it must not be asked about at all); and the hook's own half, which reads
 # git's records once and hands them to both the gate's base and this guard.
 #
-# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
-# under scripts/ because three commands of that project enumerate that one directory, so a
-# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
-# "Where this machinery lives", is the whole of the reasoning.
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
 fatal() {
@@ -76,8 +73,14 @@ overlay_working_tree || fatal \
   "could not copy $ROOT's tracked files over the clone at $CLONE" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
-git -C "$CLONE" config user.email "check-visual-guard@invalid" >/dev/null
-git -C "$CLONE" config user.name "check-visual-guard" >/dev/null
+# The commits every case below makes need an identity in the clone. Named rather than left
+# to `set -e`: stdout is discarded here, so an unguarded failure would abort the check
+# silently and read as the guard itself having refused.
+{
+  git -C "$CLONE" config user.email "check-visual-guard@invalid" >/dev/null \
+    && git -C "$CLONE" config user.name "check-visual-guard" >/dev/null
+} || fatal "could not give the scratch repository at $CLONE a committer identity" \
+  "check that 'git config' works there and the free space on \$TMPDIR, then rerun"
 
 readonly MARKERS="$scratch/markers"
 
