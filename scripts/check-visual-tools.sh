@@ -796,6 +796,26 @@ run_visual_docs
 names "task-list.svg" || fail "the check refused the missing image without naming it:"
 restore docs/screenshots
 
+# 24a. And one that is ON DISK but tracked by nothing, which is the shape the case above
+#      cannot pose and the one that actually happens: `just screenshots` WRITES into
+#      docs/screenshots, so a scene captured and never `git add`ed is a file a glob there
+#      finds and a clone of this repository does not carry. Read off the filesystem the
+#      check called that committed and passed, leaving CI's own fresh checkout the only
+#      place it was caught.
+git -C "$CLONE" rm --quiet --cached -- docs/screenshots/task-list.svg >/dev/null || fatal \
+  "could not untrack the clone's docs/screenshots/task-list.svg" \
+  "report this; the case needs that image present on disk and tracked by nothing"
+[ -f "$CLONE/docs/screenshots/task-list.svg" ] || fatal \
+  "untracking the clone's docs/screenshots/task-list.svg removed it from disk too, so this case cannot pose its question" \
+  "report this; 'git rm --cached' should leave the file where it is"
+run_visual_docs
+[ "$STATUS" -eq 0 ] \
+  && fail "an image present on disk and committed nowhere was read as committed:"
+names "task-list.svg" || fail "the check refused the untracked image without naming it:"
+git -C "$CLONE" reset --quiet -- docs/screenshots >/dev/null || fatal \
+  "could not restore the clone's docs/screenshots index entries" \
+  "report this; the clone is scratch and can be re-created"
+
 # 25. The renderer pin gets a second spelling.
 printf '\n# freeze 9.9.9 is what this repository renders with\nfreeze-version := "9.9.9"\n' >> "$CLONE/justfile"
 run_visual_docs
@@ -920,11 +940,20 @@ restore "shots/baseline/$LANE.json"
 
 # 30. A committed capture the README embeds nowhere. Every image sits in the section that
 #     explains the surface it shows, or it is not committed at all.
+#
+#     Tracked rather than merely copied in, because that is what the case says and what the
+#     check now reads: a file `just screenshots` has just written and nobody has added yet
+#     is a scene being added, which case 24a is about, not an orphan to delete.
 cp "$CLONE/docs/screenshots/task-deps.svg" "$CLONE/docs/screenshots/task-orphan.svg"
+git -C "$CLONE" add -- docs/screenshots/task-orphan.svg >/dev/null || fatal \
+  "could not track the orphaned capture in the clone" \
+  "report this; the case needs that image committed rather than merely present"
 run_visual_docs
 [ "$STATUS" -eq 0 ] && fail "a capture the README embeds nowhere was committed and the check passed:"
 names "task-orphan.svg" || fail "the check refused the orphaned capture without naming it:"
-rm -f "$CLONE/docs/screenshots/task-orphan.svg"
+git -C "$CLONE" rm --quiet --force -- docs/screenshots/task-orphan.svg >/dev/null || fatal \
+  "could not remove the orphaned capture from the clone" \
+  "report this; the clone is scratch and can be re-created"
 
 # 31. Alt text that names the command rather than describing the picture. The images carry
 #     the README's meaning for a reader who cannot see them.

@@ -26,6 +26,7 @@ readonly ROOT
 python3 - <<'PY'
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -235,12 +236,47 @@ for stale in sorted(set(baseline_names) - set(scenes)) if baseline_readable else
         "scripts/screenshots.sh captures any more. Re-bless the baseline."
     )
 
-committed = sorted(path.name for path in Path("docs/screenshots").glob("*.svg"))
-for scene in sorted(scenes):
+# `committed` means what it says: tracked by git AND present in the working tree. Read off
+# the filesystem alone it was neither — `docs/screenshots/` is exactly where
+# scripts/screenshots.sh WRITES, so a scene captured and never `git add`ed satisfied a glob
+# there and the two diagnostics below then claimed it was committed. That is the one thing
+# this check exists to catch, and CI's own fresh checkout was the only place it was caught.
+#
+# The git environment is not stripped here and does not need to be: the caller that runs
+# this check somewhere other than a repository root, scripts/check-visual-tools.sh, reaches
+# its clone through scripts/scratch-clone.sh, which unsets every GIT_* variable a hook
+# exports before the clone is made — so `git` here means the tree this check is reading.
+# `encoding` is named because a path is text read back from a subprocess, and text mode
+# with none picks the platform's code page on the Windows runner.
+listing = subprocess.run(
+    ["git", "ls-files", "-z", "--", "docs/screenshots"],
+    capture_output=True,
+    text=True,
+    encoding="utf-8",
+    check=False,
+)
+tracking_readable = listing.returncode == 0
+if not tracking_readable:
+    problems.append(
+        "docs/screenshots: git could not say which images this tree carries "
+        f"({listing.stderr.strip() or f'git exited {listing.returncode}'}), so whether the "
+        "README embeds one nobody committed is unknown. Run this check from a git checkout "
+        "of this repository, as './scripts/nx.sh run screenshots:lint' does."
+    )
+committed = sorted(
+    Path(entry).name
+    for entry in listing.stdout.split("\0")
+    if entry.endswith(".svg") and Path(entry).is_file()
+)
+# Only where git answered. Where it did not, every scene reads as uncommitted and every
+# committed image as absent, which would bury the one line above under a dozen that all
+# say the same thing — the discipline the unreadable baseline above is already held to.
+for scene in sorted(scenes) if tracking_readable else []:
     if f"{scene}.svg" not in committed:
         problems.append(
             f"docs/screenshots/{scene}.svg: is not committed, so the README cannot embed "
-            "the scene the capture renders. Run 'just screenshots' and commit it."
+            "the scene the capture renders. Run 'just screenshots', then "
+            "'git add docs/screenshots'."
         )
 
 embedded = re.findall(r"!\[([^\]]*)\]\((docs/screenshots/[^)]+)\)", readme)
