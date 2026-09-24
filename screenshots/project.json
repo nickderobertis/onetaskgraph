@@ -1,0 +1,86 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "screenshots",
+  "projectType": "library",
+  "tags": ["lang:bash", "layer:docs"],
+  "//": "No target here captures: the capture is `just screenshots`, which is no Nx target at all. This project holds the curated fixture, the vendored renderer font and the durable note, so a change to one is selected by the graph. It depends on no other project, and the only edge is the one `workspace` has to every project. screenshots/AGENTS.md is why.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "//": "Nothing to provision, deliberately: the pinned renderer is installed on demand by `just screenshots-tools`, and putting a screenshot tool on the gate's provisioning path would make an informational tier a prerequisite of the gate."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write screenshots"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place. Only this project's own JSON is formatted \u2014 biome has no formatter for Markdown front matter, a TrueType font or an SVG."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format screenshots"
+      },
+      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/screenshots/project.json"]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/check-visual-docs.sh"
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/rust-toolchain.toml",
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/.gitignore",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/.github/workflows/visual-docs.yml",
+        "{workspaceRoot}/shots/baseline/*.json",
+        "{workspaceRoot}/docs/screenshots/*.svg",
+        "{workspaceRoot}/scripts/screenshots.sh",
+        "{workspaceRoot}/scripts/screenshots-freeze.sh",
+        "{workspaceRoot}/scripts/screenshots-bless.sh",
+        "{workspaceRoot}/scripts/check-visual-docs.sh"
+      ],
+      "//": "The static half: it reconciles every version this capture restates, the scene inventory against the committed baseline, and every image the README embeds. It needs neither screencomp nor the renderer, so it runs in CI's check job like every other lint, and the workspaceRoot inputs select this project as well as hash it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] those inputs select `test` too, because Nx selects a project rather than a target, and no expensive tier sits behind that edge: both checks clone with `git clone --shared` and the target finishes in under two seconds."
+    },
+    "typecheck": {
+      "executor": "nx:noop",
+      "//": "Declared and empty, because `nx affected` fans out by target name. There is nothing here between reading a file and running it: this machinery is shell, whose static analysis is the bash 3.2 scan under `scripts:lint`."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash scripts/check-visual-guard.sh",
+          "bash scripts/check-visual-tools.sh",
+          "bash scripts/check-visual-guard-detached.sh"
+        ],
+        "parallel": false
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/.githooks/pre-push",
+        "{workspaceRoot}/scripts/screenshots-guard.sh",
+        "{workspaceRoot}/scripts/screenshots-freeze.sh",
+        "{workspaceRoot}/scripts/screenshots-bless.sh",
+        "{workspaceRoot}/scripts/check-visual-guard.sh",
+        "{workspaceRoot}/scripts/check-visual-guard-detached.sh",
+        "{workspaceRoot}/scripts/check-visual-tools.sh",
+        "{workspaceRoot}/shots/baseline/*.json"
+      ],
+      "//": "Uncached and serial for the reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob describes. The first drives the real pre-push guard and hook with screencomp and the capture stubbed at the subprocess seam; the second drives the renderer resolver and the baseline writer against a stand-in tool location and installer, reaching no network; the third runs both again from a DETACHED checkout, the shape actions/checkout leaves and no developer machine has. Each script's own header says what it covers. The detached run is last because the two it drives report their own failures first."
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Declared and empty. The 95% line floor is measured by instrumenting a compiled crate or an interpreted SDK; there is no line coverage for a shell script or a Markdown fixture, and what stands in its place is the guard check above driving the real guard until it refuses."
+    }
+  }
+}

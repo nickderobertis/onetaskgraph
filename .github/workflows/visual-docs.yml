@@ -1,0 +1,79 @@
+# Terminal screenshots via screencomp's reusable workflow. The capture step is ours
+# (scripts/screenshots.sh); screencomp owns the reproducibility gate, the classify gate,
+# the HTML gallery, the GitHub Pages deploy and the sticky before/after pull-request
+# comment.
+#
+# screenshots/AGENTS.md is the durable note: why this is a workflow of its own rather than
+# part of any gate, and why one lane read from [capture].arches in screencomp.toml is
+# enough for every machine.
+name: Visual docs
+
+on:
+  pull_request:
+    # `closed` lets screencomp delete this pull request's gh-pages preview once it closes,
+    # so stale /pr-<n>/ galleries do not accumulate on that branch.
+    types: [opened, synchronize, reopened, closed]
+  push:
+    branches: [main]
+  schedule:
+    # Monthly: prune the gh-pages gallery history so the images it accretes do not grow
+    # that branch without bound (keeps the 20 most recent versions; see below).
+    - cron: "41 4 1 * *"
+
+# The default for everything this workflow does not grant.
+permissions: {}
+
+jobs:
+  visual-docs:
+    # Least privilege, one line per grant, and on the job rather than the workflow so a
+    # second job added here inherits none of it.
+    # llmlint: ignore-block[least_privilege_grants] The comment grant reaches the push and
+    # the monthly schedule too and cannot be conditioned: GitHub takes no expression in
+    # `permissions`, and splitting the job under an `if:` would rename the check context
+    # branch protection names (`visual-docs / report (<arch>)`) and duplicate the capture
+    # command this repository holds as one statement. The grant is bounded by what the
+    # called workflow DOES with it — screencomp upserts one sticky comment on a pull
+    # request and writes none on either other event.
+    permissions:
+      contents: write # push the gh-pages gallery
+      pull-requests: write # upsert the sticky before/after comment on a pull request
+      pages: read # gate the run on the Pages build the deploy triggers
+    # llmlint: ignore-end[least_privilege_grants]
+    uses: nickderobertis/screencomp/.github/workflows/visual-docs-reusable.yml@v0.4.8
+    with:
+      # The version installed on the host runner. It is the same version the `uses:` ref
+      # above pins, and `screencomp doctor --env` is what reports the two having parted —
+      # scripts/check-visual-docs.sh reconciles them without needing the CLI installed, so
+      # the check job catches it too.
+      screencomp-version: v0.4.8
+      # Strict gate: CI FAILS when the capture drifts from the committed baseline
+      # (shots/baseline/<arch>.json). The pre-push guard is what regenerates it locally, so
+      # an intended change lands as a deliberate commit rather than a red workflow.
+      fail-on-drift: true
+      # Keep the gh-pages gallery bounded: delete this pull request's preview on close and
+      # prune history on the monthly schedule above.
+      gh-pages-maintenance: true
+      gh-pages-history-versions: 20
+      # The capture-command runs INSIDE this container (the reusable workflow's default is
+      # a Playwright image for web apps). Ours builds the real release binary, so it is the
+      # Rust image matching rust-toolchain.toml's channel — which is where that version is
+      # declared, and scripts/check-visual-docs.sh fails when this tag and that channel
+      # part. The image only has to build and render: the SVG bytes are a function of the
+      # captured text, the pinned renderer and the vendored font, and of nothing else.
+      container: rust:1.97.1-bookworm
+      # Provision the pinned renderer through the one script that owns which `freeze` this
+      # repository runs and where, then capture. The build inside that capture is a cargo
+      # invocation in this clone, so it inherits `rustflags = ["-D", "warnings"]` from
+      # .cargo/config.toml — there is no warnings-only build here any more than in the gate. The reusable workflow exports $SHOTS_OUT
+      # as shots/current/<arch>; the capture writes captures.json and the SVGs there.
+      # llmlint: ignore-block[work_goes_through_command_surface] These two lines run INSIDE
+      # the container above, which is a plain Rust image with no `just` on it. The recipes
+      # that wrap them — `just screenshots-tools` and `just screenshots` — are one line
+      # each, and fetching a task runner into the capture so that a workflow could call a
+      # wrapper would add a host tool to the one step that has to stay minimal. The two
+      # cannot part: scripts/check-visual-docs.sh reconciles this capture-command against
+      # the recipes' own bodies.
+      capture-command: |
+        bash scripts/screenshots-freeze.sh ensure
+        bash scripts/screenshots.sh
+      # llmlint: ignore-end[work_goes_through_command_surface]

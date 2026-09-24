@@ -1,0 +1,10 @@
+# The folder of plans this demo is authored in, and the folder the team's tickets
+# live in. Both are local-md, so the capture reaches no network and needs no key.
+page_size: 20
+sources:
+  plans:
+    plugin: local-md
+    config: { root: plans }
+  work:
+    plugin: local-md
+    config: { root: work }
