@@ -67,7 +67,13 @@ case "$(uname -s)" in
   Linux) os=Linux ;;
   Darwin) os=Darwin ;;
   *)
-    echo "check-visual-tools: skipped on $(uname -s), where the renderer publishes no archive and the resolver refuses by design" >&2
+    # Every case below provisions or drives the pinned renderer, and freeze publishes an
+    # archive for Linux and Darwin alone — so on the Windows runner there is nothing to
+    # provision and nothing to drive, and the resolver refuses by design rather than by
+    # defect. The skip therefore names where the property IS gated, as the other skips in
+    # this repository do (scripts/check-line-reads.sh is the model), so a reader of that
+    # lane's log is not left to assume it is gated nowhere.
+    echo "check-visual-tools: skipped on $(uname -s) (freeze publishes no archive for it, so there is no renderer to provision or drive); the Linux and macOS lanes gate this tooling" >&2
     exit 0
     ;;
 esac
