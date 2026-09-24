@@ -100,9 +100,14 @@ for name in $CREDENTIALS_AND_DEMAND; do
   seeded+=("$name=seeded-by-this-check-and-never-a-real-credential")
 done
 
-# The real entry point the gate invokes, by the name scripts/project.json runs it under.
 STEP_OUTPUT=""
 STEP_STATUS=0
+# llmlint: ignore[work_goes_through_command_surface] The step is the SUBJECT here, and what
+# is under test is the environment of the process the gate starts — so this check has to be
+# what starts it, with the stand-in cargo on that process's own PATH. `just
+# distribution-test` would run two unrelated commands beside it, take minutes of real cargo,
+# and need an Nx these scratch trees never install. The same reason
+# scripts/check-fixture-discrimination.sh invokes cargo directly.
 STEP_OUTPUT="$(env "${seeded[@]}" bash "$STEP" 2>&1)" && STEP_STATUS=0 || STEP_STATUS=$?
 
 if [ "$STEP_STATUS" -ne 0 ]; then
