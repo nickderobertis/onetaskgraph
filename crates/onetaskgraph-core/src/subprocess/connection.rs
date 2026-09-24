@@ -334,6 +334,9 @@ fn keep_platform_state(_command: &mut Command) {}
 impl Peer {
     /// Spawn `program` and take its three streams.
     ///
+    /// `handshake` bounds the initializing [`exchange`](Self::exchange), which carries the
+    /// child's own start-up inside it; `requests` bounds each exchange after that one.
+    ///
     /// # Errors
     ///
     /// Returns [`SourceError::Unavailable`] when the command cannot be spawned, naming
@@ -342,7 +345,8 @@ impl Peer {
     pub(crate) fn spawn(
         program: &str,
         args: &[String],
-        deadline: Duration,
+        handshake: Duration,
+        requests: Duration,
     ) -> Result<Self, SourceError> {
         let mut command = Command::new(program);
         command
@@ -372,8 +376,8 @@ impl Peer {
             writer,
             reader,
             stderr: Some(stderr),
-            request_deadline: deadline,
-            handshake_deadline: Some(deadline),
+            request_deadline: requests,
+            handshake_deadline: Some(handshake),
         })
     }
 

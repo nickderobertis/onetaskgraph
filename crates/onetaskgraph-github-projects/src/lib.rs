@@ -170,7 +170,8 @@
 //!
 //! | The question | What is sent | What it costs |
 //! | --- | --- | --- |
-//! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)` | the item |
+//! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)` — and, when that node is a board draft, [`graphql::DRAFT`] — the draft and the one board item it is | the item |
+//! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` | the board's fields |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
@@ -217,10 +218,26 @@
 //! selection is held over [`graphql::DOCUMENTS`] by
 //! `no_document_selects_the_boards_own_labels_field`.
 //!
-//! The last row is still the board's own item connection, and deliberately: a **draft**
-//! board item is not an issue, so no search and no node read can reach one, and the reads
-//! that have to answer for the whole board are the ones whose cost is the board's size
-//! anyway.
+//! The whole-board row is still the board's own item connection, and deliberately: a
+//! **draft** board item is not an issue, so no search can list one, and the reads that have
+//! to answer for the whole board are the ones whose cost is the board's size anyway.
+//!
+//! **A question about one item this source already names by id never lists the board.**
+//! Whether that item is on this board, and what its board fields are, is answered by reading
+//! that item — its own `Issue.projectItems`, walked to exhaustion by
+//! [`GitHubProjectsSource::resolve_issue`], or a draft's own board item — and never by
+//! looking for it in [`graphql::BOARD`]'s `items` or in a listing this command already
+//! holds. That covers a write's destination, the project a new item is filed under, a
+//! same-source far end a dependency names, a status write, the dependency slot a draft keeps,
+//! and the delete that takes back an item a copy made. What such a write needs of the board
+//! and the item does not carry — the board's id, the `Status` and origin field definitions —
+//! comes from [`graphql::BOARD_FIELDS`], which reads no item at all. The reason is evidence,
+//! not economy alone: `ProjectV2.items` is a projection that lags the membership GitHub
+//! itself reports — an issue added with `addProjectV2ItemById` can be missing from it for
+//! minutes. Scanning this host's 842-item board has refused a document copy and an update
+//! even though the items' own reads named that board. A scan there gives the wrong answer
+//! as well as paying for every page. So a `board.items` lookup does not belong on any of
+//! those paths.
 //!
 //! **What a read may return is capped too, and that cap is on the document rather than on
 //! the board.** GitHub limits the number of nodes **one query may return** to
@@ -294,8 +311,8 @@
 //!
 //! So [`GitHubProjectsSource::board`] is the **union** of both — each search result still
 //! admitted only on this board's own strongly-consistent `Issue.projectItems`, and neither
-//! enumeration dropped, because only `ProjectV2.items` reaches a board draft and the board's
-//! fields and only the search reports what the projection is behind on. What closes the last
+//! enumeration dropped, because only `ProjectV2.items` lists a board draft and only the
+//! search reports what the projection is behind on. What closes the last
 //! gap, the one where both are behind, is [`GitHubProjectsSource::created`]: every read this
 //! source answers is completed with what this process itself wrote, so an item created
 //! seconds ago is reported whether or not GitHub has caught up. Nothing else is remembered,
@@ -701,6 +718,44 @@ pub mod graphql {
     }"#
     );
 
+    /// The board's own id and field definitions, and not one of its items.
+    ///
+    /// What a write needs of the board when the item it writes does not say: the id a field
+    /// write and `addProjectV2ItemById` address, and the definitions of the `Status` and
+    /// origin fields. It selects no `items`, so what it costs is the board's field list
+    /// however many items the board holds — and it decides nothing about which items those
+    /// are, which is the question a read of one item by its own id answers instead.
+    ///
+    /// The root is aliased `boardFields` rather than `owner`, so nothing counting the
+    /// board's item reads by their root counts this one among them.
+    pub const BOARD_FIELDS: &str = r#"query($owner:String!,$number:Int!,$nestedFirst:Int!){
+      boardFields:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name}
+          }pageInfo{hasNextPage}}
+        }}
+      }
+    }"#;
+
+    /// One board draft by its own node id, with the board item it sits in.
+    ///
+    /// A draft is not an issue, so [`ISSUE`] reaches it and reads nothing of it; this is the
+    /// second read that answers it. `DraftIssue.projectV2Items` names the board item a draft
+    /// is — GitHub links a draft to one item — with the same [`board_item_values!`] the
+    /// issue fragment reads, so a draft reached by id resolves through the same resolver a
+    /// board listing hands it to, and nothing has to list the board to find one.
+    pub const DRAFT: &str = concat!(
+        r#"query($id:ID!,$nestedFirst:Int!,$boardItems:Int!){
+      node(id:$id){__typename ... on DraftIssue{id title body createdAt updatedAt
+        projectV2Items(first:$boardItems){nodes{id project{id number}
+        "#,
+        board_item_values!(),
+        r#"}pageInfo{hasNextPage endCursor}}}}
+    }"#
+    );
+
     /// One issue's board memberships alone, walked past the page a read of it carried.
     ///
     /// The recovery read behind [`GitHubProjectsSource::resolve_issue`](super::GitHubProjectsSource):
@@ -831,7 +886,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 24] = [
+    pub const DOCUMENTS: [(&str, &str); 26] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -840,6 +895,8 @@ pub mod graphql {
         ),
         (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
+        (BOARD_FIELDS, "reading the board's fields"),
+        (DRAFT, "reading one draft"),
         (REPOSITORY, "reading the destination repository"),
         (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
         (CREATE_ISSUE, "creating an issue"),
@@ -1764,6 +1821,14 @@ pub struct GitHubProjectsSource {
     /// [`Self::board_cache`]. One read answers every question a command asks, so a command
     /// that lists this board's projects and its tasks pays for one search rather than two.
     search_cache: Mutex<Option<Vec<Resolved>>>,
+    /// The board's own id and field definitions as this process last read them on their
+    /// own, for the length of one command.
+    ///
+    /// What a write needs of the board and its item does not say, read once per command
+    /// rather than once per item written, on the terms [`Self::board_cache`] is held on: it
+    /// lives and dies with the process and nothing is written down. It holds no item and so
+    /// can answer no question about one — see [`Self::board_fields`].
+    fields_cache: Mutex<Option<BoardFields>>,
     /// Each destination repository's node id, resolved once per repository
     /// rather than per issue created.
     ///
@@ -2254,6 +2319,7 @@ impl GitHubProjectsSource {
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
+            fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
         })
@@ -2866,9 +2932,8 @@ impl GitHubProjectsSource {
     /// What resolving one node id reached.
     ///
     /// Three answers rather than an `Option`, because a board *draft* is none of the other
-    /// two: it is not an issue, it has no node of its own this source can read the board
-    /// half off, and its only home is the board's own item connection — so a read of one
-    /// is completed from there rather than reported as nothing.
+    /// two: it is not an issue, so the issue fragment reads nothing of it, and a read of one
+    /// is completed by a read of the draft itself rather than reported as nothing.
     async fn reach(&self, id: &NativeId) -> Result<Reached, SourceError> {
         let asked = self
             .graphql(
@@ -2908,14 +2973,183 @@ impl GitHubProjectsSource {
         match self.reach(id).await? {
             Reached::Held(item) => Ok(Some(*item)),
             Reached::Nothing => Ok(None),
-            // The one read that still costs the board: a draft lives nowhere else.
-            Reached::Draft => Ok(self
-                .board()
-                .await?
-                .items
-                .into_iter()
-                .find(|item| item.id == *id)),
+            Reached::Draft => self.draft_by_id(id).await,
         }
+    }
+
+    /// One board draft by its own id, with the board item it sits in — or `None` when no
+    /// item of this board is that draft's.
+    ///
+    /// The same decision [`Self::resolve_issue`] makes for an issue, over the draft's own
+    /// `projectV2Items`: an entry naming this board is what makes it this board's. GitHub
+    /// links a draft to one board item, so the page this read carries is the whole of that
+    /// connection, and a page that reports more than it holds is refused rather than read
+    /// as an answer about memberships nobody read.
+    async fn draft_by_id(&self, id: &NativeId) -> Result<Option<Resolved>, SourceError> {
+        let data = self
+            .graphql(
+                graphql::DRAFT,
+                json!({"id":id.0,"nestedFirst":NESTED_PAGE_SIZE,
+                       "boardItems":BOARD_ITEMS_PAGE_SIZE}),
+            )
+            .await?;
+        // Gone between the two reads is an answer — the draft is no longer there. Anything
+        // else than the draft [`Self::reach`] was just told this id is, is not one.
+        let Some(draft) = data.get("node").filter(|node| !node.is_null()) else {
+            return Ok(None);
+        };
+        if optional_str(draft, "__typename")? != Some("DraftIssue") {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub answered {} as a draft and then as something else",
+                    id.0
+                ),
+            });
+        }
+        if required_str(draft, "id")? != id.0 {
+            return Err(SourceError::Malformed {
+                message: format!("GitHub answered a different draft for {}", id.0),
+            });
+        }
+        let memberships = draft
+            .get("projectV2Items")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} is missing projectV2Items", id.0),
+            })?;
+        let nodes = memberships
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} projectV2Items.nodes is not an array", id.0),
+            })?;
+        let info = memberships
+            .get("pageInfo")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} projectV2Items has no pageInfo", id.0),
+            })?;
+        // Read whether or not this board's entry is on the page: a page claiming more than
+        // the one item GitHub links a draft to is a malformed answer either way.
+        if required_bool(info, "hasNextPage")? || nodes.len() > 1 {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub draft {} reports more board items than the one GitHub links a draft \
+                     to",
+                    id.0
+                ),
+            });
+        }
+        if let Some(node) = nodes.first()
+            && node
+                .pointer("/project/number")
+                .and_then(Value::as_u64)
+                .is_none()
+        {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub draft {} board item has no numeric project number",
+                    id.0
+                ),
+            });
+        }
+        let Some(held) = self.board_entry(nodes) else {
+            return Ok(None);
+        };
+        if required_str(
+            held.get("project").ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} board item has no project", id.0),
+            })?,
+            "id",
+        )? != self.board_fields().await?.id.as_str()
+        {
+            return Ok(None);
+        }
+        let item = json!({
+            "id": required_str(held, "id")?,
+            "project": held.get("project"),
+            "fieldValues": held.get("fieldValues"),
+            "content": draft,
+        });
+        self.resolve(&item)
+    }
+
+    /// The board's own id and field definitions, for a write whose item does not carry
+    /// them — never its items.
+    ///
+    /// A board this command has already listed supplies them, since it read them beside its
+    /// items; otherwise they come from [`graphql::BOARD_FIELDS`], once per command. Neither
+    /// is consulted about which items the board holds: see the module documentation for
+    /// why a question about one known item is answered by reading that item.
+    async fn board_fields(&self) -> Result<BoardFields, SourceError> {
+        if let Some(board) = self.board_cache()?.as_ref() {
+            return Ok(BoardFields {
+                id: BoardId::parse(&board.id)?,
+                fields: board.fields.clone(),
+            });
+        }
+        if let Some(held) = self.fields_cache()?.clone() {
+            return Ok(held);
+        }
+        let data = self
+            .graphql(
+                graphql::BOARD_FIELDS,
+                json!({"owner":self.owner,"number":self.project_number,
+                       "nestedFirst":NESTED_PAGE_SIZE}),
+            )
+            .await?;
+        let board = data
+            .pointer("/boardFields/projectV2")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "GitHub project {}/{} was not found or is not visible to the token",
+                    self.owner, self.project_number
+                ),
+            })?;
+        let read = BoardFields {
+            id: BoardId::parse(required_str(board, "id")?)?,
+            fields: board.get("fields").cloned().unwrap_or(Value::Null),
+        };
+        *self.fields_cache()? = Some(read.clone());
+        Ok(read)
+    }
+
+    /// This process's own view of the board's fields, or the refusal a poisoned lock is.
+    fn fields_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<BoardFields>>, SourceError> {
+        self.fields_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of the board's fields was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
+    }
+
+    /// What a write to `item` needs of the board, read off that item when it says enough and
+    /// off [`Self::board_fields`] when it does not.
+    ///
+    /// A node read of an item names its board and carries the definition of every field it
+    /// holds a value of — so an item naming its board, holding a value of the origin field,
+    /// and, when the write carries a status, holding a `Status` value, needs no read of the
+    /// board at all. **Nothing the item does not say is guessed:** a field it holds no value
+    /// of may still be on the board, and a view reading it as absent would refuse a write the
+    /// board can take or skip a field write the board needs, so such an item — and a create,
+    /// which has no item yet — takes the board's fields from their own read instead.
+    async fn fields_for(
+        &self,
+        item: Option<&Resolved>,
+        writes_status: bool,
+    ) -> Result<BoardFields, SourceError> {
+        if let Some(item) = item
+            && let Some(board_id) = item.named_board()
+            && item.defines(ORIGIN_FIELD)
+            && (!writes_status || item.defines("Status"))
+        {
+            return Ok(BoardFields {
+                id: board_id,
+                fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+            });
+        }
+        self.board_fields().await
     }
 
     /// Everything filed under one issue of this board, walked to exhaustion — or `None`
@@ -3024,9 +3258,9 @@ impl GitHubProjectsSource {
 
     /// Every item on the board: the union of both enumerations GitHub offers of one.
     ///
-    /// Neither contains the other, so neither is dropped — only `ProjectV2.items` reaches a
-    /// board **draft** and the board's own fields, and only the search reports an item that
-    /// connection is behind on. The module documentation is where the lag and the
+    /// Neither contains the other, so neither is dropped — only `ProjectV2.items` lists a
+    /// board **draft** and reads the board's own fields beside its items, and only the search
+    /// reports an item that connection is behind on. The module documentation is where the lag and the
     /// measurements behind it are written down.
     ///
     /// A search result is admitted on the same terms as any other issue this source reaches
@@ -3333,7 +3567,7 @@ impl GitHubProjectsSource {
     /// it — which is the name a read of the item reports once it sits there.
     fn column_for(
         &self,
-        board: &Board,
+        fields: &Value,
         status: &Status,
         target: &StatusTarget,
     ) -> Result<Option<(String, String, String)>, SourceError> {
@@ -3349,7 +3583,7 @@ impl GitHubProjectsSource {
                 category_name(status.category)
             ),
         };
-        let Some(field) = Board::field(&board.fields, "Status")? else {
+        let Some(field) = Board::field(fields, "Status")? else {
             return Err(missing("this board has no Status field"));
         };
         if required_str(field, "__typename")? != "ProjectV2SingleSelectField" {
@@ -3393,26 +3627,20 @@ impl GitHubProjectsSource {
     /// What a status write to one item needs of the board: the board's id and the
     /// definition of its `Status` field, read off the item when the item says both.
     ///
-    /// The same reasoning as [`Self::board_for_update`]: a node read of the item names its
-    /// board, and its `Status` value carries that field's definition, options and all. An
-    /// item that does not say — no board id, or no `Status` value to read the field off —
-    /// sends this back to reading the board, as does a board this command has already read.
-    async fn status_board(&self, item: &Resolved) -> Result<Board, SourceError> {
-        let defines_status = item
-            .fields
-            .iter()
-            .any(|field| field.get("name").and_then(Value::as_str) == Some("Status"));
-        if self.board_cache()?.is_none()
-            && defines_status
-            && let Some(board_id) = &item.board_id
+    /// The same reasoning as [`Self::fields_for`]: a node read of the item names its board,
+    /// and its `Status` value carries that field's definition, options and all. An item that
+    /// does not say — no board id, or no `Status` value to read the field off — takes them
+    /// from [`Self::board_fields`], which reads no item.
+    async fn status_board(&self, item: &Resolved) -> Result<BoardFields, SourceError> {
+        if item.defines("Status")
+            && let Some(board_id) = item.named_board()
         {
-            return Ok(Board {
-                id: board_id.clone(),
+            return Ok(BoardFields {
+                id: board_id,
                 fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
-                items: Vec::new(),
             });
         }
-        self.board().await
+        self.board_fields().await
     }
 
     /// Set one task's status and nothing else; see [`TaskSource::set_task_status`].
@@ -3435,22 +3663,22 @@ impl GitHubProjectsSource {
             category,
             name: category_name(category).to_owned(),
         };
-        let (field, option, name) =
-            self.column_for(&board, &wanted, &target)?
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!(
-                        "status {} of source {} names no board Status option",
-                        category_name(category),
-                        self.name
-                    ),
-                })?;
+        let (field, option, name) = self
+            .column_for(&board.fields, &wanted, &target)?
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!(
+                    "status {} of source {} names no board Status option",
+                    category_name(category),
+                    self.name
+                ),
+            })?;
         match &target {
             StatusTarget::Terminal(_, reason) => {
                 if item.content_kind == ContentKind::DraftIssue {
                     return Err(self.closes_a_draft(category));
                 }
                 self.set_item_field(
-                    &board.id,
+                    board.id.as_str(),
                     &item.item_id,
                     &field,
                     json!({"singleSelectOptionId": option}),
@@ -3482,7 +3710,7 @@ impl GitHubProjectsSource {
                     item.closed = false;
                 }
                 self.set_item_field(
-                    &board.id,
+                    board.id.as_str(),
                     &item.item_id,
                     &field,
                     json!({"singleSelectOptionId": option}),
@@ -3806,7 +4034,8 @@ impl GitHubProjectsSource {
     /// own answer, which carries an issue's body — so an issue's recorded edges cost no
     /// request beyond the read already made, and reading the board for them would be a
     /// walk of every item for one field of one. A draft has no body in that answer, because
-    /// a draft lives only inside the board, so a draft's are read off the board as before.
+    /// a draft is not an issue, so a draft's are read off its own read by id — never off a
+    /// listing of the board, which can be behind on the very item asked about.
     async fn recorded_edges(
         &self,
         id: &NativeId,
@@ -3823,13 +4052,7 @@ impl GitHubProjectsSource {
                 metadata_body(body.as_str().map(str::to_owned))?.1
             }
             _ => {
-                let Some(item) = self
-                    .board()
-                    .await?
-                    .items
-                    .into_iter()
-                    .find(|item| item.id == *id)
-                else {
+                let Some(item) = self.item_by_id(id).await? else {
                     return Ok(Vec::new());
                 };
                 item.slot
@@ -3868,12 +4091,13 @@ impl GitHubProjectsSource {
     /// board does not hold, and a parent that is a draft, which GitHub gives no sub-issues,
     /// both of which `addSubIssue` would likewise refuse too late. Whether the entry exists
     /// and is visible to the token is checked where its node id is resolved, still before
-    /// `createIssue`. The parent is read off `board`, which is completed from
-    /// this process's own record, so a project created moments ago in this command answers
-    /// though GitHub's board read has not caught up.
-    fn creation_target(
+    /// `createIssue`. The parent is read by its own id through [`Self::item_by_id`] — never
+    /// looked up in a listing of the board, which can be minutes behind an issue its own
+    /// `projectItems` already places on it — and that read answers first from this process's
+    /// own record, so a project created moments ago in this command answers though GitHub
+    /// has not caught up.
+    async fn creation_target(
         &self,
-        board: &Board,
         incoming: &Incoming<'_>,
     ) -> Result<RepositoryTarget, SourceError> {
         let fallback = self.configured_repository()?;
@@ -3884,25 +4108,22 @@ impl GitHubProjectsSource {
                 incoming.title
             )
         };
-        let parent = incoming
-            .parent
-            .map(|parent| {
-                board
-                    .items
-                    .iter()
-                    .find(|item| item.id == *parent)
-                    .ok_or_else(|| SourceError::Refused {
-                        message: format!(
-                            "GitHub project issue {} was not found on the board of source {}, \
-                             so {} cannot be filed under it",
-                            parent.0,
-                            self.name,
-                            what(incoming)
-                        ),
-                    })
-            })
-            .transpose()?;
+        let parent = match incoming.parent {
+            Some(parent) => Some(self.item_by_id(parent).await?.ok_or_else(|| {
+                SourceError::Refused {
+                    message: format!(
+                        "GitHub project issue {} was not found on the board of source {}, so {} \
+                         cannot be filed under it",
+                        parent.0,
+                        self.name,
+                        what(incoming)
+                    ),
+                }
+            })?),
+            None => None,
+        };
         let parents_repository = parent
+            .as_ref()
             .map(|parent| {
                 // A draft is on the board and so is found, but it has no repository to
                 // place a task in and GitHub gives it no sub-issues, so `addSubIssue`
@@ -4052,33 +4273,34 @@ impl GitHubProjectsSource {
                 ),
             });
         }
-        let board = match target {
-            Some(target) => match self.board_for_update(target, incoming, depends_on).await? {
-                Some(board) => board,
-                None => self.board().await?,
-            },
-            None => self.board().await?,
+        // The destination is read by its own id, and whether this board holds it is decided
+        // by that read — its own `projectItems` — rather than by whether a listing of the
+        // board happens to include it yet. See the module documentation.
+        let existing = match target {
+            Some(target) => {
+                Some(
+                    self.item_by_id(target)
+                        .await?
+                        .ok_or_else(|| SourceError::Refused {
+                            message: format!("GitHub destination item {} was not found", target.0),
+                        })?,
+                )
+            }
+            None => None,
         };
+        let existing = existing.as_ref();
+        let board = self
+            .fields_for(existing, incoming.written.status().is_some())
+            .await?;
         let status_target = incoming
             .written
             .status()
             .map(|status| self.resolved_target(status.category))
             .transpose()?;
         let column = match (incoming.written.status(), status_target.as_ref()) {
-            (Some(status), Some(target)) => self.column_for(&board, status, target)?,
+            (Some(status), Some(target)) => self.column_for(&board.fields, status, target)?,
             _ => None,
         };
-        let existing = target
-            .map(|target| {
-                board
-                    .items
-                    .iter()
-                    .find(|item| item.id == *target)
-                    .ok_or_else(|| SourceError::Refused {
-                        message: format!("GitHub destination item {} was not found", target.0),
-                    })
-            })
-            .transpose()?;
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
             if let (Some(StatusTarget::Terminal(_, _)), Some(status)) =
@@ -4116,14 +4338,14 @@ impl GitHubProjectsSource {
         let (own_repository, creation_target) = match existing {
             Some(item) => (item.own_repository.clone(), None),
             None => {
-                let target = self.creation_target(&board, incoming)?;
+                let target = self.creation_target(incoming).await?;
                 let origin = Repository::try_from(target.origin())
                     .map_err(|message| SourceError::Config { message })?;
                 (Some(origin), Some(target))
             }
         };
         let (native, fallback) = self
-            .partition_edges(&board, incoming.written.kind(), content_kind, depends_on)
+            .partition_edges(incoming.written.kind(), content_kind, depends_on)
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
@@ -4184,7 +4406,7 @@ impl GitHubProjectsSource {
                         message: "a new item was decided without a repository to create it in"
                             .into(),
                     })?;
-                self.create_and_file_issue(&board, target, incoming, &body)
+                self.create_and_file_issue(board.id.as_str(), target, incoming, &body)
                     .await?
             }
         };
@@ -4200,7 +4422,7 @@ impl GitHubProjectsSource {
         // makes the retry create a second.
         let landed = self
             .finish_write(
-                &board,
+                board.id.as_str(),
                 incoming,
                 &content_id,
                 &item_id,
@@ -4276,7 +4498,7 @@ impl GitHubProjectsSource {
             own_repository,
             repositories: incoming.repositories.to_vec(),
             slot,
-            board_id: Some(board.id.clone()),
+            board_id: Some(board.id.as_str().to_owned()),
             fields: board
                 .fields
                 .get("nodes")
@@ -4286,84 +4508,6 @@ impl GitHubProjectsSource {
         };
         self.remember_written(remembered, existing.is_none())?;
         Ok(content_id)
-    }
-
-    /// What an update of an item this board already holds needs of the board, read off that
-    /// item rather than off the board — or `None` when the item cannot say enough, and the
-    /// board has to be read after all.
-    ///
-    /// An update needs the item it updates, the board's own id for a field write, the
-    /// definitions of the `Status` and origin fields it writes, and every same-source far end
-    /// its edges name. The first three ride along on the item's own node read — its board
-    /// entry names the board's id, and each field value on it carries the definition of the
-    /// field it is a value of — and each far end is read by its own node id. So updating one
-    /// item costs a read of that item rather than every page of the board, which is what a
-    /// copy naming one member out of many is for.
-    ///
-    /// **Nothing the item does not say is guessed.** A field this item holds no value of may
-    /// still be on the board, and a view that read it as absent would refuse a write the
-    /// board can take, or skip a field write the board needs. So a board this command has
-    /// already read is used as it is, and an item that does not name its board, holds no
-    /// value of the origin field, or holds no `Status` value when the write carries a status,
-    /// sends the write back to reading the board — exactly as every update read it before.
-    async fn board_for_update(
-        &self,
-        target: &NativeId,
-        incoming: &Incoming<'_>,
-        depends_on: &[DependencyEdge],
-    ) -> Result<Option<Board>, SourceError> {
-        if self.board_cache()?.is_some() {
-            return Ok(None);
-        }
-        let Some(existing) = self.item_by_id(target).await? else {
-            return Ok(None);
-        };
-        let Some(board_id) = existing.board_id.clone() else {
-            return Ok(None);
-        };
-        let defines = |name: &str| {
-            existing
-                .fields
-                .iter()
-                .any(|field| field.get("name").and_then(Value::as_str) == Some(name))
-        };
-        if !defines(ORIGIN_FIELD) || (incoming.written.status().is_some() && !defines("Status")) {
-            return Ok(None);
-        }
-        let fields = json!({"nodes": existing.fields, "pageInfo": {"hasNextPage": false}});
-        let mut items = vec![existing];
-        for edge in depends_on {
-            if !edge
-                .to
-                .source()
-                .is_none_or(|source| source == self.name.as_str())
-            {
-                continue;
-            }
-            // The first colon, for the reason `partition_edges` gives.
-            let far = NativeId(if edge.to.is_qualified() {
-                edge.to
-                    .id()
-                    .split_once(':')
-                    .map_or(edge.to.id(), |(_, native)| native)
-                    .to_owned()
-            } else {
-                edge.to.id().to_owned()
-            });
-            if items.iter().any(|item| item.id == far) {
-                continue;
-            }
-            match self.item_by_id(&far).await? {
-                Some(item) => items.push(item),
-                // Refused against the whole board, in the words that refusal has always had.
-                None => return Ok(None),
-            }
-        }
-        Ok(Some(Board {
-            id: board_id,
-            fields,
-            items,
-        }))
     }
 
     /// Everything a write does after the item exists: its board fields, its parent, and
@@ -4379,7 +4523,7 @@ impl GitHubProjectsSource {
     #[allow(clippy::too_many_arguments)]
     async fn finish_write(
         &self,
-        board: &Board,
+        board_id: &str,
         incoming: &Incoming<'_>,
         content_id: &NativeId,
         item_id: &str,
@@ -4392,13 +4536,13 @@ impl GitHubProjectsSource {
         native: &[String],
     ) -> Result<(), SourceError> {
         if let Some(field_id) = origin_field {
-            self.set_item_field(&board.id, item_id, field_id, json!({"text":origin}))
+            self.set_item_field(board_id, item_id, field_id, json!({"text":origin}))
                 .await?;
         }
 
         if let Some((field_id, option_id)) = column {
             self.set_item_field(
-                &board.id,
+                board_id,
                 item_id,
                 &field_id,
                 json!({"singleSelectOptionId":option_id}),
@@ -4455,10 +4599,12 @@ impl GitHubProjectsSource {
     ///
     /// Deleting the issue takes its board item with it, so there is no second mutation to
     /// keep in step. An id the board does not hold is not an error: the item is already
-    /// gone, which is the state this asks for.
+    /// gone, which is the state this asks for. Which that is, is decided by reading the item
+    /// by its own id — a listing of the board can still be missing an item it holds, and
+    /// reading that as *already gone* would leave behind the very item this was asked to
+    /// take back.
     async fn delete_item(&self, id: &NativeId) -> Result<(), SourceError> {
-        let board = self.board().await?;
-        let Some(item) = board.items.iter().find(|item| item.id == *id) else {
+        let Some(item) = self.item_by_id(id).await? else {
             return Ok(());
         };
         if item.content_kind == ContentKind::DraftIssue {
@@ -4549,7 +4695,6 @@ impl GitHubProjectsSource {
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
     async fn partition_edges(
         &self,
-        board: &Board,
         near_kind: BoardKind,
         near_content: ContentKind,
         depends_on: &[DependencyEdge],
@@ -4573,12 +4718,12 @@ impl GitHubProjectsSource {
             } else {
                 edge.to.id()
             };
+            // A same-source far end is read by its own id, exactly as the item it is a far end
+            // of is: whether this board holds it is that read's answer, never a listing's.
             let far = if same_source {
                 Some(
-                    board
-                        .items
-                        .iter()
-                        .find(|item| item.id.0 == far_id)
+                    self.item_by_id(&NativeId(far_id.to_owned()))
+                        .await?
                         .ok_or_else(|| SourceError::Refused {
                             message: format!("GitHub dependency item {far_id} was not found"),
                         })?,
@@ -4586,6 +4731,7 @@ impl GitHubProjectsSource {
             } else {
                 None
             };
+            let far = far.as_ref();
             // The caller says which kind the far end is, and this board holds the far end
             // itself, so a disagreement is settled here rather than stored: recorded, the
             // wrong kind would read back as a cross-level edge that never existed; written
@@ -4696,7 +4842,7 @@ impl GitHubProjectsSource {
     /// would report no location for the rest of the run.
     async fn create_and_file_issue(
         &self,
-        board: &Board,
+        board_id: &str,
         repository: &RepositoryTarget,
         incoming: &Incoming<'_>,
         body: &Option<String>,
@@ -4727,7 +4873,7 @@ impl GitHubProjectsSource {
         let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,
-                json!({"input":{"projectId":board.id,"contentId":content_id.0}}),
+                json!({"input":{"projectId":board_id,"contentId":content_id.0}}),
             )
             .await
         {
@@ -4853,7 +4999,8 @@ enum Reached {
     Held(Box<Resolved>),
     /// Nothing this board holds: no such node, or a node on some other board.
     Nothing,
-    /// A board draft, which exists only inside the board's own item connection.
+    /// A board draft, which [`graphql::ISSUE`] reaches and reads nothing of, so it is read
+    /// again by [`GitHubProjectsSource::draft_by_id`].
     Draft,
 }
 
@@ -4888,6 +5035,41 @@ struct Board {
     id: String,
     fields: Value,
     items: Vec<Resolved>,
+}
+
+/// What a write needs of the board and nothing more: its node id and its field
+/// definitions, in the shape a read of the board's own `fields` gives them.
+///
+/// Deliberately no items. A write decides which item it writes, which parent it files
+/// under and which far ends it names by reading each of them by its own id; this is the
+/// half of the board those reads cannot carry, and holding no item is what keeps it from
+/// ever being asked whether an item is there.
+#[derive(Clone)]
+struct BoardFields {
+    id: BoardId,
+    fields: Value,
+}
+
+/// A board's node id: what a field write and `addProjectV2ItemById` address.
+///
+/// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
+/// refused where it is read, and one an item names blank is read as not named at all.
+#[derive(Clone)]
+struct BoardId(String);
+
+impl BoardId {
+    fn parse(id: &str) -> Result<Self, SourceError> {
+        if id.trim().is_empty() {
+            return Err(SourceError::Malformed {
+                message: "GitHub named a board with a blank node id".into(),
+            });
+        }
+        Ok(Self(id.to_owned()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Board {
@@ -4948,6 +5130,22 @@ struct Resolved {
 }
 
 impl Resolved {
+    /// The board this item's own read names it on, when that read named one this source can
+    /// address.
+    fn named_board(&self) -> Option<BoardId> {
+        self.board_id
+            .as_deref()
+            .and_then(|id| BoardId::parse(id).ok())
+    }
+
+    /// Whether this item holds a value of the board field called `name`, and so carries
+    /// that field's definition. `false` says nothing about whether the board has the field.
+    fn defines(&self, name: &str) -> bool {
+        self.fields
+            .iter()
+            .any(|field| field.get("name").and_then(Value::as_str) == Some(name))
+    }
+
     /// The metadata a caller sees: their own keys, plus the copy origin this source keeps
     /// in a field of its own, and none of the five keys that are only an encoding.
     ///

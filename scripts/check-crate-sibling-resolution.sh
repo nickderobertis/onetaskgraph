@@ -85,42 +85,14 @@ version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/onetaskgraph/Cargo.toml
   "crates/onetaskgraph/Cargo.toml has no plain X.Y.Z version ('$version')" "restore that manifest's version and rerun"
 newer="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 
-# Served over loopback on a port the kernel picks, by a server of this check's own rather
-# than `python3 -m http.server`. That one binds through `HTTPServer.server_bind`, which
-# names itself with `socket.getfqdn(host)` BEFORE printing the banner this used to read the
-# port out of — and on the macOS runner that reverse lookup of 127.0.0.1 outlasted the whole
-# wait, so a registry that had in fact bound was reported as one that never reported a
-# port, with an empty log where the reason belonged. So the registry below binds without
-# the lookup, as scripts/check-npm-publish.sh does for the same reason, and writes its port
-# to a file of its own the moment it has one: the same report on every platform, read from
-# nothing a platform's resolver can delay. This is the one process this check starts, so it
-# is the one it stops.
-cat > "$scratch/registry.py" <<'PY'
-import functools
-import http.server
-import socketserver
-import sys
-
-port_file, root = sys.argv[1:]
-
-
-class Loopback(http.server.ThreadingHTTPServer):
-    """Bound without the reverse DNS lookup `HTTPServer.server_bind` does on its own account."""
-
-    def server_bind(self):
-        socketserver.TCPServer.server_bind(self)
-        self.server_name = "127.0.0.1"
-        self.server_port = self.server_address[1]
-
-
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
-server = Loopback(("127.0.0.1", 0), handler)
-with open(port_file, "w", encoding="utf-8") as handle:
-    handle.write(str(server.server_address[1]))
-server.serve_forever()
-PY
+# Launched from $ROOT rather than from the copy below because this registry instruments
+# the check; it is not part of the tree under test.
+registry_launcher="$ROOT/scripts/loopback-crate-registry.py"
+[ -r "$registry_launcher" ] || fatal \
+  "could not read $registry_launcher, which is the loopback index this check resolves against" \
+  "restore that file with 'git checkout -- scripts/loopback-crate-registry.py' and rerun"
 port_file="$scratch/port"
-python3 "$scratch/registry.py" "$port_file" "$scratch/registry" > "$scratch/server.log" 2>&1 &
+python3 "$registry_launcher" "$port_file" "$scratch/registry" > "$scratch/server.log" 2>&1 &
 server_pid=$!
 # Thirty seconds, which is what check-npm-publish.sh and test-distribution.sh give the
 # servers they stand up the same way. The liveness break keeps that generosity off the one
