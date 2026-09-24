@@ -56,11 +56,11 @@ SESSIONS = {
 }
 
 WORKFLOW = Path(".github/workflows/ci.yml")
-# Every step that re-runs a live crate's tests from outside the `test` target, and why each
-# one would otherwise open a session of its own. A step here is not a path the engine
-# consults about affected selection, so clearing is the only thing between it and a real
-# API — which is what kept this list at one entry while the second was opening a session on
-# every gate of every branch, unknown to this guard.
+# Every script that runs a whole package's tests, and why each would otherwise open a
+# session of its own. Which scripts belong here is NOT this map's own claim — it is
+# reconciled below, both ways, against a scan of `scripts/` for the invocation that does it,
+# because a hand-kept inventory is exactly what let one of these run credentialed on every
+# gate of every branch with nothing to notice.
 CLEARERS = {
     Path("scripts/rust-coverage.sh"): (
         "`just check` runs `test` and then `coverage`, and `cargo llvm-cov` re-runs the "
@@ -410,6 +410,49 @@ for wrong in ("GITHUB_PROJECTS_TOKEN:", "secrets.GITHUB_PROJECTS_TOKEN"):
 # environment a scratch clone strips is the other — and a scan that read only the first
 # would report a step that clears the credentials second as clearing nothing.
 demanded_names = {session["credential"] for session in SESSIONS.values()} | {DEMAND}
+
+# A `cargo test`/`nextest` run that names a package and NO `--test` target runs that
+# package's `tests/live.rs` among the rest, so the credentials decide whether it reaches a
+# real API. A run that names its test target is left out and left to itself:
+# scripts/check-live-decline.sh drives `--test live` on purpose and sets the credential
+# explicitly for each of its cases rather than inheriting one.
+#
+# Continuations are joined first — these invocations are written over five or six lines —
+# and comments stripped, because several of these scripts quote such a command in a
+# diagnostic or an explanation.
+RUNS_A_WHOLE_PACKAGE = re.compile(r"\bcargo\b[^\n]*\b(?:test|nextest)\b")
+NAMES_A_PACKAGE = re.compile(r"(?<!\S)(?:-p|--package)(?!\S)")
+NAMES_A_TEST_TARGET = re.compile(r"(?<!\S)--test(?!\S)")
+
+runners = set()
+for script in sorted(Path("scripts").glob("*.sh")):
+    joined = re.sub(
+        r"\\\n", " ", without_comments(read(script, "a script of this repository"))
+    )
+    for command in joined.splitlines():
+        if (
+            RUNS_A_WHOLE_PACKAGE.search(command)
+            and NAMES_A_PACKAGE.search(command)
+            and not NAMES_A_TEST_TARGET.search(command)
+        ):
+            runners.add(script)
+            break
+
+for script in sorted(runners - set(CLEARERS)):
+    problems.append(
+        f"{script.as_posix()}: runs a whole package's tests — its `tests/live.rs` among "
+        "them — and is not in the CLEARERS map in this script, so nothing holds it to "
+        "clearing the credentials. Add it there with the reason it would otherwise open a "
+        "session, and clear them in it"
+    )
+for clearer in sorted(set(CLEARERS) - runners):
+    problems.append(
+        f"{clearer.as_posix()}: is in the CLEARERS map in this script, but no longer runs a "
+        "whole package's tests — so this guard is watching a file that cannot open a "
+        "session while whatever replaced it goes unwatched. Remove the entry, or point it "
+        "at the script that took the run over"
+    )
+
 for clearer, why in sorted(CLEARERS.items()):
     source = read(clearer, "a step that re-runs a live crate's tests")
     cleared_names = {

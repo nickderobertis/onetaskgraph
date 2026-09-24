@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
-# Watch the fixture-discrimination step run with no way to reach a real API.
+# Prove the fixture-discrimination step cannot open a live session — on the process, not the
+# text.
 #
-# That step runs the WHOLE onetaskgraph-github-projects package's tests, twice, in a scratch
-# copy, on every gate — it sits outside the affected-selection fan-out on purpose — and that
-# package's `tests/live.rs` is an ordinary test of it. So while the ambient credentials
-# reached the `cargo` it invokes, the step opened a real GitHub Projects session on every
-# gate of every branch, including branches whose diff reaches no plugin behaviour at all: the
-# account's shared GraphQL allowance spent on a claim about in-process fixtures, and a lane
-# elsewhere declined for want of the budget this one drew down.
-#
-# `scripts/check-live-lane.sh` asserts the `unset` line is there. That is a claim about the
-# text of a script, and the property is about what a process receives — so this drives the
-# REAL step, with all three variables seeded PRESENT, behind a stand-in `cargo` that records
-# the environment of every invocation it is given, and reads those recordings back. A
-# sentinel seeded beside the credentials is required to arrive in each one: without it, a
-# recording that captured nothing at all would report every credential as absent and read
-# exactly like a pass.
+# scripts/check-live-lane.sh asserts that step carries the `unset` line. This drives the REAL
+# step with every credential seeded PRESENT, behind a stand-in `cargo` that records the
+# environment of each invocation it is handed. A sentinel seeded beside the credentials has
+# to arrive in every recording: a recording that captured nothing would report each
+# credential absent and read exactly like a pass. AGENTS.md records why that step is where a
+# second session per lane would otherwise come from.
 set -euo pipefail
 
 fatal() {
@@ -33,13 +25,36 @@ cd "$ROOT" || fatal \
   "check that directory's permissions, then rerun"
 
 readonly STEP="scripts/check-fixture-discrimination.sh"
-[ -r "$ROOT/$STEP" ] || fatal \
-  "$STEP is missing, so the step this check drives does not exist" \
-  "restore it with 'git checkout -- $STEP', or point this check at where it moved to"
+readonly LANE="scripts/check-live-lane.sh"
+for required in "$STEP" "$LANE"; do
+  [ -r "$ROOT/$required" ] || fatal \
+    "$required is missing, so this check has nothing to drive" \
+    "restore it with 'git checkout -- $required', or point this check at where it moved to"
+done
 
-# The three the live crate and the workflow name, which together are everything a session
-# needs to be opened and everything that turns a skip into a failure.
-readonly CREDENTIALS="GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED"
+# Derived, never restated: $LANE's own SESSIONS map and DEMAND are where the credentials and
+# the demand are declared, and scripts/check-credential-names.sh reconciles those names
+# against every file that states them.
+#
+# tr: a value captured from python carries that python's line endings, and on the Windows
+# runner each one arrives as CR LF.
+CREDENTIALS="$(python3 - "$ROOT/$LANE" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+credentials = re.findall(r'"credential": "(\w+)"', text)
+demand = re.search(r'(?m)^DEMAND = "(\w+)"$', text)
+if not credentials or not demand:
+    print("no SESSIONS credentials, or no DEMAND, to read there", file=sys.stderr)
+    raise SystemExit(1)
+sys.stdout.write("".join(f"{name}\n" for name in sorted({*credentials, demand.group(1)})))
+PY
+)" || fatal \
+  "could not read the credentials and the demand out of $LANE" \
+  "restore that guard's SESSIONS map and its DEMAND, or point this check at where they moved"
+CREDENTIALS="$(printf '%s' "$CREDENTIALS" | tr -d '\r')"
 # Seeded beside them and never cleared: its arrival is what makes their absence evidence.
 readonly PROBE=FIXTURE_DISCRIMINATION_ENVIRONMENT_PROBE
 
@@ -52,15 +67,12 @@ mkdir -p "$scratch/bin" "$scratch/invocations" || fatal \
   "could not lay out the stand-in toolchain under $scratch" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
-# The stand-in. It answers the two outcomes the step demands of a real `cargo test` — green
-# on the unmutated tree, then a harness that compiled, ran and FAILED on the mutated one —
-# so the step runs to its own conclusion rather than stopping early on a tool it cannot use.
-# It finds where to record from its own path rather than from a variable, so that a step
-# which later cleared more of the environment could not silently stop it recording.
-#
-# The names alone, not the values: a value is never written to disk here, and a name is the
-# whole of what is being asked — a credential exported as the empty string is still a name
-# the step failed to clear.
+# The stand-in answers the two outcomes the step demands — green, then a harness that
+# compiled, ran and FAILED — so the step reaches its own conclusion. It finds where to record
+# from its own path rather than from a variable, so a step that later cleared more of the
+# environment could not silently stop it recording. Names only, never values: a name is the
+# whole of what is asked, and a credential exported empty is still one the step failed to
+# clear.
 cat >"$scratch/bin/cargo" <<'STANDIN'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -81,35 +93,28 @@ chmod +x "$scratch/bin/cargo" || fatal \
   "could not make the stand-in cargo at $scratch/bin/cargo executable" \
   "check the permissions of \$TMPDIR — a noexec mount is the usual cause — then rerun"
 
-# The real entry point the gate invokes, not a helper lifted out of it: `scripts:test` and
-# `scripts:distribution-test` both run this file by this name.
+# One placeholder value for all of them: only the NAME is asked about here, and nothing
+# credential-shaped is written anywhere.
+seeded=("PATH=$scratch/bin:$PATH" "$PROBE=present")
+for name in $CREDENTIALS; do
+  seeded+=("$name=seeded-by-this-check-and-never-a-real-credential")
+done
+
+# The real entry point the gate invokes, by the name scripts/project.json runs it under.
 STEP_OUTPUT=""
 STEP_STATUS=0
-# `env` rather than an assignment prefix, because the probe's name is held in a variable
-# and bash reads `"$PROBE"=present` as an argument rather than as an assignment.
-STEP_OUTPUT="$(
-  env "PATH=$scratch/bin:$PATH" \
-    GH_PROJECTS_TOKEN=not-a-real-token-seeded-by-this-check \
-    LINEAR_API_KEY=not-a-real-key-seeded-by-this-check \
-    ONETASKGRAPH_LIVE_REQUIRED=1 \
-    "$PROBE=present" \
-    bash "$STEP" 2>&1
-)" && STEP_STATUS=0 || STEP_STATUS=$?
-
-report_step_output() {
-  printf '%s\n' "$STEP_OUTPUT" | sed 's/^/    /' >&2
-}
+STEP_OUTPUT="$(env "${seeded[@]}" bash "$STEP" 2>&1)" && STEP_STATUS=0 || STEP_STATUS=$?
 
 if [ "$STEP_STATUS" -ne 0 ]; then
-  echo "check-fixture-discrimination-credential-free: $STEP did not run to its own" >&2
-  echo "check-fixture-discrimination-credential-free: conclusion behind the stand-in cargo, so" >&2
-  echo "check-fixture-discrimination-credential-free: the recordings below say nothing about" >&2
-  echo "check-fixture-discrimination-credential-free: what its invocations received. It said:" >&2
-  report_step_output
-  echo "check-fixture-discrimination-credential-free: next: if the step now needs something" >&2
-  echo "check-fixture-discrimination-credential-free: more of cargo than a pass and then a" >&2
-  echo "check-fixture-discrimination-credential-free: 'test result: FAILED', teach the stand-in" >&2
-  echo "check-fixture-discrimination-credential-free: in this check to answer it." >&2
+  echo "check-fixture-discrimination-credential-free: $STEP did not reach its own conclusion" >&2
+  echo "check-fixture-discrimination-credential-free: behind the stand-in cargo, so the" >&2
+  echo "check-fixture-discrimination-credential-free: recordings say nothing about what its" >&2
+  echo "check-fixture-discrimination-credential-free: invocations received. It said:" >&2
+  printf '%s\n' "$STEP_OUTPUT" | sed 's/^/    /' >&2
+  echo "check-fixture-discrimination-credential-free: next: if the step now needs more of" >&2
+  echo "check-fixture-discrimination-credential-free: cargo than a pass and then a" >&2
+  echo "check-fixture-discrimination-credential-free: 'test result: FAILED', teach the" >&2
+  echo "check-fixture-discrimination-credential-free: stand-in in this check to answer it." >&2
   exit 1
 fi
 
@@ -117,21 +122,19 @@ recordings="$(find "$scratch/invocations" -name '*.names' | sort)" || fatal \
   "could not list what the stand-in cargo recorded under $scratch/invocations" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
-# Two, because the step runs the suite unmutated and then mutated. Fewer means the stand-in
-# was not what the step invoked, and a check reading no recording would find no credential
-# in it and pass.
 count=0
 if [ -n "$recordings" ]; then
   count="$(printf '%s\n' "$recordings" | wc -l | tr -d ' ')"
 fi
+# Two, because the step runs the suite unmutated and then mutated. Fewer means this check
+# read fewer environments than the step handed out, and would find no credential in them.
 if [ "$count" -lt 2 ]; then
   echo "check-fixture-discrimination-credential-free: the stand-in cargo recorded $count" >&2
   echo "check-fixture-discrimination-credential-free: invocation(s), and $STEP runs the suite" >&2
-  echo "check-fixture-discrimination-credential-free: twice — so this check read fewer" >&2
-  echo "check-fixture-discrimination-credential-free: environments than the step handed out and" >&2
-  echo "check-fixture-discrimination-credential-free: would pass on a step that cleared nothing." >&2
+  echo "check-fixture-discrimination-credential-free: twice — so this check would pass on a" >&2
+  echo "check-fixture-discrimination-credential-free: step that cleared nothing." >&2
   echo "check-fixture-discrimination-credential-free: next: confirm the step still resolves" >&2
-  echo "check-fixture-discrimination-credential-free: cargo from PATH rather than an absolute" >&2
+  echo "check-fixture-discrimination-credential-free: cargo from PATH rather than by absolute" >&2
   echo "check-fixture-discrimination-credential-free: path, so a stand-in can be put in front" >&2
   echo "check-fixture-discrimination-credential-free: of it." >&2
   exit 1
@@ -144,23 +147,31 @@ while IFS= read -r recording; do
   if ! grep -qx -- "$PROBE" "$recording"; then
     echo "check-fixture-discrimination-credential-free: invocation $invocation never received" >&2
     echo "check-fixture-discrimination-credential-free: $PROBE, which this check seeds beside" >&2
-    echo "check-fixture-discrimination-credential-free: the credentials and nothing clears — so" >&2
-    echo "check-fixture-discrimination-credential-free: the recording is not the environment" >&2
-    echo "check-fixture-discrimination-credential-free: that invocation was given, and a" >&2
-    echo "check-fixture-discrimination-credential-free: credential missing from it is evidence" >&2
-    echo "check-fixture-discrimination-credential-free: of nothing." >&2
+    echo "check-fixture-discrimination-credential-free: the credentials and nothing clears, so" >&2
+    echo "check-fixture-discrimination-credential-free: a credential missing from that" >&2
+    echo "check-fixture-discrimination-credential-free: recording is evidence of nothing." >&2
+    echo "check-fixture-discrimination-credential-free: next: repair the recording rather than" >&2
+    echo "check-fixture-discrimination-credential-free: the step — check that the stand-in's" >&2
+    echo "check-fixture-discrimination-credential-free: python3 still writes every name of its" >&2
+    echo "check-fixture-discrimination-credential-free: own environment, and that $STEP does" >&2
+    echo "check-fixture-discrimination-credential-free: not start its cargo with a cleared" >&2
+    echo "check-fixture-discrimination-credential-free: environment ('env -i' or similar)," >&2
+    echo "check-fixture-discrimination-credential-free: which would need a probe it preserves." >&2
     failures=$((failures + 1))
     continue
   fi
   for name in $CREDENTIALS; do
     if grep -qx -- "$name" "$recording"; then
       echo "check-fixture-discrimination-credential-free: invocation $invocation of cargo" >&2
-      echo "check-fixture-discrimination-credential-free: received $name. $STEP runs the whole" >&2
-      echo "check-fixture-discrimination-credential-free: onetaskgraph-github-projects package," >&2
-      echo "check-fixture-discrimination-credential-free: whose tests/live.rs opens a real" >&2
-      echo "check-fixture-discrimination-credential-free: session — on every gate of every" >&2
-      echo "check-fixture-discrimination-credential-free: branch, since this step is outside" >&2
+      echo "check-fixture-discrimination-credential-free: received $name, so $STEP can open a" >&2
+      echo "check-fixture-discrimination-credential-free: live session — on every gate of every" >&2
+      echo "check-fixture-discrimination-credential-free: branch, since it runs a whole hosted" >&2
+      echo "check-fixture-discrimination-credential-free: plugin's package from outside" >&2
       echo "check-fixture-discrimination-credential-free: affected selection." >&2
+      echo "check-fixture-discrimination-credential-free: next: clear $name near the top of" >&2
+      echo "check-fixture-discrimination-credential-free: $STEP, as scripts/rust-coverage.sh" >&2
+      echo "check-fixture-discrimination-credential-free: clears it and for the reason" >&2
+      echo "check-fixture-discrimination-credential-free: AGENTS.md records." >&2
       failures=$((failures + 1))
     fi
   done
@@ -169,10 +180,7 @@ $recordings
 EOF
 
 if [ "$failures" -ne 0 ]; then
-  echo "check-fixture-discrimination-credential-free: $failures problem(s) above." >&2
-  echo "check-fixture-discrimination-credential-free: next: restore 'unset $CREDENTIALS'" >&2
-  echo "check-fixture-discrimination-credential-free: near the top of $STEP. AGENTS.md records" >&2
-  echo "check-fixture-discrimination-credential-free: why one session per lane per run is what" >&2
-  echo "check-fixture-discrimination-credential-free: this protects." >&2
+  echo "check-fixture-discrimination-credential-free: $failures problem(s) above, each with" >&2
+  echo "check-fixture-discrimination-credential-free: what to do about it." >&2
   exit 1
 fi

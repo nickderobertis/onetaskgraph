@@ -472,8 +472,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `GH_PROJECTS_TOKEN`, `LINEAR_API_KEY` and `ONETASKGRAPH_LIVE_REQUIRED` — the demand with
   the credentials, or the skip that clearing produces fails the step for a session it is
   deliberately not running.** `scripts/check-live-lane.sh` holds every such step to it, and
-  is itself watched refusing a step that drops the line, by
-  `scripts/check-live-lane-enforced.sh`. But that guard reads the TEXT of a script, and the
+  **which steps those are is not a list it keeps** — it reconciles them, both ways, against a
+  scan of `scripts/` for a `cargo test`/`nextest` run that names a package and no `--test`
+  target, because a hand-kept inventory at one entry is precisely what let the second run
+  credentialed unnoticed. A run that names its test target is left to itself, which is what
+  `scripts/check-live-decline.sh` does on purpose. That guard is itself watched refusing a
+  step that drops the line, by `scripts/check-live-lane-enforced.sh`. But that guard reads the TEXT of a script, and the
   property is about what a process receives — the defect lasted as long as it did because
   the guard could see one step and nothing at all could see a process — so
   `scripts/check-fixture-discrimination-credential-free.sh` drives the real step with all

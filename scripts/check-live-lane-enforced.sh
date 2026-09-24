@@ -9,11 +9,8 @@
 # the value which leaves the lane free to skip. Neither hole was visible from a passing
 # run, because on this repository both arrangements are correct.
 #
-# A third was the same defect in the other half of the arrangement: that guard's
-# one-session assertion read a single script, and a second step —
-# scripts/check-fixture-discrimination.sh, which runs a whole hosted plugin's package twice
-# on every gate from outside affected selection — was opening a real session for every
-# branch with nothing here to notice.
+# A third was the same hole in its one-session assertion, which read a single script while a
+# second was opening a real session on every gate.
 #
 # So each one is introduced for real, in a scratch clone, and every case asserts on the
 # DIAGNOSTIC as well as the exit status: a guard that refuses without naming the file and
@@ -337,12 +334,8 @@ expect_refused "the crate and the workflow disagreeing about the demand" \
   "$WORKFLOW" "which is not the demand" "It has to be yes"
 reset_fixture
 
-# 13. A step outside the `test` target that re-runs a live crate's package without
-#     clearing the credentials. This is the arrangement that existed unwatched: the
-#     fixture-discrimination step runs the whole onetaskgraph-github-projects package
-#     twice, on every gate, from outside affected selection — so with the credentials
-#     intact it opened a real session for every branch, and the guard that is supposed to
-#     hold this repository to one session per lane per run could not see it.
+# 13. A step outside the `test` target re-running a live crate's package with the
+#     credentials intact. This one existed unwatched, which is why it is a case.
 substitute "$FIXTURE_STEP" 'unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 ' ''
 run_guard
