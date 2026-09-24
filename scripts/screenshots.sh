@@ -26,10 +26,7 @@
 # The renderer comes from scripts/screenshots-freeze.sh, which owns the pin and the
 # location; provision it with `just screenshots-tools`.
 #
-# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] Every shell script here lives
-# under scripts/ because three commands of that project enumerate that one directory, so a
-# capture script filed under screenshots/ escapes all three in silence. screenshots/AGENTS.md,
-# "Where this machinery lives", is the whole of the reasoning.
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
