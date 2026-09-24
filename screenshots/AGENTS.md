@@ -115,8 +115,13 @@ binary wrote.
 
 Two costs, stated rather than discovered. That path has to *be* what the kernel reports, so
 the capture refuses where it is not — macOS resolves `/tmp` through a symlink, and the
-binary canonicalises what it prints; the guard there skips loudly and CI's Linux container
-is where the baseline is made. And the vendored font is embedded into every SVG as base64,
+binary canonicalises what it prints; the guard there reports that refusal and **blocks the
+push** rather than letting bytes no baseline can match through, and CI's Linux container is
+where the baseline is made. That is the only place a symlinked ancestor is allowed to
+decide anything: every comparison that asks whether a destination lies inside this tree
+resolves **both** sides, so a clone reached through one — which is every clone under
+macOS's `/var/folders` — is not read as being outside itself.
+And the vendored font is embedded into every SVG as base64,
 so each committed image is about 360 KB — which is what makes a shot render identically on
 GitHub and crates.io with nothing external to fetch.
 

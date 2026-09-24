@@ -29,7 +29,17 @@
 # llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+# `pwd -P` rather than `pwd`, because ROOT is one SIDE of the containment comparison below
+# and the other side is resolved. A logical `pwd` keeps whatever symlink the caller walked
+# in through: on the macOS runner $TMPDIR is /var/folders/…, itself a symlink to
+# /private/var/folders/…, so a clone there had `$ROOT/shots/`* compared against a
+# `pwd -P` that had already resolved that ancestor — and the capture refused its own lane
+# directory, naming two spellings of the SAME path, before any scenario driving it could
+# reach what it was about. Linux is where the two spellings coincide, which is why nothing
+# saw it there. Both sides physical is the fix; the comparison is no weaker for it, because
+# a symlink that redirects out of the clone still resolves somewhere `$ROOT/shots/` is not a
+# prefix of.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" && cd "$ROOT" || {
   echo "screenshots: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
   echo "screenshots: next: run it from a checkout of this repository, as 'just screenshots' does" >&2
   exit 1

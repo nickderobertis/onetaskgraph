@@ -648,6 +648,49 @@ escaped="$(ls -A "$scratch/elsewhere")" || escaped="unreadable"
 rm -f "$CLONE/shots/redirected"
 rm -rf "$scratch/elsewhere"
 
+# 20b. The same containment, over a clone reached through a SYMLINKED ANCESTOR — the one
+#      shape in which a directory genuinely INSIDE the tree can read as outside it. The
+#      capture resolves each candidate destination physically, so the root it compares
+#      against has to be physical too; derived with a logical `pwd` it kept whatever
+#      symlink the caller walked in through, and the two sides then named one directory in
+#      two spellings. That is not hypothetical: $TMPDIR on the macOS runner IS such a
+#      symlink (/var/folders/… → /private/var/folders/…), so every case below this one
+#      refused on containment there rather than reaching what it was about, and the seven
+#      diagnostics all named the same path twice. Linux is where the two spellings
+#      coincide, which is why nothing saw it there.
+#
+#      Both halves, because a root that resolves is only correct if the check still
+#      REFUSES: the lane directory under the alias is accepted, and a symlink out of the
+#      tree reached through that same alias is not.
+readonly ALIAS="$scratch/aliased"
+ln -sfn "$CLONE" "$ALIAS" || fatal \
+  "could not link $ALIAS at the clone this case reaches through a symlink" \
+  "check that 'ln -s' works in \$TMPDIR, then rerun"
+# The premise, asserted rather than assumed: a shell that resolved the alias for itself
+# would leave one spelling, and this case would pass while posing no question.
+[ "$(cd "$ALIAS" && pwd)" != "$(cd "$ALIAS" && pwd -P)" ] || fatal \
+  "entering $ALIAS reports one path logically and physically, so this case cannot pose its question" \
+  "report this; the case needs an ancestor symlink the shell keeps in its own \$PWD"
+OUTPUT="$(cd "$ALIAS" && SHOTS_OUT="shots/current/$LANE" SCREENSHOTS_NO_BUILD=1 \
+  ONETASKGRAPH_TOOLS_HOME="$HOME_GOOD" bash scripts/screenshots.sh 2>&1)" && STATUS=0 || STATUS=$?
+names "outside" \
+  && fail "the capture read its own lane directory as outside the tree, reached through a symlinked ancestor:"
+names "SCREENSHOTS_NO_BUILD" \
+  || fail "reached through a symlinked ancestor the capture never got as far as the refusal this case drives it to:"
+mkdir -p "$scratch/elsewhere"
+ln -sfn "$scratch/elsewhere" "$CLONE/shots/redirected"
+OUTPUT="$(cd "$ALIAS" && SHOTS_OUT="shots/redirected/$LANE" SCREENSHOTS_NO_BUILD=1 \
+  ONETASKGRAPH_TOOLS_HOME="$HOME_GOOD" bash scripts/screenshots.sh 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] \
+  && fail "a symlink out of the tree was accepted once the clone was reached through a symlinked ancestor:"
+names "resolves to" \
+  || fail "a symlink out of the tree, reached through a symlinked ancestor, was refused without saying where it resolved:"
+escaped="$(ls -A "$scratch/elsewhere")" || escaped="unreadable"
+[ -z "$escaped" ] \
+  || fail "the capture created [$escaped] through the symlink before refusing it, outside the clone entirely:"
+rm -f "$CLONE/shots/redirected" "$ALIAS"
+rm -rf "$scratch/elsewhere"
+
 # 20a. The renderer comes from the tool home the CALLER named, and the cases below are the
 #      reason that has to be asserted rather than assumed. Every one of them drives the
 #      capture past the point where it resolves the renderer, so each needs one provisioned
