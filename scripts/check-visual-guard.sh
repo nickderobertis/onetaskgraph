@@ -280,6 +280,15 @@ run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3 "" 1
 [ "$GUARD_STATUS" -eq 0 ] || fail "the guard refused a push under CI, where the workflow owns the comparison:"
 captured && fail "the guard captured under CI, where the visual-docs workflow does that:"
 
+# 7b. And `CI=false`, which is how a caller says they are NOT in CI. Read by non-emptiness
+#     this skipped, so the local half of the gate did nothing on the very machine it exists
+#     for — and said nothing either, a skip being silent by design. Same relevant,
+#     unchanged push as case 3, so the only thing that differs is how `CI` is spelled.
+run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 0 "" false
+[ "$GUARD_STATUS" -eq 0 ] || fail "'CI=false' with an unchanged capture blocked the push:"
+captured || fail "'CI=false' was read as being under CI, so the guard skipped the push it owns:"
+called classify || fail "'CI=false' captured but never classified, so the guard stopped halfway:"
+
 # 8. A branch the remote has never seen AND with no merge base to fork from — an orphan
 #    branch, or a clone with no default branch. Nothing bounds what the push adds, so every
 #    file the branch carries has to count: a `git diff` given one revision compares that

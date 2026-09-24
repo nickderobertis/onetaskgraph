@@ -36,7 +36,16 @@ readonly ROOT
 
 # No-op under CI: .github/workflows/visual-docs.yml is the source of truth there, and the
 # gate job has no screencomp, no renderer and no business capturing.
-[ -n "${CI:-}" ] && exit 0
+#
+# Read as a boolean rather than by non-emptiness. `CI=false` and `CI=0` are how a caller
+# says they are NOT in CI, and a guard skipping on those skips on the very machine the
+# local half exists for — silently, because a skip prints nothing. Anything else non-empty
+# is CI: the hosts that set it spell it `true`, and an unfamiliar spelling there is not
+# this guard's to refuse.
+case "$(printf '%s' "${CI:-}" | tr '[:upper:]' '[:lower:]')" in
+  '' | 0 | false | no | off) ;;
+  *) exit 0 ;;
+esac
 
 # The one [capture].arches lane, read from screencomp.toml — the same single declaration
 # scripts/screenshots.sh reads. The guard classifies that lane on every host, which is

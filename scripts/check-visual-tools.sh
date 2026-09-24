@@ -655,6 +655,35 @@ run_capture shots/current/x86_64 1
 names "SCREENSHOTS_NO_BUILD" || fail "the refusal does not name the variable that asked for no build:"
 names "cargo build" || fail "the refusal does not say how to get a binary to capture:"
 
+# 21c. `SCREENSHOTS_NO_BUILD=0` asks for a build and gets one. Read by non-emptiness it
+#      selected the no-build branch, so a caller spelling "off" the conventional way was
+#      handed the opposite of what they wrote — and on a machine with no binary that is a
+#      refusal where they asked for a capture. A stand-in cargo stands in for the build, so
+#      what this costs is nothing and what it proves is which branch was taken.
+readonly FAILING_CARGO="$scratch/failing-cargo"
+mkdir -p "$FAILING_CARGO" || fatal "could not create $FAILING_CARGO" \
+  "check the permissions of \$TMPDIR, then rerun"
+cat > "$FAILING_CARGO/cargo" <<'STUB'
+#!/usr/bin/env bash
+echo "stand-in cargo: refusing to build" >&2
+exit 1
+STUB
+chmod +x "$FAILING_CARGO/cargo" || fatal "could not make the stand-in cargo executable" \
+  "check the permissions of \$TMPDIR, then rerun"
+OUTPUT="$(cd "$CLONE" && PATH="$FAILING_CARGO:$PATH" SHOTS_OUT=shots/current/x86_64 \
+  SCREENSHOTS_NO_BUILD=0 ONETASKGRAPH_TOOLS_HOME="$HOME_GOOD" \
+  bash scripts/screenshots.sh 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] && fail "the capture reported success with a cargo that refuses to build:"
+names "did not build" \
+  || fail "'SCREENSHOTS_NO_BUILD=0' never reached the build, so it was read as asking for none:"
+
+# 21d. And a value that is neither on nor off: a typo the caller meant something by, named
+#      rather than resolved to whichever branch non-emptiness happens to pick.
+run_capture shots/current/x86_64 perhaps
+[ "$STATUS" -eq 0 ] && fail "the capture accepted a SCREENSHOTS_NO_BUILD it cannot read:"
+names "SCREENSHOTS_NO_BUILD" || fail "an unreadable SCREENSHOTS_NO_BUILD was refused without naming it:"
+names "neither on" || fail "an unreadable SCREENSHOTS_NO_BUILD was refused without saying what it accepts:"
+
 # 21b. `shots` ITSELF is not a lane directory: `shots/.` resolves there, and the capture
 #      removes what SHOTS_OUT names — which would take the committed baseline with it.
 run_capture shots/. 1

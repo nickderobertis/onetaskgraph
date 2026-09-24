@@ -161,7 +161,22 @@ fi
 # The binary the scenes drive, release like a user would run. The guard and the workflow
 # both let this build; SCREENSHOTS_NO_BUILD means what it says — no build here, and a
 # refusal rather than one behind the caller's back when there is nothing to drive.
-if [ -n "${SCREENSHOTS_NO_BUILD:-}" ]; then
+#
+# Read as a boolean rather than by non-emptiness: `SCREENSHOTS_NO_BUILD=0` asks for a build,
+# and a capture that answered it with none would refuse on a machine with no binary — the
+# opposite of what the caller wrote. A value that is neither is a typo the caller meant
+# something by, so it is named rather than guessed at in either direction.
+case "$(printf '%s' "${SCREENSHOTS_NO_BUILD:-}" | tr '[:upper:]' '[:lower:]')" in
+  '' | 0 | false | no | off) no_build="" ;;
+  1 | true | yes | on) no_build=yes ;;
+  *)
+    echo "screenshots: SCREENSHOTS_NO_BUILD is '${SCREENSHOTS_NO_BUILD}', which is neither on (1, true, yes, on) nor off (0, false, no, off)" >&2
+    echo "screenshots: next: set it to one of those spellings, or unset it and let this capture build the binary" >&2
+    exit 1
+    ;;
+esac
+readonly no_build
+if [ -n "$no_build" ]; then
   if [ ! -x "$BINARY" ]; then
     echo "screenshots: SCREENSHOTS_NO_BUILD is set and there is no binary at $BINARY to capture" >&2
     echo "screenshots: next: build it with 'cargo build --release --locked --bin onetaskgraph', or unset SCREENSHOTS_NO_BUILD and let this capture build it" >&2
