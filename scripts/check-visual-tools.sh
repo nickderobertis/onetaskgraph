@@ -786,6 +786,50 @@ run_visual_docs
 names "$LANE" || fail "the check refused the restated lane without naming it:"
 restore .github/workflows/visual-docs.yml
 
+# 27a. [guard].gallery names somewhere this tree does not own. The guard writes a directory
+#      there and .gitignore has to cover it, so an absolute path, a `..` segment or an absent
+#      declaration each leave it with nowhere it may write.
+for bad in '"/tmp/gallery"' '"../gallery"' '""'; do
+  sed -i.bak "s|^gallery *= *\".*\"|gallery = $bad|" "$CLONE/screencomp.toml"
+  rm -f "$CLONE/screencomp.toml.bak"
+  grep -q "^gallery = $bad" "$CLONE/screencomp.toml" || fatal \
+    "could not point the clone's [guard].gallery at $bad" \
+    "report this; the case needs that one line rewritten"
+  run_visual_docs
+  [ "$STATUS" -eq 0 ] && fail "[guard].gallery was $bad and the check passed:"
+  names "gallery" || fail "the check refused [guard].gallery of $bad without naming the key:"
+  restore screencomp.toml
+done
+
+# 27b. And the guard restating it rather than reading it, which is how it drifted before:
+#      the value was written into the guard, into .gitignore and into screencomp.toml, and
+#      moving any one of them left the other two saying something else.
+GALLERY="$(sed -n 's/^gallery *= *"\([^"]*\)".*/\1/p' "$CLONE/screencomp.toml")"
+[ -n "$GALLERY" ] || fatal \
+  "could not read [guard].gallery out of the clone's screencomp.toml" \
+  "report this; every case below needs the declared gallery"
+readonly GALLERY
+printf '\nreadonly SECOND_SPELLING=%s\n' "\"$GALLERY\"" >> "$CLONE/scripts/screenshots-guard.sh"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the guard restated the review gallery and the check passed:"
+names "$GALLERY" || fail "the check refused the restated gallery without naming it:"
+restore scripts/screenshots-guard.sh
+
+# 27c. And the guard no longer reading it at all, which is the half a second-spelling scan
+#      cannot see: a guard that hardcodes nothing and reads nothing writes nowhere. Only the
+#      line that reads the gallery goes, so the guard still reads the LANE out of that same
+#      file — deleting every mention of screencomp.toml instead made this case pass on the
+#      lane reconciliation, which is a case posing no question of its own.
+sed -i.bak '/^GALLERY=/d' "$CLONE/scripts/screenshots-guard.sh"
+rm -f "$CLONE/scripts/screenshots-guard.sh.bak"
+grep -q '\[capture\]\.arches\|arches' "$CLONE/scripts/screenshots-guard.sh" || fatal \
+  "the clone's guard stopped reading the lane too, so this case would pass on the lane reconciliation" \
+  "report this; the case has to delete the gallery read alone"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "the guard stopped reading the review gallery and the check passed:"
+names "gallery" || fail "the check refused a guard that reads no gallery without naming the key:"
+restore scripts/screenshots-guard.sh
+
 # 28. The vendored font's licence goes missing from beside the font it covers.
 mv "$CLONE/screenshots/fonts/JetBrainsMono-OFL.txt" "$scratch/ofl.txt"
 run_visual_docs

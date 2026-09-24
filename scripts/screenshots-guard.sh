@@ -60,7 +60,25 @@ fi
 readonly LANE
 readonly MANIFEST="shots/baseline/$LANE.json"
 readonly CURRENT="shots/current"
-readonly GALLERY="shots/review"
+
+# Where the review gallery is written, read from [guard].gallery in screencomp.toml — the
+# key `screencomp init` scaffolds, so that file is where it is declared and this is not a
+# second spelling of it. It is held to a relative path inside this tree with no `..`
+# segment: the gallery is a generated directory .gitignore has to cover, and a value naming
+# somewhere else would write one where nothing ignores it — which scripts/check-visual-docs.sh
+# reconciles against that entry from the same declaration.
+GALLERY="$(sed -n 's/^gallery *= *"\([^"]*\)".*/\1/p' screencomp.toml)"
+# The empty value is folded in with the bad ones rather than tested apart: an absent
+# [guard].gallery and one naming somewhere else are the same refusal to a reader, and both
+# leave this guard with nowhere it may write.
+case "${GALLERY:-/}" in
+  /* | *..* | *' '*)
+    echo "pre-push: [guard].gallery in screencomp.toml is '${GALLERY:-none}', which is not a relative path inside this tree — the review gallery is written there and .gitignore has to cover it" >&2
+    echo "pre-push: next: set it to a directory under this repository, as 'shots/review', and make sure .gitignore ignores that directory" >&2
+    exit 1
+    ;;
+esac
+readonly GALLERY
 
 # git writes one record per ref, `<local ref> <local sha> <remote ref> <remote sha>`, and
 # what arrives on this stdin is external input: it is whatever the caller piped. So each

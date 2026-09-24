@@ -101,6 +101,40 @@ for path, text in (
             "spelling of screencomp.toml's [capture].arches; read it from there instead."
         )
 
+# Where the review gallery goes, declared once in [guard].gallery — the key `screencomp
+# init` scaffolds. The pre-push guard writes a directory there and .gitignore has to cover
+# it, so both are reconciled against THIS declaration rather than against each other: a
+# gallery moved here and nowhere else would otherwise leave a generated tree committed.
+declared_gallery = re.search(r'(?m)^gallery\s*=\s*"([^"]*)"', config)
+gallery = declared_gallery.group(1) if declared_gallery else ""
+if not gallery or gallery.startswith("/") or ".." in gallery.split("/") or " " in gallery:
+    problems.append(
+        "screencomp.toml: [guard].gallery must declare a relative directory inside this "
+        "tree, with no '..' segment and no space, because the pre-push guard writes the "
+        "review gallery there and .gitignore has to ignore that directory; it declares "
+        + (repr(declared_gallery.group(1)) if declared_gallery else "nothing")
+        + "."
+    )
+    # Fall back to the scaffolded default, so the two reconciliations below still say
+    # something useful rather than matching the empty string against every line.
+    gallery = "shots/review"
+# One line, outside a comment, naming both the key and the file: a mention in a comment is
+# not a read, and the lane's own looser test — the substring anywhere in the text — is
+# satisfied by the sentence explaining why the read is there.
+if not re.search(r"(?m)^[^#\n]*\bgallery\b[^\n]*screencomp\.toml", guard):
+    problems.append(
+        "scripts/screenshots-guard.sh: no line reads the review gallery out of "
+        "[guard].gallery in screencomp.toml. That file is the one place it is declared; "
+        "reading it is what keeps the directory the guard writes and the directory "
+        ".gitignore covers the same directory."
+    )
+if re.search(rf'(?m)^[^#]*["\']?{re.escape(gallery)}["\']?\s*$', guard):
+    problems.append(
+        f"scripts/screenshots-guard.sh: names the review gallery {gallery!r} outside a "
+        "comment, which is a second spelling of screencomp.toml's [guard].gallery; read it "
+        "from there instead."
+    )
+
 pinned = re.search(r'(?m)^readonly FREEZE_VERSION=([0-9]+\.[0-9]+\.[0-9]+)\s*$', freeze)
 if not pinned:
     problems.append(
@@ -310,7 +344,7 @@ elif channel and container.group(1) != channel.group(1):
         "version is declared; bring the image tag to it."
     )
 
-for tree in ("/shots/current/", "/shots/verify/", "/shots/review/"):
+for tree in ("/shots/current/", "/shots/verify/", f"/{gallery.strip('/')}/"):
     if tree not in ignored:
         problems.append(
             f".gitignore: does not ignore {tree}. The digest baseline and the README "
