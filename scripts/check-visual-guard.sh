@@ -300,9 +300,19 @@ git -C "$CLONE" checkout --quiet --orphan unbounded >/dev/null 2>&1 || fatal \
 git -C "$CLONE" add -A >/dev/null
 git -C "$CLONE" commit --quiet --no-verify -m "test: an orphan branch" >/dev/null
 orphan_sha="$(git -C "$CLONE" rev-parse HEAD)"
-[ -z "$(git -C "$CLONE" merge-base origin/HEAD "$orphan_sha" 2>/dev/null)" ] || fatal \
-  "the orphan branch shares a merge base with origin/HEAD, so this case cannot pose its question" \
-  "report this; 'git checkout --orphan' should leave no common history"
+# The orphan has to share no history with anything, or the guard would take a range and
+# this case would be about a different question. Asserted against $LOCAL_SHA as well as
+# against origin/HEAD, and $LOCAL_SHA is the one that makes it evidence: a scratch clone
+# of a DETACHED checkout carries no branches at all, so it has no origin/HEAD, and a
+# `merge-base` naming one answers empty whatever the orphan looks like — the assertion
+# would pass on every CI runner while proving nothing. $LOCAL_SHA is the commit every
+# other case here runs at and it resolves in either kind of clone.
+for ancestor in "$LOCAL_SHA" origin/HEAD; do
+  git -C "$CLONE" rev-parse --verify --quiet "$ancestor^{commit}" >/dev/null 2>&1 || continue
+  [ -z "$(git -C "$CLONE" merge-base "$ancestor" "$orphan_sha" 2>/dev/null)" ] || fatal \
+    "the orphan branch shares a merge base with $ancestor, so this case cannot pose its question" \
+    "report this; 'git checkout --orphan' should leave no common history"
+done
 
 run_guard "refs/heads/unbounded $orphan_sha refs/heads/unbounded 0000000000000000000000000000000000000000" \
   "$STUB_BIN:$PATH" 3 0
@@ -312,8 +322,17 @@ for path in nx.json screencomp.toml scripts/screenshots.sh; do
   grep -qF "$path" "$MARKERS/scope.stdin" 2>/dev/null \
     || fail "the changed-path list for an unbounded branch does not carry $path, so it is not every file the branch holds:"
 done
-git -C "$CLONE" checkout --quiet - >/dev/null 2>&1 || fatal \
-  "could not return $CLONE to the branch the earlier cases used" \
+# Back to the commit the earlier cases ran at, BY NAME. `git checkout -` is `@{-1}`, which
+# is read out of the HEAD reflog — and the reflog a scratch clone has depends on the shape
+# of what it was cloned from. Clone a checkout that is on a branch and the clone's own
+# checkout writes a "moving from" entry for `-` to find; clone a DETACHED one, which is
+# what actions/checkout leaves on every CI runner, and the clone arrives already detached
+# at that commit, the checkout moves nothing, no entry is written, and `-` fails with
+# "pathspec '-' did not match any file(s) known to git". That is a property of the host's
+# checkout rather than of anything under test, so this check died on CI while passing on
+# every machine a person runs it from.
+git -C "$CLONE" checkout --quiet "$LOCAL_SHA" >/dev/null 2>&1 || fatal \
+  "could not return $CLONE to $LOCAL_SHA, the commit the earlier cases used" \
   "report this; the clone is scratch and can be re-created"
 # That checkout restored every tracked file from the commit: the guard under test is the
 # committed one again, and the real capture script is back over the stub — which builds

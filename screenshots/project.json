@@ -56,7 +56,11 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["bash scripts/check-visual-guard.sh", "bash scripts/check-visual-tools.sh"],
+        "commands": [
+          "bash scripts/check-visual-guard.sh",
+          "bash scripts/check-visual-tools.sh",
+          "bash scripts/check-visual-guard-detached.sh"
+        ],
         "parallel": false
       },
       "cache": false,
@@ -68,10 +72,11 @@
         "{workspaceRoot}/scripts/screenshots-freeze.sh",
         "{workspaceRoot}/scripts/screenshots-bless.sh",
         "{workspaceRoot}/scripts/check-visual-guard.sh",
+        "{workspaceRoot}/scripts/check-visual-guard-detached.sh",
         "{workspaceRoot}/scripts/check-visual-tools.sh",
         "{workspaceRoot}/shots/baseline/*.json"
       ],
-      "//": "Uncached and serial, and both for the same reason the workspace project's own test target is: each of the two clones this repository into a scratch tree, which no input glob in this tree describes. The first drives the real pre-push guard and the real hook through every outcome each owes, with screencomp and the capture stubbed at the subprocess seam scripts/check-pre-push-provisioning.sh stubs `just` at. The second drives the renderer resolver and the baseline writer against a stand-in tool location and a stand-in installer, as scripts/check-scoped-release-plz.sh does for the other scoped tool: no network, and nothing installed on the host is read or touched."
+      "//": "Uncached and serial, and both for the same reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob in this tree describes. The first drives the real pre-push guard and the real hook through every outcome each owes, with screencomp and the capture stubbed at the subprocess seam scripts/check-pre-push-provisioning.sh stubs `just` at. The second drives the renderer resolver and the baseline writer against a stand-in tool location and a stand-in installer, as scripts/check-scoped-release-plz.sh does for the other scoped tool: no network, and nothing installed on the host is read or touched. The third runs the first two again from a DETACHED checkout, which is the shape actions/checkout leaves on every runner and the one no developer machine has: a scratch clone of such a checkout inherits no branches, so it has neither an origin/HEAD nor a reflog entry for `git checkout -`, and that difference refused this repository's own branch on the ubuntu lane while every local run passed. It runs last because the two it drives report their own failures first."
     },
     "coverage": {
       "executor": "nx:noop",

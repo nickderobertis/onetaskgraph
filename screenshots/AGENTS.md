@@ -139,7 +139,7 @@ whatever it was proving having gone wrong.
 
 So `screenshots:lint` and `screenshots:test` invoke `scripts/check-visual-*.sh` by path,
 which is the same shape `workspace` has to every `scripts/check-*.sh` it runs. Each of the
-six scripts carries a one-line pointer back to this section rather than restating it.
+seven scripts carries a one-line pointer back to this section rather than restating it.
 
 ## Commands, and what is committed
 
@@ -163,7 +163,13 @@ is what makes new bytes a deliberate commit rather than a red workflow after the
 A missing screencomp is a loud skip and never the `onevcs: host-prerequisite:` marker:
 that one belongs to the pinned release-plz, because it tells the engine driving this host
 to stop retrying, and a missing renderer is not that.
-`scripts/check-visual-guard.sh` is what keeps any of this from quietly stopping.
+`scripts/check-visual-guard.sh` is what keeps any of this from quietly stopping, and
+`scripts/check-visual-guard-detached.sh` runs it and its sibling again from a **detached**
+checkout — the shape `actions/checkout` leaves and no developer machine has. A scratch
+clone taken from one of those inherits no branches, so it has no `origin/HEAD` and no
+`@{-1}` for `git checkout -` to resolve; both differences read as the subject having
+broken rather than as the runner being shaped differently, and neither is visible from a
+checkout that is on a branch.
 
 ## Changing the screenshots
 
