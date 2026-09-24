@@ -102,12 +102,16 @@ done
 
 STEP_OUTPUT=""
 STEP_STATUS=0
-# llmlint: ignore[work_goes_through_command_surface] The step is the SUBJECT here, and what
-# is under test is the environment of the process the gate starts — so this check has to be
-# what starts it, with the stand-in cargo on that process's own PATH. `just
-# distribution-test` would run two unrelated commands beside it, take minutes of real cargo,
-# and need an Nx these scratch trees never install. The same reason
-# scripts/check-fixture-discrimination.sh invokes cargo directly.
+# The step is the SUBJECT here, and what is under test is the environment of the process the
+# gate starts — so this check has to be what starts it, with the stand-in cargo on that
+# process's own PATH. `just distribution-test` would run two unrelated commands beside it,
+# take minutes of real cargo, and need an Nx these scratch trees never install. The same
+# reason scripts/check-fixture-discrimination.sh invokes cargo directly.
+#
+# The directive sits on the line above the invocation rather than at the head of the
+# paragraph, because its scope is that one line and a reader — or a judge — counting from a
+# directive five continuation lines up cannot tell which line it reached.
+# llmlint: ignore[work_goes_through_command_surface] The line below starts the step under test directly, because what it is under test FOR is the environment that very process receives, which no wrapper can hand it.
 STEP_OUTPUT="$(env "${seeded[@]}" bash "$STEP" 2>&1)" && STEP_STATUS=0 || STEP_STATUS=$?
 
 if [ "$STEP_STATUS" -ne 0 ]; then
