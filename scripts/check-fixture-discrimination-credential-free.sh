@@ -38,7 +38,7 @@ done
 #
 # tr: a value captured from python carries that python's line endings, and on the Windows
 # runner each one arrives as CR LF.
-CREDENTIALS="$(python3 - "$ROOT/$LANE" <<'PY'
+CREDENTIALS_AND_DEMAND="$(python3 - "$ROOT/$LANE" <<'PY'
 import pathlib
 import re
 import sys
@@ -54,7 +54,7 @@ PY
 )" || fatal \
   "could not read the credentials and the demand out of $LANE" \
   "restore that guard's SESSIONS map and its DEMAND, or point this check at where they moved"
-CREDENTIALS="$(printf '%s' "$CREDENTIALS" | tr -d '\r')"
+CREDENTIALS_AND_DEMAND="$(printf '%s' "$CREDENTIALS_AND_DEMAND" | tr -d '\r')"
 # Seeded beside them and never cleared: its arrival is what makes their absence evidence.
 readonly PROBE=FIXTURE_DISCRIMINATION_ENVIRONMENT_PROBE
 
@@ -96,7 +96,7 @@ chmod +x "$scratch/bin/cargo" || fatal \
 # One placeholder value for all of them: only the NAME is asked about here, and nothing
 # credential-shaped is written anywhere.
 seeded=("PATH=$scratch/bin:$PATH" "$PROBE=present")
-for name in $CREDENTIALS; do
+for name in $CREDENTIALS_AND_DEMAND; do
   seeded+=("$name=seeded-by-this-check-and-never-a-real-credential")
 done
 
@@ -160,7 +160,7 @@ while IFS= read -r recording; do
     failures=$((failures + 1))
     continue
   fi
-  for name in $CREDENTIALS; do
+  for name in $CREDENTIALS_AND_DEMAND; do
     if grep -qx -- "$name" "$recording"; then
       echo "check-fixture-discrimination-credential-free: invocation $invocation of cargo" >&2
       echo "check-fixture-discrimination-credential-free: received $name, so $STEP can open a" >&2
