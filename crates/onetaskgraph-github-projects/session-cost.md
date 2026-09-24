@@ -581,11 +581,12 @@ item cannot say enough no longer "reads the board exactly as before", and creati
 no longer reads the board. Both read the board's fields instead, and only when no listing
 this command already holds can supply them.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Every figure below is a
-difference between two committed states of `tests/fixtures/session-cost.txt`, held by
-`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says`, which fails on
-any change to that file and names this one as where to say what moved — the same
-reconciliation the section above records, for the same reason. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Every figure in this
+block is a difference between two committed states of `tests/fixtures/session-cost.txt`, which
+is not a value any source holds. The record itself cannot move in silence:
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` fails on any change
+to it and names this file as where to say what moved. A section that could state no figure
+could not record what the change cost, which is the whole of what this file is. -->
 In the two quantities this file measures offline:
 
 |                | before | after  |
@@ -608,6 +609,7 @@ So the session sends two requests more and 30,094 worst-case nodes fewer. The re
 rises only because the lane probes each new document; on the board itself one read of an
 item and one of its fields replace a paged listing whose cost grows with the board, which on
 an 842-item board is nine `ProjectV2.items` pages plus every page of the search.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 `tests/fixtures/copy-cost.txt` does not move. A copy's engine lists the destination's items
 to match what it writes, and a board listing this command already holds supplies the board's

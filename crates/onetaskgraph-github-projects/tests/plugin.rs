@@ -8786,6 +8786,41 @@ async fn a_draft_is_read_by_its_own_id_and_never_found_by_listing_the_board() {
 }
 
 #[tokio::test]
+async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_name() {
+    // A draft is linked to one board item, so a page of them reporting more is malformed —
+    // even when this board's entry is on it.
+    let draft_entry = json!({"id":"PVTI_D","project":{"id":"PVT_board","number":7},
+                             "fieldValues":complete(json!([]))});
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"a draft",
+            "body":null,"createdAt":null,"updatedAt":null,
+            "projectV2Items":{"nodes":[draft_entry],
+                              "pageInfo":{"hasNextPage":true,"endCursor":"1"}}}}}),
+    ]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .expect_err("a draft page claiming a second board item"),
+    );
+    assert!(
+        message.contains("D_1") && message.contains("reports more board items"),
+        "{message}"
+    );
+
+    // A blank board id addresses no board, so it is refused before anything is created.
+    let endpoint = sequence_server(vec![fields_json(" ", usable_fields())]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .write_task(&write(task("T", "x", status(StatusCategory::Todo, "Todo"))))
+            .await
+            .expect_err("a board read naming a blank id"),
+    );
+    assert!(message.contains("blank node id"), "{message}");
+}
+
+#[tokio::test]
 async fn a_listing_this_command_already_holds_does_not_decide_whether_an_item_is_on_the_board() {
     // The listing may still supply the board's fields; it may not refuse an item it omits.
     let fixture = board(vec![

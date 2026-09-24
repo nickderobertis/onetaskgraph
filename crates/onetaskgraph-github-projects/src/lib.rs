@@ -3013,21 +3013,23 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("GitHub draft {} projectV2Items.nodes is not an array", id.0),
             })?;
+        let info = memberships
+            .get("pageInfo")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} projectV2Items has no pageInfo", id.0),
+            })?;
+        // Read whether or not this board's entry is on the page: a page claiming more than
+        // the one item GitHub links a draft to is a malformed answer either way.
+        if required_bool(info, "hasNextPage")? {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub draft {} reports more board items than the one GitHub links a draft \
+                     to",
+                    id.0
+                ),
+            });
+        }
         let Some(held) = self.board_entry(nodes) else {
-            let info = memberships
-                .get("pageInfo")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!("GitHub draft {} projectV2Items has no pageInfo", id.0),
-                })?;
-            if required_bool(info, "hasNextPage")? {
-                return Err(SourceError::Malformed {
-                    message: format!(
-                        "GitHub draft {} reports more board items than the one GitHub links a \
-                         draft to",
-                        id.0
-                    ),
-                });
-            }
             return Ok(None);
         };
         let item = json!({
@@ -3049,7 +3051,7 @@ impl GitHubProjectsSource {
     async fn board_fields(&self) -> Result<BoardFields, SourceError> {
         if let Some(board) = self.board_cache()?.as_ref() {
             return Ok(BoardFields {
-                id: board.id.clone(),
+                id: BoardId::parse(&board.id)?,
                 fields: board.fields.clone(),
             });
         }
@@ -3073,7 +3075,7 @@ impl GitHubProjectsSource {
                 ),
             })?;
         let read = BoardFields {
-            id: required_nonblank_str(board, "id")?.to_owned(),
+            id: BoardId::parse(required_str(board, "id")?)?,
             fields: board.get("fields").cloned().unwrap_or(Value::Null),
         };
         *self.fields_cache()? = Some(read.clone());
@@ -3107,12 +3109,12 @@ impl GitHubProjectsSource {
         writes_status: bool,
     ) -> Result<BoardFields, SourceError> {
         if let Some(item) = item
-            && let Some(board_id) = &item.board_id
+            && let Some(board_id) = item.named_board()
             && item.defines(ORIGIN_FIELD)
             && (!writes_status || item.defines("Status"))
         {
             return Ok(BoardFields {
-                id: board_id.clone(),
+                id: board_id,
                 fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
             });
         }
@@ -3600,10 +3602,10 @@ impl GitHubProjectsSource {
     /// from [`Self::board_fields`], which reads no item.
     async fn status_board(&self, item: &Resolved) -> Result<BoardFields, SourceError> {
         if item.defines("Status")
-            && let Some(board_id) = &item.board_id
+            && let Some(board_id) = item.named_board()
         {
             return Ok(BoardFields {
-                id: board_id.clone(),
+                id: board_id,
                 fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
             });
         }
@@ -3645,7 +3647,7 @@ impl GitHubProjectsSource {
                     return Err(self.closes_a_draft(category));
                 }
                 self.set_item_field(
-                    &board.id,
+                    board.id.as_str(),
                     &item.item_id,
                     &field,
                     json!({"singleSelectOptionId": option}),
@@ -3677,7 +3679,7 @@ impl GitHubProjectsSource {
                     item.closed = false;
                 }
                 self.set_item_field(
-                    &board.id,
+                    board.id.as_str(),
                     &item.item_id,
                     &field,
                     json!({"singleSelectOptionId": option}),
@@ -4373,7 +4375,7 @@ impl GitHubProjectsSource {
                         message: "a new item was decided without a repository to create it in"
                             .into(),
                     })?;
-                self.create_and_file_issue(&board.id, target, incoming, &body)
+                self.create_and_file_issue(board.id.as_str(), target, incoming, &body)
                     .await?
             }
         };
@@ -4389,7 +4391,7 @@ impl GitHubProjectsSource {
         // makes the retry create a second.
         let landed = self
             .finish_write(
-                &board.id,
+                board.id.as_str(),
                 incoming,
                 &content_id,
                 &item_id,
@@ -4465,7 +4467,7 @@ impl GitHubProjectsSource {
             own_repository,
             repositories: incoming.repositories.to_vec(),
             slot,
-            board_id: Some(board.id.clone()),
+            board_id: Some(board.id.as_str().to_owned()),
             fields: board
                 .fields
                 .get("nodes")
@@ -5013,8 +5015,30 @@ struct Board {
 /// ever being asked whether an item is there.
 #[derive(Clone)]
 struct BoardFields {
-    id: String,
+    id: BoardId,
     fields: Value,
+}
+
+/// A board's node id: what a field write and `addProjectV2ItemById` address.
+///
+/// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
+/// refused where it is read, and one an item names blank is read as not named at all.
+#[derive(Clone)]
+struct BoardId(String);
+
+impl BoardId {
+    fn parse(id: &str) -> Result<Self, SourceError> {
+        if id.trim().is_empty() {
+            return Err(SourceError::Malformed {
+                message: "GitHub named a board with a blank node id".into(),
+            });
+        }
+        Ok(Self(id.to_owned()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Board {
@@ -5075,6 +5099,14 @@ struct Resolved {
 }
 
 impl Resolved {
+    /// The board this item's own read names it on, when that read named one this source can
+    /// address.
+    fn named_board(&self) -> Option<BoardId> {
+        self.board_id
+            .as_deref()
+            .and_then(|id| BoardId::parse(id).ok())
+    }
+
     /// Whether this item holds a value of the board field called `name`, and so carries
     /// that field's definition. `false` says nothing about whether the board has the field.
     fn defines(&self, name: &str) -> bool {
