@@ -451,15 +451,42 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   successful rather than failing the run. Linear's is what the extraction of
   `crates/onetaskgraph-linear/tests/cleanup/` is for: one cleanup that the credentialed
   journey and that stand-in both drive, rather than a second spelling of it beside the first.
-- **Two things still hold one session per lane per run, and the second is the one a fold
+- **Three things still hold one session per lane per run, and the first is the one a fold
   that stops at the test target gets wrong**: `scripts/rust-coverage.sh` clearing the
   credentials, because `just check` performs the affected `test` target **and** the affected
   `coverage` target, and coverage is `cargo llvm-cov --no-report nextest --package <crate>`,
   which re-runs the very same integration tests — so a fold that stops at `test` opens a second session per
-  lane; and `.github/workflows/ci.yml` handing the credentials to exactly one leg of its
-  three-platform matrix, so the count is one session per run rather than six. If you are
-  changing the matrix or the coverage target, that pair is what has to stay true, and the
-  note in `rust-coverage.sh` says it where you will meet it.
+  lane; `.github/workflows/ci.yml` handing the credentials to exactly one leg of its
+  three-platform matrix, so the count is one session per run rather than six; and
+  `scripts/check-fixture-discrimination.sh` clearing them too, because it runs the WHOLE
+  `onetaskgraph-github-projects` package — twice, in a scratch copy — and that package's
+  `tests/live.rs` is an ordinary test of it. **That step is outside the affected-selection
+  fan-out on purpose, which is what made it the worst of the three**: the edge keeping a
+  live session off a diff that reaches no plugin behaviour IS affected selection, and this
+  step is on the far side of it, so with the credentials intact it opened a real session on
+  every gate of every branch — and refused unrelated work, by drawing down an allowance
+  another consumer was admitted against. Nothing is lost by clearing them there: what it
+  asserts is that a fixture substitution turns the suite red, which reaches no API at all.
+  So the rule is a property of a *step* rather than of two named files: **a step that
+  re-runs a live crate's package from outside the `test` target clears
+  `GH_PROJECTS_TOKEN`, `LINEAR_API_KEY` and `ONETASKGRAPH_LIVE_REQUIRED` — the demand with
+  the credentials, or the skip that clearing produces fails the step for a session it is
+  deliberately not running.** `scripts/check-live-lane.sh` holds every such step to it, and
+  **which steps those are is not a list it keeps** — it reconciles them, both ways, against a
+  scan of `scripts/` for a `cargo test`/`nextest` run that names a package and no `--test`
+  target, because a hand-kept inventory at one entry is precisely what let the second run
+  credentialed unnoticed. A run that names its test target is left to itself, which is what
+  `scripts/check-live-decline.sh` does on purpose. That guard is itself watched refusing a
+  step that drops the line, by `scripts/check-live-lane-enforced.sh`. But that guard reads the TEXT of a script, and the
+  property is about what a process receives — the defect lasted as long as it did because
+  the guard could see one step and nothing at all could see a process — so
+  `scripts/check-fixture-discrimination-credential-free.sh` drives the real step with all
+  three seeded present, behind a stand-in `cargo` that records the environment of every
+  invocation, and refuses any that carries one of the three. A sentinel seeded beside them
+  has to arrive in each recording, because a recording that captured nothing would report
+  every credential absent and read exactly like a pass. If you are changing the matrix, the
+  coverage target or that step, those three are what have to stay true, and the note in each
+  script says it where you will meet it.
   **A seat is no longer part of that, and the GitHub Projects lane takes none** — it opens
   `Exclusivity::Shared`, so two sessions of it on one machine no longer exclude one another.
   A seat was always a file on one machine, which excluded nothing on another, and the hosted

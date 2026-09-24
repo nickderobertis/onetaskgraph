@@ -12,6 +12,15 @@
 # not compile at all would look like the strictest suite in the repository.
 set -euo pipefail
 
+# ONE live session per lane per run, and this step is where a third would come from: it runs
+# the WHOLE onetaskgraph-github-projects package, twice, and that package's `tests/live.rs`
+# is an ordinary test of it — from outside the affected-selection fan-out, so with the
+# ambient credentials it opened a session on every gate of every branch. Nothing is lost:
+# what this asserts is that a fixture substitution turns the suite red, which reaches no API.
+# The demand goes with the credentials, or the skip that clearing produces would fail this
+# step for a session it is deliberately not running. AGENTS.md records the rest.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+
 fatal() {
   echo "check-fixture-discrimination: $1" >&2
   echo "check-fixture-discrimination: next: $2" >&2
