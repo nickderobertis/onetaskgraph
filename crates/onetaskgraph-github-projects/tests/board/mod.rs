@@ -3,7 +3,7 @@
 //! A whole session of the live journey is the source's own reads and writes plus the
 //! journey's own calls, and three of the journey's are answered from this workspace's own
 //! tables and calculations rather than from any board state: the `rateLimit(dryRun: true)`
-//! probe, the mutation-schema introspection, and the allowance read. That is what makes them
+//! probe, the contract-schema introspection, and the allowance read. That is what makes them
 //! shareable — a binary with no board at all can answer them.
 //!
 //! Two binaries do, and they answer with **this** code rather than with two spellings of it:
@@ -138,6 +138,12 @@ fn introspected(query: &str) -> Value {
 
 /// One introspected type's members, as the selection for its kind spells them.
 fn introspected_type_members(name: &str) -> Value {
+    if name == "DraftIssue" {
+        return json!({"fields":[{"name":"projectV2Items",
+            "type":introspected_type("ProjectV2ItemConnection!"),
+            "args":[{"name":"first","type":introspected_type("Int")},
+                    {"name":"after","type":introspected_type("String")}] }]});
+    }
     if name == "Mutation" {
         let fields = crate::journey::MUTATION_CONTRACT
             .iter()

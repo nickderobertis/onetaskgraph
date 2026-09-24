@@ -1265,33 +1265,40 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
 ///
 /// **GitHub owns it and GitHub's own refusal is the drift gate.** Nothing offline can
 /// observe the cap, so there is no artifact to pin it against; what there is instead is
-/// [`verify_mutation_schema`] running against the real API on every credentialed run, where
+/// [`verify_contract_schema`] running against the real API on every credentialed run, where
 /// a cap GitHub lowers refuses these documents and states the new number. Drift the other
 /// way costs a few requests that were never wrong. This is the one spelling of it — the
 /// offline guard in `tests/plugin.rs` reads this constant rather than the number.
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule asks for a gate on drift in both directions and GitHub publishes no readable form of this cap — no schema field, no header, no documented figure — only the refusal it answers a document over the cap with. So a lowered cap is caught, by that refusal, in the required check; a raised one is unobservable except by deliberately sending a document over the current cap to see whether it is now accepted, which spends a request of a shared budget every run to learn something that changes nothing, because being under a raised cap is conservative rather than wrong.
 pub const INTROSPECTION_FIELD_LIMIT: usize = 2;
 
-/// The whole mutation contract, in as few documents as that cap allows.
+/// The mutation contract and the draft membership read, in as few documents as the cap allows.
 ///
 /// **Batched rather than one request per type, and the reason is what a session costs.**
 /// GitHub allows any number of aliased root fields on one query, and `__type` is not a
-/// connection, so a document here adds nothing to the node count. Thirty-four types and
-/// the `Mutation` root — eighteen `inputFields` selections and seventeen `fields` ones —
-/// become nine documents instead of thirty-five requests. Nothing is narrowed: every name,
-/// input, payload, member and type signature the checks below hold GitHub to is still asked
-/// for, from the same two tables, and [`verify_mutation_schema`] answers from all eight as
+/// connection, so a document here adds nothing to the node count. Thirty-four mutation
+/// types, the `Mutation` root and `DraftIssue` — eighteen `inputFields` selections and
+/// eighteen `fields` ones — become nine documents instead of thirty-six requests.
+/// Nothing is narrowed: every name, input, payload, member and type signature the checks
+/// below hold GitHub to is still asked for, and [`verify_contract_schema`] answers from all nine as
 /// though they were one.
 ///
 /// The alias is the type's own name, which is already a GraphQL identifier, so the answer is
 /// keyed by the thing it describes — and each document carries its own aliases alone, which
 /// is what lets the answers merge without colliding.
 #[must_use]
-pub fn mutation_schema_documents() -> Vec<String> {
-    let mut selected_fields = vec![String::from(
-        "Mutation:__type(name:\"Mutation\"){fields{name type{name ofType{name}}args{name \
+pub fn contract_schema_documents() -> Vec<String> {
+    let mut selected_fields = vec![
+        String::from(
+            "Mutation:__type(name:\"Mutation\"){fields{name type{name ofType{name}}args{name \
          type{name ofType{name}}}}}",
-    )];
+        ),
+        String::from(
+            "DraftIssue:__type(name:\"DraftIssue\"){fields{name type{kind name \
+         ofType{kind name ofType{kind name}}}args{name type{kind name \
+         ofType{kind name ofType{kind name}}}}}}",
+        ),
+    ];
     let mut selected_input_fields = Vec::new();
     for (type_name, input, _) in MUTATION_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
@@ -1326,14 +1333,14 @@ pub fn mutation_schema_documents() -> Vec<String> {
 /// real call, and this is where `budget::recheck` reads its headers: a session the account
 /// cannot afford is declined there, on that one call, rather than reported here as a schema
 /// that drifted because GitHub refused to answer it.
-async fn verify_mutation_schema(
+async fn verify_contract_schema(
     token: &str,
     after_the_first_call: impl FnOnce(),
 ) -> Result<(), String> {
     let mut answered = serde_json::Map::new();
     let mut after_the_first_call = Some(after_the_first_call);
-    for document in mutation_schema_documents() {
-        let response = graphql(token, &document, "mutation schema introspection").await;
+    for document in contract_schema_documents() {
+        let response = graphql(token, &document, "contract schema introspection").await;
         if let Some(recheck) = after_the_first_call.take() {
             recheck();
         }
@@ -1341,7 +1348,7 @@ async fn verify_mutation_schema(
         let data = response
             .pointer("/data")
             .and_then(Value::as_object)
-            .ok_or_else(|| "mutation schema introspection returned no data".to_owned())?;
+            .ok_or_else(|| "contract schema introspection returned no data".to_owned())?;
         for (alias, members) in data {
             answered.insert(alias.clone(), members.clone());
         }
@@ -1354,6 +1361,35 @@ async fn verify_mutation_schema(
         .pointer("/data/Mutation/fields")
         .and_then(Value::as_array)
         .ok_or_else(|| "mutation contract introspection returned no fields".to_owned())?;
+    let draft_fields = response
+        .pointer("/data/DraftIssue/fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub schema has no DraftIssue fields".to_owned())?;
+    let memberships = draft_fields
+        .iter()
+        .find(|field| field.get("name").and_then(Value::as_str) == Some("projectV2Items"))
+        .ok_or_else(|| "GitHub DraftIssue has no projectV2Items field".to_owned())?;
+    if memberships.get("type").and_then(type_signature).as_deref()
+        != Some("ProjectV2ItemConnection!")
+    {
+        return Err("GitHub DraftIssue.projectV2Items changed its return type".to_owned());
+    }
+    for (name, expected) in [("first", "Int"), ("after", "String")] {
+        let actual = memberships
+            .get("args")
+            .and_then(Value::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .find(|arg| arg.get("name").and_then(Value::as_str) == Some(name))
+            })
+            .and_then(|arg| arg.get("type"))
+            .and_then(type_signature);
+        if actual.as_deref() != Some(expected) {
+            return Err(format!(
+                "GitHub DraftIssue.projectV2Items({name}:) changed: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
     for (field_name, input_name, payload_name) in MUTATION_CONTRACT {
         let field = fields
             .iter()
@@ -2467,11 +2503,11 @@ pub async fn run(nomination: Nomination) {
     // have been observed to disagree, and a session the headers cannot afford is DECLINED
     // on them here — after that one call, before anything is written — rather than left to
     // fail on its next one.
-    verify_mutation_schema(&token, || {
+    verify_contract_schema(&token, || {
         budget::recheck(&admitted, &SESSION).unwrap_or_else(|declined| declined.refuse());
     })
     .await
-    .unwrap_or_else(|error| panic!("GitHub mutation schema drifted: {error}"));
+    .unwrap_or_else(|error| panic!("GitHub contract schema drifted: {error}"));
     // GitHub, not this workspace, is the authority on both what a document may return and
     // what it costs. It runs here rather than
     // in the offline gate because it needs the credential this lane already has, and it runs

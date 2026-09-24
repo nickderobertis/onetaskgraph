@@ -68,7 +68,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["generate-check"],
       "options": {
-        "command": "bun test",
+        "command": "bun scripts/test.ts",
         "cwd": "sdks/typescript"
       }
     },
@@ -76,7 +76,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["generate-check"],
       "options": {
-        "command": "bun test --coverage --coverage-threshold=0.95",
+        "command": "bun scripts/test.ts --coverage --coverage-threshold=0.95",
         "cwd": "sdks/typescript"
       }
     },
