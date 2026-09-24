@@ -9,6 +9,12 @@
 # the value which leaves the lane free to skip. Neither hole was visible from a passing
 # run, because on this repository both arrangements are correct.
 #
+# A third was the same defect in the other half of the arrangement: that guard's
+# one-session assertion read a single script, and a second step —
+# scripts/check-fixture-discrimination.sh, which runs a whole hosted plugin's package twice
+# on every gate from outside affected selection — was opening a real session for every
+# branch with nothing here to notice.
+#
 # So each one is introduced for real, in a scratch clone, and every case asserts on the
 # DIAGNOSTIC as well as the exit status: a guard that refuses without naming the file and
 # the value sends the next author hunting, which is most of what the guard is for. The
@@ -30,6 +36,7 @@ readonly ROOT
 readonly JOURNEY="crates/onetaskgraph-github-projects/tests/live.rs"
 readonly WORKFLOW=".github/workflows/ci.yml"
 readonly LIVE_CRATE="crates/onetaskgraph-live/src/lib.rs"
+readonly FIXTURE_STEP="scripts/check-fixture-discrimination.sh"
 
 # Tested before it is sourced, not merely guarded after: bash 3.2 ends the shell where
 # `source` cannot find its file, so a handler after `||` never runs there — and
@@ -330,14 +337,27 @@ expect_refused "the crate and the workflow disagreeing about the demand" \
   "$WORKFLOW" "which is not the demand" "It has to be yes"
 reset_fixture
 
-# 13. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
+# 13. A step outside the `test` target that re-runs a live crate's package without
+#     clearing the credentials. This is the arrangement that existed unwatched: the
+#     fixture-discrimination step runs the whole onetaskgraph-github-projects package
+#     twice, on every gate, from outside affected selection — so with the credentials
+#     intact it opened a real session for every branch, and the guard that is supposed to
+#     hold this repository to one session per lane per run could not see it.
+substitute "$FIXTURE_STEP" 'unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+' ''
+run_guard
+expect_refused "a step re-running a live crate's package with the credentials intact" \
+  "$FIXTURE_STEP" "does not clear GH_PROJECTS_TOKEN"
+reset_fixture
+
+# 14. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
 #     request no secrets at all, so demanding a credential there would fail every outside
 #     contribution for something its author cannot supply — and without this case, a guard
-#     that refused every arrangement would have satisfied all twelve cases above.
+#     that refused every arrangement would have satisfied all thirteen cases above.
 substitute "$WORKFLOW" 'ONETASKGRAPH_LIVE_REQUIRED: "1"' \
   "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}"
 run_guard
-# llmlint: ignore[live_tier_compiles_and_requires_credential] The one case here that asserts a PASS, for the exemption the repository decided on; the twelve above are what hold every other run to the demand.
+# llmlint: ignore[live_tier_compiles_and_requires_credential] The one case here that asserts a PASS, for the exemption the repository decided on; the thirteen above are what hold every other run to the demand and to one session per lane per run.
 expect_passed "the fork exception, spelled whole"
 reset_fixture
 

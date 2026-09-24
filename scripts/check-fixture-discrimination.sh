@@ -12,6 +12,25 @@
 # not compile at all would look like the strictest suite in the repository.
 set -euo pipefail
 
+# ONE live session per lane per run, and this step is the third place a second one would
+# come from. What it runs is the WHOLE onetaskgraph-github-projects package — twice, once
+# unmutated and once mutated — and that package's `tests/live.rs` is an ordinary test of
+# it, so with the ambient credentials intact this opened a real GitHub Projects session on
+# every gate of every branch. It sits outside the affected-selection fan-out deliberately,
+# which is what makes that worse rather than better: the edge that keeps a live session off
+# a diff reaching no plugin behaviour is affected selection, and this step is on the other
+# side of it. The allowance it spends is the account's, shared with every other lane that
+# draws on it, and exhausting it has already turned the default branch red.
+#
+# Nothing is lost by clearing them: what this step asserts is that a fixture substitution
+# turns the suite red, which is a claim about the crate's in-process fixtures and reaches no
+# API at all. The demand is cleared with the credentials, or the skip that clearing produces
+# would fail this step for a session it is deliberately not running — the same pairing, for
+# the same reason, as `scripts/rust-coverage.sh`. `scripts/check-live-lane.sh` holds both
+# scripts to it, and `scripts/check-fixture-discrimination-credential-free.sh` drives this
+# one with the three seeded present and reads what every `cargo` invocation below received.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+
 fatal() {
   echo "check-fixture-discrimination: $1" >&2
   echo "check-fixture-discrimination: next: $2" >&2

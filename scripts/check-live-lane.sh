@@ -19,7 +19,10 @@
 #      under the name the product reads, with that lane's nominations and the demand that
 #      stops a missing credential passing green — set to `1`, rather than merely mentioned,
 #      because `ONETASKGRAPH_LIVE_REQUIRED: 0` is spelled the same way and is the hole.
-#   6. scripts/rust-coverage.sh clears them, because coverage re-runs the same tests.
+#   6. Every step that re-runs a live crate's tests outside the `test` target clears the
+#      credentials and the demand: scripts/rust-coverage.sh, because coverage re-runs the
+#      same tests, and scripts/check-fixture-discrimination.sh, which runs a whole hosted
+#      plugin's package twice on every gate from outside affected selection.
 #   7. Every variable the live crate declares sits inside the namespace the product's
 #      configuration layer reserves — the lane's variables share the product's own
 #      `ONETASKGRAPH_` prefix, and one outside that namespace decodes to an unknown
@@ -53,7 +56,22 @@ SESSIONS = {
 }
 
 WORKFLOW = Path(".github/workflows/ci.yml")
-COVERAGE = Path("scripts/rust-coverage.sh")
+# Every step that re-runs a live crate's tests from outside the `test` target, and why each
+# one would otherwise open a session of its own. A step here is not a path the engine
+# consults about affected selection, so clearing is the only thing between it and a real
+# API — which is what kept this list at one entry while the second was opening a session on
+# every gate of every branch, unknown to this guard.
+CLEARERS = {
+    Path("scripts/rust-coverage.sh"): (
+        "`just check` runs `test` and then `coverage`, and `cargo llvm-cov` re-runs the "
+        "same integration tests"
+    ),
+    Path("scripts/check-fixture-discrimination.sh"): (
+        "It runs a whole hosted plugin's package — the live journey among those tests — "
+        "twice in a scratch copy, on every gate, from outside the affected-selection "
+        "fan-out it deliberately sits beyond"
+    ),
+}
 DEMAND = "ONETASKGRAPH_LIVE_REQUIRED"
 # The one run where the demand is legitimately not made, spelled as GitHub Actions spells
 # it. A fork pull request receives no secrets at all, so a credential was never expected
@@ -386,18 +404,26 @@ for wrong in ("GITHUB_PROJECTS_TOKEN:", "secrets.GITHUB_PROJECTS_TOKEN"):
             "file."
         )
 
-# 5. Coverage does not open the second session.
-coverage = read(COVERAGE, "the coverage script every Rust crate routes through")
-cleared = re.search(r"(?m)^unset ([^\n]+)$", without_comments(coverage))
-cleared_names = set(cleared.group(1).split()) if cleared else set()
-for name in {session["credential"] for session in SESSIONS.values()} | {DEMAND}:
-    if name not in cleared_names:
-        problems.append(
-            f"{COVERAGE.as_posix()}: does not clear {name}. `just check` runs `test` and then "
-            "`coverage`, and `cargo llvm-cov` re-runs the same integration tests — so this "
-            "phase would open a second session against the shared external fixture the "
-            "first one is still writing to"
-        )
+# 5. No step outside the `test` target opens a session of its own.
+#
+# Every `unset` line rather than the first: a step may clear more than one thing — the git
+# environment a scratch clone strips is the other — and a scan that read only the first
+# would report a step that clears the credentials second as clearing nothing.
+demanded_names = {session["credential"] for session in SESSIONS.values()} | {DEMAND}
+for clearer, why in sorted(CLEARERS.items()):
+    source = read(clearer, "a step that re-runs a live crate's tests")
+    cleared_names = {
+        name
+        for line in re.findall(r"(?m)^unset ([^\n]+)$", without_comments(source))
+        for name in line.split()
+    }
+    for name in sorted(demanded_names):
+        if name not in cleared_names:
+            problems.append(
+                f"{clearer.as_posix()}: does not clear {name}. {why} — so this step would "
+                "open a session of its own against the shared external fixture, on a run "
+                "the engine never decided to spend one on"
+            )
 
 # 7. No live variable collides with the product's configuration prefix.
 #
@@ -459,9 +485,11 @@ if problems:
         "through "
         "onetaskgraph_live::Session::open; the credentials and nominations on one lane of "
         "the matrix in .github/workflows/ci.yml with ONETASKGRAPH_LIVE_REQUIRED set to 1 "
-        "beside them; scripts/rust-coverage.sh clearing them so coverage opens no second "
-        "session; and every live variable inside the namespace the engine's environment "
-        "layer reserves. AGENTS.md records why each of those is what it is.",
+        "beside them; every step that re-runs a live crate's tests from outside the "
+        "`test` target — scripts/rust-coverage.sh and "
+        "scripts/check-fixture-discrimination.sh — clearing them so none of them opens a "
+        "session of its own; and every live variable inside the namespace the engine's "
+        "environment layer reserves. AGENTS.md records why each of those is what it is.",
         file=sys.stderr,
     )
     sys.exit(1)
