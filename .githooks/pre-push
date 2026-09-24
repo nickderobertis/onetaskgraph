@@ -14,12 +14,9 @@
 # implicit base is how affected selection quietly starts comparing against the wrong
 # commit. The supply-chain and distribution stages stay outside selection and still run.
 #
-# After the gate comes the screencomp screenshot guard, which is the local half of the
-# STRICT visual gate (screenshots/AGENTS.md). It is deliberately the only thing beside the
-# gate in this hook and it is deliberately AFTER it: the bar this hook already ran is
-# unchanged, and the guard adds a refusal of its own only when what is being pushed can
-# change a rendered shot. It takes no screenshot on any other push, and none at all from
-# `just gate`, `just check` or CI's check job — the visual workflow is its own.
+# After the gate comes the screencomp screenshot guard, the only thing beside the gate in
+# this hook and deliberately after it. screenshots/AGENTS.md, "The strict gate, and how its
+# local half is activated", is why it sits there and when it captures.
 #
 # Provisioning comes first, and its refusal is deliberately not spelled like the gate's.
 # A fresh worktree has no node_modules and no synced Python environment, so a hook that

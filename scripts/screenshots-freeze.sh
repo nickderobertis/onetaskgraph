@@ -2,18 +2,12 @@
 # The ONE implementation of which `freeze` this repository renders its screenshots with,
 # and where that binary lives.
 #
-# `freeze` turns a scene's captured bytes into an SVG, so its version is one of the two
-# inputs the committed digest baseline is a function of (the other is the vendored font).
-# The pin therefore lives in exactly one place — FREEZE_VERSION below — and the capture
-# script, the justfile recipe and .github/workflows/visual-docs.yml all reach the binary
-# through this script rather than naming a version of their own. Moving the pin reflows
-# every shot: bless the baseline in the same change.
+# The pin is FREEZE_VERSION below and every caller reaches the binary through this script;
+# screenshots/AGENTS.md's pin table is why, and says to bless in the same change as a move.
 #
 # The binary lives in a REPOSITORY-SCOPED location, never on PATH, for the reason
-# scripts/scoped-release-plz.sh gives at length: other repositories on this host pin other
-# versions of the same global command, and installing one repository's pin globally
-# invalidates another's gate until a person puts it back. The location is namespaced by
-# tool and version under the user's cache home:
+# scripts/scoped-release-plz.sh gives at length about the other scoped tool. It is
+# namespaced by tool and version under the user's cache home:
 #
 #   ${ONETASKGRAPH_TOOLS_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/tools}/freeze/<version>/bin/freeze
 #

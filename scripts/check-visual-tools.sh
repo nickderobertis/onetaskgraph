@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # Drive the screenshot tooling this repository owns through its real paths.
 #
-# `scripts/screenshots-freeze.sh` decides which renderer the capture runs and provisions it,
-# `scripts/screenshots-bless.sh` writes the committed digest baseline, and
-# `scripts/check-visual-docs.sh` is what fails when a copy of a pin or an image parts from
-# its source. Between them they carry a couple of dozen refusals, and every one is a path a
-# person meets on a bad day — a renderer that is not there, an archive that would write
-# outside the directory it unpacks into, a README embedding an image nobody committed. So
-# they are driven here rather than read, exactly as scripts/check-scoped-release-plz.sh
-# drives the other scoped tool: against a stand-in tool location and a stand-in installer,
-# with NO network and nothing installed on the host touched. The last of the three is
-# watched REFUSING, because a guard nobody has seen fail is a guard nobody knows works.
+# The subjects are scripts/screenshots-freeze.sh, scripts/screenshots-bless.sh and
+# scripts/check-visual-docs.sh. Between them they carry a couple of dozen refusals, and
+# every one is a path a person meets on a bad day — a renderer that is not there, an
+# archive that would write outside the directory it unpacks into, a README embedding an
+# image nobody committed. So they are driven here rather than read, exactly as
+# scripts/check-scoped-release-plz.sh drives the other scoped tool: against a stand-in tool
+# location and a stand-in installer, with NO network and nothing installed on the host
+# touched.
 #
 # What is stood in for is `curl` (the one thing that reaches a network) and screencomp.
 # What is real is both scripts, the archive handling, the scoped layout and the version

@@ -1,18 +1,11 @@
 # Terminal screenshots via screencomp's reusable workflow. The capture step is ours
 # (scripts/screenshots.sh); screencomp owns the reproducibility gate, the classify gate,
 # the HTML gallery, the GitHub Pages deploy and the sticky before/after pull-request
-# comment. screenshots/AGENTS.md is the durable note.
+# comment.
 #
-# This is a workflow of its own ON PURPOSE. Screenshots are informational, like a bench:
-# they are not in `just check`, not in `just gate`, not in the CI check job, and not an Nx
-# target any of those reach. The only other place a capture can happen is the pre-push
-# guard, which runs after the gate the hook already ran and only when what is being pushed
-# can change a rendered shot.
-#
-# Which CPU arch(es) CI captures is read from [capture].arches in screencomp.toml — one
-# lane per arch, and that file is the one place any lane is named. These shots are
-# deterministic SVGs (a vendored, pinned font, and a fixture staged at a fixed absolute
-# path), so the single lane declared there is correct for every machine.
+# screenshots/AGENTS.md is the durable note: why this is a workflow of its own rather than
+# part of any gate, and why one lane read from [capture].arches in screencomp.toml is
+# enough for every machine.
 name: Visual docs
 
 on:
@@ -33,19 +26,14 @@ permissions: {}
 jobs:
   visual-docs:
     # Least privilege, one line per grant, and on the job rather than the workflow so a
-    # second job added here inherits none of it. They cannot vary by event: GitHub takes no
-    # expression in `permissions`, and the two ways round that are both worse than the
-    # grant. A second job under an `if:` would duplicate this whole call — the capture
-    # command included, which scripts/check-visual-docs.sh reconciles against the recipes as
-    # ONE statement — and it would rename the check context, which is this job's id: the
-    # branch-protection context an owner adds is `visual-docs / report (<arch>)`, and a
-    # split would make it two contexts, neither of them that one. So the comment grant is
-    # held by what the called workflow does with it instead: one sticky comment, on a pull
-    # request, through screencomp's own action.
+    # second job added here inherits none of it.
     # llmlint: ignore-block[least_privilege_grants] The comment grant reaches the push and
-    # the monthly schedule as well, and cannot be conditioned: the paragraph above is why,
-    # and the grant is held by what the called workflow DOES with it — screencomp upserts
-    # one sticky comment on a pull request and writes none on either other event.
+    # the monthly schedule too and cannot be conditioned: GitHub takes no expression in
+    # `permissions`, and splitting the job under an `if:` would rename the check context
+    # branch protection names (`visual-docs / report (<arch>)`) and duplicate the capture
+    # command this repository holds as one statement. The grant is bounded by what the
+    # called workflow DOES with it — screencomp upserts one sticky comment on a pull
+    # request and writes none on either other event.
     permissions:
       contents: write # push the gh-pages gallery
       pull-requests: write # upsert the sticky before/after comment on a pull request

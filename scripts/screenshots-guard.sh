@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # The local half of the STRICT screenshot gate, run by .githooks/pre-push after the gate.
 #
-# .github/workflows/visual-docs.yml fails on any capture that drifts from the committed
-# baseline. This is what lets you regenerate and commit that baseline BEFORE pushing, so
-# the workflow stays green: it re-captures only when a file that can change a rendered
-# shot is in what is being pushed ([guard].paths in screencomp.toml), and on drift it
-# refreshes the baseline, builds a review gallery and BLOCKS the push so the new bytes are
-# committed deliberately.
+# screenshots/AGENTS.md, "The strict gate, and how its local half is activated", is what
+# this implements: re-capture only when what is being pushed matches [guard].paths in
+# screencomp.toml, and on drift refresh the baseline, build a review gallery and block.
 #
 # It reads the ref records git feeds a pre-push hook on STDIN — the hook hands on what it
 # read — and does nothing at all when there are none: no records is nothing being pushed,

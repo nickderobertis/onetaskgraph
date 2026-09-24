@@ -2,24 +2,12 @@
 # Run this project's two checks again from a DETACHED checkout, which is what CI runs them
 # in and what no developer machine reproduces.
 #
-# `actions/checkout` leaves the workspace detached at the ref under test and keeps no local
-# branch at all, and both of this project's checks clone that workspace into a scratch tree.
-# Two things about such a clone differ from one taken on a person's machine, and neither is
-# visible from a checkout that is on a branch:
-#
-#   * it inherits no branches, so it has no `origin/HEAD` — and a `git merge-base` naming
-#     one answers empty whatever it is asked about, which turns an assertion written
-#     against it into one that cannot fail;
-#   * it arrives already detached at the commit its own checkout then asks for, so that
-#     checkout moves HEAD nowhere, writes no "moving from" reflog entry, and `git checkout -`
-#     — which is `@{-1}`, read out of that reflog — fails with
-#     "pathspec '-' did not match any file(s) known to git".
-#
-# That second one is not hypothetical: it is how scripts/check-visual-guard.sh came to pass
-# on every machine a person ran it from and refuse this repository's own branch on the
-# ubuntu lane, reported as the guard having broken rather than as the runner's checkout
-# being shaped differently. Nothing local could see it, so this is that lane's condition
-# brought here.
+# screenshots/AGENTS.md, "The strict gate, and how its local half is activated", records
+# what such a clone lacks — an `origin/HEAD`, and a reflog entry for `git checkout -` — and
+# why neither difference is visible from a checkout that is on a branch. This is that
+# lane's condition brought here: the second of them is how scripts/check-visual-guard.sh
+# came to pass on every machine a person ran it from and refuse this repository's own
+# branch on the ubuntu lane, reported as the guard having broken.
 #
 # The subjects are real and unmodified; the only stand-in is for the host, which is the
 # variable under test. Case 1 refuses to let the rest pass vacuously, because a copy still

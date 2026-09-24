@@ -3,19 +3,10 @@
 # (see screencomp.toml and .github/workflows/visual-docs.yml).
 #
 # Every scene drives the REAL release `onetaskgraph` binary against the curated fixture in
-# screenshots/fixture/ and renders exactly the bytes it wrote to a deterministic SVG with
-# `freeze` and the VENDORED, pinned font. Nothing here rewrites a captured byte: the
-# fixture is staged at a FIXED absolute path, so the paths the binary prints — a
-# configuration document, a resolved `root`, a task's `location` — are real and identical
-# on every machine. That matters more than it sounds: `config show` aligns its columns
-# against the widest value it is printing, so a path rewritten afterwards would leave the
-# origin column of two rows ninety characters left of every other row's. screenshots/AGENTS.md
-# is the durable note; it says what each scene documents and why the fixture is curated.
-#
-# No network and no credential: the fixture configures `local-md` and `in-memory`, the two
-# plugins compiled into every build that reach nothing, and never the two that reach a
-# network — not even against a loopback fixture server, because a capture that binds a
-# socket can fail for a reason that has nothing to do with the tool.
+# screenshots/fixture/ and renders exactly the bytes it wrote. screenshots/AGENTS.md is the
+# durable note: what each scene documents, why the fixture is curated, what the capture is
+# pinned to, why it configures only the two plugins that reach nothing, and why staging the
+# fixture at a FIXED absolute path is the whole of the normalisation.
 #
 # Output (screencomp's capture contract):
 #   $SHOTS_OUT/captures.json   index: {schema, shots:[{name,toggles,hash,image}]}

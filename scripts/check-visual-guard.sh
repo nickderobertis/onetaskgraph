@@ -13,17 +13,9 @@
 # capture (whose bytes the committed baseline gates and which costs a release build). What
 # is real is the guard, the clone, the git history, the ref records and the diff.
 #
-# The cases are numbered in the body, and each says in one line what it is about. Between
-# them they cover: which pushes reach a capture and which do not (no records, a malformed
-# record, a deleted ref, an unresolvable commit, a branch nothing bounds, an explicit range,
-# nothing relevant, CI); what happens to a capture once it is made (unchanged, drifted, and
-# a drift whose baseline or gallery could not be written, and one where a step reported
-# writing it and did not); what happens when a step fails
-# (screencomp absent and required or not, a scope error, a capture that failed, a classify
-# that failed for anything but drift, and a changed-path list that could not be written);
-# which spelling of a changed path screencomp is handed (one git quotes, and one carrying a
-# newline that it must not be asked about at all); and the hook's own half, which reads
-# git's records once and hands them to both the gate's base and this guard.
+# The cases are numbered in the body and each says in one line what it is about; that
+# numbered list is the inventory, rather than a summary of it here that a case added later
+# would quietly fall out of.
 #
 # llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail

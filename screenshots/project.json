@@ -3,7 +3,7 @@
   "name": "screenshots",
   "projectType": "library",
   "tags": ["lang:bash", "layer:docs"],
-  "//": "No target here captures: the capture is `just screenshots`, which is no Nx target at all, and that is what keeps it out of `just check`, `just gate` and CI's check job. What this project holds is the curated fixture, the vendored renderer font and the durable note \u2014 a project like everything else, so a change to one is selected by the graph rather than escaping it. It depends on no other project, and the only edge is the one `workspace` has to every project. screenshots/AGENTS.md is why.",
+  "//": "No target here captures: the capture is `just screenshots`, which is no Nx target at all. This project holds the curated fixture, the vendored renderer font and the durable note, so a change to one is selected by the graph. It depends on no other project, and the only edge is the one `workspace` has to every project. screenshots/AGENTS.md is why.",
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
@@ -51,7 +51,7 @@
     },
     "typecheck": {
       "executor": "nx:noop",
-      "//": "Declared and empty. Target names are uniform because `nx affected` fans out by name, and there is nothing here between reading a file and running it: the capture machinery is shell, whose static analysis is the bash 3.2 scan under `scripts:lint`, and the fixture is data the real binary parses in the `test` target's own scenes."
+      "//": "Declared and empty, because `nx affected` fans out by target name. There is nothing here between reading a file and running it: this machinery is shell, whose static analysis is the bash 3.2 scan under `scripts:lint`."
     },
     "test": {
       "executor": "nx:run-commands",
@@ -76,7 +76,7 @@
         "{workspaceRoot}/scripts/check-visual-tools.sh",
         "{workspaceRoot}/shots/baseline/*.json"
       ],
-      "//": "Uncached and serial, and both for the same reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob in this tree describes. The first drives the real pre-push guard and the real hook through every outcome each owes, with screencomp and the capture stubbed at the subprocess seam scripts/check-pre-push-provisioning.sh stubs `just` at. The second drives the renderer resolver and the baseline writer against a stand-in tool location and a stand-in installer, as scripts/check-scoped-release-plz.sh does for the other scoped tool: no network, and nothing installed on the host is read or touched. The third runs the first two again from a DETACHED checkout, which is the shape actions/checkout leaves on every runner and the one no developer machine has: a scratch clone of such a checkout inherits no branches, so it has neither an origin/HEAD nor a reflog entry for `git checkout -`, and that difference refused this repository's own branch on the ubuntu lane while every local run passed. It runs last because the two it drives report their own failures first."
+      "//": "Uncached and serial for the reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob describes. The first drives the real pre-push guard and hook with screencomp and the capture stubbed at the subprocess seam; the second drives the renderer resolver and the baseline writer against a stand-in tool location and installer, reaching no network; the third runs both again from a DETACHED checkout, the shape actions/checkout leaves and no developer machine has. Each script's own header says what it covers. The detached run is last because the two it drives report their own failures first."
     },
     "coverage": {
       "executor": "nx:noop",

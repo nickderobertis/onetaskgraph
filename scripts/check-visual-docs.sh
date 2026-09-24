@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # Reconcile everything the visual-docs adoption states twice.
 #
-# The capture is byte-gated, so what it renders cannot drift in silence. What CAN drift is
-# everything around it that is written down in more than one place: the renderer pin, the
-# arch lane, the two screencomp versions in the workflow, the scene inventory, and the
-# images the README embeds. Each of those has one authoritative source in this tree, and
-# this is the check that fails when a copy parts from it.
+# The capture is byte-gated, so what it renders cannot drift in silence; what can drift is
+# everything around it that is written down in more than one place. screenshots/AGENTS.md,
+# "Why it is byte-reproducible, and what it is pinned to", names each of those and its one
+# authoritative source, and this is the check that fails when a copy parts from one.
 #
-# It takes NO screenshot and needs neither screencomp nor the renderer installed, which is
-# what lets it run in CI's check job like any other lint while the capture stays in its own
-# workflow (screenshots/AGENTS.md records that split and why).
+# It takes NO screenshot and needs neither screencomp nor the renderer, which is what lets
+# it run in CI's check job while the capture stays in its own workflow.
 #
 # Quiet on success. On failure it names the file and the edit.
 #

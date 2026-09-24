@@ -2,12 +2,8 @@
 # Refresh the committed digest baseline from the capture that is already on disk.
 #
 # Run after an INTENDED output change, through `just screenshots-bless`, which captures
-# first. It reads the lane out of screencomp.toml — the one place it is declared — so the
-# baseline it writes is the file .github/workflows/visual-docs.yml and .githooks/pre-push
-# both classify against, and never a second spelling of that name.
-#
-# Commit shots/baseline/<lane>.json together with the refreshed docs/screenshots/, which
-# the capture has already written.
+# first. It reads the lane out of screencomp.toml rather than spelling it again, so the
+# baseline it writes is the one the workflow and the guard classify against.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
