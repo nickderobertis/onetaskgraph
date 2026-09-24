@@ -35,7 +35,6 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 started_pids=""
 cleanup() {
-  # Only the processes this check started, by the pids it was given.
   for pid in $started_pids; do kill "$pid" 2>/dev/null || true; done
   rm -rf "$scratch"
 }
@@ -107,7 +106,7 @@ called_file=""
 log_file=""
 case_pid=""
 
-launch() { # the launcher, then its own arguments — the port file among them
+launch() {
   rm -f "$port_file" "$called_file"
   PYTHONPATH="$scratch/shim" ONETASKGRAPH_GETFQDN_CALLED="$called_file" \
     python3 "$@" >"$log_file" 2>&1 &
@@ -132,8 +131,6 @@ stop() {
   case_pid=""
 }
 
-# What a port file holds is a port only because the registry put it there, so a case that
-# reads one says which it got.
 reports_a_port() {
   local reported
   reported="$(cat "$port_file" 2>/dev/null | tr -d '\r\n')"
@@ -165,11 +162,10 @@ if ! await "$called_file"; then
   exit 1
 fi
 if reports_a_port; then
-  fail "a registry bound the stock way reported a port although socket.getfqdn never answered — so cases 2 and 3 below would pass for a launcher that binds through the reverse lookup, which is the whole of what they are for"
+  fail "a registry bound the stock way reported a port although socket.getfqdn never answered — so the launcher cases below would pass for a launcher that binds through the reverse lookup, which is the whole of what they are for"
 fi
 stop
 
-# 2. The sparse crate index scripts/check-crate-sibling-resolution.sh resolves against.
 port_file="$scratch/crate.port"
 called_file="$scratch/crate.getfqdn"
 log_file="$scratch/crate.log"
@@ -185,8 +181,6 @@ if [ -e "$called_file" ]; then
 fi
 stop
 
-# 3. The npm registry scripts/check-npm-publish.sh publishes into, with the two files it
-#    keeps its state in beside the port file it writes.
 port_file="$scratch/npm.port"
 called_file="$scratch/npm.getfqdn"
 log_file="$scratch/npm.log"
@@ -203,9 +197,9 @@ if [ -e "$called_file" ]; then
 fi
 stop
 
-# 4. What the cases above prove is about those two checks only while those two checks are
-#    what stands these registries up. So each one names its launcher, and neither builds a
-#    server of its own for the cases above to miss.
+# What the cases above prove is about those two checks only while those two checks are
+# what stands these registries up. So each one names its launcher, and neither builds a
+# server of its own for the cases above to miss.
 while read -r check launcher; do
   grep -Fq "$launcher" "$ROOT/$check" || fail \
     "$check no longer names $launcher, so the launcher this check proved is not the registry that check starts"
