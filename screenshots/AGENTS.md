@@ -100,7 +100,11 @@ pure layout maths. Four things are pinned, and each has exactly one source:
 those ahead of the configuration document: an exported one prints straight into the
 `config show` scene as the layer it won at, and one naming a source adds that source's rows
 to every listing. `HOME`, the `XDG_*` directories and `TMPDIR` are redirected into the
-staged tree for the same reason.
+staged tree for the same reason. `ONETASKGRAPH_TOOLS_HOME` is swept out of the environment
+with the rest and then handed to `screenshots-freeze.sh` alone, because it is spelled like
+one of those settings and is none: it names where the renderer above is provisioned. Swept
+and not kept, the capture took the renderer from the ambient cache home whatever the caller
+named — green on a machine that had one there and refusing on one that did not.
 
 **The fixture is staged at a fixed absolute path, and that is the whole of the
 normalisation.** This tool prints absolute paths, and `config show` aligns its columns
