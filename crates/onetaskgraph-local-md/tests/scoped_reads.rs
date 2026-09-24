@@ -7,11 +7,8 @@
 //! over a real folder, the vanishing ones with a real second thread deleting files.
 
 use std::fs;
-#[cfg(unix)]
 use std::path::Path;
-#[cfg(unix)]
 use std::sync::Arc;
-#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use onetaskgraph_plugin_api::{
@@ -238,11 +235,22 @@ async fn a_document_query_scoped_to_a_project_is_read_on_the_same_terms() {
     assert!(malformed(error).contains("theirs.md"));
 }
 
+/// How many listings the walk makes while the churn runs. Fewer on Windows, where a listing
+/// costs more and every entry the churn is part-way through removing costs a probe on top.
+const LISTINGS: u32 = if cfg!(windows) { 60 } else { 300 };
+
 /// While `churn` runs, create and delete tasks under `tasks/theirs/` — and whole folders of
 /// them — on another thread as fast as it will go, so the walk keeps meeting entries that are
 /// gone by the time it resolves or reads them. Every file is renamed into place, so each one
 /// is only ever there whole: what the walk meets is a vanish, never a file half written.
-#[cfg(unix)]
+///
+/// Not one of these writes is unwrapped, and that is the interleaving rather than a
+/// weakening of it. Windows leaves a file the walk still has open in its folder through its
+/// own deletion, so this thread's next write of that name, its rename over it and its
+/// removal of the folder holding it are all refused until the walk lets go — exactly when
+/// the walk is meeting what this test is about. A thread that unwrapped would fail the test
+/// for succeeding at it. What is asserted instead is that the churn really happened: a run
+/// in which nothing was placed or nothing removed proves nothing and says so.
 fn while_files_vanish(root: &Path, churn: impl FnOnce()) {
     let done = Arc::new(AtomicBool::new(false));
     let deleting = {
@@ -251,37 +259,43 @@ fn while_files_vanish(root: &Path, churn: impl FnOnce()) {
         std::thread::spawn(move || {
             let place = |path: std::path::PathBuf| {
                 let staged = path.with_extension("staged");
-                fs::write(&staged, "---\ntitle: Brief\nproject: theirs\n---\n").unwrap();
-                fs::rename(&staged, path).unwrap();
+                if fs::write(&staged, "---\ntitle: Brief\nproject: theirs\n---\n").is_err() {
+                    return false;
+                }
+                fs::rename(&staged, &path).is_ok() || {
+                    let _ = fs::remove_file(&staged);
+                    false
+                }
             };
+            let (mut placed, mut removed) = (0_u32, 0_u32);
             let mut cycles = 0_u32;
             while !done.load(Ordering::SeqCst) || cycles == 0 {
                 let deep = theirs.join(format!("deep-{}", cycles % 4));
-                fs::create_dir_all(&deep).unwrap();
+                let _ = fs::create_dir_all(&deep);
                 for n in 0..40 {
-                    place(theirs.join(format!("brief-{n}.md")));
-                    place(deep.join(format!("{n}.md")));
+                    placed += u32::from(place(theirs.join(format!("brief-{n}.md"))));
+                    placed += u32::from(place(deep.join(format!("{n}.md"))));
                 }
                 for n in 0..40 {
-                    fs::remove_file(theirs.join(format!("brief-{n}.md"))).unwrap();
+                    removed +=
+                        u32::from(fs::remove_file(theirs.join(format!("brief-{n}.md"))).is_ok());
                 }
-                fs::remove_dir_all(&deep).unwrap();
+                let _ = fs::remove_dir_all(&deep);
                 cycles += 1;
             }
-            cycles
+            (cycles, placed, removed)
         })
     };
     churn();
     done.store(true, Ordering::SeqCst);
-    assert!(deleting.join().expect("the deleting thread finished") > 0);
+    let (cycles, placed, removed) = deleting.join().expect("the deleting thread finished");
+    assert!(cycles > 0);
+    assert!(
+        placed > 0 && removed > 0,
+        "{placed} placed, {removed} removed"
+    );
 }
 
-// Unix alone: on Windows a file another process has unlinked while a handle to it is still
-// open answers "access is denied" to every open until that handle closes, and `std`'s
-// metadata read falls back to the directory listing, which still names it — so a file that
-// is vanishing there is indistinguishable, through `std`, from one the reader may not open,
-// and the walk reports it. That is a Windows gap of its own, not what this test proves.
-#[cfg(unix)]
 #[test]
 fn a_file_that_vanishes_during_the_walk_is_skipped_rather_than_reported() {
     let (root, source) = folder(&[
@@ -293,7 +307,7 @@ fn a_file_that_vanishes_during_the_walk_is_skipped_rather_than_reported() {
         .build()
         .unwrap();
     while_files_vanish(root.path(), || {
-        for _ in 0..300 {
+        for _ in 0..LISTINGS {
             // Unscoped: every file the walk meets is either a whole task or gone, so every
             // listing answers, holding the two tasks that stay and whatever of the churn it
             // caught.
