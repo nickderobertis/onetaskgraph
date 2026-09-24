@@ -273,6 +273,58 @@ OUTPUT="$(PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="relative/tools" \
 [ "$STATUS" -eq 69 ] || fail "a relative tool home exited $STATUS, expected 69:"
 names "absolute" || fail "a relative tool home was refused without saying why:"
 
+# 10a. And a DRIVE-LETTER tool home, which is absolute on Windows and on no other platform:
+#      `C:/tools` here is a directory named `C:` under the working directory, which for
+#      `just screenshots-tools` is this repository. Accepted on every platform it made the
+#      one check standing between `ensure`'s `rm -rf` and this tree pass a value that is
+#      relative on the very hosts it was protecting. Both spellings, and the assertion is
+#      that nothing was created under the working directory: a refusal that still walked
+#      the path first is not a refusal.
+#
+#      This case runs where a drive letter is NOT absolute, which is the Linux and macOS
+#      lanes; on the Windows lane the value is accepted, and 10b is what drives that half.
+#
+#      The resolver is driven from a working directory of this case's own, because a value
+#      this refusal did not catch is resolved against the CALLER's, and an assertion that
+#      nothing was created needs somewhere it can say that of.
+readonly DRIVE_CWD="$scratch/drive-letter-cwd"
+mkdir -p "$DRIVE_CWD" || fatal "could not create $DRIVE_CWD" \
+  "check the permissions of \$TMPDIR, then rerun"
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-visual-tools: the drive-letter refusal is skipped on Windows (a drive letter IS an absolute path there, so there is nothing to refuse); the Linux and macOS lanes gate it" >&2
+    ;;
+  *)
+    for drive_home in 'C:/tools' 'C:\tools'; do
+      OUTPUT="$(cd "$DRIVE_CWD" && PATH="$STAND_IN:$PATH" ONETASKGRAPH_TOOLS_HOME="$drive_home" \
+        bash "$FREEZE" ensure 2>&1)" && STATUS=0 || STATUS=$?
+      [ "$STATUS" -eq 69 ] \
+        || fail "the drive-letter tool home [$drive_home] exited $STATUS on $(uname -s), expected 69:"
+      names "absolute" \
+        || fail "the drive-letter tool home [$drive_home] was refused without saying why:"
+      stray="$(ls -A "$DRIVE_CWD")" || stray="unreadable"
+      [ -z "$stray" ] \
+        || fail "the drive-letter tool home [$drive_home] created [$stray] under the working directory before refusing it:"
+    done
+    ;;
+esac
+
+# 10b. The other half: where a drive letter IS absolute, it is accepted rather than refused,
+#      so the case above narrows nothing on the platform that spelling belongs to. Driven by
+#      telling the resolver it is on Windows, because that is the one input the decision
+#      reads and this host cannot supply it. `path` rather than `ensure`, since what this
+#      asserts is that the value passed validation — `ensure` would go on to provision under
+#      a `C:` directory here, which is the very thing 10a is about.
+OUTPUT="$(cd "$DRIVE_CWD" && OS=Windows_NT PATH="$STAND_IN:$PATH" \
+  ONETASKGRAPH_TOOLS_HOME='C:/tools' bash "$FREEZE" path 2>&1)" && STATUS=0 || STATUS=$?
+[ "$STATUS" -eq 0 ] \
+  || fail "a drive-letter tool home was refused where a drive letter is an absolute path:"
+names "C:/tools/freeze/$PIN/bin/freeze" \
+  || fail "a drive-letter tool home did not scope the renderer under itself:"
+stray="$(ls -A "$DRIVE_CWD")" || stray="unreadable"
+[ -z "$stray" ] \
+  || fail "'path' created [$stray] rather than only naming where the renderer would go:"
+
 # 15. No curl: the archive cannot be fetched, and that is what it says.
 readonly NO_CURL="$scratch/no-curl"
 mkdir -p "$NO_CURL" || fatal "could not create $NO_CURL" \

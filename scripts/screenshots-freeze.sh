@@ -86,14 +86,33 @@ else
 fi
 # `ensure` removes a directory two levels beneath this root, so it has to be absolute
 # before anything is created or cleared under it.
+#
+# A drive letter is absolute on Windows and NOWHERE ELSE: `C:/tools` on Linux or macOS is a
+# directory named `C:` under whatever the caller's working directory is, which for
+# `just screenshots-tools` is this repository — so accepting that spelling on every platform
+# had the one check standing between a stray `rm -rf` and this tree pass a value that is
+# relative on the very hosts it was protecting. So the two Windows spellings are accepted
+# only where the running platform gives them that meaning, by the same reading of `$OS` and
+# `$OSTYPE` every other script here uses.
+#
+# `why` is empty for a value this accepts, and otherwise carries the refusal's own reason:
+# a plainly relative path and one that would have been absolute on another platform look
+# nothing alike to the person reading it.
+why="not an absolute path"
 case "$tools_home" in
-  /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
-  *)
-    echo "screenshots-freeze: the tool home '$tools_home' is not an absolute path, so nothing is provisioned or removed under it" >&2
-    echo "screenshots-freeze: next: set ONETASKGRAPH_TOOLS_HOME, XDG_CACHE_HOME or HOME to an absolute directory" >&2
-    exit 69
+  /*) why="" ;;
+  [A-Za-z]:/* | [A-Za-z]:\\*)
+    case "${OS:-}${OSTYPE:-}" in
+      *Windows_NT* | *msys* | *cygwin* | *win32*) why="" ;;
+      *) why="not an absolute path on $(uname -s): a drive letter is one on Windows alone, and here it is a directory of that name under the working directory" ;;
+    esac
     ;;
 esac
+if [ -n "$why" ]; then
+  echo "screenshots-freeze: the tool home '$tools_home' is $why, so nothing is provisioned or removed under it" >&2
+  echo "screenshots-freeze: next: set ONETASKGRAPH_TOOLS_HOME, XDG_CACHE_HOME or HOME to an absolute directory" >&2
+  exit 69
+fi
 readonly scoped_root="$tools_home/freeze/$FREEZE_VERSION"
 readonly scoped_bin="$scoped_root/bin/freeze"
 
