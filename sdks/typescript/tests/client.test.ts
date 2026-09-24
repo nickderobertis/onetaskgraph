@@ -112,32 +112,11 @@ beforeAll(() => {
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-// This file's first command is the first time anything here starts the debug binary, and
-// that first exec is not the same cost as the ones after it: on a loaded macOS runner,
-// paging in an unstripped debug build and validating its signature has outlasted bun's 5s
-// default on its own. A bound this wide still catches a command that hangs; what it stops
-// doing is reporting a cold start as one.
-const COLD_START_TIMEOUT_MS = 60_000;
-
-// The warm spawns are not free either, and the test below is nothing but sixteen of them:
-// about 57ms each on an idle eight-core box, 914ms for the test. That left bun's 5s
-// default a factor of five, and the gate spends it — it runs ten projects and their cargo
-// builds at once, and this test outlasted the default there at 5039.53ms on a tree that
-// runs it in under a second unloaded. The default is the bound bun gives a unit test, not
-// one anybody chose for a test whose whole cost is real processes; so this test gets the
-// same wide bound and for the same reason as the one above. It still catches a command
-// that never returns; what it stops doing is reporting a busy machine as one.
-const SUBPROCESS_SUITE_TIMEOUT_MS = 60_000;
-
-test(
-  "every emitted command has a client method",
-  async () => {
-    assertCompleteCommandSurface();
-    const bundle = await client.schema();
-    expect(bundle).toHaveProperty("commands", [...clientCommands]);
-  },
-  COLD_START_TIMEOUT_MS,
-);
+test("every emitted command has a client method", async () => {
+  assertCompleteCommandSurface();
+  const bundle = await client.schema();
+  expect(bundle).toHaveProperty("commands", [...clientCommands]);
+});
 
 test("status options names a source that is not backed by GitHub Projects", async () => {
   await expect(client.sourcesStatusOptions("work")).rejects.toThrow(
@@ -185,108 +164,104 @@ test("the prefix these tests remove is the one the binary reads its configuratio
   }
 });
 
-test(
-  "typed methods drive every real binary command",
-  async () => {
-    expect((await client.configShow()).settings.length).toBeGreaterThan(0);
-    expect((await client.sourcesList())[0]?.source).toBe("work");
-    const tasks = await client.taskList({
-      sources: ["work"],
-      labels: ["bug"],
-      excludeLabels: ["chore"],
-      statuses: ["todo"],
-      search: "Alpha",
-      fields: "title",
-      limit: 1,
-      project: "P-1",
-    });
-    expect(tasks.items[0]?.id).toBe("work:T-1");
-    const firstPage = await client.taskList({ sources: ["work"], limit: 1 });
-    expect(firstPage.next).toBeString();
-    const secondPage = await client.taskList({
-      sources: ["work"],
-      limit: 1,
-      page: firstPage.next ?? "missing-page-token",
-    });
-    expect(secondPage.items).toHaveLength(1);
-    expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
-    expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
-      "work:T-2",
-    );
-    expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
-      "Alpha engine",
-    );
-    expect(
-      (
-        await client.taskDeps("work:T-2", {
-          direction: "depended-on-by",
-          limit: 1,
-          allowPartial: true,
-        })
-      ).items[0]?.from,
-    ).toEqual({ id: "work:T-1", kind: "task" });
-    expect(
-      (
-        await client.projectList({
-          sources: ["work"],
-          labels: ["bug"],
-          excludeLabels: ["chore"],
-          statuses: ["in-progress"],
-          search: "Engine",
-          fields: "title",
-          limit: 1,
-          allowPartial: true,
-        })
-      ).items[0]?.id,
-    ).toBe("work:P-1");
-    expect(
-      (await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title,
-    ).toBe("Engine");
-    expect(
-      (
-        await client.projectDeps("work:P-2", {
-          direction: "depended-on-by",
-          limit: 1,
-          allowPartial: true,
-        })
-      ).items[0]?.from,
-    ).toEqual({ id: "work:P-1", kind: "project" });
-    const documents = await client.documentList({
-      sources: ["work"],
-      labels: ["bug"],
-      excludeLabels: ["chore"],
-      search: "Alpha",
-      fields: "title",
-      limit: 1,
-      project: "P-1",
-    });
-    expect(documents.items[0]?.id).toBe("work:D-1");
-    // Where a document is comes back as the contract type's own JSON, so a caller branches
-    // on which key is present rather than parsing a sentence.
-    expect(documents.items[0]?.item.location).toEqual({ url: "https://example.invalid/D-1" });
-    expect((await client.documentList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
-      "work:D-2",
-    );
-    expect(
-      (await client.documentShow("work:D-1", { allowPartial: true })).items[0]?.item.title,
-    ).toBe("Alpha design");
-    expect(
-      (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
-    ).toBe("work:L-1");
-    expect(
-      (
-        await client.search("Alpha", {
-          sources: ["work"],
-          fields: "title",
-          kind: "task",
-          limit: 1,
-          allowPartial: true,
-        })
-      ).items[0]?.kind,
-    ).toBe("task");
-  },
-  SUBPROCESS_SUITE_TIMEOUT_MS,
-);
+test("typed methods drive every real binary command", async () => {
+  expect((await client.configShow()).settings.length).toBeGreaterThan(0);
+  expect((await client.sourcesList())[0]?.source).toBe("work");
+  const tasks = await client.taskList({
+    sources: ["work"],
+    labels: ["bug"],
+    excludeLabels: ["chore"],
+    statuses: ["todo"],
+    search: "Alpha",
+    fields: "title",
+    limit: 1,
+    project: "P-1",
+  });
+  expect(tasks.items[0]?.id).toBe("work:T-1");
+  const firstPage = await client.taskList({ sources: ["work"], limit: 1 });
+  expect(firstPage.next).toBeString();
+  const secondPage = await client.taskList({
+    sources: ["work"],
+    limit: 1,
+    page: firstPage.next ?? "missing-page-token",
+  });
+  expect(secondPage.items).toHaveLength(1);
+  expect(secondPage.items[0]?.id).not.toBe(firstPage.items[0]?.id);
+  expect((await client.taskList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+    "work:T-2",
+  );
+  expect((await client.taskShow("work:T-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Alpha engine",
+  );
+  expect(
+    (
+      await client.taskDeps("work:T-2", {
+        direction: "depended-on-by",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.from,
+  ).toEqual({ id: "work:T-1", kind: "task" });
+  expect(
+    (
+      await client.projectList({
+        sources: ["work"],
+        labels: ["bug"],
+        excludeLabels: ["chore"],
+        statuses: ["in-progress"],
+        search: "Engine",
+        fields: "title",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.id,
+  ).toBe("work:P-1");
+  expect((await client.projectShow("work:P-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Engine",
+  );
+  expect(
+    (
+      await client.projectDeps("work:P-2", {
+        direction: "depended-on-by",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.from,
+  ).toEqual({ id: "work:P-1", kind: "project" });
+  const documents = await client.documentList({
+    sources: ["work"],
+    labels: ["bug"],
+    excludeLabels: ["chore"],
+    search: "Alpha",
+    fields: "title",
+    limit: 1,
+    project: "P-1",
+  });
+  expect(documents.items[0]?.id).toBe("work:D-1");
+  // Where a document is comes back as the contract type's own JSON, so a caller branches
+  // on which key is present rather than parsing a sentence.
+  expect(documents.items[0]?.item.location).toEqual({ url: "https://example.invalid/D-1" });
+  expect((await client.documentList({ sources: ["work"], noProject: true })).items[0]?.id).toBe(
+    "work:D-2",
+  );
+  expect((await client.documentShow("work:D-1", { allowPartial: true })).items[0]?.item.title).toBe(
+    "Alpha design",
+  );
+  expect(
+    (await client.labelList({ sources: ["work"], limit: 1, allowPartial: true })).items[0]?.id,
+  ).toBe("work:L-1");
+  expect(
+    (
+      await client.search("Alpha", {
+        sources: ["work"],
+        fields: "title",
+        kind: "task",
+        limit: 1,
+        allowPartial: true,
+      })
+    ).items[0]?.kind,
+  ).toBe("task");
+});
 
 test("copy drives the real binary and reports what it did to each item", async () => {
   const copyRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-copy-"));
@@ -495,91 +470,87 @@ test("a document copy drives the real binary and is refused by a source with non
   }
 });
 
-test(
-  "comments are added, listed, edited and deleted through the real binary",
-  async () => {
-    // `notes` is a folder of Markdown, whose comments are a section of the task's own file, so
-    // what one client call writes the next one reads back. `plain` is an in-memory source that
-    // does not say its tasks have comments, so the verbs are refused against it.
-    const commentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-comment-"));
-    mkdirSync(resolve(commentRoot, "notes/tasks"), { recursive: true });
-    writeFileSync(
-      resolve(commentRoot, "notes/tasks/T-1.md"),
-      "---\ntitle: Ship the release\nstatus: todo\n---\nLong-form task content.\n",
-    );
-    writeFileSync(
-      resolve(commentRoot, "onetaskgraph.yaml"),
-      JSON.stringify({
-        sources: {
-          notes: { plugin: "local-md", config: { root: resolve(commentRoot, "notes") } },
-          plain: {
-            plugin: "in-memory",
-            config: {
-              tasks: [
-                {
-                  id: "T-1",
-                  title: "Plain",
-                  status: { category: "todo", name: "Todo" },
-                  labels: [],
-                },
-              ],
-            },
+test("comments are added, listed, edited and deleted through the real binary", async () => {
+  // `notes` is a folder of Markdown, whose comments are a section of the task's own file, so
+  // what one client call writes the next one reads back. `plain` is an in-memory source that
+  // does not say its tasks have comments, so the verbs are refused against it.
+  const commentRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-comment-"));
+  mkdirSync(resolve(commentRoot, "notes/tasks"), { recursive: true });
+  writeFileSync(
+    resolve(commentRoot, "notes/tasks/T-1.md"),
+    "---\ntitle: Ship the release\nstatus: todo\n---\nLong-form task content.\n",
+  );
+  writeFileSync(
+    resolve(commentRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: {
+        notes: { plugin: "local-md", config: { root: resolve(commentRoot, "notes") } },
+        plain: {
+          plugin: "in-memory",
+          config: {
+            tasks: [
+              {
+                id: "T-1",
+                title: "Plain",
+                status: { category: "todo", name: "Todo" },
+                labels: [],
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
+  );
+  try {
+    const commentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: commentRoot });
+
+    // Text handed over as a body reaches the binary on standard input, byte for byte.
+    const first = await commentClient.taskCommentAdd("notes:T-1", {
+      body: "Seen again on main:\n\n## Evidence\n",
+      author: "ada",
+    });
+    expect([first.body, first.author]).toEqual(["Seen again on main:\n\n## Evidence\n", "ada"]);
+    writeFileSync(resolve(commentRoot, "second.md"), "from a file\n");
+    const second = await commentClient.taskCommentAdd("notes:T-1", {
+      bodyFile: resolve(commentRoot, "second.md"),
+    });
+    expect(second.body).toBe("from a file\n");
+
+    const listed = await commentClient.taskCommentList("notes:T-1");
+    expect(listed.comments.map((comment) => comment.id)).toEqual([first.id, second.id]);
+
+    const edited = await commentClient.taskCommentEdit("notes:T-1", first.id, {
+      body: "corrected\n",
+    });
+    expect(edited).toMatchObject({
+      id: first.id,
+      author: first.author,
+      created_at: first.created_at,
+      body: "corrected\n",
+    });
+    writeFileSync(resolve(commentRoot, "edit.md"), "corrected again\n");
+    const editedFromFile = await commentClient.taskCommentEdit("notes:T-1", first.id, {
+      bodyFile: resolve(commentRoot, "edit.md"),
+    });
+    expect(editedFromFile.body).toBe("corrected again\n");
+
+    expect(await commentClient.taskCommentDelete("notes:T-1", second.id)).toEqual({
+      deleted: second.id,
+    });
+    const shown = await commentClient.taskShow("notes:T-1");
+    expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
+    expect(shown.items[0]?.item.content).toBe("Long-form task content.");
+
+    // A source whose tasks have none carries no comments key, and refuses the verbs.
+    expect("comments" in (await commentClient.taskShow("plain:T-1"))).toBe(false);
+    await expect(commentClient.taskCommentList("plain:T-1")).rejects.toThrow("has no comments");
+    await expect(commentClient.taskCommentAdd("notes:T-1", { body: "" })).rejects.toBeInstanceOf(
+      OnetaskgraphExecutionError,
     );
-    try {
-      const commentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: commentRoot });
-
-      // Text handed over as a body reaches the binary on standard input, byte for byte.
-      const first = await commentClient.taskCommentAdd("notes:T-1", {
-        body: "Seen again on main:\n\n## Evidence\n",
-        author: "ada",
-      });
-      expect([first.body, first.author]).toEqual(["Seen again on main:\n\n## Evidence\n", "ada"]);
-      writeFileSync(resolve(commentRoot, "second.md"), "from a file\n");
-      const second = await commentClient.taskCommentAdd("notes:T-1", {
-        bodyFile: resolve(commentRoot, "second.md"),
-      });
-      expect(second.body).toBe("from a file\n");
-
-      const listed = await commentClient.taskCommentList("notes:T-1");
-      expect(listed.comments.map((comment) => comment.id)).toEqual([first.id, second.id]);
-
-      const edited = await commentClient.taskCommentEdit("notes:T-1", first.id, {
-        body: "corrected\n",
-      });
-      expect(edited).toMatchObject({
-        id: first.id,
-        author: first.author,
-        created_at: first.created_at,
-        body: "corrected\n",
-      });
-      writeFileSync(resolve(commentRoot, "edit.md"), "corrected again\n");
-      const editedFromFile = await commentClient.taskCommentEdit("notes:T-1", first.id, {
-        bodyFile: resolve(commentRoot, "edit.md"),
-      });
-      expect(editedFromFile.body).toBe("corrected again\n");
-
-      expect(await commentClient.taskCommentDelete("notes:T-1", second.id)).toEqual({
-        deleted: second.id,
-      });
-      const shown = await commentClient.taskShow("notes:T-1");
-      expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
-      expect(shown.items[0]?.item.content).toBe("Long-form task content.");
-
-      // A source whose tasks have none carries no comments key, and refuses the verbs.
-      expect("comments" in (await commentClient.taskShow("plain:T-1"))).toBe(false);
-      await expect(commentClient.taskCommentList("plain:T-1")).rejects.toThrow("has no comments");
-      await expect(commentClient.taskCommentAdd("notes:T-1", { body: "" })).rejects.toBeInstanceOf(
-        OnetaskgraphExecutionError,
-      );
-    } finally {
-      rmSync(commentRoot, { recursive: true, force: true });
-    }
-  },
-  SUBPROCESS_SUITE_TIMEOUT_MS,
-);
+  } finally {
+    rmSync(commentRoot, { recursive: true, force: true });
+  }
+});
 
 // One folder of Markdown, `work`, holding a task, a project and a document that each already
 // carry a metadata key, so a set that disturbed anything beside its own key would show in what a
@@ -611,64 +582,60 @@ function metadataFolder(): string {
   return metadataRoot;
 }
 
-test(
-  "one metadata key of a task, a project and a document is set through the real binary",
-  async () => {
-    const metadataRoot = metadataFolder();
-    try {
-      const metadataClient = new OnetaskgraphClient({ binaryPath: binary, cwd: metadataRoot });
+test("one metadata key of a task, a project and a document is set through the real binary", async () => {
+  const metadataRoot = metadataFolder();
+  try {
+    const metadataClient = new OnetaskgraphClient({ binaryPath: binary, cwd: metadataRoot });
 
-      const task = await metadataClient.taskMetadataSet(
-        "work:T-1",
-        "myapp.review",
-        '{"approved": true}',
-      );
-      expect(task).toEqual({
-        id: "work:T-1",
-        key: "myapp.review",
-        value: { approved: true },
-        location: { path: expect.any(String) },
-      });
-      // Compared by the file it names, as the document copy above explains: a canonical path
-      // is spelled differently on each platform.
-      const location = task.location;
-      if (!location || !("path" in location)) {
-        throw new Error(`a local-md task reports a path, not ${JSON.stringify(location)}`);
-      }
-      const located = location.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
-      expect(readFileSync(located, "utf8")).toBe(
-        readFileSync(resolve(metadataRoot, "work/tasks/T-1.md"), "utf8"),
-      );
-      const project = await metadataClient.projectMetadataSet("work:P-1", "myapp.review", "3");
-      expect([project.id, project.key, project.value]).toEqual(["work:P-1", "myapp.review", 3]);
-      const document = await metadataClient.documentMetadataSet("work:D-1", "myapp.review", "null");
-      expect([document.id, document.value]).toEqual(["work:D-1", null]);
-
-      // The folder really holds each: a later invocation reads what these wrote, beside the
-      // key each record already had.
-      const shown = await metadataClient.taskShow("work:T-1");
-      expect(shown.items[0]?.item.metadata).toEqual({
-        "myapp.kept": 1,
-        "myapp.review": { approved: true },
-      });
-      const projects = await metadataClient.projectShow("work:P-1");
-      expect(projects.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": 3 });
-      const documents = await metadataClient.documentShow("work:D-1");
-      expect(documents.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": null });
-
-      const reserved = metadataClient.taskMetadataSet("work:T-1", "onetaskgraph.origin", '"x"');
-      await expect(reserved).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
-      await expect(reserved).rejects.toMatchObject({ exitCode: 1 });
-      await expect(reserved).rejects.toThrow("which this product owns");
-      await expect(
-        metadataClient.taskMetadataSet("work:T-1", "myapp.review", "yes"),
-      ).rejects.toThrow("is not JSON");
-    } finally {
-      rmSync(metadataRoot, { recursive: true, force: true });
+    const task = await metadataClient.taskMetadataSet(
+      "work:T-1",
+      "myapp.review",
+      '{"approved": true}',
+    );
+    expect(task).toEqual({
+      id: "work:T-1",
+      key: "myapp.review",
+      value: { approved: true },
+      location: { path: expect.any(String) },
+    });
+    // Compared by the file it names, as the document copy above explains: a canonical path
+    // is spelled differently on each platform.
+    const location = task.location;
+    if (!location || !("path" in location)) {
+      throw new Error(`a local-md task reports a path, not ${JSON.stringify(location)}`);
     }
-  },
-  SUBPROCESS_SUITE_TIMEOUT_MS,
-);
+    const located = location.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
+    expect(readFileSync(located, "utf8")).toBe(
+      readFileSync(resolve(metadataRoot, "work/tasks/T-1.md"), "utf8"),
+    );
+    const project = await metadataClient.projectMetadataSet("work:P-1", "myapp.review", "3");
+    expect([project.id, project.key, project.value]).toEqual(["work:P-1", "myapp.review", 3]);
+    const document = await metadataClient.documentMetadataSet("work:D-1", "myapp.review", "null");
+    expect([document.id, document.value]).toEqual(["work:D-1", null]);
+
+    // The folder really holds each: a later invocation reads what these wrote, beside the
+    // key each record already had.
+    const shown = await metadataClient.taskShow("work:T-1");
+    expect(shown.items[0]?.item.metadata).toEqual({
+      "myapp.kept": 1,
+      "myapp.review": { approved: true },
+    });
+    const projects = await metadataClient.projectShow("work:P-1");
+    expect(projects.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": 3 });
+    const documents = await metadataClient.documentShow("work:D-1");
+    expect(documents.items[0]?.item.metadata).toEqual({ "myapp.kept": 1, "myapp.review": null });
+
+    const reserved = metadataClient.taskMetadataSet("work:T-1", "onetaskgraph.origin", '"x"');
+    await expect(reserved).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(reserved).rejects.toMatchObject({ exitCode: 1 });
+    await expect(reserved).rejects.toThrow("which this product owns");
+    await expect(metadataClient.taskMetadataSet("work:T-1", "myapp.review", "yes")).rejects.toThrow(
+      "is not JSON",
+    );
+  } finally {
+    rmSync(metadataRoot, { recursive: true, force: true });
+  }
+});
 
 // One folder of Markdown, `work`, which outlives the invocation so what one call writes the
 // next one reads back. `P` delivers a task of `nowhere`, which no configuration names, so every
@@ -690,71 +657,63 @@ function deliveringFolder(): string {
   return statusRoot;
 }
 
-test(
-  "a task's status is set through the real binary, read back, and refused by name",
-  async () => {
-    const statusRoot = deliveringFolder();
-    try {
-      const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+test("a task's status is set through the real binary, read back, and refused by name", async () => {
+  const statusRoot = deliveringFolder();
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
 
-      const answer = await statusClient.taskStatusSet("work:T-1", "queued");
-      expect(answer.id).toBe("work:T-1");
-      expect(answer.status.category).toBe("queued");
-      expect(answer.delivered).toEqual([]);
+    const answer = await statusClient.taskStatusSet("work:T-1", "queued");
+    expect(answer.id).toBe("work:T-1");
+    expect(answer.status.category).toBe("queued");
+    expect(answer.delivered).toEqual([]);
 
-      // The folder really holds it: a later invocation reads the status this one wrote.
-      const shown = await statusClient.taskShow("work:T-1");
-      expect(shown.items[0]?.item.status.category).toBe("queued");
+    // The folder really holds it: a later invocation reads the status this one wrote.
+    const shown = await statusClient.taskShow("work:T-1");
+    expect(shown.items[0]?.item.status.category).toBe("queued");
 
-      const refused = statusClient.taskStatusSet("missing:T-1", "queued");
-      await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
-      await expect(refused).rejects.toMatchObject({ exitCode: 1 });
-      await expect(refused).rejects.toThrow('no source named "missing" is configured');
-    } finally {
-      rmSync(statusRoot, { recursive: true, force: true });
-    }
-  },
-  SUBPROCESS_SUITE_TIMEOUT_MS,
-);
+    const refused = statusClient.taskStatusSet("missing:T-1", "queued");
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+    await expect(refused).rejects.toThrow('no source named "missing" is configured');
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
 
-test(
-  "task status set answers when a delivered task could not be kept in step",
-  async () => {
-    // Exit 4 is a write that landed with a delivered task it could not reach, not a failure,
-    // so the client hands back the whole answer rather than rejecting on the exit code.
-    const statusRoot = deliveringFolder();
-    try {
-      const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+test("task status set answers when a delivered task could not be kept in step", async () => {
+  // Exit 4 is a write that landed with a delivered task it could not reach, not a failure,
+  // so the client hands back the whole answer rather than rejecting on the exit code.
+  const statusRoot = deliveringFolder();
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
 
-      // The invocation the client makes, observed at the process boundary: it exits 4.
-      const observed = spawnSync(
-        binary,
-        ["task", "status", "set", "work:P", "in-progress", "--json"],
-        { cwd: statusRoot, encoding: "utf8" },
-      );
-      expect(observed.status).toBe(4);
-      expect(observed.stderr).toContain("nowhere:T-9 could not be kept in step with work:P");
+    // The invocation the client makes, observed at the process boundary: it exits 4.
+    const observed = spawnSync(
+      binary,
+      ["task", "status", "set", "work:P", "in-progress", "--json"],
+      { cwd: statusRoot, encoding: "utf8" },
+    );
+    expect(observed.status).toBe(4);
+    expect(observed.stderr).toContain("nowhere:T-9 could not be kept in step with work:P");
 
-      const answer = await statusClient.taskStatusSet("work:P", "queued");
-      expect(answer.id).toBe("work:P");
-      expect(answer.status.category).toBe("queued");
-      expect(answer.delivered).toHaveLength(1);
-      expect(answer.delivered[0]).toMatchObject({
-        ticket: "nowhere:T-9",
-        deliverer: "work:P",
-        outcome: "failed",
-        failure: { kind: "unknown-source" },
-      });
+    const answer = await statusClient.taskStatusSet("work:P", "queued");
+    expect(answer.id).toBe("work:P");
+    expect(answer.status.category).toBe("queued");
+    expect(answer.delivered).toHaveLength(1);
+    expect(answer.delivered[0]).toMatchObject({
+      ticket: "nowhere:T-9",
+      deliverer: "work:P",
+      outcome: "failed",
+      failure: { kind: "unknown-source" },
+    });
 
-      const shown = await statusClient.taskShow("work:P");
-      expect(shown.items[0]?.item.status.category).toBe("queued");
-      expect(shown.items[0]?.item.delivers).toEqual(["nowhere:T-9"]);
-    } finally {
-      rmSync(statusRoot, { recursive: true, force: true });
-    }
-  },
-  SUBPROCESS_SUITE_TIMEOUT_MS,
-);
+    const shown = await statusClient.taskShow("work:P");
+    expect(shown.items[0]?.item.status.category).toBe("queued");
+    expect(shown.items[0]?.item.delivers).toEqual(["nowhere:T-9"]);
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
 
 test("a source failure remains typed for partial and accepted-partial exits", async () => {
   const failureRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-failure-"));

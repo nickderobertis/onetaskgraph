@@ -97,7 +97,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
   } finally {
     rmSync(generated, { recursive: true, force: true });
   }
-}, 30_000);
+});
 
 test("a description in several paragraphs generates without trailing whitespace", () => {
   // `json-schema-to-typescript` renders a paragraph break inside a JSDoc block as a line
@@ -134,7 +134,7 @@ test("a description in several paragraphs generates without trailing whitespace"
     rmSync(fixtures, { recursive: true, force: true });
     rmSync(generated, { recursive: true, force: true });
   }
-}, 30_000);
+});
 
 test("a schema that accepts any JSON value generates as unknown", () => {
   // The binary emits a `serde_json::Value` — `MetadataSet.value` — as a schema holding nothing
@@ -182,7 +182,7 @@ test("a schema that accepts any JSON value generates as unknown", () => {
     rmSync(fixtures, { recursive: true, force: true });
     rmSync(generated, { recursive: true, force: true });
   }
-}, 30_000);
+});
 
 test("generator rejects unsafe destinations and malformed executable output", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-boundary-"));
@@ -277,7 +277,7 @@ test("generator rejects unsafe destinations and malformed executable output", ()
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-}, 30_000);
+});
 
 test("generator reports uncompileable roots and generated-file write failures", () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generator-failures-"));
@@ -318,4 +318,4 @@ test("generator reports uncompileable roots and generated-file write failures", 
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
-}, 30_000);
+});
