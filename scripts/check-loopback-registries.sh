@@ -83,8 +83,6 @@ fi
 # if it ever does.
 cat > "$scratch/stock-registry.py" <<'PY' || fatal \
   "could not write the stock stand-in in $scratch" "check \$TMPDIR permissions, then rerun"
-"""A loopback registry bound the way http.server binds one, for this check to catch."""
-
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -115,7 +113,7 @@ launch() {
 }
 
 # Thirty seconds, which is what the two checks under test give these very servers.
-await() { # the file to wait for; answers whether it arrived
+await() {
   local target="$1" tick=0
   while [ "$tick" -lt 300 ]; do
     [ -s "$target" ] && return 0
@@ -140,8 +138,6 @@ reports_a_port() {
   [ "$reported" -ge 1 ] && [ "$reported" -le 65535 ]
 }
 
-# 1. The stock bind, caught. The shim records the call and then holds the bind for ever, so
-#    a registry that binds that way never reaches the line that writes its port.
 port_file="$scratch/stock.port"
 called_file="$scratch/stock.getfqdn"
 log_file="$scratch/stock.log"
@@ -163,6 +159,7 @@ if ! await "$called_file"; then
 fi
 if reports_a_port; then
   fail "a registry bound the stock way reported a port although socket.getfqdn never answered — so the launcher cases below would pass for a launcher that binds through the reverse lookup, which is the whole of what they are for"
+  echo "check-loopback-registries: next: repair the stock stand-in or sitecustomize shim written above so HTTPServer.server_bind reaches the blocking resolver" >&2
 fi
 stop
 
@@ -173,8 +170,14 @@ launch "$ROOT/scripts/loopback-crate-registry.py" "$port_file" "$scratch/index"
 if ! await "$port_file"; then
   fail "scripts/loopback-crate-registry.py reported no port within 30s while socket.getfqdn never answered — which is the macOS release runner, where check-crate-sibling-resolution reads an empty log and fails a release. It said:"
   sed 's/^/    /' <"$log_file" >&2
+  if [ -s "$log_file" ]; then
+    echo "check-loopback-registries: next: repair the startup error printed above in scripts/loopback-crate-registry.py, then rerun" >&2
+  else
+    echo "check-loopback-registries: next: restore Loopback.server_bind's direct TCPServer bind in scripts/loopback-crate-registry.py, then rerun" >&2
+  fi
 elif ! reports_a_port; then
   fail "scripts/loopback-crate-registry.py wrote '$(cat "$port_file" | tr -d '\r\n')' where a port number belongs"
+  echo "check-loopback-registries: next: make that launcher's port-file write use server.server_address[1], then rerun" >&2
 fi
 if [ -e "$called_file" ]; then
   fail "scripts/loopback-crate-registry.py called $(cat "$called_file" | tr -d '\r\n') on its way to a port; on the macOS runner that call is what never came back"
@@ -189,8 +192,14 @@ launch "$ROOT/scripts/loopback-npm-registry.py" "$scratch/npm.published" "$port_
 if ! await "$port_file"; then
   fail "scripts/loopback-npm-registry.py reported no port within 30s while socket.getfqdn never answered — which is the macOS release runner, where check-npm-publish reads an empty log and the whole install path fails on a name nothing reads. It said:"
   sed 's/^/    /' <"$log_file" >&2
+  if [ -s "$log_file" ]; then
+    echo "check-loopback-registries: next: repair the startup error printed above in scripts/loopback-npm-registry.py, then rerun" >&2
+  else
+    echo "check-loopback-registries: next: restore Loopback.server_bind's direct TCPServer bind in scripts/loopback-npm-registry.py, then rerun" >&2
+  fi
 elif ! reports_a_port; then
   fail "scripts/loopback-npm-registry.py wrote '$(cat "$port_file" | tr -d '\r\n')' where a port number belongs"
+  echo "check-loopback-registries: next: make that launcher's port-file write use server.server_address[1], then rerun" >&2
 fi
 if [ -e "$called_file" ]; then
   fail "scripts/loopback-npm-registry.py called $(cat "$called_file" | tr -d '\r\n') on its way to a port; on the macOS runner that call is what never came back"
@@ -201,8 +210,18 @@ stop
 # what stands these registries up. So each one names its launcher, and neither builds a
 # server of its own for the cases above to miss.
 while read -r check launcher; do
-  grep -Fq "$launcher" "$ROOT/$check" || fail \
-    "$check no longer names $launcher, so the launcher this check proved is not the registry that check starts"
+  case "$check" in
+    scripts/check-crate-sibling-resolution.sh)
+      assignment='registry_launcher="$ROOT/scripts/loopback-crate-registry.py"'
+      invocation='python3 "$registry_launcher" "$port_file" "$scratch/registry" > "$scratch/server.log" 2>&1 &'
+      ;;
+    scripts/check-npm-publish.sh)
+      assignment='readonly REGISTRY_LAUNCHER="$ROOT/scripts/loopback-npm-registry.py"'
+      invocation='python3 "$REGISTRY_LAUNCHER" "$PUBLISHED" "$PORT_FILE" "$MODE_FILE" 2>"$REGISTRY_LOG" &'
+      ;;
+  esac
+  grep -Fxq "$assignment" "$ROOT/$check" && grep -Fxq "$invocation" "$ROOT/$check" || fail \
+    "$check no longer assigns and launches $launcher, so the launcher this check proved is not the registry that check starts; next: restore those executable lines or update this test to drive the new launcher"
   for inlined in 'server_bind' 'HTTPServer(' 'ThreadingHTTPServer('; do
     if grep -Fq "$inlined" "$ROOT/$check"; then
       fail "$check builds a loopback server of its own ('$inlined'), which nothing above drives — move it into $launcher, which this check holds to binding without the reverse lookup"

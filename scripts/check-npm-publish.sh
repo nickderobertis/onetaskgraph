@@ -47,8 +47,6 @@ readonly PORT_FILE="$scratch/port"
 # absent and then refuses the publication itself.
 readonly MODE_FILE="$scratch/mode"
 
-# The registry: scripts/loopback-npm-registry.py, which records what it is published,
-# answers a read as a registry would, and says what its bind owes this check.
 readonly REGISTRY_LAUNCHER="$ROOT/scripts/loopback-npm-registry.py"
 [ -r "$REGISTRY_LAUNCHER" ] || fatal \
   "could not read $REGISTRY_LAUNCHER, which is the registry this check publishes into" \

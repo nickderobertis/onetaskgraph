@@ -51,7 +51,6 @@ def mode():
 
 
 def shape_of(document):
-    """What is wrong with this publication document, or `None` when nothing is."""
     if not isinstance(document, dict):
         return f"the publication is not a JSON object: {type(document).__name__}"
     if not isinstance(document.get("name"), str):
