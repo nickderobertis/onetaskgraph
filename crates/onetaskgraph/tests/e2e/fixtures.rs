@@ -1831,13 +1831,37 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "subIssues":{"nodes":nodes,
                 "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
     }
+    // The board's own id and fields with none of its items: what a write reads when the
+    // item it writes does not carry them.
+    if query.contains("boardFields:repositoryOwner") {
+        assert_eq!(variables["owner"], "fixture-owner");
+        assert_eq!(variables["number"], 7);
+        return json!({"boardFields":{"projectV2":{"id":"PVT-board","fields":board.fields()}}});
+    }
+    // One draft by its own id, with the one board item GitHub links it to.
+    if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+            return json!({ "node": null });
+        };
+        if !GitHubBoard::is_draft(item) {
+            return json!({"node":{"__typename":"Issue"}});
+        }
+        let board_item = board.rendered(item);
+        let mut draft = board.content(item);
+        draft["projectV2Items"] = json!({"nodes":[{"id":board_item["id"],
+                                                   "project":{"id":"PVT-board","number":7},
+                                                   "fieldValues":board_item["fieldValues"]}],
+                                         "pageInfo":{"hasNextPage":false,"endCursor":null}});
+        return json!({ "node": draft });
+    }
     if query.contains("node(id:$id){__typename ...BoardIssue}") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
         };
         // A draft resolves as a node of its own type, and the fragment on `Issue` selects
-        // nothing of it: its board half lives on the board's item connection alone.
+        // nothing of it: what it holds is read by its own draft read.
         if GitHubBoard::is_draft(item) {
             return json!({"node":{"__typename":"DraftIssue"}});
         }

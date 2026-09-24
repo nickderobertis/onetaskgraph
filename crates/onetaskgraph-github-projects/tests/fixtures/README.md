@@ -73,6 +73,16 @@ fragment type conditions, and fixture keys against it; the credentialed live lan
 introspects the current mutation fields and input types as its mutation freshness check,
 then exercises reads without changing the configured board.
 
+`DraftIssue.projectV2Items` — the board item a draft sits in, which is how the source reads
+one draft by its own id rather than by listing the board — was read from GitHub.com's own
+published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
+2026-09-23, reduced to its `first` and `after` arguments as every other connection here is.
+GitHub documents that a draft is currently linked to one item. The fields-only board read
+selects `ProjectV2.id` and `ProjectV2.fields`, both already pinned.
+The credentialed live lane introspects `DraftIssue.projectV2Items` with its argument and
+return types before running its journey, so the pinned read field is checked against
+GitHub's current schema.
+
 `deleteIssue`, `DeleteIssueInput` and `DeleteIssuePayload` are here from the same
 observation the credentialed live lane's mutation-freshness check reads: `live.rs` pins
 `DeleteIssueInput{issueId}` and `DeleteIssuePayload{repository}` and introspects the real
