@@ -562,3 +562,57 @@ and it is spent on every command that asks a question about the whole board. A c
 asks about one project still asks that project — `graphql::SUB_ISSUES`, no board read and no
 search — so nothing about the cost of the reads this source was shaped to make instead of a
 board read has changed.
+
+## Answering a question about one known item without listing the board, and what that moved
+
+Every question this source asks about **one item it already names by id** now reads that
+item: the destination of an update, the project a new item is filed under, a same-source
+far end a dependency names, a status write, a draft's dependency slot, the delete that takes
+back an item a copy made, and a draft read by its id. Whether the item is on the board is
+decided by its own `Issue.projectItems`, or a draft's own board item, and never by looking
+for it in `ProjectV2.items` — which lags, and which on this host's 842-item `plans` board
+refused two items GitHub itself placed on it. What a write needs of the board that the item
+does not carry comes from `graphql::BOARD_FIELDS`, the board's `id` and `fields` with no
+`items`. The crate documentation states the rule and the evidence; this section is what it
+costs.
+
+That **supersedes two statements above**, in *What a project copy costs*: an update whose
+item cannot say enough no longer "reads the board exactly as before", and creating an item
+no longer reads the board. Both read the board's fields instead, and only when no listing
+this command already holds can supply them.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Every figure below is a
+difference between two committed states of `tests/fixtures/session-cost.txt`, held by
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says`, which fails on
+any change to that file and names this one as where to say what moved — the same
+reconciliation the section above records, for the same reason. -->
+In the two quantities this file measures offline:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |    111 |    113 |
+| **node count** | 268569 | 238475 |
+
+Six rows move, and nothing else does:
+
+- **Two reconciliation probes are new**, one per new document: `reading one draft` (153
+  worst-case nodes) and `reading the board's fields` (50). The credentialed lane asks GitHub
+  about every read document, so a document added is a probe added.
+- **One whole-board read became two small reads.** A write in the journey that used to list
+  the board to find an item it already named — one `reading the board` page (10,150 nodes)
+  and the search beside it (20,400) — now reads that item (`reading one issue`, one more
+  request, 203 nodes) and the board's fields (`reading the board's fields`, one request, 50
+  nodes).
+
+So the session sends two requests more and 30,094 worst-case nodes fewer. The request count
+rises only because the lane probes each new document; on the board itself one read of an
+item and one of its fields replace a paged listing whose cost grows with the board, which on
+an 842-item board is nine `ProjectV2.items` pages plus every page of the search.
+
+`tests/fixtures/copy-cost.txt` does not move. A copy's engine lists the destination's items
+to match what it writes, and a board listing this command already holds supplies the board's
+fields, so no copy in that record makes a fields-only read. What changes is that the listing
+is no longer asked whether an item is there: every item the copy names is read by its own id.
+
+The estimate in `tests/journey/budget.rs` moves with the record, as it is built to, and is
+not restated here.
