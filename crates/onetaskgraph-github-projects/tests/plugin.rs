@@ -201,6 +201,17 @@ struct Item {
     /// The board's real id unless a case has made the entry name something no write could
     /// address, which is what an update reading its board off the item has to refuse.
     board_entry_id: &'static str,
+    /// Whether GitHub's own enumerations of the board — `ProjectV2.items` and the
+    /// board-scoped issue search — list this item yet.
+    ///
+    /// An item added to a board can appear in its own membership before it appears in
+    /// `ProjectV2.items`. This flag models that state in the fixture board.
+    listed: bool,
+    /// Whether this item holds a value of the board's origin text field.
+    ///
+    /// GitHub answers `fieldValues` with the values an item holds and nothing for a field
+    /// it holds none of, so an item nobody ever copied carries no definition of that field.
+    origin_value: bool,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -247,6 +258,8 @@ impl Item {
             other_boards: Vec::new(),
             on_this_board: true,
             board_entry_id: "PVT_board",
+            listed: true,
+            origin_value: true,
             path_labels: BTreeMap::new(),
         }
     }
@@ -311,6 +324,17 @@ impl Item {
         self.board_entry_id = id;
         self
     }
+    /// Leave this item out of every listing of the board while every read of it by id still
+    /// places it on the board. See [`Item::listed`].
+    fn unlisted(mut self) -> Self {
+        self.listed = false;
+        self
+    }
+    /// Give this item no value of the origin field. See [`Item::origin_value`].
+    fn holding_no_origin_value(mut self) -> Self {
+        self.origin_value = false;
+        self
+    }
     /// Answer `path` with a label set of its own. See [`Item::path_labels`].
     fn labels_on(mut self, path: &'static str, labels: &[(&'static str, &'static str)]) -> Self {
         self.path_labels.insert(path, labels.to_vec());
@@ -338,9 +362,11 @@ impl Item {
                 json!({"name":status,"field":{"id":"FIELD_status","name":"Status","options":options}}),
             );
         }
-        nodes.push(
-            json!({"text":self.origin.clone().unwrap_or_default(),"field":{"id":"FIELD_origin","name":"onetaskgraph.origin"}}),
-        );
+        if self.origin_value || self.origin.is_some() {
+            nodes.push(
+                json!({"text":self.origin.clone().unwrap_or_default(),"field":{"id":"FIELD_origin","name":"onetaskgraph.origin"}}),
+            );
+        }
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -477,6 +503,16 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many items this board's own `ProjectV2.items` connection lists, once that
+    /// connection has been left behind — `None` while it lists everything this board holds.
+    ///
+    /// GitHub's lag, which that connection has and no other view of a board does; the crate
+    /// documentation at `GitHubProjectsSource::board` is where it is written down. So this
+    /// withholds from that one connection and from nothing else.
+    ///
+    /// It is deliberately permanent rather than timed: a lag that expires would let a wait
+    /// outlast it, and a wait that can outlast the defect proves nothing about the source.
+    items_connection_behind_from: Option<usize>,
     /// A cursor this board answers every membership page with, instead of one that
     /// advances. See [`Asked::stuck_cursor`].
     stuck_membership_cursor: Option<&'static str>,
@@ -520,6 +556,18 @@ impl Refusal {
                                    your request again later.",
                          "documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"})
                 .to_string(),
+        }
+    }
+    /// A transient unavailability, which is what GitHub answers when it is briefly unwell.
+    ///
+    /// Deliberately not a rate limit: `Limiter::classify` recognises none of it, so the
+    /// source reports it rather than waiting it out, and one scripted entry is therefore one
+    /// failed request rather than the first of a retried schedule.
+    fn unavailable() -> Self {
+        Self {
+            status: "503 Service Unavailable",
+            headers: String::new(),
+            body: json!({"message": "unavailable"}).to_string(),
         }
     }
     /// The same refusal, asking for a wait of `seconds`.
@@ -863,6 +911,20 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+
+    /// Leave this board's own `ProjectV2.items` connection behind everything filed from now
+    /// on, the way GitHub's is, and leave every other view of this board current.
+    ///
+    /// See [`State::items_connection_behind_from`] for the measurement this models. It
+    /// reaches the source's own whole-board document alone: the lane's artifact lookup in
+    /// `journey::artifact_item_ids` walks that connection too, and on GitHub what it looks
+    /// for is residue from runs long since projected — a board that hid a run's own
+    /// artifacts from that run's own cleanup would model a board nothing can ever sweep,
+    /// which is not what was observed and would fail the journey somewhere it is not about.
+    fn items_connection_falls_behind(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.items_connection_behind_from = Some(state.items.len());
+    }
     /// Give this board's `Status` field one more option, the way a person adding a column on
     /// GitHub does. The shipped board has no `Queued` option, which is what lets one case
     /// prove a status needing it is refused and another prove it lands once it is there.
@@ -930,6 +992,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        items_connection_behind_from: None,
         stuck_membership_cursor: None,
         seen: Vec::new(),
         documents: Vec::new(),
@@ -1441,7 +1504,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let options = state.options();
         let matched = state.items[..visible]
             .iter()
-            .filter(|item| item.typename == "Issue")
+            .filter(|item| item.listed && item.typename == "Issue")
             .filter(|item| {
                 title
                     .as_ref()
@@ -1523,6 +1586,25 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             "projectItems":{"nodes":[{"project":{"id":"PVT_board"},
                 "fieldValues":item.field_values(&state.options())}]}}});
     }
+    if query.contains("boardFields:repositoryOwner(login:$owner)") {
+        assert_eq!(variables["owner"], json!("octo-org"));
+        assert_eq!(variables["number"], json!(7));
+        return json!({"boardFields":{"projectV2":{"id":"PVT_board","fields":state.fields()}}});
+    }
+    if query.contains("on DraftIssue{") && query.contains("projectV2Items(first:$boardItems)") {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+            return json!({ "node": null });
+        };
+        if item.typename != "DraftIssue" {
+            // Not a draft, so the `... on DraftIssue` arm selects nothing of it.
+            return json!({"node":{"__typename":item.typename}});
+        }
+        let options = state.options();
+        let mut draft = item.content(asked);
+        draft["projectV2Items"] = item.project_items(&options, asked);
+        return json!({ "node": draft });
+    }
     if query.contains("node(id:$id){__typename ...BoardIssue}") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
@@ -1578,10 +1660,20 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         other => panic!("after must be null or a string: {other}"),
     };
     let first = variables["first"].as_u64().expect("first") as usize;
-    let visible = state.items.len().saturating_sub(state.lagging_reads);
+    // What this connection lists is what it had caught up with, which is everything unless
+    // this board was left behind; see `State::items_connection_behind_from`.
+    let listed = state
+        .items_connection_behind_from
+        .unwrap_or(state.items.len())
+        .min(state.items.len());
+    let shown = state.items[..listed.saturating_sub(state.lagging_reads)]
+        .iter()
+        .filter(|item| item.listed)
+        .collect::<Vec<_>>();
+    let visible = shown.len();
     let end = (offset + first).min(visible);
     let options = state.options();
-    let nodes = state.items[offset.min(end)..end]
+    let nodes = shown[offset.min(end)..end]
         .iter()
         .map(|item| {
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),
@@ -1729,6 +1821,7 @@ fn operation_name(query: &str) -> &str {
     match root {
         "owner" => "board",
         "node" if query.contains("subIssues(") => "projectTasks",
+        "node" if query.contains("projectV2Items(") => "draft",
         "node" if query.contains("projectItems(first:$first") => "issueBoardItems",
         "node" if query.contains("blockedBy(") => "issueDependencies",
         "node" if query.contains("comments(first:") => "issueComments",
@@ -1783,8 +1876,11 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
-            let mut request = [0_u8; 8192];
-            let _ = stream.read(&mut request).unwrap();
+            let request = read_http_json(&mut stream);
+            let (status, body) = match empty_board_search(&request) {
+                Some(empty) => ("200 OK".to_owned(), empty),
+                None => (status.clone(), body.clone()),
+            };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -1795,34 +1891,46 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
     format!("http://{address}/graphql")
 }
 
-/// A scripted update's exchange, opened by the read of the item's own node an update now
-/// makes first, answered as reaching nothing.
+/// An empty board-scoped issue search, for a request that is one.
 ///
-/// An update asks the item it updates for the board's id and field definitions before it
-/// reads the board, and an item that read does not reach sends the write on to the board —
-/// which is the read these scripts go on to answer, and the path their cases are about.
-fn unreached_first(bodies: Vec<Value>) -> Vec<Value> {
-    std::iter::once(json!({"data":{"node":null}}))
-        .chain(bodies)
-        .collect()
+/// A whole-board read is the union of GitHub's two enumerations of one board — see
+/// `GitHubProjectsSource::board` — so a server scripting a board response is asked for the
+/// search as well. The servers below script the *board* document and every case they carry
+/// is about that response, so the search they answer holds nothing, which changes no case's
+/// subject and no case's answer: an issue a board read leaves out is one this search does
+/// not name either. It is the truthful answer for the one case where the two could disagree,
+/// too — a token that cannot see an item's content cannot find that item by searching for it.
+fn empty_board_search(request: &Value) -> Option<String> {
+    request["query"]
+        .as_str()
+        .filter(|query| query.contains("search(query:$search"))
+        .map(|_| {
+            json!({"data":{"search":{"nodes":[],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+            .to_string()
+        })
 }
 
 fn sequence_server(bodies: Vec<Value>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     thread::spawn(move || {
-        for body in bodies {
+        let mut scripted = bodies.into_iter();
+        loop {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut bytes = Vec::new();
-            let mut chunk = [0_u8; 4096];
-            loop {
-                let count = stream.read(&mut chunk).unwrap();
-                bytes.extend_from_slice(&chunk[..count]);
-                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let body = body.to_string();
+            let request = read_http_json(&mut stream);
+            // Answered beside the script rather than out of it; see `empty_board_search`.
+            // A script is an exchange somebody wrote down to make one refusal happen, and
+            // spending one of its entries on the search would move every entry after it.
+            let body = match empty_board_search(&request) {
+                Some(empty) => empty,
+                None => match scripted.next() {
+                    Some(body) => body.to_string(),
+                    // The script is spent: the server goes away, exactly as it did before,
+                    // so a source asking for more is refused rather than answered.
+                    None => return,
+                },
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -3044,6 +3152,198 @@ async fn a_read_taken_straight_after_a_write_answers_with_what_was_written() {
             .expect("the project this run wrote")
             .title,
         "Second plan"
+    );
+}
+
+/// A whole-board read reports an item `ProjectV2.items` has not caught up with.
+///
+/// Every read here is through a source that did none of the writing, which is what makes it
+/// about GitHub's data rather than about `GitHubProjectsSource::created`: that record is
+/// empty in a source built after the write, and a correction it could answer would have
+/// deleted the property the credentialed journey's own wait exists for.
+#[tokio::test]
+async fn a_board_read_reports_an_item_the_boards_own_item_connection_is_behind_on() {
+    let fixture = board_of(1, 1);
+    fixture.items_connection_falls_behind();
+
+    let writer = source(&fixture);
+    let created = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    let reader = source(&fixture);
+    let held = selected_tasks(reader.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        held.contains(&created.0),
+        "a source that did none of the writing did not report the item the board was \
+         given: {held:?}"
+    );
+    assert!(
+        !fixture.searches().is_empty(),
+        "and the board's own issue search really was the discovery path"
+    );
+
+    // The other half, so the assertion above is about the search rather than about anything
+    // this source kept: hold the search back over the same item and the same read reports
+    // it no longer. Nothing but the board changed.
+    fixture.read_behind(1);
+    let blind = source(&fixture);
+    assert!(
+        !selected_tasks(blind.as_ref(), &TaskQuery::default())
+            .await
+            .contains(&created.0),
+        "with both of GitHub's enumerations behind there is nothing left to answer from"
+    );
+}
+
+/// What this run writes to an item only the board's search reported reaches the read.
+///
+/// The half a source keeps of that search is a third place one item can sit, beside the
+/// board it read and what it created — and for an item the board's own item connection is
+/// behind on it is the *only* place, so a write or a delete that missed it would put the
+/// stale record back on exactly the items the union in `GitHubProjectsSource::board` exists
+/// for. Both halves are driven here through one source's own reads.
+#[tokio::test]
+async fn a_write_and_a_delete_reach_an_item_only_the_boards_search_reported() {
+    async fn titled(source: &dyn TaskSource) -> Vec<String> {
+        let mut held = source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect("the board answers a task query")
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect::<Vec<_>>();
+        held.sort();
+        held
+    }
+
+    let fixture = board_of(1, 1);
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    // A source that did none of the writing, whose first read is what fills its view of
+    // this board — the item connection in one half and the search in the other.
+    let reader = source(&fixture);
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step"],
+        "the first read reports the item only the search knows about"
+    );
+
+    reader
+        .write_task(&ItemWrite {
+            target: Some(created.clone()),
+            item: task(
+                "ignored",
+                "Third step, revised",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("an update of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1", "Third step, revised"],
+        "and reports the title this run just wrote onto it rather than the one it read"
+    );
+
+    reader
+        .delete_task(&created)
+        .await
+        .expect("a delete of an item this board holds");
+    assert_eq!(
+        titled(reader.as_ref()).await,
+        ["Step 1.1"],
+        "and stops reporting it once this run has taken it off"
+    );
+}
+
+/// A board read whose search fails says so, and the next read asks the search again.
+///
+/// The union in `GitHubProjectsSource::board` made the search a half of every whole-board
+/// read, where before it answered the project list alone — so a search that fails is a new
+/// way for a board read to fail, and what it must never do is answer with the half that did
+/// work. An item only the search reports is exactly the item the union exists for, so a read
+/// silently missing it would be the defect this correction was written to remove, arriving
+/// by another route.
+///
+/// The second half is the one a cache makes possible: the source holds the search for the
+/// length of a command, and a failed walk that got written down there would be permanent for
+/// that command. The refusal is a single scripted 503 — the shape a publication of this
+/// repository was really refused in — so the same source, asked again, has a working search
+/// to reach.
+#[tokio::test]
+async fn a_board_read_whose_search_fails_is_refused_rather_than_answered_short() {
+    let fixture = board_of(1, 1);
+    // Only the search can report what this run is about to write; see
+    // `State::items_connection_behind_from`.
+    fixture.items_connection_falls_behind();
+    let created = source(&fixture)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+
+    fixture.script_for("search", vec![Refusal::unavailable()]);
+
+    // A source that did none of the writing, so the only place the item above sits is the
+    // search this board is about to refuse.
+    let reader = source(&fixture);
+    let message = refusal(
+        reader
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .expect_err("a board read whose search failed is a failure, not a short answer"),
+    );
+    assert!(
+        message.contains("503"),
+        "and says what GitHub answered rather than something of its own: {message}"
+    );
+
+    // The scripted refusal is spent, so the very same source asking again reaches a working
+    // search — which it only does if the failed walk was not kept.
+    let held = selected_tasks(reader.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        held.contains(&created.0),
+        "the retried search reports the item the board's own item connection is behind on, \
+         and it is the very item this run created: {held:?}"
+    );
+    // Counted by arrival, refused one included: the write above lists nothing, so the two
+    // are the refused walk and its retry.
+    assert_eq!(
+        fixture.requests("search"),
+        2,
+        "and the second read really did ask the search again rather than answer from a \
+         record of the walk that failed"
     );
 }
 
@@ -5123,7 +5423,7 @@ async fn a_status_set_to_a_column_reopens_a_closed_issue_moves_its_option_and_no
     );
 
     // An item holding no `Status` value cannot say what the field's options are, so the
-    // board is read for them.
+    // board's fields are read for them — and nothing lists its items.
     assert_eq!(
         source
             .set_task_status(&id("I_bare"), StatusCategory::Todo)
@@ -5131,7 +5431,8 @@ async fn a_status_set_to_a_column_reopens_a_closed_issue_moves_its_option_and_no
             .unwrap(),
         Some(status(StatusCategory::Todo, "Todo"))
     );
-    assert_eq!(fixture.board_item_reads().len(), 1);
+    assert_eq!(fixture.requests("boardFields"), 1);
+    assert!(fixture.board_item_reads().is_empty());
     assert_eq!(fixture.item("I_bare").state, "OPEN");
 }
 
@@ -6904,8 +7205,7 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
     let complete = json!({"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"FIELD_status",
                                     "name":"Status","options":[{"id":"OPT_todo","name":"Todo"}]}],
                           "pageInfo":{"hasNextPage":false}});
-    let empty_board = json!({"data":{"owner":{"projectV2":{"id":"B","title":"T","fields":complete,
-        "items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}});
+    let empty_board = fields_json("B", complete);
     for (bodies, expected) in [
         (
             vec![
@@ -6963,6 +7263,21 @@ fn issue_item(content: Value) -> Value {
     json!({"id":"PVTI_1","fieldValues":complete(json!([])),"content":content})
 }
 
+fn fields_json(id: &str, fields: Value) -> Value {
+    json!({"data":{"boardFields":{"projectV2":{"id":id,"fields":fields}}}})
+}
+/// One issue's own node read, placing it on the configured board and holding no field
+/// values — so what a write needs of the board's fields comes from [`fields_json`].
+fn held_issue(id: &str, title: &str, parent: Option<&str>) -> Value {
+    json!({"data":{"node":{"__typename":"Issue","id":id,"title":title,"body":"",
+        "state":"OPEN","stateReason":null,"repository":{"nameWithOwner":"acme/work"},
+        "parent":parent.map(|parent| json!({"id":parent})),"subIssuesSummary":{"total":0},
+        "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},
+        "projectItems":{"nodes":[{"id":format!("PVTI_{}", id.trim_start_matches("I_")),
+                                  "project":{"id":"PVT_board","number":7},
+                                  "fieldValues":complete(json!([]))}],
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
+}
 fn plain_issue() -> Value {
     json!({"__typename":"Issue","id":"I_1","title":"one","body":"","state":"OPEN",
            "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
@@ -7133,9 +7448,8 @@ async fn a_status_or_origin_field_of_the_wrong_shape_is_refused_by_name() {
             "fields.nodes is not an array",
         ),
     ] {
-        let body = board_json(fields, complete(json!([])));
         let endpoint = sequence_server(vec![
-            body.clone(),
+            fields_json("PVT_board", fields),
             json!({"data":{"repository":{"id":"R","nameWithOwner":"acme/work"}}}),
             json!({"data":{"createIssue":{"issue":{"id":"I_new"}}}}),
             json!({"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_new"}}}}),
@@ -7356,33 +7670,32 @@ async fn malformed_dependency_connections_are_named_rather_than_read_as_empty() 
 #[tokio::test]
 async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_malformed() {
     let fields = usable_fields();
-    let board_with_one = board_json(
-        fields.clone(),
-        complete(json!([{"id":"PVTI_1","fieldValues":complete(json!([])),
-                         "content":{"__typename":"Issue","id":"I_1","title":"one","body":"",
-                                    "state":"OPEN","stateReason":null,
-                                    "repository":{"nameWithOwner":"acme/work"},
-                                    "parent":{"id":"I_old"},"subIssuesSummary":{"total":0},
-                                    "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}])),
-    );
+    let held_one = held_issue("I_1", "one", Some("I_old"));
+    let board_fields = fields_json("PVT_board", fields);
     let ok_update = json!({"data":{"updateIssue":{"issue":{"id":"I_1"}}}});
     let ok_field =
         json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}}}});
     let cases: Vec<(Vec<Value>, &str)> = vec![
         (
-            vec![board_with_one.clone(), json!({"data":{"updateIssue":{}}})],
+            vec![
+                held_one.clone(),
+                board_fields.clone(),
+                json!({"data":{"updateIssue":{}}}),
+            ],
             "item update returned no item",
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 json!({"data":{"updateIssue":{"issue":{"id":"I_other"}}}}),
             ],
             "item update returned the wrong item",
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 ok_update.clone(),
                 json!({"data":{"updateProjectV2ItemFieldValue":{}}}),
             ],
@@ -7390,7 +7703,8 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 ok_update.clone(),
                 json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_other"}}}}),
             ],
@@ -7398,7 +7712,8 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7408,7 +7723,8 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7418,7 +7734,8 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
         ),
         (
             vec![
-                board_with_one.clone(),
+                held_one.clone(),
+                board_fields.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7428,7 +7745,7 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
         ),
     ];
     for (bodies, expected) in cases {
-        let endpoint = sequence_server(unreached_first(bodies));
+        let endpoint = sequence_server(bodies);
         let message = refusal(
             configured(&endpoint, json!({}))
                 .write_task(&ItemWrite {
@@ -7453,21 +7770,9 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
 
 #[tokio::test]
 async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
-    let board_with_two = board_json(
-        usable_fields(),
-        complete(json!([
-            {"id":"PVTI_1","fieldValues":complete(json!([])),
-             "content":{"__typename":"Issue","id":"I_1","title":"one","body":"","state":"OPEN",
-                        "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
-                        "parent":null,"subIssuesSummary":{"total":0},
-                        "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}}},
-            {"id":"PVTI_2","fieldValues":complete(json!([])),
-             "content":{"__typename":"Issue","id":"I_2","title":"two","body":"","state":"OPEN",
-                        "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
-                        "parent":null,"subIssuesSummary":{"total":0},
-                        "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}
-        ])),
-    );
+    let held_one = held_issue("I_1", "one", None);
+    let board_fields = fields_json("PVT_board", usable_fields());
+    let held_two = held_issue("I_2", "two", None);
     let ok_update = json!({"data":{"updateIssue":{"issue":{"id":"I_1"}}}});
     let ok_field =
         json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}}}});
@@ -7477,7 +7782,9 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
     let cases: Vec<(Vec<Value>, &str)> = vec![
         (
             vec![
-                board_with_two.clone(),
+                held_one.clone(),
+                board_fields.clone(),
+                held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7487,7 +7794,9 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
         ),
         (
             vec![
-                board_with_two.clone(),
+                held_one.clone(),
+                board_fields.clone(),
+                held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7498,7 +7807,9 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
         ),
         (
             vec![
-                board_with_two.clone(),
+                held_one.clone(),
+                board_fields.clone(),
+                held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7509,7 +7820,9 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
         ),
         (
             vec![
-                board_with_two.clone(),
+                held_one.clone(),
+                board_fields.clone(),
+                held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7520,7 +7833,9 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
         ),
         (
             vec![
-                board_with_two.clone(),
+                held_one.clone(),
+                board_fields.clone(),
+                held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
                 ok_field.clone(),
@@ -7531,7 +7846,7 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
         ),
     ];
     for (bodies, expected) in cases {
-        let endpoint = sequence_server(unreached_first(bodies));
+        let endpoint = sequence_server(bodies);
         let message = refusal(
             configured(&endpoint, json!({}))
                 .write_task(&ItemWrite {
@@ -7556,18 +7871,11 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
 
 #[tokio::test]
 async fn a_blocked_by_connection_answered_in_pages_is_walked_before_it_is_reconciled() {
-    let board_one = board_json(
-        usable_fields(),
-        complete(json!([{"id":"PVTI_1","fieldValues":complete(json!([])),
-            "content":{"__typename":"Issue","id":"I_1","title":"one","body":"","state":"OPEN",
-                       "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
-                       "parent":null,"subIssuesSummary":{"total":0},
-                       "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}])),
-    );
     let ok_field =
         json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}}}});
-    let endpoint = sequence_server(unreached_first(vec![
-        board_one,
+    let endpoint = sequence_server(vec![
+        held_issue("I_1", "one", None),
+        fields_json("PVT_board", usable_fields()),
         json!({"data":{"updateIssue":{"issue":{"id":"I_1"}}}}),
         ok_field.clone(),
         ok_field,
@@ -7579,7 +7887,7 @@ async fn a_blocked_by_connection_answered_in_pages_is_walked_before_it_is_reconc
             "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         json!({"data":{"removeBlockedBy":{"issue":{"id":"I_1"},"blockingIssue":{"id":"I_a"}}}}),
         json!({"data":{"removeBlockedBy":{"issue":{"id":"I_1"},"blockingIssue":{"id":"I_b"}}}}),
-    ]));
+    ]);
     configured(&endpoint, json!({}))
         .write_task(&ItemWrite {
             target: Some(NativeId("I_1".to_owned())),
@@ -8113,9 +8421,10 @@ async fn a_read_refused_past_the_budget_reports_it_rather_than_hanging() {
 }
 
 #[tokio::test]
-async fn a_project_copy_reads_the_board_and_the_repository_once_for_the_whole_command() {
-    // Six items, so a source reading the board per item written reads it seven times and
-    // the repository six — which is the burst this counts, not the writes themselves.
+async fn six_related_writes_read_the_boards_fields_and_repository_once_for_the_command() {
+    // Six items, so a source reading the board's fields per item written reads them six
+    // times and the repository six — which is the burst this counts, not the writes
+    // themselves. And none of the six lists the board: each item it names is read by id.
     let fixture = board(vec![]);
     let source = source(&fixture);
     let plan = source
@@ -8136,9 +8445,14 @@ async fn a_project_copy_reads_the_board_and_the_repository_once_for_the_whole_co
         source.write_task(&write(child)).await.expect("a task");
     }
     assert_eq!(
-        fixture.requests("board"),
+        fixture.requests("boardFields"),
         1,
-        "the board was re-read per item written"
+        "the board's fields were re-read per item written"
+    );
+    assert_eq!(
+        fixture.board_item_reads(),
+        Vec::<String>::new(),
+        "a copy listed the board to write items it names by id"
     );
     assert_eq!(
         fixture.requests("repository"),
@@ -8189,34 +8503,466 @@ async fn an_update_its_own_item_describes_is_written_without_reading_the_board()
     assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
 }
 
-#[tokio::test]
-async fn an_update_its_own_item_cannot_describe_still_reads_the_board() {
-    // An item holding no Status value says nothing about whether the board has a Status
-    // field, and a status write needs one. So the board is read, rather than the field
-    // guessed absent and the write refused — or guessed present and written blind.
-    let fixture = board(vec![Item::issue("I_1", "one")]);
-    move_to_in_progress(source(&fixture).as_ref()).await;
-    assert_eq!(fixture.requests("board"), 1);
-    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+fn field_writes(fixture: &Fixture) -> Vec<(String, String)> {
+    fixture
+        .seen()
+        .into_iter()
+        .filter(|call| call[0] == "updateProjectV2ItemFieldValue")
+        .map(|call| {
+            (
+                call[1]["projectId"].as_str().unwrap_or_default().to_owned(),
+                call[1]["itemId"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
 }
 
 #[tokio::test]
-async fn an_update_whose_item_names_an_empty_board_id_still_reads_the_board() {
+async fn an_update_its_own_item_cannot_describe_reads_the_boards_fields_and_never_its_items() {
+    // An item holding no Status value says nothing about whether the board has a Status
+    // field, and one holding no origin value says nothing about the origin field — and an
+    // update writes both. So the board's fields are read, rather than either field guessed
+    // absent and the write refused, or guessed present and written blind. What is read is
+    // the fields alone: whether the item is on this board is its own read's answer, so an
+    // item GitHub's listings have not caught up with lands all the same.
+    for (held, what) in [
+        (Item::issue("I_1", "before").unlisted(), "no Status value"),
+        (
+            Item::issue("I_1", "before")
+                .status("Todo")
+                .holding_no_origin_value()
+                .unlisted(),
+            "no origin value",
+        ),
+    ] {
+        let fixture = board(vec![held]);
+        move_to_in_progress(source(&fixture).as_ref()).await;
+        let written = fixture.item("I_1");
+        assert_eq!(written.status.as_deref(), Some("In Progress"), "{what}");
+        assert_eq!(written.title, "one", "{what}");
+        assert_eq!(written.origin.as_deref(), Some(""), "{what}");
+        assert_eq!(fixture.requests("boardFields"), 1, "{what}");
+        assert_eq!(fixture.requests("board"), 0, "{what}");
+        assert_eq!(
+            fixture.board_item_reads(),
+            Vec::<String>::new(),
+            "an update of an item with {what} listed the board"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_update_whose_item_names_an_empty_board_id_takes_the_boards_id_from_its_fields() {
     // The board id an update writes its fields against comes from a third party's answer,
     // and an empty one addresses no board. Taken as given, every field write of the update
-    // would go out against it; read as absent, the write reads the board for its real id.
+    // would go out against it; read as absent, the write takes the board's real id — and
+    // the field definitions beside it — from the read of the board's fields, which lists
+    // no item.
     let fixture = board(vec![
-        Item::issue("I_1", "one")
+        Item::issue("I_1", "before")
             .status("Todo")
             .board_entry_names(""),
     ]);
     move_to_in_progress(source(&fixture).as_ref()).await;
-    assert_eq!(
-        fixture.requests("board"),
-        1,
-        "an update took an empty board id from its item instead of reading the board"
-    );
     assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+    assert_eq!(fixture.item("I_1").title, "one");
+    let writes = field_writes(&fixture);
+    assert!(!writes.is_empty(), "the update wrote no board field");
+    assert!(
+        writes.iter().all(|(board, _)| board == "PVT_board"),
+        "an update took an empty board id from its item: {writes:?}"
+    );
+    assert_eq!(fixture.requests("boardFields"), 1);
+    assert_eq!(
+        fixture.board_item_reads(),
+        Vec::<String>::new(),
+        "the board's id was taken from a listing of its items"
+    );
+}
+
+#[tokio::test]
+async fn a_child_is_filed_under_a_project_issue_no_listing_of_the_board_names_yet() {
+    // The 842-item board's refusal: a project issue whose own `projectItems` names the board
+    // and which `ProjectV2.items` does not list. It is this board's, so a child is filed
+    // under it.
+    let fixture = board(vec![
+        Item::issue("I_plan", "the plan")
+            .sub_issues(1)
+            .status("Todo")
+            .unlisted(),
+    ]);
+    let source = source(&fixture);
+    let child = source
+        .write_task(&task_under(Some("I_plan"), "a step", &[]))
+        .await
+        .expect("a project issue on this board takes a child");
+    assert_eq!(fixture.item(&child.0).parent.as_deref(), Some("I_plan"));
+    assert!(
+        fixture.seen().iter().any(|call| call[0] == "addSubIssue"
+            && call[1]["issueId"] == "I_plan"
+            && call[1]["subIssueId"] == child.0.as_str()),
+        "the child was not attached as the project's sub-issue: {:?}",
+        fixture.seen()
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_child_is_refused_under_an_issue_whose_whole_membership_names_no_entry_for_this_board() {
+    // The other half: an issue that really is not here, its memberships walked to
+    // exhaustion — past the page that came with it — and none naming this board. Refused in
+    // the words it always had, naming the id, before anything is created.
+    for elsewhere in [
+        Item::issue("I_elsewhere", "another plan").only_on(&[3]),
+        Item::issue("I_elsewhere", "another plan").only_on(&boards_ahead_of_this_one()),
+    ] {
+        let fixture = board(vec![elsewhere]);
+        let message = refusal(
+            source(&fixture)
+                .write_task(&task_under(Some("I_elsewhere"), "a step", &[]))
+                .await
+                .expect_err("an issue this board does not hold takes no child"),
+        );
+        assert!(
+            message.contains("GitHub project issue I_elsewhere was not found on the board"),
+            "{message}"
+        );
+        assert!(
+            !fixture.seen().iter().any(|call| call[0] == "createIssue"),
+            "an issue was created before the parent was refused: {:?}",
+            fixture.seen()
+        );
+        assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+    }
+}
+
+#[tokio::test]
+async fn an_update_of_a_destination_this_board_does_not_hold_is_refused_naming_it() {
+    let fixture = board(vec![
+        Item::issue("I_elsewhere", "another").only_on(&boards_ahead_of_this_one()),
+    ]);
+    for target in ["I_elsewhere", "I_gone"] {
+        let message = refusal(
+            source(&fixture)
+                .write_task(&ItemWrite {
+                    target: Some(id(target)),
+                    item: task("T", "one", status(StatusCategory::Todo, "Todo")),
+                    depends_on: vec![],
+                })
+                .await
+                .expect_err("a destination this board does not hold"),
+        );
+        assert!(
+            message.contains(&format!("GitHub destination item {target} was not found")),
+            "{message}"
+        );
+    }
+    assert!(fixture.seen().is_empty(), "{:?}", fixture.seen());
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_same_source_far_end_no_listing_names_yet_resolves_from_its_own_read() {
+    // The near item holds no Status value, so the write takes the board's fields from their
+    // own read — the path that once listed the board and looked the far end up in it.
+    let fixture = board(vec![
+        Item::issue("I_1", "step"),
+        Item::issue("I_2", "the one waited on")
+            .status("Todo")
+            .unlisted(),
+    ]);
+    source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(id("I_1")),
+            item: Task {
+                repositories: vec![repo("acme/work")],
+                ..task("T", "step", status(StatusCategory::Todo, "Todo"))
+            },
+            depends_on: vec![edge(("I_1", ItemKind::Task), ("I_2", ItemKind::Task))],
+        })
+        .await
+        .expect("a far end this board holds resolves");
+    assert_eq!(
+        fixture.state.lock().unwrap().blocked_by.get("I_1").cloned(),
+        Some(vec!["I_2".to_owned()])
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_status_set_on_an_item_no_listing_names_yet_lands() {
+    // With a Status value, the item carries the field's definition; without one, the
+    // board's fields are read for it. Neither lists the board.
+    let fixture = board(vec![
+        Item::issue("I_held", "has a column")
+            .status("Todo")
+            .unlisted(),
+        Item::issue("I_bare", "has none").unlisted(),
+    ]);
+    let source = source(&fixture);
+    for held in ["I_held", "I_bare"] {
+        source
+            .set_task_status(&id(held), StatusCategory::InProgress)
+            .await
+            .unwrap()
+            .expect("a task of this board");
+        assert_eq!(
+            fixture.item(held).status.as_deref(),
+            Some("In Progress"),
+            "{held}"
+        );
+    }
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_drafts_recorded_dependencies_are_read_off_its_own_read_when_no_listing_names_it() {
+    // A draft's dependency node carries no body, so its slot is read off the draft itself.
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft")
+            .status("Todo")
+            .body(&slotted("", &json!({"onetaskgraph.depends_on":["I_2"]})))
+            .unlisted(),
+        Item::issue("I_2", "other").status("Todo"),
+    ]);
+    let edges = walk(
+        source(&fixture).as_ref(),
+        "D_1",
+        ItemKind::Task,
+        Direction::DependsOn,
+        10,
+    )
+    .await
+    .expect("a draft's recorded edges");
+    assert_eq!(
+        edges.iter().map(|edge| edge.to.id()).collect::<Vec<_>>(),
+        vec!["I_2"]
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn deleting_an_item_no_listing_names_yet_deletes_it() {
+    // Read as *already gone*, this is the item a copy that could not finish would leave
+    // behind.
+    let fixture = board(vec![Item::issue("I_made", "made by a copy").unlisted()]);
+    source(&fixture)
+        .delete_task(&id("I_made"))
+        .await
+        .expect("the item is taken back");
+    assert!(!fixture.holds("I_made"), "the item is still on the board");
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_draft_is_read_by_its_own_id_and_never_found_by_listing_the_board() {
+    let fixture = board(vec![
+        Item::draft("D_1", "a draft").status("Todo").unlisted(),
+        Item::draft("D_2", "someone else's").only_on(&[3]),
+    ]);
+    let source = source(&fixture);
+    let draft = source
+        .get_task(&id("D_1"))
+        .await
+        .unwrap()
+        .expect("a draft of this board");
+    assert_eq!(draft.title, "a draft");
+    assert_eq!(draft.status, status(StatusCategory::Todo, "Todo"));
+    assert_eq!(
+        source
+            .get_task(&id("D_2"))
+            .await
+            .unwrap()
+            .map(|task| task.id),
+        None,
+        "a draft on another board was answered as this board's"
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_name() {
+    // A draft is linked to one board item, so a page of them reporting more is malformed —
+    // even when this board's entry is on it.
+    let draft_entry = json!({"id":"PVTI_D","project":{"id":"PVT_board","number":7},
+                             "fieldValues":complete(json!([]))});
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"a draft",
+            "body":null,"createdAt":null,"updatedAt":null,
+            "projectV2Items":{"nodes":[draft_entry.clone()],
+                              "pageInfo":{"hasNextPage":true,"endCursor":"1"}}}}}),
+    ]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .expect_err("a draft page claiming a second board item"),
+    );
+    assert!(
+        message.contains("D_1") && message.contains("reports more board items"),
+        "{message}"
+    );
+    // The same for a complete page holding two, and for a second read that answers the
+    // draft's id as something else.
+    let second_entry = json!({"id":"PVTI_E","project":{"id":"PVT_9","number":9},
+                              "fieldValues":complete(json!([]))});
+    for (answer, expected) in [
+        (
+            json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"a draft",
+                "body":null,"createdAt":null,"updatedAt":null,
+                "projectV2Items":{"nodes":[draft_entry.clone(), second_entry],
+                                  "pageInfo":{"hasNextPage":false,"endCursor":"2"}}}}}),
+            "reports more board items",
+        ),
+        (
+            json!({"data":{"node":{"__typename":"Issue"}}}),
+            "as a draft and then as something else",
+        ),
+        (
+            json!({"data":{"node":{"__typename":"DraftIssue","id":"D_other","title":"a draft",
+                "body":null,"createdAt":null,"updatedAt":null,
+                "projectV2Items":{"nodes":[draft_entry.clone()],
+                                  "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+            "answered a different draft",
+        ),
+    ] {
+        let endpoint = sequence_server(vec![
+            json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+            answer,
+        ]);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .get_task(&id("D_1"))
+                .await
+                .expect_err(expected),
+        );
+        assert!(
+            message.contains("D_1") && message.contains(expected),
+            "{message}"
+        );
+    }
+
+    // A blank board id addresses no board, so it is refused before anything is created.
+    let endpoint = sequence_server(vec![fields_json(" ", usable_fields())]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .write_task(&write(task("T", "x", status(StatusCategory::Todo, "Todo"))))
+            .await
+            .expect_err("a board read naming a blank id"),
+    );
+    assert!(message.contains("blank node id"), "{message}");
+}
+
+#[tokio::test]
+async fn a_vanished_draft_is_absent_and_a_malformed_membership_is_refused() {
+    let reached = json!({"data":{"node":{"__typename":"DraftIssue"}}});
+    let vanished = configured(
+        &sequence_server(vec![reached.clone(), json!({"data":{"node":null}})]),
+        json!({}),
+    );
+    assert!(vanished.get_task(&id("D_1")).await.unwrap().is_none());
+
+    for (membership, expected) in [
+        (None, "missing projectV2Items"),
+        (Some(json!({"nodes":"bad"})), "nodes is not an array"),
+        (Some(json!({"nodes":[]})), "has no pageInfo"),
+    ] {
+        let mut draft = json!({"__typename":"DraftIssue","id":"D_1"});
+        if let Some(membership) = membership {
+            draft["projectV2Items"] = membership;
+        }
+        let endpoint = sequence_server(vec![reached.clone(), json!({"data":{"node":draft}})]);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .get_task(&id("D_1"))
+                .await
+                .unwrap_err(),
+        );
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn a_draft_on_a_different_board_with_the_same_number_is_not_returned() {
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"elsewhere",
+            "body":null,"createdAt":null,"updatedAt":null,
+            "projectV2Items":{"nodes":[{"id":"PVTI_1",
+                "project":{"id":"PVT_elsewhere","number":7},
+                "fieldValues":complete(json!([]))}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        fields_json("PVT_board", usable_fields()),
+    ]);
+    assert!(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_draft_membership_without_a_numeric_board_number_is_refused() {
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1",
+            "projectV2Items":{"nodes":[{"id":"PVTI_1",
+                "project":{"id":"PVT_board","number":"seven"}}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+    ]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .expect_err("a malformed membership"),
+    );
+    assert!(
+        message.contains("D_1") && message.contains("numeric project number"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_fields_only_read_of_an_unavailable_board_refuses_before_creation() {
+    let endpoint = sequence_server(vec![json!({"data":{"boardFields":{"projectV2":null}}})]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .write_task(&write(task("T", "x", status(StatusCategory::Todo, "Todo"))))
+            .await
+            .expect_err("an unavailable board"),
+    );
+    assert!(
+        message.contains("project") && message.contains("not found"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_listing_this_command_already_holds_does_not_decide_whether_an_item_is_on_the_board() {
+    // The listing may still supply the board's fields; it may not refuse an item it omits.
+    let fixture = board(vec![
+        Item::issue("I_listed", "listed").status("Todo"),
+        Item::issue("I_1", "before").status("Todo").unlisted(),
+    ]);
+    let source = source(&fixture);
+    let listed = selected_tasks(source.as_ref(), &TaskQuery::default()).await;
+    assert!(
+        listed.contains(&"I_listed".to_owned()) && !listed.contains(&"I_1".to_owned()),
+        "the listing was meant to omit I_1: {listed:?}"
+    );
+    let listings = fixture.board_item_reads().len();
+    assert!(listings > 0, "the command did not list the board first");
+    move_to_in_progress(source.as_ref()).await;
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+    assert_eq!(fixture.item("I_1").title, "one");
+    assert_eq!(
+        fixture.board_item_reads().len(),
+        listings,
+        "the update listed the board again"
+    );
 }
 
 #[tokio::test]
@@ -8230,6 +8976,12 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
     // the source with what the second write gave it rather than what it had before.
     let fixture = board(vec![Item::issue("I_old", "already there").status("Todo")]);
     let source = source(&fixture);
+    // The command lists the board first, so every write below lands on a listing it
+    // already holds — which is the listing whose staleness this is about.
+    assert_eq!(
+        selected_tasks(source.as_ref(), &TaskQuery::default()).await,
+        vec!["I_old".to_owned()]
+    );
     let first = source
         .write_task(&write(task(
             "T-1",
@@ -8279,6 +9031,23 @@ async fn the_board_this_command_reads_holds_what_this_command_has_itself_written
             .title,
         "renamed",
         "this command's own view of the board went stale after it wrote to it"
+    );
+    let listed = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("the board lists again")
+        .items;
+    assert!(
+        listed
+            .iter()
+            .any(|task| task.id.0 == "I_old" && task.title == "renamed")
+            && listed.iter().any(|task| task.id == first)
+            && listed.iter().any(|task| task.id == landed),
+        "the listing this command holds went stale after it wrote: {:?}",
+        listed
+            .iter()
+            .map(|task| (&task.id.0, &task.title))
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         fixture.requests("board"),
@@ -10628,7 +11397,7 @@ fn answer_a_label_call(
 /// [`journey::INTROSPECTION_FIELD_LIMIT`].
 #[test]
 fn no_introspection_document_selects_a_capped_field_more_often_than_github_allows() {
-    let documents = journey::mutation_schema_documents();
+    let documents = journey::contract_schema_documents();
     for (index, document) in documents.iter().enumerate() {
         for capped in ["fields{", "inputFields{"] {
             let used = document.matches(capped).count();
@@ -10666,6 +11435,10 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
 #[tokio::test]
 async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says() {
     let fixture = board_with(vec![], true, false);
+    // The board GitHub really is, so the journey below — the same body of code the
+    // credentialed lane drives — can only converge through the union in
+    // `GitHubProjectsSource::board`.
+    fixture.items_connection_falls_behind();
     let labels = label_endpoints(&fixture.state);
     journey::against(journey::Endpoints {
         graphql: fixture.endpoint.clone(),

@@ -262,8 +262,9 @@ In the two quantities this file measures offline, in the record's own frame:
 point-cost reconciliation asking GitHub about the two new query documents —
 `reading a task's comments` at 100 nodes, which is its one `comments(first:)` connection and
 nothing multiplied through it, and `reading which issue a comment is on` at none. The third is
-the mutation schema introspection: three mutations bring three input and three payload types,
-thirty-four types in all, and at GitHub's cap of two capped selections a document that is
+the contract schema introspection: three mutations bring three input and three payload types,
+thirty-four mutation types in all, with a draft read type alongside them. At GitHub's cap
+of two capped selections a document, that is
 **nine** documents rather than eight. The three mutations are not reconciled, because
 `rateLimit` cannot be asked about a mutation; `tests/point_cost.rs` pins each of the five at
 one point. Every other row of the record is byte-for-byte what it was.
@@ -451,6 +452,11 @@ copies it measures are:
 | **requests**            |         69 |        68 |         47 |        23 |    9 |    9 |
 | **node count**          |      53150 |     32750 |      19452 |     14583 | 1209 | 1209 |
 
+The **after** columns are this reduction's own after, and (b) has moved once since: reading a
+board through both of GitHub's enumerations of it, below, adds a search to it.
+`tests/fixtures/copy-cost.txt` is what a copy costs now and the record the test holds a copy
+to; the columns here are a comparison of one change and stay as they were taken.
+
 Per call, before, measured on the same harness against the engine as it stood at 0.2.28:
 
 ```
@@ -514,3 +520,102 @@ in the quantities above: neither adds a request or a node to any document.
 What stays as it was: a member the copy names that records no origin is still looked for
 by origin before it is created — that is correctness, not slack — and creating an item
 still reads the board, which a create needs for the repository it files the issue in.
+
+## Reading a board through both of GitHub's enumerations of it, and what that costs
+
+A whole-board read now sends the board-scoped issue search beside `graphql::BOARD`, because
+neither of GitHub's two enumerations of one board is complete on its own. `ProjectV2.items`
+is a projection GitHub rebuilds behind the write, and an item added with
+`addProjectV2ItemById` can be missing from it for minutes; the search reports the same item
+within seconds. The reasoning and the measurements behind that are in the crate
+documentation, at `GitHubProjectsSource::board`. This section is only what it costs.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] What this states is a
+difference between two committed states of `tests/fixtures/session-cost.txt`, which is not a
+value any source holds and so is not a second spelling of one. The fixture itself cannot move
+in silence: `a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` fails
+on any change to it and its message names this file as the place to say what moved — which is
+the same reconciliation the directive at the head of this file records, for the same reason. A
+section of this file that may state no figure could not record what a change cost, which is
+the whole of what this file is. -->
+What it moves, in the two quantities this file measures offline: **one request more over the
+whole session, and 20,400 worst-case nodes more.** One row moves, `searching this board's
+issues`, by one request. Every other row of the record is byte-for-byte what it was, `reading
+the board` included. The totals are `tests/fixtures/session-cost.txt`, which is the one place
+they are written down and the one the test holds a session to.
+
+One request rather than one per board read is the whole point of
+`GitHubProjectsSource::search_cache`. A board read and a project listing are two questions
+about the same board, and both of them now want that search: reading it once per source is
+what keeps a session that reads the board several times from buying a search each time.
+`tests/fixtures/copy-cost.txt` is where that shows most plainly — a whole project copy already
+searched once and searches once still, and what moves there is the **repeat** copy, which read
+the board without ever listing a project and so had no search to share.
+
+The estimate in `tests/journey/budget.rs` moves with the record, as it is built to: one more
+`SEARCH_ISSUES` at its worst-case price against the GraphQL budget, and the REST estimate
+unchanged. It is not restated here, because it is not a figure anybody writes down — it is
+computed from the record above on every run and printed beside what the session was really
+attributed.
+
+What this does not buy is a reduction anywhere: it is a request spent to make a read correct,
+and it is spent on every command that asks a question about the whole board. A command that
+asks about one project still asks that project — `graphql::SUB_ISSUES`, no board read and no
+search — so nothing about the cost of the reads this source was shaped to make instead of a
+board read has changed.
+
+## Answering a question about one known item without listing the board, and what that moved
+
+Every question this source asks about **one item it already names by id** now reads that
+item: the destination of an update, the project a new item is filed under, a same-source
+far end a dependency names, a status write, a draft's dependency slot, the delete that takes
+back an item a copy made, and a draft read by its id. Whether the item is on the board is
+decided by its own `Issue.projectItems`, or a draft's own board item, and never by looking
+for it in `ProjectV2.items` — which lags, and which on this host's 842-item `plans` board
+refused two items GitHub itself placed on it. What a write needs of the board that the item
+does not carry comes from `graphql::BOARD_FIELDS`, the board's `id` and `fields` with no
+`items`. The crate documentation states the rule and the evidence; this section is what it
+costs.
+
+That **supersedes two statements above**, in *What a project copy costs*: an update whose
+item cannot say enough no longer "reads the board exactly as before", and creating an item
+no longer reads the board. Both read the board's fields instead, and only when no listing
+this command already holds can supply them.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Every figure in this
+block is a difference between two committed states of `tests/fixtures/session-cost.txt`, which
+is not a value any source holds. The record itself cannot move in silence:
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` fails on any change
+to it and names this file as where to say what moved. A section that could state no figure
+could not record what the change cost, which is the whole of what this file is. -->
+In the two quantities this file measures offline:
+
+|                | before | after  |
+| -------------- | -----: | -----: |
+| **requests**   |    111 |    113 |
+| **node count** | 268569 | 238475 |
+
+Six rows move, and nothing else does:
+
+- **Two reconciliation probes are new**, one per new document: `reading one draft` (153
+  worst-case nodes) and `reading the board's fields` (50). The credentialed lane asks GitHub
+  about every read document, so a document added is a probe added.
+- **One whole-board read became two small reads.** A write in the journey that used to list
+  the board to find an item it already named — one `reading the board` page (10,150 nodes)
+  and the search beside it (20,400) — now reads that item (`reading one issue`, one more
+  request, 203 nodes) and the board's fields (`reading the board's fields`, one request, 50
+  nodes).
+
+So the session sends two requests more and 30,094 worst-case nodes fewer. The request count
+rises only because the lane probes each new document; on the board itself one read of an
+item and one of its fields replace a paged listing whose cost grows with the board, which on
+an 842-item board is nine `ProjectV2.items` pages plus every page of the search.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+`tests/fixtures/copy-cost.txt` does not move. A copy's engine lists the destination's items
+to match what it writes, and a board listing this command already holds supplies the board's
+fields, so no copy in that record makes a fields-only read. What changes is that the listing
+is no longer asked whether an item is there: every item the copy names is read by its own id.
+
+The estimate in `tests/journey/budget.rs` moves with the record, as it is built to, and is
+not restated here.

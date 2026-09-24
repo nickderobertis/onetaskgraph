@@ -6,7 +6,7 @@
 //! and declined on them where they refuse what the endpoint claimed. The journey is the real
 //! one, `journey::run`, driven the way both of its drives drive it; what stands in for
 //! GitHub is one local HTTP server that answers the allowance read with a whole allowance,
-//! answers the session's first real call — the first mutation-schema introspection document
+//! answers the session's first real call — the first contract-schema introspection document
 //! — with whatever a test scripts, and refuses everything else with a `404` it records.
 //!
 //! That recording is what makes each decline below evidence about **artifacts** as well as
@@ -289,7 +289,7 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
     for figure in [
         "the allowance read GET /rate_limit".to_owned(),
         format!("claimed {LIMIT} of {LIMIT} points remaining"),
-        budget::first_call_headers("mutation schema introspection"),
+        budget::first_call_headers("contract schema introspection"),
         format!("reported {remaining} of {LIMIT} remaining"),
         format!("estimated to spend {}", estimated()),
         format!("retained buffer is {buffer}"),
@@ -406,7 +406,7 @@ fn a_first_call_that_never_reached_the_host_fails_as_itself_rather_than_declinin
     // it runs into is the schema verification FAILING on the call that could not be made.
     let (drive, _turn) = drive(FirstCall::HangUp);
     let message = drive.message();
-    assert!(message.contains("mutation schema drifted"), "{message}");
+    assert!(message.contains("contract schema drifted"), "{message}");
     assert!(message.contains("could not reach GitHub"), "{message}");
     assert!(!message.contains("DID NOT RUN"), "{message}");
     // The stand-in recorded the call before hanging up on it, and the journey did not
@@ -423,7 +423,7 @@ fn a_first_call_carrying_the_allowance_the_endpoint_claimed_lets_the_session_go_
     // than the two requests a declined session sends.
     let (drive, _turn) = drive(FirstCall::reporting(LIMIT - 1));
     let message = drive.message();
-    assert!(message.contains("mutation schema drifted"), "{message}");
+    assert!(message.contains("contract schema drifted"), "{message}");
     assert!(!message.contains("DID NOT RUN"), "{message}");
     assert!(
         drive.asked.len() > 2,
@@ -442,7 +442,7 @@ fn recorded_first_call(outcome: Outcome, headers: &[(&str, &str)]) -> Request {
     Request::graphql(
         "query { __typename }",
         &json!({}),
-        Some("mutation schema introspection"),
+        Some("contract schema introspection"),
         None,
     )
     .finished(
@@ -498,7 +498,7 @@ fn the_second_reading_is_decided_on_the_call_recorded_right_after_the_allowance_
     );
     assert_eq!(
         readings.carried_by,
-        budget::first_call_headers("mutation schema introspection")
+        budget::first_call_headers("contract schema introspection")
     );
     assert_eq!(readings.estimated_cost, estimated());
     assert_eq!(readings.retained_buffer, RETAINED_BUFFER.of(LIMIT));

@@ -28,3 +28,40 @@ from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .task_detail import TaskDetail as TaskDetail
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
+
+# Every root is named here rather than left to the `import X as X` form alone: a
+# root whose generated class carries another name — every `QueryResponseOf…`, and
+# `PageOfDocument` — is aliased, and a strict type checker reads an aliased name as
+# private to this module rather than as a re-export. This list is what makes the
+# whole set public to one, here and through the package's own `import *`.
+__all__ = [
+    "Comment",
+    "CommentList",
+    "CopyReport",
+    "DeletedComment",
+    "Delivered",
+    "DeliveryOutcome",
+    "Document",
+    "DocumentQuery",
+    "EffectiveConfig",
+    "FailureDocument",
+    "GlobalId",
+    "Location",
+    "MetadataSet",
+    "PageOfDocument",
+    "QueryPlan",
+    "QueryResponseOfQualifiedDocument",
+    "QueryResponseOfQualifiedEdge",
+    "QueryResponseOfQualifiedLabel",
+    "QueryResponseOfQualifiedProject",
+    "QueryResponseOfQualifiedTask",
+    "QueryResponseOfSearchHit",
+    "SourceFailure",
+    "SourceListing",
+    "SourceName",
+    "StatusCategory",
+    "StatusOptionsReport",
+    "TaskDetail",
+    "TaskRef",
+    "TaskStatusSet",
+]
