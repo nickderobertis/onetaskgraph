@@ -8795,7 +8795,7 @@ async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_na
         json!({"data":{"node":{"__typename":"DraftIssue"}}}),
         json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"a draft",
             "body":null,"createdAt":null,"updatedAt":null,
-            "projectV2Items":{"nodes":[draft_entry],
+            "projectV2Items":{"nodes":[draft_entry.clone()],
                               "pageInfo":{"hasNextPage":true,"endCursor":"1"}}}}}),
     ]);
     let message = refusal(
@@ -8808,6 +8808,38 @@ async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_na
         message.contains("D_1") && message.contains("reports more board items"),
         "{message}"
     );
+    // The same for a complete page holding two, and for a second read that answers the
+    // draft's id as something else.
+    let second_entry = json!({"id":"PVTI_E","project":{"id":"PVT_9","number":9},
+                              "fieldValues":complete(json!([]))});
+    for (answer, expected) in [
+        (
+            json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"a draft",
+                "body":null,"createdAt":null,"updatedAt":null,
+                "projectV2Items":{"nodes":[draft_entry.clone(), second_entry],
+                                  "pageInfo":{"hasNextPage":false,"endCursor":"2"}}}}}),
+            "reports more board items",
+        ),
+        (
+            json!({"data":{"node":{"__typename":"Issue"}}}),
+            "as a draft and then as something else",
+        ),
+    ] {
+        let endpoint = sequence_server(vec![
+            json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+            answer,
+        ]);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .get_task(&id("D_1"))
+                .await
+                .expect_err(expected),
+        );
+        assert!(
+            message.contains("D_1") && message.contains(expected),
+            "{message}"
+        );
+    }
 
     // A blank board id addresses no board, so it is refused before anything is created.
     let endpoint = sequence_server(vec![fields_json(" ", usable_fields())]);

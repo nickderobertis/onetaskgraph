@@ -2995,13 +2995,19 @@ impl GitHubProjectsSource {
                        "boardItems":BOARD_ITEMS_PAGE_SIZE}),
             )
             .await?;
-        let Some(draft) = data
-            .get("node")
-            .filter(|node| !node.is_null())
-            .filter(|node| node.get("__typename").and_then(Value::as_str) == Some("DraftIssue"))
-        else {
+        // Gone between the two reads is an answer — the draft is no longer there. Anything
+        // else than the draft [`Self::reach`] was just told this id is, is not one.
+        let Some(draft) = data.get("node").filter(|node| !node.is_null()) else {
             return Ok(None);
         };
+        if optional_str(draft, "__typename")? != Some("DraftIssue") {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub answered {} as a draft and then as something else",
+                    id.0
+                ),
+            });
+        }
         let memberships = draft
             .get("projectV2Items")
             .ok_or_else(|| SourceError::Malformed {
@@ -3020,7 +3026,7 @@ impl GitHubProjectsSource {
             })?;
         // Read whether or not this board's entry is on the page: a page claiming more than
         // the one item GitHub links a draft to is a malformed answer either way.
-        if required_bool(info, "hasNextPage")? {
+        if required_bool(info, "hasNextPage")? || nodes.len() > 1 {
             return Err(SourceError::Malformed {
                 message: format!(
                     "GitHub draft {} reports more board items than the one GitHub links a draft \
