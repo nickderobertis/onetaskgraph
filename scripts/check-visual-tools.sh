@@ -1068,6 +1068,19 @@ run_visual_docs
 names "No Nx target may" || fail "the check refused the capturing target without saying no target may:"
 restore screenshots/project.json
 
+# 37a. A project document that is valid JSON and is not a project: a root that parses to a
+#      list has no `.get`, so reading `targets` off it ended this check with an
+#      AttributeError naming neither the file nor what was wrong with it — a scan that dies
+#      reports nothing about the targets it had not reached yet.
+printf '[]\n' > "$CLONE/screenshots/project.json"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "a project document whose root is a list was read as a project:"
+names "screenshots/project.json" \
+  || fail "a non-object project document was refused without naming the file:"
+names "root is list" \
+  || fail "a non-object project document was refused without saying what its root is:"
+restore screenshots/project.json
+
 if [ "$failures" -ne 0 ]; then
   echo "check-visual-tools: $failures expectation(s) failed." >&2
   echo "check-visual-tools: repair scripts/screenshots-freeze.sh, scripts/screenshots.sh," >&2

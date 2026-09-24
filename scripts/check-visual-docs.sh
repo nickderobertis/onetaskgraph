@@ -436,10 +436,21 @@ for project_file in sorted(Path(".").glob("*/project.json")) + sorted(
     Path(".").glob("*/*/project.json")
 ):
     try:
-        targets = json.loads(read(project_file)).get("targets", {})
+        document = json.loads(read(project_file))
     except ValueError as error:
         problems.append(f"{project_file.as_posix()}: is not valid JSON ({error})")
         continue
+    # Valid JSON is not yet a project document: a root that is a list, a string or a number
+    # parses and then has no `.get`, which would end this check with an AttributeError
+    # naming neither the file nor what is wrong with it.
+    if not isinstance(document, dict):
+        problems.append(
+            f"{project_file.as_posix()}: is valid JSON whose root is "
+            f"{type(document).__name__}, not a project document. Restore it to an object "
+            'with a "targets" key.'
+        )
+        continue
+    targets = document.get("targets", {})
     if not isinstance(targets, dict):
         problems.append(f'{project_file.as_posix()}: "targets" is not a JSON object')
         continue
