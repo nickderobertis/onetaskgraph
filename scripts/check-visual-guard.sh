@@ -571,22 +571,53 @@ grep -q '\\342' "$MARKERS/scope.stdin" 2>/dev/null \
 #     all — handed over it would arrive as two names, neither of them the file, and both
 #     would likely miss. So the guard captures WITHOUT asking, which is the direction every
 #     selection decision in this repository fails in.
-nl_path="$(printf 'docs/two\nlines.md')"
-mkdir -p "$CLONE/docs" || fatal "could not create $CLONE/docs" \
-  "check the permissions of \$TMPDIR, then rerun"
-printf 'x\n' > "$CLONE/$nl_path"
-git -C "$CLONE" add -A >/dev/null
-git -C "$CLONE" commit --quiet --no-verify -m "test: a changed path carrying a newline" >/dev/null
-nl_sha="$(git -C "$CLONE" rev-parse HEAD)"
-GUARD_RANGE="$nl_sha~1..$nl_sha"
-# scope answers 0 — "nothing relevant" — so a guard that DID consult it would exit without
-# capturing, and the assertion below separates the two outcomes rather than reading one.
-run_guard "$RECORDS" "$STUB_BIN:$PATH" 0 0
-GUARD_RANGE=""
-called scope \
-  && fail "a path carrying a newline was handed to screencomp, which can only read it as two names:"
-captured \
-  || fail "a path screencomp cannot be asked about did not fall back to capturing, so the drift would reach the workflow:"
+#
+#     NTFS forbids a newline in a file name outright, so on Windows the fixture this case
+#     needs cannot be created at all and there is nothing for the guard to be asked about.
+#     That is not a platform difference to remove — it is an input the filesystem cannot
+#     represent — so the case says on that lane that it is skipped, in the same shape
+#     scripts/check-line-reads.sh uses for a fixture NTFS refuses for the same reason. Every
+#     other case in this file runs on all three.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-visual-guard: the newline-path case is skipped on Windows (NTFS forbids a newline in a file name, so the fixture cannot be created); the Linux and macOS lanes gate that fall-back" >&2
+    ;;
+  *)
+    nl_path="$(printf 'docs/two\nlines.md')"
+    mkdir -p "$CLONE/docs" || fatal "could not create $CLONE/docs" \
+      "check the permissions of \$TMPDIR, then rerun"
+    printf 'x\n' > "$CLONE/$nl_path"
+    git -C "$CLONE" add -A >/dev/null
+    git -C "$CLONE" commit --quiet --no-verify -m "test: a changed path carrying a newline" >/dev/null
+    nl_sha="$(git -C "$CLONE" rev-parse HEAD)"
+    # The premise, asserted rather than assumed: a filesystem that quietly renamed the file
+    # rather than refusing it would leave this case reading a path with no newline in it,
+    # which the guard rightly DOES hand to screencomp — and the two assertions below would
+    # then report the guard as broken rather than the fixture as absent, which is exactly
+    # how this read on the Windows lane.
+    #
+    # Captured and matched IN THIS SHELL rather than piped into a quiet `grep`: under
+    # `pipefail` the grep exits at its first match, the writer ahead of it dies of SIGPIPE
+    # and the pipeline reports that death, so the same listing would pass or fail by
+    # timing. scripts/check-visual-tools.sh states the same reason over its archive
+    # listings.
+    nl_listing="$(git -C "$CLONE" diff -z --name-only "$nl_sha~1..$nl_sha" | tr '\0' '\n')" || fatal \
+      "could not list what the newline-path commit changes" \
+      "report this; the case needs 'git diff --name-only -z' to answer in the clone"
+    grep -qxF 'lines.md' <<<"$nl_listing" || fatal \
+      "the changed-path listing carries no path split by a newline, so this case cannot pose its question" \
+      "report this; the case needs a committed file whose name really holds a newline"
+    GUARD_RANGE="$nl_sha~1..$nl_sha"
+    # scope answers 0 — "nothing relevant" — so a guard that DID consult it would exit without
+    # capturing, and the assertion below separates the two outcomes rather than reading one.
+    run_guard "$RECORDS" "$STUB_BIN:$PATH" 0 0
+    GUARD_RANGE=""
+    called scope \
+      && fail "a path carrying a newline was handed to screencomp, which can only read it as two names:"
+    captured \
+      || fail "a path screencomp cannot be asked about did not fall back to capturing, so the drift would reach the workflow:"
+    ;;
+esac
 
 # 21. The changed-path list is written to a temporary file, and that write can fail — a
 #     full \$TMPDIR is the one that happens. Without its own handler `set -e` would end the
