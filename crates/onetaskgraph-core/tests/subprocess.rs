@@ -379,7 +379,11 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
     let answer = json!({"id": "0", "result": {"protocol_version": 2,
         "kind": "silent", "capabilities": capabilities()}})
     .to_string();
-    let source = SubprocessSource::connect_with_deadline(
+    // Twenty milliseconds bounds the request under test, against a child already running.
+    // The handshake before it carries the child's own start-up — `/bin/sh` reaching its
+    // first `read` — which a loaded host stretches well past that, so it takes the
+    // protocol's default and the asserted deadline reaches the silent request alone.
+    let source = SubprocessSource::connect_with_deadlines(
         "/bin/sh",
         &[
             "-c".to_owned(),
@@ -390,6 +394,7 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         &name(),
         &json!({}),
         BTreeMap::new(),
+        RequestDeadline::DEFAULT,
         RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
     )
     .expect("the handshake succeeds");
@@ -407,14 +412,63 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         started.elapsed() < Duration::from_secs(1),
         "the deadline did not hang"
     );
+    // An expired request kills the child this path owns, closing the connection for good; a
+    // child left alive would answer every later call with a fresh timeout of its own. So
+    // polling for a refusal that names no deadline is what tells the two apart while the
+    // child takes its moment to die.
     let again = Instant::now();
+    loop {
+        let Err(SourceError::Unavailable { message }) = source.health().await else {
+            panic!("the timed-out connection stays closed");
+        };
+        if !message.contains("did not answer") {
+            break;
+        }
+        assert!(
+            again.elapsed() < Duration::from_secs(5),
+            "a later call kept waiting on a child the expired deadline should have \
+             killed: {message}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handshake_slower_than_the_request_deadline_still_connects() {
+    // The test above asserts the short bound; this one asserts that it stops where the
+    // handshake begins. Its child waits a whole second before reading — fifty times that
+    // bound, and far past any scheduler delay — so the handshake succeeding is evidence
+    // that the two spans are bounded apart, rather than evidence that this host was fast.
+    // One deadline for both is what held a real child's start-up to twenty milliseconds.
+    let answer = json!({"id": "0", "result": {"protocol_version": 2,
+        "kind": "slow-to-start", "capabilities": capabilities()}})
+    .to_string();
+    let source = SubprocessSource::connect_with_deadlines(
+        "/bin/sh",
+        &[
+            "-c".to_owned(),
+            "sleep 1; read -r _; printf '%s\\n' \"$1\"; while :; do :; done".to_owned(),
+            "_".to_owned(),
+            answer,
+        ],
+        &name(),
+        &json!({}),
+        BTreeMap::new(),
+        RequestDeadline::DEFAULT,
+        RequestDeadline::from_millis(NonZeroU64::new(20).expect("positive")),
+    )
+    .expect("a handshake is not held to the request deadline");
+
+    // The generous handshake replaced nothing: what comes after it is still held to twenty
+    // milliseconds, against the same child that took a second to reach its first read.
+    let SourceError::Unavailable { message } = source.health().await.expect_err("it times out")
+    else {
+        panic!("a deadline is a reachability failure");
+    };
     assert!(
-        matches!(source.health().await, Err(SourceError::Unavailable { .. })),
-        "the timed-out connection stays closed"
-    );
-    assert!(
-        again.elapsed() < Duration::from_secs(1),
-        "a later call did not inherit the hang"
+        message.contains("health") && message.contains("20 milliseconds"),
+        "{message}"
     );
 }
 
