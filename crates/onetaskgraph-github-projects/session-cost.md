@@ -262,8 +262,9 @@ In the two quantities this file measures offline, in the record's own frame:
 point-cost reconciliation asking GitHub about the two new query documents —
 `reading a task's comments` at 100 nodes, which is its one `comments(first:)` connection and
 nothing multiplied through it, and `reading which issue a comment is on` at none. The third is
-the mutation schema introspection: three mutations bring three input and three payload types,
-thirty-four types in all, and at GitHub's cap of two capped selections a document that is
+the contract schema introspection: three mutations bring three input and three payload types,
+thirty-four mutation types in all, with a draft read type alongside them. At GitHub's cap
+of two capped selections a document, that is
 **nine** documents rather than eight. The three mutations are not reconciled, because
 `rateLimit` cannot be asked about a mutation; `tests/point_cost.rs` pins each of the five at
 one point. Every other row of the record is byte-for-byte what it was.

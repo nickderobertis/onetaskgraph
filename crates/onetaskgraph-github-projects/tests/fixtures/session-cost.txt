@@ -10,6 +10,7 @@ requests per call
     1       0  account allowance before the reconciliation
     6       0  adding an issue to the board
     2     100  board page size probe
+    9       0  contract schema introspection
     6       0  creating an issue
     6       0  deleting an issue
     3       0  filing an issue under its project
@@ -18,7 +19,6 @@ requests per call
     1       0  live label attachment
     1       0  live origin field cleanup
     1       0  live origin field creation
-    9       0  mutation schema introspection
     1   20400  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies

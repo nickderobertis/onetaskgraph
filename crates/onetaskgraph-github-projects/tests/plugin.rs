@@ -8855,7 +8855,7 @@ async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_na
 }
 
 #[tokio::test]
-async fn a_draft_disappearing_or_answering_a_malformed_membership_is_not_returned() {
+async fn a_vanished_draft_is_absent_and_a_malformed_membership_is_refused() {
     let reached = json!({"data":{"node":{"__typename":"DraftIssue"}}});
     let vanished = configured(
         &sequence_server(vec![reached.clone(), json!({"data":{"node":null}})]),
@@ -11397,7 +11397,7 @@ fn answer_a_label_call(
 /// [`journey::INTROSPECTION_FIELD_LIMIT`].
 #[test]
 fn no_introspection_document_selects_a_capped_field_more_often_than_github_allows() {
-    let documents = journey::mutation_schema_documents();
+    let documents = journey::contract_schema_documents();
     for (index, document) in documents.iter().enumerate() {
         for capped in ["fields{", "inputFields{"] {
             let used = document.matches(capped).count();
