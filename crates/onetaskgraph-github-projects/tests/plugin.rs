@@ -204,11 +204,8 @@ struct Item {
     /// Whether GitHub's own enumerations of the board — `ProjectV2.items` and the
     /// board-scoped issue search — list this item yet.
     ///
-    /// Board state, not a switch in the source: an issue added with `addProjectV2ItemById`
-    /// can be missing from `ProjectV2.items` for minutes while its own `Issue.projectItems`
-    /// names the board, and on 2026-09-23 this host's 842-item `plans` board denied
-    /// `I_kwDOTXCWqs8AAAABS1843Q` twice that way. An item held like this is a member of the
-    /// board by every read of it by id, and absent from every listing.
+    /// An item added to a board can appear in its own membership before it appears in
+    /// `ProjectV2.items`. This flag models that state in the fixture board.
     listed: bool,
     /// Whether this item holds a value of the board's origin text field.
     ///
@@ -7266,7 +7263,6 @@ fn issue_item(content: Value) -> Value {
     json!({"id":"PVTI_1","fieldValues":complete(json!([])),"content":content})
 }
 
-/// A fields-only read of the board, as [`graphql::BOARD_FIELDS`] is answered.
 fn fields_json(id: &str, fields: Value) -> Value {
     json!({"data":{"boardFields":{"projectV2":{"id":id,"fields":fields}}}})
 }
@@ -8425,7 +8421,7 @@ async fn a_read_refused_past_the_budget_reports_it_rather_than_hanging() {
 }
 
 #[tokio::test]
-async fn a_project_copy_reads_the_boards_fields_and_the_repository_once_for_the_whole_command() {
+async fn six_related_writes_read_the_boards_fields_and_repository_once_for_the_command() {
     // Six items, so a source reading the board's fields per item written reads them six
     // times and the repository six — which is the burst this counts, not the writes
     // themselves. And none of the six lists the board: each item it names is read by id.
@@ -8507,7 +8503,6 @@ async fn an_update_its_own_item_describes_is_written_without_reading_the_board()
     assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
 }
 
-/// The field writes an update sent, as `(projectId, itemId)` pairs.
 fn field_writes(fixture: &Fixture) -> Vec<(String, String)> {
     fixture
         .seen()
@@ -8824,6 +8819,13 @@ async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_na
             json!({"data":{"node":{"__typename":"Issue"}}}),
             "as a draft and then as something else",
         ),
+        (
+            json!({"data":{"node":{"__typename":"DraftIssue","id":"D_other","title":"a draft",
+                "body":null,"createdAt":null,"updatedAt":null,
+                "projectV2Items":{"nodes":[draft_entry.clone()],
+                                  "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+            "answered a different draft",
+        ),
     ] {
         let endpoint = sequence_server(vec![
             json!({"data":{"node":{"__typename":"DraftIssue"}}}),
@@ -8850,6 +8852,92 @@ async fn a_draft_read_or_a_fields_read_this_source_cannot_trust_is_refused_by_na
             .expect_err("a board read naming a blank id"),
     );
     assert!(message.contains("blank node id"), "{message}");
+}
+
+#[tokio::test]
+async fn a_draft_disappearing_or_answering_a_malformed_membership_is_not_returned() {
+    let reached = json!({"data":{"node":{"__typename":"DraftIssue"}}});
+    let vanished = configured(
+        &sequence_server(vec![reached.clone(), json!({"data":{"node":null}})]),
+        json!({}),
+    );
+    assert!(vanished.get_task(&id("D_1")).await.unwrap().is_none());
+
+    for (membership, expected) in [
+        (None, "missing projectV2Items"),
+        (Some(json!({"nodes":"bad"})), "nodes is not an array"),
+        (Some(json!({"nodes":[]})), "has no pageInfo"),
+    ] {
+        let mut draft = json!({"__typename":"DraftIssue","id":"D_1"});
+        if let Some(membership) = membership {
+            draft["projectV2Items"] = membership;
+        }
+        let endpoint = sequence_server(vec![reached.clone(), json!({"data":{"node":draft}})]);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .get_task(&id("D_1"))
+                .await
+                .unwrap_err(),
+        );
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[tokio::test]
+async fn a_draft_on_a_different_board_with_the_same_number_is_not_returned() {
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1","title":"elsewhere",
+            "body":null,"createdAt":null,"updatedAt":null,
+            "projectV2Items":{"nodes":[{"id":"PVTI_1",
+                "project":{"id":"PVT_elsewhere","number":7},
+                "fieldValues":complete(json!([]))}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        fields_json("PVT_board", usable_fields()),
+    ]);
+    assert!(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_draft_membership_without_a_numeric_board_number_is_refused() {
+    let endpoint = sequence_server(vec![
+        json!({"data":{"node":{"__typename":"DraftIssue"}}}),
+        json!({"data":{"node":{"__typename":"DraftIssue","id":"D_1",
+            "projectV2Items":{"nodes":[{"id":"PVTI_1",
+                "project":{"id":"PVT_board","number":"seven"}}],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+    ]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .get_task(&id("D_1"))
+            .await
+            .expect_err("a malformed membership"),
+    );
+    assert!(
+        message.contains("D_1") && message.contains("numeric project number"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_fields_only_read_of_an_unavailable_board_refuses_before_creation() {
+    let endpoint = sequence_server(vec![json!({"data":{"boardFields":{"projectV2":null}}})]);
+    let message = refusal(
+        configured(&endpoint, json!({}))
+            .write_task(&write(task("T", "x", status(StatusCategory::Todo, "Todo"))))
+            .await
+            .expect_err("an unavailable board"),
+    );
+    assert!(
+        message.contains("project") && message.contains("not found"),
+        "{message}"
+    );
 }
 
 #[tokio::test]

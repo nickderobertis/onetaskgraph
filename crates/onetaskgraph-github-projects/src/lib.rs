@@ -234,12 +234,10 @@
 //! comes from [`graphql::BOARD_FIELDS`], which reads no item at all. The reason is evidence,
 //! not economy alone: `ProjectV2.items` is a projection that lags the membership GitHub
 //! itself reports — an issue added with `addProjectV2ItemById` can be missing from it for
-//! minutes, measured below — and on 2026-09-23 this host's 842-item `plans` board refused
-//! a document copy because its project issue "was not found on the board" and an update
-//! because its "destination item … was not found", while GitHub, asked for each by id, named
-//! it on that board and not archived. A scan there gives the wrong answer as well as paying
-//! for every page; a read by id gives the right one for one query however large the board
-//! is. So a `board.items` lookup does not belong on any of those paths.
+//! minutes. Scanning this host's 842-item board has refused a document copy and an update
+//! even though the items' own reads named that board. A scan there gives the wrong answer
+//! as well as paying for every page. So a `board.items` lookup does not belong on any of
+//! those paths.
 //!
 //! **What a read may return is capped too, and that cap is on the document rather than on
 //! the board.** GitHub limits the number of nodes **one query may return** to
@@ -3008,6 +3006,11 @@ impl GitHubProjectsSource {
                 ),
             });
         }
+        if required_str(draft, "id")? != id.0 {
+            return Err(SourceError::Malformed {
+                message: format!("GitHub answered a different draft for {}", id.0),
+            });
+        }
         let memberships = draft
             .get("projectV2Items")
             .ok_or_else(|| SourceError::Malformed {
@@ -3035,9 +3038,31 @@ impl GitHubProjectsSource {
                 ),
             });
         }
+        if let Some(node) = nodes.first()
+            && node
+                .pointer("/project/number")
+                .and_then(Value::as_u64)
+                .is_none()
+        {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub draft {} board item has no numeric project number",
+                    id.0
+                ),
+            });
+        }
         let Some(held) = self.board_entry(nodes) else {
             return Ok(None);
         };
+        if required_str(
+            held.get("project").ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub draft {} board item has no project", id.0),
+            })?,
+            "id",
+        )? != self.board_fields().await?.id.as_str()
+        {
+            return Ok(None);
+        }
         let item = json!({
             "id": required_str(held, "id")?,
             "project": held.get("project"),
