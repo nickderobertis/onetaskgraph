@@ -3235,6 +3235,13 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         r#"{"data":{"issues":{"nodes":[{}],"pageInfo":{}}}}"#,
         r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"}}],"pageInfo":{}}}}"#,
         r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"},"labels":{}}],"pageInfo":{}}}}"#,
+        // An issue with no `identifier`. Linear declares it `String!` and both read
+        // operations select it, so a response without one is a response this source cannot
+        // read — not an issue with no handle, which Linear has no way to be.
+        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
+        // And one whose identifier is not a string, which is the other half: present is
+        // not the same as readable.
+        r#"{"data":{"issues":{"nodes":[{"id":"i","identifier":7,"title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
     ] {
         let (endpoint, _) = server("200 OK", "", body);
         assert!(matches!(

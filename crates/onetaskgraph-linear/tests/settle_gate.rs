@@ -176,7 +176,11 @@ fn request(stream: &mut TcpStream) -> String {
 
 fn issue(id: &str, title: &str, project: &str) -> Value {
     json!({
-        "id": id, "title": title, "description": null, "url": null,
+        // `Issue.identifier` is `String!` and both read operations select it, so a
+        // stand-in that left it out would be refused before this gate's own subject —
+        // how a walk settles — was ever reached.
+        "id": id, "identifier": format!("ENG-{}", id.replace('-', "")),
+        "title": title, "description": null, "url": null,
         "createdAt": "2026-09-15T12:00:00Z", "updatedAt": "2026-09-15T12:00:00Z",
         "state": {"name": "Todo", "type": "unstarted"}, "labels": {"nodes": []},
         "project": {"id": project}

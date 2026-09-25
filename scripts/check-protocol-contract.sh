@@ -629,8 +629,25 @@ STRUCT_SECTIONS = {
 # What this reconciles is the pair: the field has to be on the Rust struct, and the section
 # has to name it. So the field cannot be removed or renamed while the document goes on
 # specifying it, and the section cannot be renamed or dropped while the field remains.
+#
+# The value is the section plus the facts about the member's WIRE FORM that the section
+# states and the Rust declaration decides. Both sides are checked against this table rather
+# than against each other, so the table is the one place the pair is written down: a member
+# that stops being an `Option`, or loses its serde default, fails here even though the
+# document still reads correctly, and a section that stops saying so fails even though the
+# Rust is unchanged. Checking only that both spell the name would leave exactly that drift
+# invisible, which is the drift that matters — §6 rests on this member being omissible.
 MEMBER_SECTIONS = {
-    ("Task", "key"): "### 4.13a A task's `key`",
+    ("Task", "key"): {
+        "heading": "### 4.13a A task's `key`",
+        # `Option<T>`: a peer may omit it, which is why it needed no protocol bump.
+        "optional": True,
+        # `#[serde(default)]`: an omitted member reads as absent rather than refusing.
+        "defaulted": True,
+        # The word the section has to use for each, so the document cannot quietly stop
+        # promising what the type provides.
+        "states": ("optional", "absent"),
+    },
 }
 
 
@@ -691,7 +708,8 @@ for struct, heading in STRUCT_SECTIONS.items():
                 f"would never handle it."
             )
 
-for (struct, member), heading in MEMBER_SECTIONS.items():
+for (struct, member), specified in MEMBER_SECTIONS.items():
+    heading = specified["heading"]
     declaration = re.search(
         r"pub struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct),
         source_rs + contract_rs,
@@ -703,24 +721,55 @@ for (struct, member), heading in MEMBER_SECTIONS.items():
             "restore it, or teach this script the shape it has now — a struct whose "
             "members this document specifies cannot go unreconciled.",
         )
-    if not re.search(
-        r"^    pub %s:" % re.escape(member), declaration.group(1), re.MULTILINE
-    ):
+    # The field and everything attached to it: the attributes between the previous member
+    # and this one are this member's own, which is where `#[serde(...)]` sits.
+    field = re.search(
+        r"\n((?:    #\[[^\n]*\]\n|    ///[^\n]*\n)*)    pub %s: ([^\n,]+),"
+        % re.escape(member),
+        declaration.group(1),
+    )
+    if field is None:
         failures.append(
             f'"{heading}" specifies the member "{member}", but `{struct}` no longer '
             f"carries it. Restore the field, or remove that section — a plugin author "
             f"implementing from it would send a member the engine has nowhere to put."
         )
+    else:
+        attributes, rust_type = field.group(1), field.group(2).strip()
+        if rust_type.startswith("Option<") != specified["optional"]:
+            failures.append(
+                f'`{struct}::{member}` is declared `{rust_type}`, which disagrees with '
+                f'MEMBER_SECTIONS about whether "{heading}" specifies an optional member. '
+                f"A member a peer may omit is an `Option`; one it may not is not. Make the "
+                f"declaration, the table and that section say one thing."
+            )
+        if ("#[serde(default" in attributes) != specified["defaulted"]:
+            failures.append(
+                f'`{struct}::{member}` disagrees with MEMBER_SECTIONS about its serde '
+                f'default. "{heading}" specifies what an omitted member means, and the '
+                f"default is what makes that true of the type — a peer written before this "
+                f"member existed omits it, and §6 rests on that being read rather than "
+                f"refused."
+            )
     # The section BODY, not the heading: a heading that names the member — this one does —
     # would satisfy `spelled` on its own, and a section reduced to its title would pass a
     # check that was supposed to notice exactly that.
-    body = section(heading).split("\n", 1)[1] if "\n" in section(heading) else ""
+    whole = section(heading)
+    body = whole.split("\n", 1)[1] if "\n" in whole else ""
     if not spelled(member, body):
         failures.append(
             f'`{struct}` carries the field "{member}" but "{heading}", which is the '
             f"section that specifies it, never names it. Name it there — this section is "
             f"the only place the wire form of that member is written down."
         )
+    for word in specified["states"]:
+        if word not in body:
+            failures.append(
+                f'"{heading}" no longer says "{word}" about `{struct}::{member}`, which '
+                f"is one of the facts about its wire form MEMBER_SECTIONS records. A "
+                f"plugin author reads that section to learn whether they may leave the "
+                f"member out and what leaving it out means."
+            )
 
 # The framing limit is a number rather than a name, so neither of the two scans above
 # would ever notice it drifting. It is normative — a plugin author reads it and sizes their
