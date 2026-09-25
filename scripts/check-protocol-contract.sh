@@ -749,7 +749,9 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
                 f'default. "{heading}" specifies what an omitted member means, and the '
                 f"default is what makes that true of the type — a peer written before this "
                 f"member existed omits it, and §6 rests on that being read rather than "
-                f"refused."
+                f"refused. Restore `#[serde(default)]` on that field; if the member is "
+                f"deliberately no longer defaulted, set `\"defaulted\": False` in "
+                f"MEMBER_SECTIONS and say in that section what a peer omitting it now gets."
             )
     # The section BODY, not the heading: a heading that names the member — this one does —
     # would satisfy `spelled` on its own, and a section reduced to its title would pass a
@@ -768,7 +770,10 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
                 f'"{heading}" no longer says "{word}" about `{struct}::{member}`, which '
                 f"is one of the facts about its wire form MEMBER_SECTIONS records. A "
                 f"plugin author reads that section to learn whether they may leave the "
-                f"member out and what leaving it out means."
+                f'member out and what leaving it out means. Put the word "{word}" back in '
+                f"that section's body, saying what it said about the member; if the wire "
+                f"form really changed, change the Rust declaration and the `states` entry "
+                f"in MEMBER_SECTIONS in the same edit."
             )
 
 # The framing limit is a number rather than a name, so neither of the two scans above
