@@ -122,7 +122,7 @@ has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`;
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
 another; Linear, which has no such state, refuses it by name.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This user-facing summary is required to describe the GitHub projection; the loopback plugin tests and shared live journey drive the resolved mapping, mutations, and observed read-back together. -->
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule's executable source for this sentence is the shared journey `every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_intact`, which drives every configured source kind and asserts both halves of it: the fields named as written come back equal, and `url` and `key` are absent on the copied item even where the source reported one. A drift gate here could only reconcile this prose against a Rust doc comment, which is one prose spelling checked against another. -->
 On GitHub Projects, terminal writes keep both GitHub representations aligned: `done`
 selects the mapped `Done` option and closes the issue as completed, while `cancelled`
 selects the mapped `Cancelled` option and closes it as not planned. Those are the shipped

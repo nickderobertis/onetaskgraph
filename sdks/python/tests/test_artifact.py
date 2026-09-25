@@ -266,12 +266,9 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
     assert emitted_bundle["version"] == 19
-    # Version 19 published a task's `key`, and it is the first row this assertion has had
-    # to make about a *property* rather than a root: a new property is a new field in this
-    # package's generated model exactly as a new root is a new model, which is why it moved
-    # the version at all. So it is asserted where the bundle carries it — on the `Task` the
-    # task responses define — and on the generated model this package ships, because the
-    # two agreeing is the whole of what this test is for.
+    # Version 19 published a task's `key`. A property is asserted on both sides, because
+    # the bundle carrying one the generated model does not is exactly the drift the version
+    # exists to make visible.
     for root in ("QueryResponseOfQualifiedTask", "TaskDetail"):
         assert "key" in bundle["roots"][root]["$defs"]["Task"]["properties"], root
     assert "key" in _generated_task_fields()

@@ -4885,14 +4885,22 @@ impl GitHubProjectsSource {
         // a response without it is not worth failing a landed write over — the item simply
         // reports no location until the board read catches up, which is what it did before.
         let url = optional_str(created, "url")?.map(str::to_owned);
-        // Optional on the same terms, and for the same reason: GitHub declares
-        // `Issue.number` non-null, and a landed write is not worth failing over a response
-        // that came back without it — the item reports no handle until a board read
-        // catches up. This is the one read of a number that tolerates absence.
-        let number = created_issue_number(created)?;
-        // The issue exists from here on, so a failure filing it on the board takes it
-        // back: an issue in the repository that is on no board is an item nobody asked for
-        // and nothing here would find again.
+        // The issue exists from here on, so every failure past this point takes it back:
+        // an issue in the repository that is on no board is an item nobody asked for and
+        // nothing here would find again.
+        //
+        // Its number is optional on the same terms its address is — a landed write is not
+        // worth failing over a member that came back missing, and such an item reports no
+        // handle until a board read catches up. A number that is *present* and is not an
+        // unsigned integer is still a response this source cannot read, and that refusal
+        // owes the take-back exactly as a refused board filing does.
+        let number = match created_issue_number(created) {
+            Ok(number) => number,
+            Err(error) => {
+                let _ = self.delete_issue(&content_id).await;
+                return Err(error);
+            }
+        };
         let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,
@@ -5094,8 +5102,10 @@ struct Landed {
     /// The issue's own node id, which is the [`NativeId`] this source reports.
     content_id: NativeId,
     /// The board item's id, which is what a field write addresses.
+    // llmlint: ignore[invalid_states_unrepresentable] This field and the one below are `Resolved::item_id` and `Resolved::url` carried out of one call: the update arm assigns them from an existing `Resolved` and the whole record is assigned straight back into one. A newtype introduced here alone would be wrapped at both of those boundaries and unwrapped at every use, and would make this private record disagree with the type the same values have on the struct they come from and return to. Where the board item id gets a newtype is on `Resolved`, which is the contract's own shape and not this change's to move.
     item_id: String,
     /// The web address GitHub gave the issue, when it gave one.
+    // llmlint: ignore[invalid_states_unrepresentable] The answer `Resolved::url` and the contract's `Task::url` already record: a web address this source never parses, resolves or compares — it reads GitHub's string and hands it back, and `Location::Url` is where the contract gives it a shape. Validating it here would have this plugin decide what GitHub may call an address.
     url: Option<String>,
     /// The issue's number on its repository, when GitHub reported one.
     number: Option<u64>,

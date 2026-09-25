@@ -502,6 +502,13 @@ struct State {
     guarded_status_options: Option<Vec<Value>>,
     /// Whether the first post-update read changes existing option metadata.
     drift_guarded_status_description: bool,
+    /// Whether `createIssue` answers with a `number` that is not an unsigned integer.
+    ///
+    /// The other half of the tolerated-absence rule: a member that came back *missing* is
+    /// not worth failing a landed write over, and one that came back unreadable is a
+    /// response this source cannot read at all. Only a fixture reaches it, because GitHub
+    /// answers with an `Int!`.
+    creation_number_is_unreadable: bool,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -988,6 +995,11 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
+    /// Answer every `createIssue` from here on with a `number` that is not an integer.
+    fn creation_reports_an_unreadable_number(&self) {
+        self.state.lock().unwrap().creation_number_is_unreadable = true;
+    }
+
     fn blank_status_snapshot_id(&self, target: &'static str) {
         self.state.lock().unwrap().blank_status_snapshot_id = Some(target);
     }
@@ -1013,6 +1025,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         ],
         guarded_status_options: None,
         drift_guarded_status_description: false,
+        creation_number_is_unreadable: false,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1388,10 +1401,14 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .expect("createIssue names a repository this board resolved")
                 .to_owned(),
         );
-        let number = state
-            .creation_reports_number
-            .then_some(created.number)
-            .map_or(Value::Null, |number| json!(number));
+        let number = if state.creation_number_is_unreadable {
+            json!("not-a-number")
+        } else {
+            state
+                .creation_reports_number
+                .then_some(created.number)
+                .map_or(Value::Null, |number| json!(number))
+        };
         state.pending.push(created);
         // GitHub answers the creating mutation with the issue's own address and number,
         // which is the only place a run learns either before its board read catches up.
@@ -10387,6 +10404,128 @@ async fn an_issue_created_without_a_number_reports_no_key_rather_than_failing_th
     assert_eq!(
         read.title, "Third step",
         "and the rest of the write is exactly what it was"
+    );
+}
+
+#[tokio::test]
+async fn a_creation_answering_with_an_unreadable_number_is_refused_and_the_issue_taken_back() {
+    // The other side of the lenient branch. A number that came back *missing* is tolerated
+    // — the item reports no handle until a board read catches up — but one that came back
+    // as something other than an unsigned integer is a response this source cannot read,
+    // and reading it as *no handle* would be guessing. What the refusal owes is the
+    // take-back every failure past the creating mutation owes: the issue exists by the time
+    // the number is read, so returning without deleting it would leave an issue in the
+    // repository on no board, which is the item nobody asked for that nothing here would
+    // find again.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    fixture.creation_reports_an_unreadable_number();
+    let source = source(&fixture);
+
+    let message = refusal(
+        source
+            .write_task(&write(task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            )))
+            .await
+            .expect_err("a created issue whose number cannot be read is refused"),
+    );
+    assert!(
+        message.contains("GitHub created issue number is not an unsigned integer"),
+        "the refusal names what it could not read: {message}"
+    );
+    assert!(
+        fixture.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "the issue this call created was left behind: {:?}",
+        fixture.seen()
+    );
+    assert!(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .all(|held| held.title != "Third step"),
+        "and the board holds nothing this failed write made"
+    );
+}
+
+#[tokio::test]
+async fn an_update_keeps_the_destinations_own_key_whatever_the_incoming_task_carried() {
+    // A key is read-only, so an `ItemWrite` arriving with one is an item read somewhere
+    // that has a handle — a Linear issue's `ENG-123` — on its way into an item this board
+    // already numbered. The handle stays the destination's own.
+    //
+    // A list either side of the write is what makes that a real question rather than one
+    // the board answers for free: a write records what it wrote over this source's own
+    // view of the board, so the second list answers out of the record the update built
+    // rather than by asking GitHub again. An update that carried no number into that
+    // record would have the item report no handle for the rest of the run, while a direct
+    // read of the issue went on reporting one.
+    let fixture = board(vec![Item::issue("I_1", "one").number(4242).status("Todo")]);
+    let source = source(&fixture);
+
+    let before = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("this board lists")
+        .items;
+    assert_eq!(
+        before
+            .iter()
+            .map(|task| (task.id.0.as_str(), task.key.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("I_1", Some("4242"))]
+    );
+
+    let mut revised = task(
+        "ignored",
+        "one, revised",
+        status(StatusCategory::Todo, "Todo"),
+    );
+    revised.key = Some("ENG-999".to_owned());
+    revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let written = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: revised,
+            depends_on: vec![],
+        })
+        .await
+        .expect("this board takes the update");
+    assert_eq!(
+        written,
+        NativeId("I_1".to_owned()),
+        "the update addressed the item that was already there"
+    );
+
+    let after = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("this board lists")
+        .items;
+    assert_eq!(
+        after
+            .iter()
+            .map(|task| (task.id.0.as_str(), task.title.as_str(), task.key.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("I_1", "one, revised", Some("4242"))],
+        "the destination's own number, not the handle the write carried, and the rest of \
+         the update landed with it"
+    );
+
+    // And a direct read of the issue says the same, so the two halves cannot disagree.
+    assert_eq!(
+        source
+            .get_task(&written)
+            .await
+            .expect("this source answers")
+            .expect("the item it just updated is there")
+            .key
+            .as_deref(),
+        Some("4242")
     );
 }
 
