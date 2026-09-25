@@ -502,6 +502,15 @@ struct State {
     guarded_status_options: Option<Vec<Value>>,
     /// Whether the first post-update read changes existing option metadata.
     drift_guarded_status_description: bool,
+    /// Whether `createIssue` answers with the new issue's `number`.
+    ///
+    /// GitHub declares `Issue.number` non-null and always answers with one, which is the
+    /// default here. A board that leaves it out models the response this source is
+    /// deliberately lenient about: a landed write is not worth failing over a member that
+    /// came back missing, so the item reports no handle until a read of the board catches
+    /// up. Nothing else can produce that state, and it is not one a board is ever *seen*
+    /// in — which is exactly why it needs a fixture to reach it.
+    creation_reports_number: bool,
     /// Which identifier the next guarded snapshot returns blank, for boundary validation.
     blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
@@ -974,6 +983,10 @@ impl Fixture {
     fn drift_guarded_status_description(&self) {
         self.state.lock().unwrap().drift_guarded_status_description = true;
     }
+    /// Answer every `createIssue` from here on without the issue's `number`.
+    fn creation_reports_no_number(&self) {
+        self.state.lock().unwrap().creation_reports_number = false;
+    }
 
     fn blank_status_snapshot_id(&self, target: &'static str) {
         self.state.lock().unwrap().blank_status_snapshot_id = Some(target);
@@ -1000,6 +1013,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         ],
         guarded_status_options: None,
         drift_guarded_status_description: false,
+        creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
         status_field,
@@ -1361,6 +1375,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
+        // Its own band, so an assertion about a created issue's number cannot pass against
+        // a number a seeded board item happened to be wearing.
+        created.number = 2000 + state.next as u64;
         created.body = input["body"].as_str().map(str::to_owned);
         // The issue is in the repository whose node id the input carried, which is how a
         // read of it derives the repository the source chose rather than the board's own.
@@ -1371,9 +1388,18 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .expect("createIssue names a repository this board resolved")
                 .to_owned(),
         );
+        let number = state
+            .creation_reports_number
+            .then_some(created.number)
+            .map_or(Value::Null, |number| json!(number));
         state.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id,
-            "url":format!("https://github.example/{id}")}}});
+        // GitHub answers the creating mutation with the issue's own address and number,
+        // which is the only place a run learns either before its board read catches up.
+        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}")});
+        if !number.is_null() {
+            issue["number"] = number;
+        }
+        return json!({ "createIssue": { "issue": issue } });
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         let content = input["contentId"]
@@ -10263,6 +10289,69 @@ async fn a_task_reports_the_issue_number_alone_as_its_key_and_a_draft_reports_no
             && keys.contains(&("I_other".to_owned(), Some("7".to_owned())))
             && keys.contains(&("D_1".to_owned(), None)),
         "{keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_issue_this_run_created_reports_its_key_before_the_board_read_catches_up() {
+    // The creating mutation is the only place a run learns the new issue's number, because
+    // GitHub's own board read is behind for a moment after a create — so an item this run
+    // made and then read back answers out of what this source remembered, and an item
+    // remembered without its number would report no handle for the rest of the run.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    let source = source(&fixture);
+
+    let created = source
+        .write_task(&write(task(
+            "ignored",
+            "Third step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a task this board accepts");
+
+    let read = source
+        .get_task(&created)
+        .await
+        .expect("this source answers")
+        .expect("the item it just created is there");
+    assert_eq!(
+        read.key.as_deref(),
+        Some("2001"),
+        "the number the creating mutation answered with is the handle this item reports"
+    );
+    assert_eq!(read.id, created, "and its node id is the one the write returned");
+}
+
+#[tokio::test]
+async fn an_issue_created_without_a_number_reports_no_key_rather_than_failing_the_write() {
+    // GitHub declares `Issue.number` non-null, so this is a response that should not
+    // happen — and a landed write is not worth failing over a member that came back
+    // missing anyway. The item reports no handle until a read of the board catches up,
+    // which is the same answer as a backend that has none, and the write still lands
+    // whole: this is the lenient branch, driven rather than assumed.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    fixture.creation_reports_no_number();
+    let source = source(&fixture);
+
+    let created = source
+        .write_task(&write(task(
+            "ignored",
+            "Third step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a create whose answer omits the number still lands");
+
+    let read = source
+        .get_task(&created)
+        .await
+        .expect("this source answers")
+        .expect("the item it just created is there");
+    assert_eq!(read.key, None, "no handle, rather than a guess or a failure");
+    assert_eq!(
+        read.title, "Third step",
+        "and the rest of the write is exactly what it was"
     );
 }
 

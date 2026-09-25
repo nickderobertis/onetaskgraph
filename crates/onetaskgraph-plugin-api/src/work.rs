@@ -29,6 +29,7 @@ pub struct Task {
     ///
     /// **Read-only.** A source derives it, no write type accepts one, and
     /// [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+    // llmlint: ignore[invalid_states_unrepresentable] SECOND PERMITTED REASON — the same answer `Task::url` and `Project::url` below already record, at a field that arrived the same way: this crate's field types ARE the approved contract, and the contract approving this field states its shape as `Option<String>` in as many words. A newtype here would be an amendment to a frozen surface that three other undispatched nodes are being built against, which is the contract owner's to make and not this change's; AGENTS.md, "The plugin contract", records where that decision lives. A backend's handle is also the one value this product deliberately never parses, matches on or resolves by — `id` does all three — so the confusion a newtype prevents is confusion no code here can act on.
     #[serde(default)]
     pub key: Option<String>,
     /// The one-line summary a user recognises the task by.

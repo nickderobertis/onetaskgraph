@@ -119,7 +119,6 @@ fn dataset_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
 /// a handle that happens to be empty.
 pub type Handle = fn(&str) -> Option<String>;
 
-/// A source with no short handle of its own: every task of it reports none.
 fn no_handle(_id: &str) -> Option<String> {
     None
 }
