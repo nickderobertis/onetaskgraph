@@ -176,6 +176,15 @@ struct Item {
     body: Option<String>,
     state: &'static str,
     state_reason: Option<String>,
+    /// This issue's own number on its repository, which is the short handle GitHub shows
+    /// people and this source reports as a task's `key`.
+    ///
+    /// Every fixture issue wears the same one unless a case says otherwise, because only
+    /// the cases about the handle care which number it is — and those set their own, so
+    /// two issues they compare cannot accidentally agree. A draft carries it and never
+    /// sends it: `DraftIssue` declares no `number`, which is what having no handle looks
+    /// like on the wire.
+    number: u64,
     parent: Option<String>,
     sub_issues: u64,
     /// `owner/name` of the repository this issue is in — the one the `createIssue` that
@@ -249,6 +258,7 @@ impl Item {
             body: None,
             state: "OPEN",
             state_reason: None,
+            number: 1043,
             parent: None,
             sub_issues: 0,
             repository: Some("acme/work".to_owned()),
@@ -286,6 +296,10 @@ impl Item {
     }
     fn parent(mut self, parent: &str) -> Self {
         self.parent = Some(parent.to_owned());
+        self
+    }
+    fn number(mut self, number: u64) -> Self {
+        self.number = number;
         self
     }
     fn sub_issues(mut self, total: u64) -> Self {
@@ -412,7 +426,8 @@ impl Item {
             "PullRequest" => json!({"__typename":"PullRequest","id":self.content_id}),
             "DraftIssue" => json!({"__typename":"DraftIssue","id":self.content_id,
                 "title":self.title,"body":self.body,"createdAt":null,"updatedAt":null}),
-            _ => json!({"__typename":"Issue","id":self.content_id,"title":self.title,
+            _ => json!({"__typename":"Issue","id":self.content_id,"number":self.number,
+                "title":self.title,
                 "body":self.body.clone().unwrap_or_default(),
                 "url":format!("https://github.example/{}", self.content_id),
                 "createdAt":null,"updatedAt":null,"state":self.state,
@@ -10175,6 +10190,80 @@ async fn every_predicate_a_document_query_carries_is_applied_before_it_is_paged(
         ["I_filed"]
     );
     assert!(second.next.is_none(), "the walk reached the end");
+}
+
+#[tokio::test]
+async fn a_task_reports_the_issue_number_alone_as_its_key_and_a_draft_reports_none() {
+    // The short handle this backend shows people is the issue's **number alone**, as a
+    // decimal string — `1043`, never `owner/repo#1043` — and the native id stays the
+    // issue's GraphQL node id beside it. A draft has no number at all: `DraftIssue`
+    // declares none, so it reports no handle rather than one of some other shape.
+    let fixture = board(vec![
+        Item::issue("I_task", "Alpha engine").number(1043),
+        Item::issue("I_other", "Beta").number(7),
+        Item::draft("D_1", "a draft"),
+    ]);
+    let source = source(&fixture);
+
+    let task = source
+        .get_task(&NativeId("I_task".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.key.as_deref(), Some("1043"));
+    assert_eq!(
+        task.id,
+        NativeId("I_task".to_owned()),
+        "the node id is what everything stores and matches on, and the key never displaces it"
+    );
+
+    // A second issue, so the handle is read off each item rather than being one constant
+    // this board happens to answer everything with.
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_other".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .key
+            .as_deref(),
+        Some("7")
+    );
+
+    assert_eq!(
+        source
+            .get_task(&NativeId("D_1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .key,
+        None,
+        "a draft is filed in no repository, so nothing numbered it"
+    );
+
+    // And a listing reports it too, so one verb cannot carry the handle while another
+    // drops it: the board query and the node read compose the same fragment.
+    let listed = source
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .unwrap()
+        .items;
+    let keys: Vec<(String, Option<String>)> = listed
+        .iter()
+        .map(|task| (task.id.0.clone(), task.key.clone()))
+        .collect();
+    assert!(
+        keys.contains(&("I_task".to_owned(), Some("1043".to_owned())))
+            && keys.contains(&("I_other".to_owned(), Some("7".to_owned())))
+            && keys.contains(&("D_1".to_owned(), None)),
+        "{keys:?}"
+    );
 }
 
 #[tokio::test]
