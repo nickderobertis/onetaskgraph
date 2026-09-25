@@ -53,6 +53,9 @@ pub struct Ready {
     pub labels_its_documents: bool,
     /// Where this source says one of its entities is, or that it does not say.
     pub place: Place,
+    /// The short handle this row's backend shows people for one of its tasks, or that it
+    /// has none.
+    pub handle: Handle,
 }
 
 /// Where a row's source says one entity is: its verb, its native id, this run's sandbox.
@@ -101,6 +104,23 @@ fn dataset_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
             });
         }
     }
+    None
+}
+
+/// The short handle a row's source reports for one task, by that task's native id.
+///
+/// A function for the reason [`Place`] is one: a handle is the *backend's* own name for an
+/// item, so what it is belongs to the row rather than to the shared dataset. It is
+/// deliberately not a field of [`dataset`] — a source with no handle of its own must report
+/// none, and a dataset carrying one would hand every row the same answer and prove nothing.
+///
+/// `None` is this backend having no separate handle for its tasks, which is the contract's
+/// case for a folder of Markdown and for an in-memory source alike, and is not the same as
+/// a handle that happens to be empty.
+pub type Handle = fn(&str) -> Option<String>;
+
+/// A source with no short handle of its own: every task of it reports none.
+fn no_handle(_id: &str) -> Option<String> {
     None
 }
 
@@ -364,6 +384,7 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             labels_its_documents: true,
             place: dataset_place,
+            handle: no_handle,
             declared: Declared {
                 documents: Support::Native,
                 comments: Support::Native,
@@ -386,6 +407,7 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             labels_its_documents: true,
             place: dataset_place,
+            handle: no_handle,
             declared: Declared {
                 projects: Support::Native,
                 // Native here for the same reason `projects` is: it says this source
@@ -413,6 +435,7 @@ pub const ROWS: &[Row] = &[
             complete_dataset: true,
             labels_its_documents: true,
             place: dataset_place,
+            handle: no_handle,
             declared: Declared {
                 documents: Support::Native,
                 comments: Support::Native,
@@ -432,6 +455,7 @@ pub const ROWS: &[Row] = &[
             // one is — the only row of this table whose locations are not knowable until
             // the sandbox holding them exists.
             place: local_md_place,
+            handle: no_handle,
             declared: Declared {
                 // A third folder beside `tasks/` and `projects/`: this source holds
                 // documents, and reads, filters and writes them on the same terms.
@@ -452,6 +476,7 @@ pub const ROWS: &[Row] = &[
             // can open, so this row's source says where all three are — as a link, which
             // is the shape a folder of Markdown's path is not.
             place: linear_place,
+            handle: linear_handle,
             // Linear models the whole table: two projects, an orphan, and dependencies in
             // both directions, so it drives the shared complete-dataset journeys.
             complete_dataset: true,
@@ -487,6 +512,7 @@ pub const ROWS: &[Row] = &[
             // Every entity here is an issue and every issue has a web address, so this row
             // is the one whose places are all links.
             place: github_place,
+            handle: github_handle,
             // A document here is an issue, and an issue carries labels, so this row's
             // documents are labelled exactly as its tasks are.
             labels_its_documents: true,
@@ -581,6 +607,33 @@ pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
 /// board below sets it: the shared dataset's two projects hold their own tasks and one
 /// task is filed under neither. Before it carried parents, every task on this board was an
 /// orphan and no filter scoped to a project could have separated anything.
+/// The repository issue number this fixture board gives one item.
+///
+/// One derivation, used by the responses this fake sends and by the journey that asserts
+/// what the CLI printed. GitHub numbers an issue by its repository, so the number is not an
+/// index into anything on the board: it starts well above the count of fixture items, and
+/// its last digits come from the id so a reader of a failure message can tell which item
+/// they are looking at.
+pub fn github_number(id: &str) -> u64 {
+    let digits: String = id.chars().filter(char::is_ascii_digit).collect();
+    let tail: u64 = digits.parse().expect("a fixture id ends in digits");
+    let level = match id.chars().next() {
+        Some('P') => 20,
+        Some('D') => 40,
+        // `ISSUE-<n>`, an issue a run of a journey created. Its own band, so a created
+        // issue never wears a number the shared dataset already gave something else.
+        Some('I') => 60,
+        _ => 0,
+    };
+    1000 + level + tail
+}
+
+/// What the `github-projects` row reports as a task's key: the issue's number alone, as a
+/// decimal string — never `owner/repo#1043`.
+fn github_handle(id: &str) -> Option<String> {
+    Some(github_number(id).to_string())
+}
+
 fn github_item(
     id: &str,
     title: &str,
@@ -1055,6 +1108,7 @@ impl GitHubBoard {
                           "body":item["body"],"createdAt":null,"updatedAt":null});
         }
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
+               "number":github_number(item["id"].as_str().unwrap()),
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
                "createdAt":null,"updatedAt":null,"state":item["state"],
                "stateReason":item["reason"],
@@ -1613,10 +1667,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[]});
         board.pending.push(created);
-        // GitHub answers the creating mutation with the issue's own web address, which is
-        // the only place a run learns where an item it just created is before this board's
-        // read catches up.
-        return json!({"createIssue":{"issue":{"id":id,
+        // GitHub answers the creating mutation with the issue's own web address and its
+        // number, which is the only place a run learns where an item it just created is,
+        // and what that item's short handle is, before this board's read catches up.
+        return json!({"createIssue":{"issue":{"id":id,"number":github_number(&id),
             "url":format!("https://example.invalid/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
@@ -3186,8 +3240,27 @@ fn linear_project_status(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
+/// The `identifier` this workspace gives one issue: the handle a person says out loud.
+///
+/// One derivation, used by the responses this fake sends and by the journey that asserts
+/// what the CLI printed, so the fixture and the expectation cannot drift. The shape is
+/// Linear's — a team key, a dash, then what distinguishes the issue — and what
+/// distinguishes it here is the fixture's own id with its dash taken out, which keeps every
+/// identifier in this workspace distinct including the ones a write creates (`T-W1`).
+/// Linear declares `Issue.identifier` as `String!` and this plugin never parses one, so any
+/// distinct string is a faithful stand-in; what would not be faithful is two issues sharing
+/// one.
+pub fn linear_identifier(id: &str) -> String {
+    format!("ENG-{}", id.replace('-', ""))
+}
+
+/// What the `linear` row reports as a task's key: that issue's own identifier.
+fn linear_handle(id: &str) -> Option<String> {
+    Some(linear_identifier(id))
+}
+
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})

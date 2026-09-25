@@ -2167,6 +2167,102 @@ fn both_renderings_report_where_an_entity_is_for_documents_tasks_and_projects_al
     }
 }
 
+#[test]
+fn both_renderings_report_a_tasks_key_where_its_backend_has_one_and_omit_it_where_none() {
+    // Every row, because *having a short handle at all* is a claim each backend makes and
+    // the rows differ in it: a Linear workspace shows `ENG-123`, a GitHub board shows the
+    // issue's number alone, and a folder of Markdown and an in-memory source have no handle
+    // of their own and must report none rather than a second copy of the id. Which of the
+    // three a row said is collected as it goes and asserted at the end, so a table that
+    // stopped discriminating cannot make every assertion here pass while proving nothing.
+    let mut seen: Vec<Option<String>> = Vec::new();
+    for row in ROWS {
+        let sandbox = host(row);
+        let handle = row.fixture.handle;
+
+        for id in ["T-1", "T-2"] {
+            let expected = handle(id);
+            seen.push(expected.clone());
+            let shown = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, id)]);
+
+            // The human rendering prints the handle beside the id it belongs to, and a
+            // source with none prints no line at all — the reader is told this backend has
+            // nothing to say rather than handed the id twice under a second label.
+            assert_eq!(
+                field(&shown, "key"),
+                expected,
+                "{}: `task show {id}` prints this backend's own handle, or no key line:\n{shown}",
+                row.name
+            );
+            // And the id is unchanged beside it: a key never displaces what everything
+            // stores and matches on.
+            assert_eq!(
+                field(&shown, "id").as_deref(),
+                Some(qualified(SOURCE, id).as_str()),
+                "{}: `task show {id}` still reports the native id:\n{shown}",
+                row.name
+            );
+
+            // The machine rendering carries it as its own member, absent as JSON null, so
+            // a consumer reads one key rather than parsing a line.
+            let response: serde_json::Value = serde_json::from_str(&ok(
+                row,
+                &sandbox,
+                &["task", "show", &qualified(SOURCE, id), "--json"],
+            ))
+            .expect("a show emits JSON");
+            let item = &response["items"][0]["item"];
+            assert_eq!(
+                &item["key"],
+                &expected.as_ref().map_or_else(|| json!(null), |key| json!(key)),
+                "{}: `task show {id} --json` carries the key:\n{item}",
+                row.name
+            );
+            assert_eq!(
+                item["id"], json!(id),
+                "{}: the native id is unchanged beside it:\n{item}",
+                row.name
+            );
+            assert_ne!(
+                item["key"], item["id"],
+                "{}: a source with no handle reports none rather than a copy of the id:\n{item}",
+                row.name
+            );
+        }
+
+        // A project has no key at all — the contract gives one only to a task — so the
+        // member is absent from a project's machine rendering however loudly this row's
+        // backend names its issues.
+        let project: serde_json::Value = serde_json::from_str(&ok(
+            row,
+            &sandbox,
+            &["project", "show", &qualified(SOURCE, "P-1"), "--json"],
+        ))
+        .expect("a show emits JSON");
+        assert_eq!(
+            project["items"][0]["item"].get("key"),
+            None,
+            "{}: a project carries no key:\n{}",
+            row.name,
+            project["items"][0]["item"]
+        );
+    }
+
+    // The table itself is asserted, for the reason the location journey asserts its own:
+    // some row has to report a handle and some row has to report none, or this journey is
+    // proving one case twice.
+    assert!(
+        seen.iter().any(Option::is_some),
+        "no row reports a key for any task, so this journey no longer proves that a \
+         backend's handle reaches either rendering"
+    );
+    assert!(
+        seen.iter().any(Option::is_none),
+        "every row reports a key, so this journey no longer proves that a source with no \
+         handle of its own reports none"
+    );
+}
+
 /// A sample of the entities this row serves: enough of each kind for one to carry a
 /// location and one to carry none, plus the documents only where the row's source has any.
 ///

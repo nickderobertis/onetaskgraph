@@ -1324,6 +1324,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
             target: Some(NativeId("sketch".into())),
             item: Task {
                 id: NativeId("sketch".into()),
+                key: None,
                 title: "Sketch".into(),
                 content: None,
                 status: Status {

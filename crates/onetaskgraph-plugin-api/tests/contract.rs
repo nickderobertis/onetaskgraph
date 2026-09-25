@@ -817,6 +817,7 @@ fn dependency_endpoints_validate_and_preserve_qualified_ids() {
 fn a_task_round_trips_through_json_with_every_field_populated() {
     let task = Task {
         id: NativeId::from("ENG-1"),
+        key: Some("ENG-1".to_owned()),
         title: "Ship the contract".to_owned(),
         content: Some("Two crates, one direction.".to_owned()),
         status: Status {
@@ -1348,6 +1349,9 @@ fn source_name_validation_agrees_with_the_pattern_it_publishes() {
 fn outgoing() -> Task {
     Task {
         id: NativeId::from("T-1"),
+        // A write never carries a handle: a source derives one on a read, and a
+        // destination writing this item derives its own or has none.
+        key: None,
         title: "Alpha engine".to_owned(),
         content: None,
         status: Status {

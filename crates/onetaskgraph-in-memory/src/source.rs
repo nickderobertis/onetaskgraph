@@ -443,6 +443,13 @@ impl TaskSource for InMemorySource {
         self.declared().writes
     }
 
+    /// The incoming task's `key` is dropped rather than refused, and the two halves of
+    /// that are one rule. A key is read-only — a source derives it and no write carries
+    /// one — so an `ItemWrite` arriving with one is an item read somewhere that *has* a
+    /// handle, on its way into a source that does not, and refusing it would stop a copy
+    /// out of Linear or a GitHub board landing here at all. What is refused instead is a
+    /// key written down in this source's own configuration, where nobody is copying
+    /// anything and the entry is simply wrong; see [`InMemoryConfig::validate`].
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
         let near = write.target.as_ref().unwrap_or(&write.item.id);
@@ -456,6 +463,7 @@ impl TaskSource for InMemorySource {
                     .ok_or_else(|| missing(target, "task"))?;
                 held.tasks[position] = Task {
                     id: target.clone(),
+                    key: None,
                     ..write.item.clone()
                 };
                 target.clone()
@@ -464,6 +472,7 @@ impl TaskSource for InMemorySource {
                 let id = unused(held.tasks.iter().map(|task| &task.id), &write.item.id);
                 held.tasks.push(Task {
                     id: id.clone(),
+                    key: None,
                     ..write.item.clone()
                 });
                 id

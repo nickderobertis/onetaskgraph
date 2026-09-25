@@ -1850,6 +1850,80 @@ fn a_document() -> Document {
 }
 
 #[test]
+fn a_task_configured_with_a_key_is_refused_naming_it() {
+    // `key` is the short handle a *backend* shows people, and this source is not a
+    // backend: its work lives in one process and dies with it, so nothing outside ever
+    // named one of these tasks `ENG-123`. Refused rather than dropped, because `Task` is
+    // what a configured task is and so the member is in this plugin's own published
+    // configuration schema — accepting it and discarding it in silence is worse.
+    let mut config = common::work();
+    config["tasks"][0]["key"] = json!("ENG-1");
+    let config: InMemoryConfig =
+        serde_json::from_value(config).expect("the shape is a valid configuration block");
+
+    let SourceError::Config { message } = onetaskgraph_in_memory::InMemorySource::new(config)
+        .expect_err("a configured key is refused")
+    else {
+        panic!("an incoherent configuration is a config error");
+    };
+    assert!(
+        message.contains("is configured with the key ENG-1")
+            && message.contains("an in-memory source has none of its own"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_write_carrying_a_key_lands_and_the_item_reads_back_without_one() {
+    // The other half of the rule above, and the reason it is not the same half: a key is
+    // read-only, so an `ItemWrite` arriving with one is an item read somewhere that has a
+    // handle — a Linear issue, a GitHub board item — on its way into a source that has
+    // none. Refusing it would stop that copy landing at all, so the write lands and the
+    // handle does not come with it.
+    let source = fully_capable();
+    let mut item = outgoing("T-9", "Written");
+    item.key = Some("ENG-1".to_owned());
+
+    let created = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: item.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("this source takes the write");
+    let read = source
+        .get_task(&created)
+        .await
+        .expect("this source answers")
+        .expect("the task is there");
+    assert_eq!(read.title, "Written", "the rest of the write landed");
+    assert_eq!(
+        read.key, None,
+        "an in-memory source reports no handle, whatever a write carried"
+    );
+
+    // And again on the update path, which is a second arm of the same match.
+    let updated = source
+        .write_task(&ItemWrite {
+            target: Some(created.clone()),
+            item,
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("this source takes the write");
+    assert_eq!(
+        source
+            .get_task(&updated)
+            .await
+            .expect("this source answers")
+            .expect("the task is there")
+            .key,
+        None
+    );
+}
+
+#[test]
 fn documents_configured_under_a_source_that_declares_it_has_none_are_refused() {
     // The one incoherence documents add: work held where nothing may ask for it. A source
     // declaring it has none is never asked for one, so these rows could never be read —

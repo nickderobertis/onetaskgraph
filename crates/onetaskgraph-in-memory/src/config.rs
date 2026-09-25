@@ -185,6 +185,27 @@ impl InMemoryConfig {
             }
         }
 
+        // A handle this source cannot have issued. `key` is the short name a *backend*
+        // shows people — Linear's `ENG-123`, a GitHub issue's `1043` — and an in-memory
+        // source is not a backend: its work lives in this process and dies with it, so
+        // nothing outside ever named one of these tasks. The contract puts `in-memory`
+        // with `local-md` among the sources with no separate handle of their own, so a
+        // configured key would have this source report a handle nobody issued, next to an
+        // id it does not belong to. Refused rather than quietly dropped, because `Task` is
+        // what a configured task is and so `key` is in this plugin's own published
+        // configuration schema: a member the schema accepts and the source discards in
+        // silence is the worse of the two failures.
+        for task in &self.tasks {
+            if let Some(key) = &task.key {
+                problems.push(format!(
+                    "task {} is configured with the key {key}; `key` is the short handle a \
+                     backend shows people, and an in-memory source has none of its own — \
+                     remove it, or configure this work under a source whose backend issues one",
+                    task.id
+                ));
+            }
+        }
+
         // A task's two task lists, held to what every source holds them to: no entry naming
         // the task itself, and none naming one task twice.
         for task in &self.tasks {
