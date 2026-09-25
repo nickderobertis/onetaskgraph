@@ -10453,6 +10453,43 @@ async fn a_creation_answering_with_an_unreadable_number_is_refused_and_the_issue
 }
 
 #[tokio::test]
+async fn a_board_that_will_not_take_the_issue_back_still_reports_why_the_write_failed() {
+    // The take-back is best effort on purpose: the caller is told why the *write* failed,
+    // not why the tidy-up did, because a cleanup failure reported in place of the cause
+    // would name the wrong problem — and the residue a refused cleanup leaves is real, so
+    // the attempt is made and its outcome is what this pins. Nothing else in this suite
+    // reaches a delete that fails, so the discarded result is unproved without it.
+    let stuck = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    stuck.creation_reports_an_unreadable_number();
+    stuck.refuse("deleteIssue");
+    let source = source(&stuck);
+
+    let message = refusal(
+        source
+            .write_task(&write(task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            )))
+            .await
+            .expect_err("a created issue whose number cannot be read is still refused"),
+    );
+    assert!(
+        message.contains("GitHub created issue number is not an unsigned integer"),
+        "the cause survives the failed cleanup rather than being replaced by it: {message}"
+    );
+    assert!(
+        !message.contains("deleteIssue"),
+        "and the cleanup's own failure is not what the caller is told: {message}"
+    );
+    assert!(
+        stuck.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "the take-back was attempted even though this board refuses it: {:?}",
+        stuck.seen()
+    );
+}
+
+#[tokio::test]
 async fn an_update_keeps_the_destinations_own_key_whatever_the_incoming_task_carried() {
     // A key is read-only, so an `ItemWrite` arriving with one is an item read somewhere
     // that has a handle — a Linear issue's `ENG-123` — on its way into an item this board

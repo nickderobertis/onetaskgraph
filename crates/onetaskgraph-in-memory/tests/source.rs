@@ -1903,7 +1903,6 @@ async fn a_write_carrying_a_key_lands_and_the_item_reads_back_without_one() {
         "an in-memory source reports no handle, whatever a write carried"
     );
 
-    // And again on the update path, which is a second arm of the same match.
     let updated = source
         .write_task(&ItemWrite {
             target: Some(created.clone()),
