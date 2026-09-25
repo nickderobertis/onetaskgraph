@@ -6341,9 +6341,12 @@ fn issue_number(issue: &Value) -> Result<u64, SourceError> {
 fn created_issue_number(created: &Value) -> Result<Option<u64>, SourceError> {
     match created.get("number") {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value.as_u64().map(Some).ok_or_else(|| SourceError::Malformed {
-            message: "GitHub created issue number is not an unsigned integer".into(),
-        }),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub created issue number is not an unsigned integer".into(),
+            }),
     }
 }
 

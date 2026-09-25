@@ -10349,7 +10349,10 @@ async fn an_issue_this_run_created_reports_its_key_before_the_board_read_catches
         Some("2001"),
         "the number the creating mutation answered with is the handle this item reports"
     );
-    assert_eq!(read.id, created, "and its node id is the one the write returned");
+    assert_eq!(
+        read.id, created,
+        "and its node id is the one the write returned"
+    );
 }
 
 #[tokio::test]
@@ -10377,7 +10380,10 @@ async fn an_issue_created_without_a_number_reports_no_key_rather_than_failing_th
         .await
         .expect("this source answers")
         .expect("the item it just created is there");
-    assert_eq!(read.key, None, "no handle, rather than a guess or a failure");
+    assert_eq!(
+        read.key, None,
+        "no handle, rather than a guess or a failure"
+    );
     assert_eq!(
         read.title, "Third step",
         "and the rest of the write is exactly what it was"

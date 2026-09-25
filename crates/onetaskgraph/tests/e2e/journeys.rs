@@ -2214,12 +2214,15 @@ fn both_renderings_report_a_tasks_key_where_its_backend_has_one_and_omit_it_wher
             let item = &response["items"][0]["item"];
             assert_eq!(
                 &item["key"],
-                &expected.as_ref().map_or_else(|| json!(null), |key| json!(key)),
+                &expected
+                    .as_ref()
+                    .map_or_else(|| json!(null), |key| json!(key)),
                 "{}: `task show {id} --json` carries the key:\n{item}",
                 row.name
             );
             assert_eq!(
-                item["id"], json!(id),
+                item["id"],
+                json!(id),
                 "{}: the native id is unchanged beside it:\n{item}",
                 row.name
             );
