@@ -7207,7 +7207,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         ),
         (
             board(
-                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
+                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I","number":1043,"subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "missing fieldValues",
@@ -7215,7 +7215,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         (
             board(
                 json!({"nodes":[{"id":"PVTI","fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":true}},
-                                 "content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
+                                 "content":{"__typename":"Issue","id":"I","number":1043,"subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "exceeds the supported nested connection size",
@@ -7311,7 +7311,7 @@ fn fields_json(id: &str, fields: Value) -> Value {
 /// One issue's own node read, placing it on the configured board and holding no field
 /// values — so what a write needs of the board's fields comes from [`fields_json`].
 fn held_issue(id: &str, title: &str, parent: Option<&str>) -> Value {
-    json!({"data":{"node":{"__typename":"Issue","id":id,"title":title,"body":"",
+    json!({"data":{"node":{"__typename":"Issue","id":id,"number":1043,"title":title,"body":"",
         "state":"OPEN","stateReason":null,"repository":{"nameWithOwner":"acme/work"},
         "parent":parent.map(|parent| json!({"id":parent})),"subIssuesSummary":{"total":0},
         "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},
@@ -7321,7 +7321,7 @@ fn held_issue(id: &str, title: &str, parent: Option<&str>) -> Value {
                         "pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
 }
 fn plain_issue() -> Value {
-    json!({"__typename":"Issue","id":"I_1","title":"one","body":"","state":"OPEN",
+    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"","state":"OPEN",
            "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
            "parent":null,"subIssuesSummary":{"total":0},
            "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
@@ -7361,7 +7361,7 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
             board_json(
                 usable_fields(),
                 complete(json!([issue_item(
-                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"",
                     "createdAt":"not-a-time","subIssuesSummary":{"total":0}})
                 )])),
             ),
@@ -7371,7 +7371,7 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
             board_json(
                 usable_fields(),
                 complete(json!([issue_item(
-                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"",
                     "subIssuesSummary":{"total":0},
                     "labels":{"nodes":"no","pageInfo":{"hasNextPage":false}}})
                 )])),
@@ -7381,6 +7381,35 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
         (
             board_json(usable_fields(), json!({"nodes":[],"pageInfo":{}})),
             "missing boolean field hasNextPage",
+        ),
+        // An issue with no number. GitHub declares `Issue.number` as `Int!`, so this is a
+        // shape that cannot come back from the real API — and reading it as *an issue with
+        // no handle* would be guessing, which is what every case in this list exists to
+        // refuse. Only a draft has no number, and a draft is decided on `__typename`
+        // before this is ever read.
+        (
+            board_json(
+                usable_fields(),
+                complete(json!([issue_item(
+                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    "subIssuesSummary":{"total":0},
+                    "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
+                )])),
+            ),
+            "GitHub issue number is missing or is not an unsigned integer",
+        ),
+        // And one whose number is a string, which is the other half: present is not the
+        // same as readable.
+        (
+            board_json(
+                usable_fields(),
+                complete(json!([issue_item(
+                    json!({"__typename":"Issue","id":"I_1","number":"1043","title":"one",
+                    "body":"","subIssuesSummary":{"total":0},
+                    "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
+                )])),
+            ),
+            "GitHub issue number is missing or is not an unsigned integer",
         ),
     ];
     for (body, expected) in cases {

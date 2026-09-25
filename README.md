@@ -267,6 +267,7 @@ read, nothing is written, and each item is reported with the action it would hav
 
 ![A terminal showing a dry-run copy of two tasks into another source: the first names its counterpart there and reads `updated`, the second has none and reads `created`, followed by the line counting rewritten, unresolved and ambiguous references](docs/screenshots/task-copy-dry-run.svg)
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This is the user-facing statement of a rule whose one executable source is the engine's copy path and each destination's own write; `ItemWrite::item` in the api crate carries the same list as the doc comment a plugin author reads. It is driven rather than merely restated: the shared journey `every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_intact` runs against EVERY configured source kind and asserts both halves of this sentence — that the fields it names as written come back equal, and that `url` and `key` are absent on the copied item even where the source reported one. What the rule would otherwise want here is a gate reconciling this prose against a Rust doc comment, which is one prose spelling checked against another. -->
 Every field a copy read is written — title, content, status, labels, project,
 repositories, metadata and the edges — except `url`, `location`, `key`, `created_at` and
 `updated_at`, which are the destination's own: the short handle a backend shows people is

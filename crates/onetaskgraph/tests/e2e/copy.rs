@@ -851,6 +851,21 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
         );
         // `url` is the destination's own and is never written.
         assert_eq!(copied["url"], Value::Null, "{}", row.name);
+        // And `key` the same way, which is the field this destination makes a real test
+        // of: a folder of Markdown has no handle of its own, so if a copy ever wrote one
+        // it could only be the source's — a Linear issue's `ENG-…`, a GitHub issue's
+        // number — worn by an item that backend never issued it to. Where this row's
+        // source does have one, it is read here and still absent there.
+        assert_eq!(copied["key"], Value::Null, "{}", row.name);
+        if let Some(handle) = (row.fixture.handle)("T-1") {
+            assert_eq!(
+                source["key"],
+                json!(handle),
+                "{}: the source really does report a handle, so the line above is not \
+                 passing because there was nothing to carry",
+                row.name
+            );
+        }
 
         // A second copy of the same item updates that one and creates nothing.
         let again = ok(&sandbox, &["task", "copy", &from, "--to", NOTES, "--json"]);

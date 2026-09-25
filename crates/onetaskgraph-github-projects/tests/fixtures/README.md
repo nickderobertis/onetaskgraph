@@ -73,6 +73,21 @@ fragment type conditions, and fixture keys against it; the credentialed live lan
 introspects the current mutation fields and input types as its mutation freshness check,
 then exercises reads without changing the configured board.
 
+`Issue.number` — the short handle GitHub shows people, which this source reports as a
+task's `key` — was read from GitHub.com's own published schema artifact
+<https://docs.github.com/public/fpt/schema.docs.graphql> on **2026-09-25**, where it is
+declared `number: Int!` and documented as "Identifies the issue number." It is selected by
+the `BoardIssue` fragment, which every one of the three read documents composes, and by
+`createIssue`'s own payload, which is the only place a run learns a new issue's number
+before the board read catches up.
+
+Being non-null is the whole of why this source refuses a read of an issue that comes back
+without it rather than reporting a task with no handle: only a `DraftIssue` has no number,
+and `DraftIssue` declares none at all, so absence on an `Issue` is a response that cannot
+be read rather than an issue that has none. Every recorded issue in the files above
+therefore carries one, as GitHub's own answers do. The one tolerated absence is the
+creating mutation's payload, which a landed write is not worth failing over.
+
 `DraftIssue.projectV2Items` — the board item a draft sits in, which is how the source reads
 one draft by its own id rather than by listing the board — was read from GitHub.com's own
 published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on

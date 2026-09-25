@@ -616,6 +616,24 @@ STRUCT_SECTIONS = {
     "Metered": "### 4.14 `metering`",
 }
 
+# A member specified in a section of its own, rather than as part of a struct the map
+# above reconciles whole.
+#
+# `Task` is not in STRUCT_SECTIONS and adding it would be a different document: no section
+# enumerates a task's members, because this one describes the members that need explaining
+# one at a time — §4.13 for `location`, §4.13a for `key` — while §4.4 simply says the
+# result *is* a `Task`. A struct-level entry would therefore demand that every member of
+# `Task` be named somewhere, which is a change to how this document is written rather than
+# a drift check.
+#
+# What this reconciles is the pair: the field has to be on the Rust struct, and the section
+# has to name it. So the field cannot be removed or renamed while the document goes on
+# specifying it, and the section cannot be renamed or dropped while the field remains.
+MEMBER_SECTIONS = {
+    ("Task", "key"): "### 4.13a A task's `key`",
+}
+
+
 def wire_members(struct):
     """The members a hand-written `Serialize` puts on the wire, which no field scan sees.
 
@@ -672,6 +690,37 @@ for struct, heading in STRUCT_SECTIONS.items():
                 f"names it. Specify it there — a plugin author writing from that section "
                 f"would never handle it."
             )
+
+for (struct, member), heading in MEMBER_SECTIONS.items():
+    declaration = re.search(
+        r"pub struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct),
+        source_rs + contract_rs,
+        re.DOTALL,
+    )
+    if declaration is None:
+        refuse(
+            f"could not read the `{struct}` struct from the api crate.",
+            "restore it, or teach this script the shape it has now — a struct whose "
+            "members this document specifies cannot go unreconciled.",
+        )
+    if not re.search(
+        r"^    pub %s:" % re.escape(member), declaration.group(1), re.MULTILINE
+    ):
+        failures.append(
+            f'"{heading}" specifies the member "{member}", but `{struct}` no longer '
+            f"carries it. Restore the field, or remove that section — a plugin author "
+            f"implementing from it would send a member the engine has nowhere to put."
+        )
+    # The section BODY, not the heading: a heading that names the member — this one does —
+    # would satisfy `spelled` on its own, and a section reduced to its title would pass a
+    # check that was supposed to notice exactly that.
+    body = section(heading).split("\n", 1)[1] if "\n" in section(heading) else ""
+    if not spelled(member, body):
+        failures.append(
+            f'`{struct}` carries the field "{member}" but "{heading}", which is the '
+            f"section that specifies it, never names it. Name it there — this section is "
+            f"the only place the wire form of that member is written down."
+        )
 
 # The framing limit is a number rather than a name, so neither of the two scans above
 # would ever notice it drifting. It is normative — a plugin author reads it and sizes their

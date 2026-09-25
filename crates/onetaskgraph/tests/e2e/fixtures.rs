@@ -596,16 +596,6 @@ pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
     github_projects_server(sandbox, Some(recorded))
 }
 
-/// One item on the fixture board, in the shape the fixture keeps it between requests.
-///
-/// A board is a container of projects: `T-1`..`T-4` are task issues, and `P-1` and `P-2`
-/// are project issues, readable as projects because they carry this source's own kind
-/// marker rather than because the board is one.
-///
-/// [`Placement::parent`] is what makes that structure real rather than asserted, and the
-/// board below sets it: the shared dataset's two projects hold their own tasks and one
-/// task is filed under neither. Before it carried parents, every task on this board was an
-/// orphan and no filter scoped to a project could have separated anything.
 /// The repository issue number this fixture board gives one item.
 ///
 /// One derivation, used by the responses this fake sends and by the journey that asserts
@@ -633,6 +623,16 @@ fn github_handle(id: &str) -> Option<String> {
     Some(github_number(id).to_string())
 }
 
+/// One item on the fixture board, in the shape the fixture keeps it between requests.
+///
+/// A board is a container of projects: `T-1`..`T-4` are task issues, and `P-1` and `P-2`
+/// are project issues, readable as projects because they carry this source's own kind
+/// marker rather than because the board is one.
+///
+/// [`Placement::parent`] is what makes that structure real rather than asserted, and the
+/// board below sets it: the shared dataset's two projects hold their own tasks and one
+/// task is filed under neither. Before it carried parents, every task on this board was an
+/// orphan and no filter scoped to a project could have separated anything.
 fn github_item(
     id: &str,
     title: &str,

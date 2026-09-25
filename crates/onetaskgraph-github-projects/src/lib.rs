@@ -3522,7 +3522,13 @@ impl GitHubProjectsSource {
             labels: labels(content)?,
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
-            number: issue_number(content)?,
+            number: match content_kind {
+                ContentKind::Issue => Some(issue_number(content)?),
+                // A draft is filed in no repository, so nothing ever numbered it:
+                // `DraftIssue` declares no `number` at all, exactly as it declares no
+                // `subIssuesSummary` the branch above reads.
+                ContentKind::DraftIssue => None,
+            },
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
@@ -4881,8 +4887,9 @@ impl GitHubProjectsSource {
         let url = optional_str(created, "url")?.map(str::to_owned);
         // Optional on the same terms, and for the same reason: GitHub declares
         // `Issue.number` non-null, and a landed write is not worth failing over a response
-        // that came back without it — the item reports no key until a read of it catches up.
-        let number = issue_number(created)?;
+        // that came back without it — the item reports no handle until a board read
+        // catches up. This is the one read of a number that tolerates absence.
+        let number = created_issue_number(created)?;
         // The issue exists from here on, so a failure filing it on the board takes it
         // back: an issue in the repository that is on no board is an item nobody asked for
         // and nothing here would find again.
@@ -5152,8 +5159,11 @@ struct Resolved {
     origin: Option<String>,
     /// The issue's own number on its repository, as GitHub reports it.
     ///
-    /// `None` for a draft, which has no number at all — `DraftIssue` declares none, and a
-    /// draft is not filed in a repository to be numbered by one.
+    /// `None` in exactly two cases: a draft, which has no number at all — `DraftIssue`
+    /// declares none, and a draft is not filed in a repository to be numbered by one — and
+    /// an issue this run created whose creating mutation answered without one, which is a
+    /// response GitHub's own schema says cannot happen and which a landed write is not
+    /// worth failing over. An `Issue` read off the board always has one.
     number: Option<u64>,
     url: Option<String>,
     created_at: Option<DateTime<Utc>>,
@@ -6303,18 +6313,36 @@ fn sub_issue_total(issue: &Value) -> Result<u64, SourceError> {
         })
 }
 
-/// One issue's own `number`, and `None` for content that has none.
+/// One issue's own `number`.
 ///
-/// A draft is the content with none: `DraftIssue` declares no `number`, so the member is
-/// absent from the response rather than null, and absent is what a draft having no handle
-/// looks like here. An `Issue` always has one — GitHub declares `Issue.number` as `Int!`
-/// and every selection of an issue in this module asks for it — so a member that is
-/// present and is not an unsigned integer is a response this source cannot read.
-fn issue_number(content: &Value) -> Result<Option<u64>, SourceError> {
-    match content.get("number") {
+/// An issue always has one: GitHub declares `Issue.number` as `Int!` and every selection of
+/// an issue in this module asks for it. So a read of one that comes back without it, or
+/// with something that is not an unsigned integer, is a response this source cannot read —
+/// absence here is **not** "this issue has no number". A draft is the content that has
+/// none, and a draft never reaches this: the caller decides on `__typename` first, the way
+/// it does for `subIssuesSummary`, which `DraftIssue` equally declares nothing for.
+fn issue_number(issue: &Value) -> Result<u64, SourceError> {
+    issue
+        .get("number")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub issue number is missing or is not an unsigned integer".into(),
+        })
+}
+
+/// The `number` a creating mutation answered with, and `None` when it answered without one.
+///
+/// The one place a missing number is tolerated, on exactly the terms the `url` beside it is
+/// tolerated: by the time this is read the issue exists, and a landed write is not worth
+/// failing over a member that came back missing. Such an item reports no handle until a
+/// board read catches up, which is what every item did before there were handles at all.
+/// A number that is *present* and is not an unsigned integer is still a response this
+/// source cannot read.
+fn created_issue_number(created: &Value) -> Result<Option<u64>, SourceError> {
+    match created.get("number") {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_u64().map(Some).ok_or_else(|| SourceError::Malformed {
-            message: "GitHub issue number is not an unsigned integer".into(),
+            message: "GitHub created issue number is not an unsigned integer".into(),
         }),
     }
 }
