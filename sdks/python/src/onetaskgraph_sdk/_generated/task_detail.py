@@ -292,6 +292,12 @@ class Task(BaseModel):
         ),
     ] = []
     id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
+    key: Annotated[
+        str | None,
+        Field(
+            description="The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it, no write type accepts one, and\n[`ItemWrite`](crate::ItemWrite) carries nothing for it."
+        ),
+    ] = None
     labels: Annotated[
         list[Label],
         Field(

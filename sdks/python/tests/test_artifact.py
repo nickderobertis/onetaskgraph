@@ -265,7 +265,16 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 18
+    assert emitted_bundle["version"] == 19
+    # Version 19 published a task's `key`, and it is the first row this assertion has had
+    # to make about a *property* rather than a root: a new property is a new field in this
+    # package's generated model exactly as a new root is a new model, which is why it moved
+    # the version at all. So it is asserted where the bundle carries it — on the `Task` the
+    # task responses define — and on the generated model this package ships, because the
+    # two agreeing is the whole of what this test is for.
+    for root in ("QueryResponseOfQualifiedTask", "TaskDetail"):
+        assert "key" in bundle["roots"][root]["$defs"]["Task"]["properties"], root
+    assert "key" in _generated_task_fields()
     # Version 15 published what the three `metadata set` verbs answer with.
     assert "MetadataSet" in bundle["roots"]
     for verb in ("task_metadata_set", "project_metadata_set", "document_metadata_set"):
@@ -283,3 +292,16 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
 
 
 # llmlint: ignore-end[async_typed_clients_at_boundaries]
+
+
+def _generated_task_fields() -> set[str]:
+    """The field names of the `Task` model this package generated and ships.
+
+    Read off the model rather than the schema, because the schema is the *input* to
+    generation: a bundle that carries a property while the generated model does not is
+    exactly the drift the version is supposed to make visible, and comparing the schema with
+    itself would not see it.
+    """
+    from onetaskgraph_sdk._generated.task_detail import Task
+
+    return set(Task.model_fields)
