@@ -277,6 +277,7 @@ async fn drive_every_declared_capability(
     };
     let task = |name: &str, status: &Status, under: Option<&NativeId>, labels: Vec<Label>| Task {
         id: NativeId("live-source-item".into()),
+        key: None,
         title: name.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
         status: status.clone(),

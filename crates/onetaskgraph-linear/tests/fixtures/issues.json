@@ -4,6 +4,7 @@
       "nodes": [
         {
           "id": "i1",
+          "identifier": "ENG-1",
           "title": "Fixture issue",
           "description": "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->",
           "url": "https://linear.app/acme/issue/ENG-1",
@@ -15,6 +16,7 @@
         },
         {
           "id": "i2",
+          "identifier": "ENG-2",
           "title": "Second fixture issue",
           "description": "Another recorded body",
           "url": "https://linear.app/acme/issue/ENG-2",

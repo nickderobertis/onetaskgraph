@@ -229,11 +229,11 @@ pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
     /// Fetch one issue.
-    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id title description url createdAt updatedAt archivedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
     pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
     /// List issues.
-    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
+    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
     /// List projects.
     pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
     /// List issue labels.
@@ -2202,6 +2202,10 @@ fn map_task(v: &Value, source: &SourceName) -> Result<Task, SourceError> {
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
     Ok(Task {
         id,
+        // `Issue.identifier` is `String!` and every read of an issue selects it, so a
+        // response without one is a response this source cannot read rather than an issue
+        // with no handle — Linear gives every issue one.
+        key: Some(str_at(v, "identifier")?.into()),
         title: str_at(v, "title")?.into(),
         content,
         status: status(v.get("state").ok_or_else(|| SourceError::Malformed {

@@ -2021,6 +2021,7 @@ fn build_refusal(config: Value) -> String {
 fn task(id: &str, title: &str, status: Status) -> Task {
     Task {
         id: NativeId(id.to_owned()),
+        key: None,
         title: title.to_owned(),
         content: None,
         status,

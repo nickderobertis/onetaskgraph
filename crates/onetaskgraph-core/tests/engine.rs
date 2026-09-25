@@ -1533,6 +1533,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
     let response = QueryResponse {
         items: vec![Task {
             id: NativeId::from("ENG-1"),
+            key: None,
             title: "Land the contract".to_owned(),
             content: None,
             status: Status {

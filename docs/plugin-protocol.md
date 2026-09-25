@@ -771,6 +771,27 @@ This is not the `url` field those three entities already carry, does not replace
 not derived from it. A plugin that reported a web address there goes on reporting exactly
 what it reported before, whether or not it also says where the entity is.
 
+### 4.13a A task's `key`
+
+The short handle the backend shows people, beside a `Task`'s `id` and never instead of it:
+
+```json
+{ "id": "I_kwDOAbc123", "key": "1043", "title": "Rate-limit the sync loop", "…": "…" }
+```
+
+The member is **optional** and an absent one means `null`, which says *this backend has no
+short handle for this task*. A plugin that has one sends it — Linear's `ENG-123`, a GitHub
+issue's number alone as a decimal string, `1043` and never `owner/repo#1043` — and one that
+has none sends nothing rather than a copy of the `id`.
+
+It is **human-facing and it may change**: an issue moved between teams or transferred
+between repositories gets a new one. So `id` stays what the engine and every consumer
+store and match on, and nothing resolves a task by its key.
+
+It is **read-only**. A plugin derives it on a read; no write carries one, an `ItemWrite`
+whose task holds one is read exactly as one that does not, and a plugin never stores it.
+A `Project` and a `Document` have no `key` at all.
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
@@ -1075,6 +1096,14 @@ version 1 plugin could be sent one halfway through undoing a copy. Adding a meth
 declaration its peer cannot accidentally make is the "method a peer may decline" case below;
 adding one a peer has already implicitly opted into is not.
 
+A task's `key` (§4.13a) was added **without** a bump, and it is the `location` case again
+rather than a new one: an added optional member with a documented default, on a shape both
+peers already exchange. A plugin written before it omits the member and is read as the
+source with no short handle it is; an engine written before it ignores one a plugin sends,
+exactly as it ignored `location`. Nothing is gated on it because nothing has to be — no
+method takes it, no method returns only it, and no request is decided by whether a peer
+understands it, so there is no shape a peer could be handed that it was not written for.
+
 `metering` (§4.14) and the `meters` member of §3.4 were added **without** a bump, for the
 same reason the documents were: the engine sends `metering` only to a plugin that answered
 `meters: true`, and a plugin written before there was metering omits the member, is read as
@@ -1174,7 +1203,7 @@ Plugin to engine:
 
 ```
 {"id":"0","result":{"protocol_version":2,"kind":"local-md","capabilities":{"projects":"native","documents":"unsupported","orphan_tasks":"native","filter_by_label":"native","filter_by_status":"unsupported","search_title":"native","search_content":"unsupported","task_dependencies":"forward-only","project_dependencies":"forward-only","max_page_size":200}}}
-{"id":"1","result":{"items":[{"id":"tasks/migrate.md","title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
+{"id":"1","result":{"items":[{"id":"tasks/migrate.md","key":null,"title":"Migrate the store","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null},{"id":"tasks/schema.md","key":null,"title":"Settle the schema","content":null,"status":{"category":"in-progress","name":"Doing"},"labels":[],"project":null,"url":null,"location":null,"created_at":null,"updated_at":null}],"next":"b2Zmc2V0PTI"}}
 {"id":"2","result":{"items":[{"from":"tasks/migrate.md","to":"tasks/schema.md","kind":"blocks"}],"next":null}}
 ```
 

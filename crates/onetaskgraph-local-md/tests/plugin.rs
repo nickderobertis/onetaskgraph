@@ -815,6 +815,7 @@ fn schema_requires_root_and_refuses_unknown_fields() {
 fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Task {
     Task {
         id: NativeId(id.into()),
+        key: None,
         title: title.into(),
         content: Some("the engine core".into()),
         status: Status {

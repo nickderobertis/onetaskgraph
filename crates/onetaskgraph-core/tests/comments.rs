@@ -292,6 +292,7 @@ struct Misbehaving(Answer);
 fn a_task(native: &str) -> Task {
     Task {
         id: NativeId::from(native),
+        key: None,
         title: native.to_owned(),
         content: None,
         status: Status {

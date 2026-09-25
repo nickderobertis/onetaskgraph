@@ -622,6 +622,7 @@ impl TaskSource for Rendezvous {
         self.barrier.wait().await;
         Ok(Page::last(vec![Task {
             id: NativeId::from("T-1"),
+            key: None,
             title: "Waited".to_owned(),
             content: None,
             status: Status {
@@ -920,6 +921,7 @@ impl TaskSource for StuckEdges {
 fn one_task(id: &NativeId) -> Task {
     Task {
         id: id.clone(),
+        key: None,
         title: "Alpha".to_owned(),
         content: None,
         status: Status {
@@ -1283,6 +1285,7 @@ impl Recording {
         let items = (start..end)
             .map(|index| Task {
                 id: NativeId::from(format!("T-{index}")),
+                key: None,
                 title: format!("task {index}"),
                 content: None,
                 status: Status {
