@@ -120,6 +120,8 @@ METHOD_SECTIONS = {
     "set_document_metadata": (
         "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
     ),
+    "set_task_priority": "### 4.19 `set_task_priority`",
+    "set_task_content": "### 4.20 `set_task_content`",
 }
 
 ENUM_SECTIONS = {
@@ -133,6 +135,7 @@ ENUM_SECTIONS = {
     "ItemKind": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Location": "### 4.13 `Location`",
+    "Priority": "### 4.13b A task's `priority`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with
@@ -627,6 +630,15 @@ STRUCT_SECTIONS = {
 # the recorded words — so neither side can drift from what §6 rests on while the other
 # still reads correctly.
 MEMBER_SECTIONS = {
+    ("Task", "priority"): {
+        "heading": "### 4.13b A task's `priority`",
+        "type": "Priority",
+        "defaulted": True,
+        "states": (
+            "The member is **optional** and an absent one means `\"none\"`",
+            "a plugin written before this member omits it",
+        ),
+    },
     ("Task", "key"): {
         "heading": "### 4.13a A task's `key`",
         # The whole declared type, not only its `Option`: a peer may omit the member, which
@@ -646,7 +658,7 @@ MEMBER_SECTIONS = {
 
 
 # The JSON type a declared Rust type is sent as, for the types MEMBER_SECTIONS names.
-WIRE_TYPES = {"String": str, "bool": bool, "u64": int, "u32": int}
+WIRE_TYPES = {"String": str, "bool": bool, "u64": int, "u32": int, "Priority": str}
 
 
 def wire_members(struct):

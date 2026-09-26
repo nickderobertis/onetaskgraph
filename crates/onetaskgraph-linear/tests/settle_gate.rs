@@ -182,7 +182,7 @@ fn issue(id: &str, title: &str, project: &str) -> Value {
         "id": id, "identifier": format!("ENG-{}", id.replace('-', "")),
         "title": title, "description": null, "url": null,
         "createdAt": "2026-09-15T12:00:00Z", "updatedAt": "2026-09-15T12:00:00Z",
-        "state": {"name": "Todo", "type": "unstarted"}, "labels": {"nodes": []},
+        "state": {"name": "Todo", "type": "unstarted"}, "priority": 0, "labels": {"nodes": []},
         "project": {"id": project}
     })
 }

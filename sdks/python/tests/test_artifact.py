@@ -269,7 +269,22 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 19
+    assert emitted_bundle["version"] == 20
+    # Version 20 published a task's `priority` and what `task priority set`, `task content
+    # set` and `sources fields` answer with.
+    for root in ("QueryResponseOfQualifiedTask", "TaskDetail"):
+        assert "priority" in _schema_path(bundle["roots"][root], "$defs", "Task", "properties"), (
+            root
+        )
+    assert "priority" in _generated_task_fields()
+    for verb, root in (
+        ("task_priority_set", "TaskPrioritySet"),
+        ("task_content_set", "TaskContentSet"),
+        ("sources_fields", "FieldsReport"),
+    ):
+        assert generate.RESPONSE_ROOTS[verb] == root, verb
+        assert root in bundle["roots"], root
+    assert "Priority" in bundle["roots"]
     # Version 19 published a task's `key`. A property is asserted on both sides, because
     # the bundle carrying one the generated model does not is exactly the drift the version
     # exists to make visible.

@@ -24,6 +24,8 @@
 //! | `projects` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `documents` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `comments` | **Supported and proven** — the hosted source's own, forwarded, and the four comment methods carried over the pipe as §4.15 and §4.16 specify. |
+//! | `priority` | **Supported and proven** — the hosted source's own, forwarded; absent from a handshake written before priorities, and then read as unsupported, so such a plugin is never handed a priority it would drop. `set_task_priority` is carried over the pipe as §4.19 specifies. |
+//! | `filter_by_priority` | **Supported and proven** — the hosted source's own, forwarded; absent from an older handshake, and then read as unsupported, so the engine narrows. |
 //! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |

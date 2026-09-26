@@ -8,9 +8,9 @@ use chrono::{TimeZone as _, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Document,
     DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, Page,
-    PageRequest, Project, ProjectFilter, ProjectQuery, SOURCE_NAME_PATTERN, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery, WriteSupport,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SOURCE_NAME_PATTERN,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use onetaskgraph_plugin_api::{
     Comment, CommentBody, MetadataKey, MetadataRecord, NewComment, TaskRef, commentless,
@@ -34,6 +34,8 @@ impl TaskSource for Silent {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Native,
@@ -824,6 +826,7 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
             category: StatusCategory::InProgress,
             name: "In Review".to_owned(),
         },
+        priority: Priority::None,
         labels: vec![Label {
             id: NativeId::from("l-1"),
             name: "infra".to_owned(),
@@ -1092,6 +1095,7 @@ fn a_query_round_trips_with_every_filter_populated() {
         },
         statuses: vec![StatusCategory::Todo, StatusCategory::InProgress],
         project: ProjectFilter::Is(NativeId::from("P-1")),
+        priorities: Vec::new(),
     };
     let encoded = serde_json::to_string(&query).expect("encodes");
     assert_eq!(
@@ -1428,6 +1432,7 @@ fn outgoing() -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -2094,4 +2099,162 @@ fn a_task_ref_names_a_task_bare_or_qualified_and_a_list_refuses_itself_and_repea
         [qualified]
     );
     assert_eq!(TaskRef::DELIVERS_KEY, "onetaskgraph.delivers");
+}
+
+#[test]
+fn a_priority_is_one_of_five_kebab_case_values_and_defaults_to_none() {
+    let spelled: Vec<serde_json::Value> = Priority::ALL
+        .iter()
+        .map(|priority| serde_json::to_value(priority).expect("encodes"))
+        .collect();
+    assert_eq!(
+        spelled,
+        vec![
+            serde_json::json!("none"),
+            serde_json::json!("urgent"),
+            serde_json::json!("high"),
+            serde_json::json!("medium"),
+            serde_json::json!("low"),
+        ]
+    );
+    // `ALL` restates the variants, so it is reconciled against the enum's own derived schema,
+    // which is generated from them: a priority added without joining `ALL` fails here.
+    let schema = serde_json::to_value(schemars::schema_for!(Priority)).expect("serializes");
+    let declared: Vec<serde_json::Value> = schema["oneOf"]
+        .as_array()
+        .expect("a unit-variant enum schema lists its variants")
+        .iter()
+        .map(|variant| variant["const"].clone())
+        .collect();
+    assert_eq!(declared, spelled);
+    assert_eq!(Priority::default(), Priority::None);
+    for priority in Priority::ALL {
+        assert_eq!(priority.as_str().parse::<Priority>(), Ok(priority));
+        assert_eq!(priority.to_string(), priority.as_str());
+    }
+    let refused = "critical".parse::<Priority>().expect_err("not a priority");
+    assert!(
+        refused.contains("\"critical\" is not a priority"),
+        "{refused}"
+    );
+    assert!(serde_json::from_value::<Priority>(serde_json::json!("Urgent")).is_err());
+}
+
+#[test]
+fn a_task_written_before_there_were_priorities_reads_as_none_and_round_trips() {
+    // The literal shape a pre-priority engine or plugin wrote — every member a task had the
+    // day before `priority` existed, and no `priority` at all. It reads as `none`, which is
+    // what a source that cannot hold one reports, and it is written back out with the member
+    // present: always serialised, so a reader never has to tell absent from `none`.
+    let before = r#"{
+        "id": "tasks/migrate.md",
+        "key": null,
+        "title": "Migrate the store",
+        "content": "Move the rows.",
+        "status": { "category": "todo", "name": "Todo" },
+        "labels": [],
+        "project": null,
+        "url": null,
+        "location": null,
+        "created_at": null,
+        "updated_at": null,
+        "metadata": { "team.estimate": 3 },
+        "repositories": []
+    }"#;
+    let read: Task = serde_json::from_str(before).expect("a pre-priority task still decodes");
+    assert_eq!(read.priority, Priority::None);
+    let written = serde_json::to_value(&read).expect("encodes");
+    assert_eq!(written["priority"], serde_json::json!("none"));
+    let mut expected: serde_json::Value = serde_json::from_str(before).expect("json");
+    expected["priority"] = serde_json::json!("none");
+    assert_eq!(
+        written, expected,
+        "every member it arrived with, plus the one it lacked"
+    );
+    assert_eq!(
+        serde_json::from_value::<Task>(written).expect("decodes"),
+        read
+    );
+
+    // And a priority that is there survives the round trip, so the tolerance above is not
+    // tolerance of losing one.
+    let mut held: serde_json::Value = serde_json::from_str(before).expect("json");
+    held["priority"] = serde_json::json!("high");
+    let carried: Task = serde_json::from_value(held.clone()).expect("decodes");
+    assert_eq!(carried.priority, Priority::High);
+    assert_eq!(serde_json::to_value(&carried).expect("encodes"), held);
+
+    held["priority"] = serde_json::json!("p1");
+    let refused = serde_json::from_value::<Task>(held).expect_err("not a priority");
+    assert!(refused.to_string().contains("p1"), "{refused}");
+}
+
+#[test]
+fn a_handshake_written_before_there_were_priorities_declares_neither_priority_capability() {
+    // The literal capability object a pre-priority plugin sends at the handshake: every
+    // member but the two this change adds. It is read as a source that holds no priority and
+    // cannot filter by one, which is what keeps such a plugin from ever being handed a
+    // priority it would drop (docs/plugin-protocol.md §6).
+    let before = r#"{
+        "projects": "native",
+        "documents": "unsupported",
+        "comments": "unsupported",
+        "orphan_tasks": "native",
+        "filter_by_label": "unsupported",
+        "filter_by_status": "native",
+        "search_title": "native",
+        "search_content": "unsupported",
+        "task_dependencies": "forward-only",
+        "project_dependencies": "both-directions",
+        "max_page_size": 25
+    }"#;
+    let read: Capabilities = serde_json::from_str(before).expect("a pre-priority handshake");
+    assert_eq!(read.priority, Support::Unsupported);
+    assert_eq!(read.filter_by_priority, Support::Unsupported);
+    assert_eq!(read, Silent("older").capabilities());
+    let written = serde_json::to_value(&read).expect("encodes");
+    assert_eq!(
+        serde_json::from_value::<Capabilities>(written).expect("decodes"),
+        read
+    );
+
+    // A query with no priority filter is the query such a plugin read before: the member is
+    // left off the wire rather than sent empty.
+    let query = serde_json::to_value(TaskQuery::default()).expect("encodes");
+    assert!(query.get("priorities").is_none(), "{query}");
+    let narrowed = TaskQuery {
+        priorities: vec![Priority::Urgent, Priority::None],
+        ..TaskQuery::default()
+    };
+    let encoded = serde_json::to_value(&narrowed).expect("encodes");
+    assert_eq!(encoded["priorities"], serde_json::json!(["urgent", "none"]));
+    assert_eq!(
+        serde_json::from_value::<TaskQuery>(encoded).expect("decodes"),
+        narrowed
+    );
+}
+
+#[tokio::test]
+async fn a_source_that_writes_no_priority_or_content_refuses_both_by_name() {
+    let source: Box<dyn TaskSource> = Box::new(Silent("read-only"));
+    let Err(SourceError::Refused { message }) = source
+        .set_task_priority(&NativeId::from("T-1"), Priority::High)
+        .await
+    else {
+        panic!("a priority write is refused");
+    };
+    assert_eq!(
+        message,
+        "the read-only plugin cannot write a task's priority on its own"
+    );
+    let Err(SourceError::Refused { message }) = source
+        .set_task_content(&NativeId::from("T-1"), "body")
+        .await
+    else {
+        panic!("a content write is refused");
+    };
+    assert_eq!(
+        message,
+        "the read-only plugin cannot write a task's content on its own"
+    );
 }

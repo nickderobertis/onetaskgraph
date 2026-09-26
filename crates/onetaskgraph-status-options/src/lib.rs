@@ -1,17 +1,47 @@
-//! The guarded, plugin-specific `sources status-options` operation.
+// llmlint: ignore[names_match_behavior] The crate keeps its name from when Status was the one field it set up, deliberately: it is a published crate a `release-targets.toml` target covers and its dependents name, so renaming it for the Priority field it now also sets up would break them. The task that generalised it states the name is kept, and this module's own documentation says so.
+//! The guarded, plugin-specific board field setup: `sources fields`, and the Status-only
+//! `sources status-options` it supersedes.
 //!
 //! Keeping this orchestration outside the CLI preserves the repository's project boundary:
-//! the binary wraps commands, while this independently selectable project owns the one command
-//! that constructs and invokes the GitHub Projects adapter directly.
+//! the binary wraps commands, while this independently selectable project owns the commands
+//! that construct and invoke the GitHub Projects adapter directly. The crate keeps its name
+//! from when Status was the one field it set up.
 
 use onetaskgraph_github_projects::GitHubProjectsSource;
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName};
 
 pub use onetaskgraph_github_projects::{
-    GitHubProjectsConfig, StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
+    BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, SetupMode,
+    StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
 };
 
+/// Plan or apply the guarded setup of every board field one configured source names: its
+/// Status options always, and its Priority field and options when it sets
+/// `priority_mapping`.
+///
+/// # Errors
+///
+/// As [`GitHubProjectsSource::fields`], and [`SourceError::Config`] or
+/// [`SourceError::Auth`] for a source that cannot be built.
+pub async fn reconcile_fields(
+    name: &SourceName,
+    config: GitHubProjectsConfig,
+    secrets: &impl SecretResolver,
+    mode: SetupMode,
+) -> Result<FieldsReport, SourceError> {
+    GitHubProjectsSource::new(name, config, secrets)?
+        .fields(mode)
+        .await
+}
+
 /// Plan or apply the guarded Status-option additions for one configured source.
+///
+/// The Status-only form, superseded by [`reconcile_fields`]; kept with its exact behaviour and
+/// report shape for the callers written against it.
+///
+/// # Errors
+///
+/// As [`GitHubProjectsSource::status_options`].
 pub async fn reconcile(
     name: &SourceName,
     config: GitHubProjectsConfig,

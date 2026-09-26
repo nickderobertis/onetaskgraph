@@ -9,10 +9,12 @@ from .document import Document as Document
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
 from .failure_document import FailureDocument as FailureDocument
+from .fields_report import FieldsReport as FieldsReport
 from .global_id import GlobalId as GlobalId
 from .location import Location as Location
 from .metadata_set import MetadataSet as MetadataSet
 from .page_of_document import Page as PageOfDocument
+from .priority import Priority as Priority
 from .query_plan import QueryPlan as QueryPlan
 from .query_response_of_qualified_document import QueryResponse as QueryResponseOfQualifiedDocument
 from .query_response_of_qualified_edge import QueryResponse as QueryResponseOfQualifiedEdge
@@ -25,7 +27,9 @@ from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
 from .status_category import StatusCategory as StatusCategory
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
+from .task_content_set import TaskContentSet as TaskContentSet
 from .task_detail import TaskDetail as TaskDetail
+from .task_priority_set import TaskPrioritySet as TaskPrioritySet
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
 
@@ -45,10 +49,12 @@ __all__ = [
     "DocumentQuery",
     "EffectiveConfig",
     "FailureDocument",
+    "FieldsReport",
     "GlobalId",
     "Location",
     "MetadataSet",
     "PageOfDocument",
+    "Priority",
     "QueryPlan",
     "QueryResponseOfQualifiedDocument",
     "QueryResponseOfQualifiedEdge",
@@ -61,7 +67,9 @@ __all__ = [
     "SourceName",
     "StatusCategory",
     "StatusOptionsReport",
+    "TaskContentSet",
     "TaskDetail",
+    "TaskPrioritySet",
     "TaskRef",
     "TaskStatusSet",
 ]

@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Project,
-    ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory, Task, TaskQuery,
-    TaskRef, TextFields,
+    DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Priority,
+    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskQuery, TaskRef, TextFields,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -22,7 +22,8 @@ use crate::{
     CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
     Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
     QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind,
-    SourceFailure, SourceListing, SourcePlan, TaskDetail, TaskStatusSet,
+    SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail, TaskPrioritySet,
+    TaskStatusSet,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -38,7 +39,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 19;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 20;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -56,6 +57,9 @@ pub fn schema_bundle() -> Value {
     roots.insert("Label", schema_for!(Label));
     roots.insert("Status", schema_for!(Status));
     roots.insert("StatusCategory", schema_for!(StatusCategory));
+    // A root of its own although `Task` reaches it, for the reason `StatusCategory` is one:
+    // `task priority set` and `task list --priority` take one by name.
+    roots.insert("Priority", schema_for!(Priority));
     roots.insert("SourceName", schema_for!(SourceName));
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyEndpoint", schema_for!(DependencyEndpoint));
@@ -145,6 +149,10 @@ pub fn schema_bundle() -> Value {
     roots.insert("TaskStatusSet", schema_for!(TaskStatusSet));
     roots.insert("Delivered", schema_for!(Delivered));
     roots.insert("DeliveryOutcome", schema_for!(DeliveryOutcome));
+
+    // What `task priority set` and `task content set` answer with.
+    roots.insert("TaskPrioritySet", schema_for!(TaskPrioritySet));
+    roots.insert("TaskContentSet", schema_for!(TaskContentSet));
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", schema_for!(MetadataSet));

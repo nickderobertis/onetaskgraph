@@ -51,13 +51,19 @@ serve.
 
 ```bash
 onetaskgraph sources list
+onetaskgraph sources fields <SOURCE> [--apply] [--json]
+# Without --apply this only reports what a GitHub Projects board lacks of the fields its
+# source's configuration names: the Status options status_mapping resolves to, and the
+# Priority field and its options when priority_mapping is set. --apply adds the missing
+# options and creates a missing Priority field, sending every existing option back with its
+# id, then verifies every pre-existing option and every item's values of both fields and
+# prints recovery data if GitHub drifted.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
-# Without --apply this only reports configured GitHub Projects Status options the board
-# lacks. --apply sends the complete existing option list with ids, then verifies every
-# pre-existing option id and item assignment and prints recovery data if GitHub drifted.
+# The Status-only form of `sources fields`, which supersedes it; kept as it was.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
-                       [--status S]... [--project P | --no-project]
+                       [--status S]... [--priority none|urgent|high|medium|low]...
+                       [--project P | --no-project]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID>
@@ -68,6 +74,8 @@ onetaskgraph task comment list   <ID>
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
 onetaskgraph task comment delete <ID> <COMMENT-ID>
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
+onetaskgraph task priority set <ID> none|urgent|high|medium|low
+onetaskgraph task content set <ID> --file PATH
 onetaskgraph task metadata set <ID> <KEY> <VALUE>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
@@ -129,11 +137,31 @@ selects the mapped `Cancelled` option and closes it as not planned. Those are th
 option names. An open-category write reopens a closed issue before selecting its mapped
 option; a draft item has no issue state to reopen. If any mapped option is absent, the
 write is refused by that option's name before either representation changes —
-`sources status-options` counts a terminal category's mapped option as configured, so it
-names a missing `Done` or `Cancelled` and `--apply` adds it. Reads keep
+`sources fields` (and its Status-only form, `sources status-options`) counts a terminal
+category's mapped option as configured, so it names a missing `Done` or `Cancelled` and
+`--apply` adds it. Reads keep
 GitHub's issue decision authoritative for closed issues—completed reads `done` and not
 planned reads `cancelled`, regardless of the displayed option—while the Status option
 decides an open issue's category.
+
+A task's **priority** is one of `none`, `urgent`, `high`, `medium` and `low`, and every task
+carries one — `none` when none is set, and for every task of a source that cannot hold one.
+`task list --priority` keeps the tasks at any of the priorities named, and `task priority set`
+writes that one field and answers with the priority as the source reads it back; `none`
+clears it. A copy carries a task's priority like its status. A folder of Markdown holds it as
+a `priority:` key, Linear as its own issue priority, and a GitHub Projects board as the
+option of a single-select `Priority` field that the source's `priority_mapping` names —
+`Urgent`, `High`, `Medium` and `Low` unless it says otherwise. A board source configured
+without `priority_mapping` holds no priority, and a copy or a `task priority set` that would
+write one to it is refused by name before the board is asked anything. `sources fields
+<SOURCE> --apply` creates the board's `Priority` field, or adds the options it lacks, without
+disturbing an option or an item's value that is already there.
+
+A task's **content** is replaced on its own with `task content set <ID> --file PATH`: the
+file's bytes become the task's body, and status, priority, metadata, labels, repositories and
+dependencies stay exactly as they are — on a GitHub board, whose metadata lives in the issue
+body beside the content, that block is kept as it was. There is no compare-and-set: what the
+file holds replaces whatever the task held.
 
 One **metadata** key of a task, a project or a document is set on its own with `task`,
 `project` or `document metadata set <ID> <KEY> <VALUE>`, which adds the key or replaces what

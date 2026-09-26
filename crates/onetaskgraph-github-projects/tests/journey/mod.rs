@@ -33,9 +33,9 @@ use onetaskgraph_github_projects::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Project,
-    ProjectFilter, ProjectQuery, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, TextFields, TextQuery,
+    Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Priority,
+    Project, ProjectFilter, ProjectQuery, SourceName, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -1604,6 +1604,7 @@ fn artifact_task(
         title: title.to_owned(),
         content: Some(content),
         status: status.clone(),
+        priority: Priority::None,
         labels: vec![],
         project,
         url: None,
@@ -2548,6 +2549,8 @@ pub async fn run(nomination: Nomination) {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

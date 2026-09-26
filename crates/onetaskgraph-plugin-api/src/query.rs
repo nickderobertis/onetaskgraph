@@ -4,7 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-use crate::{NativeId, StatusCategory};
+use crate::{NativeId, Priority, StatusCategory};
 
 /// A filter over a source's tasks.
 ///
@@ -19,6 +19,16 @@ pub struct TaskQuery {
     pub statuses: Vec<StatusCategory>,
     /// Which project the task belongs to.
     pub project: ProjectFilter,
+    /// Priorities to keep: a task matches when its priority is any one of these. Empty means
+    /// unfiltered.
+    ///
+    /// Defaulted when absent and left out of the wire when empty, so a plugin written before
+    /// there were priorities reads exactly the query it read before — and, declaring no
+    /// [`Capabilities::filter_by_priority`](crate::Capabilities::filter_by_priority), is never
+    /// handed one it would have to ignore.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub priorities: Vec<Priority>,
 }
 
 /// A filter over a source's projects.

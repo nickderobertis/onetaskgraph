@@ -41,6 +41,32 @@ pub struct Capabilities {
     // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects` and `documents` already use, and a second enum here would say the same thing three ways for three sibling fields. Whether comments can be *written* is `TaskSource::writes`, the one write declaration every write of this contract already reads, so a read-only pairing is a source declaring `Native` here and `Unsupported` there rather than a third variant.
     #[serde(default = "no_comments")]
     pub comments: Support,
+    /// Whether the source's tasks hold a [`Priority`](crate::Priority) at all.
+    ///
+    /// Read exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:
+    /// it says what the source *holds*, not which predicate it applies, so the second
+    /// capability rule does not reach it. A source declaring `Unsupported` reports every
+    /// task's priority as `none`, and the engine never hands it one that is not: a copy
+    /// carrying another priority to it, and a `task priority set` naming it, are both refused
+    /// before the source is asked, naming the source and the field.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates priorities says nothing here and is never handed a priority it would drop.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects`, `documents` and `comments` already use, and a second enum here would say the same thing four ways for four sibling fields. Whether a priority can be *written* is `TaskSource::writes`, the one write declaration every write of this contract already reads.
+    #[serde(default = "no_priority")]
+    pub priority: Support,
+    /// Whether the source keeps only the tasks whose priority a query lists, itself.
+    ///
+    /// A predicate, and so one the second capability rule reaches: a source declaring
+    /// `Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and
+    /// returns the wider set, and the engine narrows it. Its own member rather than a reading
+    /// of [`priority`](Self::priority), because holding a priority and filtering by one are
+    /// two abilities — a board holds a priority on a field it cannot be asked to filter by.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates priorities is narrowed by the engine rather than trusted to have filtered.
+    #[serde(default = "no_priority_filter")]
+    pub filter_by_priority: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -74,6 +100,19 @@ fn no_documents() -> Support {
 /// What [`Capabilities::comments`] means when a wire value does not carry it: a plugin
 /// written before there were comments, on the terms [`no_documents`] gives.
 fn no_comments() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::priority`] means when a wire value does not carry it: a plugin
+/// written before there were priorities, on the terms [`no_documents`] gives.
+fn no_priority() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::filter_by_priority`] means when a wire value does not carry it: a
+/// plugin that has never heard of the predicate, and so ignores it — which rule 2 already
+/// makes the one safe reading.
+fn no_priority_filter() -> Support {
     Support::Unsupported
 }
 

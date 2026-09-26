@@ -14,7 +14,7 @@
 //! the answer would depend on which plugin happened to be first in the list.
 
 use onetaskgraph_plugin_api::{
-    Document, Label, LabelFilter, NativeId, Project, ProjectFilter, StatusCategory, Task,
+    Document, Label, LabelFilter, NativeId, Priority, Project, ProjectFilter, StatusCategory, Task,
     TextFields, TextQuery,
 };
 
@@ -33,6 +33,8 @@ pub(crate) struct LocalTasks {
     pub text: Option<TextQuery>,
     /// The owning project, when the source does not filter by it.
     pub project: Option<ProjectFilter>,
+    /// Priorities to keep, when the source does not filter by priority.
+    pub priorities: Vec<Priority>,
 }
 
 impl LocalTasks {
@@ -44,6 +46,9 @@ impl LocalTasks {
             return false;
         }
         if !status_matches(task.status.category, &self.statuses) {
+            return false;
+        }
+        if !self.priorities.is_empty() && !self.priorities.contains(&task.priority) {
             return false;
         }
         if let Some(query) = &self.text

@@ -24,8 +24,9 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencySupport, Direction, Health, Label, LabelFilter,
-    NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    NativeId, Page, PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError,
+    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -132,6 +133,7 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         sources: Vec::new(),
         filters,
         project,
+        priorities: Vec::new(),
         paging,
     }
 }
@@ -417,6 +419,7 @@ async fn a_request_naming_a_source_nothing_configures_is_refused_with_the_names_
             sources: vec![name("elsewhere")],
             filters: Filters::default(),
             project: ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: page(10),
         })
         .await
@@ -588,6 +591,8 @@ impl TaskSource for Rendezvous {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -629,6 +634,7 @@ impl TaskSource for Rendezvous {
                 category: StatusCategory::Todo,
                 name: "Todo".to_owned(),
             },
+            priority: Priority::None,
             labels: Vec::new(),
             project: None,
             url: None,
@@ -723,6 +729,8 @@ impl TaskSource for Stuck {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -846,6 +854,8 @@ impl TaskSource for StuckEdges {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -928,6 +938,7 @@ fn one_task(id: &NativeId) -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -1292,6 +1303,7 @@ impl Recording {
                     category: StatusCategory::Todo,
                     name: "Todo".to_owned(),
                 },
+                priority: Priority::None,
                 labels: Vec::new(),
                 project: None,
                 url: None,
@@ -1322,6 +1334,8 @@ impl TaskSource for Recording {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

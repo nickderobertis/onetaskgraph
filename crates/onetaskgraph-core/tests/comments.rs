@@ -12,9 +12,9 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencySupport, Direction,
-    Health, Label, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SecretResolver,
-    SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
-    WriteSupport,
+    Health, Label, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
+    SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -299,6 +299,7 @@ fn a_task(native: &str) -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -333,6 +334,8 @@ impl TaskSource for Misbehaving {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

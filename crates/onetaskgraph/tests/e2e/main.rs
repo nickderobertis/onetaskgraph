@@ -43,6 +43,12 @@ mod copy_cost;
 mod delivery;
 mod document_store;
 mod failures;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
+// the required real CLI boundary against a loopback board and completes in about a second,
+// for the reason `status_options` below does: the binary project is the narrowest project that
+// can own a binary subprocess journey, and the plugin-isolation contract forbids moving it
+// into a plugin crate.
+mod fields;
 mod fixtures;
 mod journeys;
 mod machine;
@@ -55,6 +61,13 @@ mod machine;
 mod metadata;
 mod multi_source;
 mod no_persistence;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against the shared rows — folders
+// of Markdown, in-memory sources, the loopback Linear workspace and GitHub board, and the
+// Python stdio peer — with no credential and no network, in a few seconds. What it proves is
+// the engine's own refusal and the contract every plugin shares, so it cannot sit behind one
+// plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod priority;
 mod source_host;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
 // the required real CLI boundary against a loopback board and completes nine journeys in

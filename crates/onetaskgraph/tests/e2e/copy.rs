@@ -1008,7 +1008,9 @@ fn a_project_whose_goal_outgrows_a_board_description_still_copies() {
     );
     let id = reported(&copied)[0].1.as_str().expect("an id").to_owned();
     let written = shown(&sandbox, "project", &id);
-    assert_eq!(written["content"], goal.trim_end());
+    // The folder reads the body exactly — its trailing space included — and the board keeps
+    // what it was given.
+    assert_eq!(written["content"], goal);
     assert_eq!(written["metadata"]["onepipeline.steps"], json!([goal]));
 }
 

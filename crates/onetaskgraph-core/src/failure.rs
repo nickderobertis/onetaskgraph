@@ -179,9 +179,12 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             ("no-documents".to_owned(), configured(name), None)
         }
         EngineError::NoComments { name, .. } => ("no-comments".to_owned(), configured(name), None),
+        EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }
         | EngineError::StatusNotWritable { name, .. }
-        | EngineError::MetadataNotWritable { name, .. } => {
+        | EngineError::MetadataNotWritable { name, .. }
+        | EngineError::PriorityNotWritable { name, .. }
+        | EngineError::ContentNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
         EngineError::NoSuchItem { .. }

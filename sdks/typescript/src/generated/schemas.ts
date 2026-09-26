@@ -51,6 +51,11 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/Support",
         "description": "Whether the source filters by label itself."
       },
+      "filter_by_priority": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
+      },
       "filter_by_status": {
         "$ref": "#/$defs/Support",
         "description": "Whether the source filters by status itself."
@@ -64,6 +69,11 @@ export const runtimeSchemas = {
       "orphan_tasks": {
         "$ref": "#/$defs/Support",
         "description": "Whether the source can select tasks belonging to no project."
+      },
+      "priority": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
       },
       "project_dependencies": {
         "$ref": "#/$defs/DependencySupport",
@@ -2127,6 +2137,198 @@ export const runtimeSchemas = {
     "title": "FailureDocument",
     "type": "object"
   },
+  "FieldsReport": {
+    "$defs": {
+      "BoardField": {
+        "description": "One board field the guarded setup reads and writes — every one it reads, and the only\nones it writes.",
+        "oneOf": [
+          {
+            "const": "Status",
+            "description": "The single-select `Status` field every instance's `status_mapping` resolves into.",
+            "type": "string"
+          },
+          {
+            "const": "Priority",
+            "description": "The single-select `Priority` field an instance's `priority_mapping` resolves into.",
+            "type": "string"
+          }
+        ]
+      },
+      "ColumnName": {
+        "description": "The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "FieldOutcome": {
+        "description": "What the guarded setup did to one field.",
+        "oneOf": [
+          {
+            "const": "planned",
+            "description": "A read-only plan.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "Apply found the field there with every configured option.",
+            "type": "string"
+          },
+          {
+            "const": "applied",
+            "description": "Missing options were added to the field that was there, and verified.",
+            "type": "string"
+          },
+          {
+            "const": "created",
+            "description": "The field was not there; it was created holding the configured options, and verified.",
+            "type": "string"
+          }
+        ]
+      },
+      "FieldReport": {
+        "description": "One field's plan, or its verified outcome.",
+        "properties": {
+          "existing": {
+            "description": "The field's complete option list observed before any mutation; empty when the field\nwas not there.",
+            "items": {
+              "$ref": "#/$defs/StatusOption"
+            },
+            "type": "array"
+          },
+          "exists": {
+            "description": "Whether the board had the field before the operation.",
+            "type": "boolean"
+          },
+          "field": {
+            "$ref": "#/$defs/BoardField",
+            "description": "Which field."
+          },
+          "missing": {
+            "description": "Configured option names the field lacked before the operation — every one of them,\nin the order a new field lists them, when the field was not there at all.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/$defs/FieldOutcome",
+            "description": "What the requested operation did."
+          }
+        },
+        "required": [
+          "field",
+          "exists",
+          "missing",
+          "outcome",
+          "existing"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "StatusOption": {
+        "description": "One existing or proposed option in a guarded Status-field update.",
+        "properties": {
+          "color": {
+            "$ref": "#/$defs/StatusOptionColor",
+            "description": "GitHub's single-select color token."
+          },
+          "description": {
+            "description": "The option description, including an empty one.",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/$defs/StatusOptionId",
+            "description": "GitHub's stable id."
+          },
+          "name": {
+            "$ref": "#/$defs/ColumnName",
+            "description": "The visible option name."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "description"
+        ],
+        "type": "object"
+      },
+      "StatusOptionColor": {
+        "description": "GitHub's closed single-select color vocabulary.",
+        "oneOf": [
+          {
+            "const": "GRAY",
+            "description": "Gray.",
+            "type": "string"
+          },
+          {
+            "const": "BLUE",
+            "description": "Blue.",
+            "type": "string"
+          },
+          {
+            "const": "GREEN",
+            "description": "Green.",
+            "type": "string"
+          },
+          {
+            "const": "YELLOW",
+            "description": "Yellow.",
+            "type": "string"
+          },
+          {
+            "const": "PURPLE",
+            "description": "Purple.",
+            "type": "string"
+          },
+          {
+            "const": "RED",
+            "description": "Red.",
+            "type": "string"
+          },
+          {
+            "const": "ORANGE",
+            "description": "Orange.",
+            "type": "string"
+          },
+          {
+            "const": "PINK",
+            "description": "Pink.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusOptionId": {
+        "description": "A GitHub single-select option's opaque GraphQL node identifier.",
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The plan and verified outcome of setting up every field a source's configuration names.",
+    "properties": {
+      "fields": {
+        "description": "`Status`, always, and `Priority` when the source sets `priority_mapping`.",
+        "items": {
+          "$ref": "#/$defs/FieldReport"
+        },
+        "type": "array"
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The configured source name."
+      }
+    },
+    "required": [
+      "source",
+      "fields"
+    ],
+    "title": "FieldsReport",
+    "type": "object"
+  },
   "GlobalId": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
@@ -3195,6 +3397,36 @@ export const runtimeSchemas = {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Repository": {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
@@ -3332,6 +3564,11 @@ export const runtimeSchemas = {
             "default": {},
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
+          },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
           },
           "project": {
             "anyOf": [
@@ -3472,6 +3709,11 @@ export const runtimeSchemas = {
         "type": "string"
       },
       {
+        "const": "priority",
+        "description": "Filter by priority.",
+        "type": "string"
+      },
+      {
         "const": "search-title",
         "description": "Search titles.",
         "type": "string"
@@ -3498,6 +3740,38 @@ export const runtimeSchemas = {
       }
     ],
     "title": "Predicate"
+  },
+  "Priority": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+    "oneOf": [
+      {
+        "const": "none",
+        "description": "No priority is set.",
+        "type": "string"
+      },
+      {
+        "const": "urgent",
+        "description": "Drop everything for it.",
+        "type": "string"
+      },
+      {
+        "const": "high",
+        "description": "Next, before the rest.",
+        "type": "string"
+      },
+      {
+        "const": "medium",
+        "description": "In its turn.",
+        "type": "string"
+      },
+      {
+        "const": "low",
+        "description": "When there is nothing more pressing.",
+        "type": "string"
+      }
+    ],
+    "title": "Priority"
   },
   "Project": {
     "$defs": {
@@ -4532,6 +4806,36 @@ export const runtimeSchemas = {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Repository": {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
@@ -4670,6 +4974,11 @@ export const runtimeSchemas = {
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
           },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
           "project": {
             "anyOf": [
               {
@@ -4758,6 +5067,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -5056,6 +5370,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -5440,6 +5759,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -5842,6 +6166,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -6252,6 +6581,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -6819,6 +7153,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "priority",
+            "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -6841,6 +7180,36 @@ export const runtimeSchemas = {
           {
             "const": "reverse-dependencies",
             "description": "Walk dependency edges backwards.",
+            "type": "string"
+          }
+        ]
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
             "type": "string"
           }
         ]
@@ -7226,6 +7595,11 @@ export const runtimeSchemas = {
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
           },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
           "project": {
             "anyOf": [
               {
@@ -7422,6 +7796,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "priority",
+            "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -7444,6 +7823,36 @@ export const runtimeSchemas = {
           {
             "const": "reverse-dependencies",
             "description": "Walk dependency edges backwards.",
+            "type": "string"
+          }
+        ]
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
             "type": "string"
           }
         ]
@@ -7967,6 +8376,11 @@ export const runtimeSchemas = {
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
           },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
           "project": {
             "anyOf": [
               {
@@ -8176,6 +8590,36 @@ export const runtimeSchemas = {
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
       },
       "Project": {
         "description": "A grouping of tasks, shaped like a [`Task`] without a parent of its own.",
@@ -8437,6 +8881,11 @@ export const runtimeSchemas = {
             "default": {},
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
+          },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
           },
           "project": {
             "anyOf": [
@@ -9032,6 +9481,11 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by label itself."
           },
+          "filter_by_priority": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
+          },
           "filter_by_status": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by status itself."
@@ -9045,6 +9499,11 @@ export const runtimeSchemas = {
           "orphan_tasks": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source can select tasks belonging to no project."
+          },
+          "priority": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
           },
           "project_dependencies": {
             "$ref": "#/$defs/DependencySupport",
@@ -9316,6 +9775,11 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by label itself."
           },
+          "filter_by_priority": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
+          },
           "filter_by_status": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by status itself."
@@ -9329,6 +9793,11 @@ export const runtimeSchemas = {
           "orphan_tasks": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source can select tasks belonging to no project."
+          },
+          "priority": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
           },
           "project_dependencies": {
             "$ref": "#/$defs/DependencySupport",
@@ -9607,6 +10076,11 @@ export const runtimeSchemas = {
           {
             "const": "status",
             "description": "Filter by status category.",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "Filter by priority.",
             "type": "string"
           },
           {
@@ -10022,6 +10496,36 @@ export const runtimeSchemas = {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Repository": {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
@@ -10165,6 +10669,11 @@ export const runtimeSchemas = {
         "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
         "type": "object"
       },
+      "priority": {
+        "$ref": "#/$defs/Priority",
+        "default": "none",
+        "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+      },
       "project": {
         "anyOf": [
           {
@@ -10215,6 +10724,27 @@ export const runtimeSchemas = {
       "labels"
     ],
     "title": "Task",
+    "type": "object"
+  },
+  "TaskContentSet": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task content set` answers with.",
+    "properties": {
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The task whose content was replaced."
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "TaskContentSet",
     "type": "object"
   },
   "TaskDetail": {
@@ -10364,6 +10894,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "priority",
+            "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -10386,6 +10921,36 @@ export const runtimeSchemas = {
           {
             "const": "reverse-dependencies",
             "description": "Walk dependency edges backwards.",
+            "type": "string"
+          }
+        ]
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
             "type": "string"
           }
         ]
@@ -10771,6 +11336,11 @@ export const runtimeSchemas = {
             "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
             "type": "object"
           },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
           "project": {
             "anyOf": [
               {
@@ -10878,6 +11448,62 @@ export const runtimeSchemas = {
     "title": "TaskDetail",
     "type": "object"
   },
+  "TaskPrioritySet": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task priority set` answers with.",
+    "properties": {
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The task whose priority was set."
+      },
+      "priority": {
+        "$ref": "#/$defs/Priority",
+        "description": "Its priority as its source reads it back after the write."
+      }
+    },
+    "required": [
+      "id",
+      "priority"
+    ],
+    "title": "TaskPrioritySet",
+    "type": "object"
+  },
   "TaskQuery": {
     "$defs": {
       "LabelFilter": {
@@ -10915,6 +11541,36 @@ export const runtimeSchemas = {
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
       },
       "ProjectFilter": {
         "description": "Which project a task must belong to.",
@@ -11034,6 +11690,14 @@ export const runtimeSchemas = {
       "labels": {
         "$ref": "#/$defs/LabelFilter",
         "description": "Label membership."
+      },
+      "priorities": {
+        "default": [],
+        "description": "Priorities to keep: a task matches when its priority is any one of these. Empty means\nunfiltered.\n\nDefaulted when absent and left out of the wire when empty, so a plugin written before\nthere were priorities reads exactly the query it read before — and, declaring no\n[`Capabilities::filter_by_priority`](crate::Capabilities::filter_by_priority), is never\nhanded one it would have to ignore.",
+        "items": {
+          "$ref": "#/$defs/Priority"
+        },
+        "type": "array"
       },
       "project": {
         "$ref": "#/$defs/ProjectFilter",

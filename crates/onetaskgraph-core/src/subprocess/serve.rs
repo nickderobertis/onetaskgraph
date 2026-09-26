@@ -24,11 +24,12 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentsParams, DeleteCommentParams, DeleteParams, DeliveredByParams,
-    DependencyParams, DocumentDir, DocumentQueryParams, DocumentWriteParams, EditCommentParams,
-    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
-    PROTOCOL_VERSION, ProjectQueryParams, ProjectWriteParams, Request, Response, StatusParams,
-    TaskQueryParams, TaskWriteParams, after_the_first_vocabulary, knows_every_category, vocabulary,
+    AddCommentParams, CommentsParams, ContentParams, DeleteCommentParams, DeleteParams,
+    DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams, DocumentWriteParams,
+    EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
+    LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
+    ProjectWriteParams, Request, Response, StatusParams, TaskQueryParams, TaskWriteParams,
+    after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -259,6 +260,9 @@ async fn initialize(
                 // On the same terms: every plugin of this build sets one metadata key or
                 // refuses to in the contract's own words.
                 metadata_updates: true,
+                // And again: every plugin of this build replaces a task's content or refuses
+                // to in the contract's own words.
+                content_updates: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -440,6 +444,18 @@ async fn dispatch(
             let params: StatusParams = decode(method, params)?;
             let status = source.set_task_status(&params.id, params.category).await?;
             encode(json!({ "status": status.map(|status| told(status, known)) }))
+        }
+        "set_task_priority" => {
+            let params: PriorityParams = decode(method, params)?;
+            let priority = source
+                .set_task_priority(&params.id, params.priority)
+                .await?;
+            encode(json!({ "priority": priority }))
+        }
+        "set_task_content" => {
+            let params: ContentParams = decode(method, params)?;
+            let written = source.set_task_content(&params.id, &params.content).await?;
+            encode(json!({ "id": written.map(|()| params.id) }))
         }
         "set_task_metadata" => {
             let params: MetadataParams = decode(method, params)?;

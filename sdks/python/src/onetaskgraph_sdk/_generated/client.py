@@ -10,8 +10,10 @@ from .models import (
     CopyReport,
     DeletedComment,
     EffectiveConfig,
+    FieldsReport,
     GlobalId,
     MetadataSet,
+    Priority,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
@@ -22,7 +24,9 @@ from .models import (
     SourceName,
     StatusCategory,
     StatusOptionsReport,
+    TaskContentSet,
     TaskDetail,
+    TaskPrioritySet,
     TaskStatusSet,
 )
 
@@ -35,14 +39,17 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "show"): ("id",),
     ("search",): ("text",),
+    ("sources", "fields"): ("source",),
     ("sources", "status-options"): ("source",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
     ("task", "comment", "list"): ("id",),
+    ("task", "content", "set"): ("id",),
     ("task", "copy"): ("ids",),
     ("task", "deps"): ("id",),
     ("task", "metadata", "set"): ("id", "key", "value"),
+    ("task", "priority", "set"): ("id", "priority"),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
 }
@@ -399,6 +406,26 @@ class GeneratedClient:
             source=source,
         )
 
+    async def sources_fields(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FieldsReport:
+        """Run ``onetaskgraph sources fields``."""
+        return await self._invoke(
+            ["sources", "fields"],
+            FieldsReport,
+            source=source,
+            apply=apply,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def sources_list(
         self,
         *,
@@ -521,6 +548,26 @@ class GeneratedClient:
             set=set,
         )
 
+    async def task_content_set(
+        self,
+        id: GlobalId | str,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentSet:
+        """Run ``onetaskgraph task content set``."""
+        return await self._invoke(
+            ["task", "content", "set"],
+            TaskContentSet,
+            id=id,
+            file=file,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def task_copy(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
@@ -588,6 +635,9 @@ class GeneratedClient:
         not_label: list[str] | tuple[str, ...] | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
         project: str | None = None,
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
@@ -619,6 +669,7 @@ class GeneratedClient:
             not_label=not_label,
             page=page,
             page_size=page_size,
+            priority=priority,
             project=project,
             search=search,
             set=set,
@@ -643,6 +694,26 @@ class GeneratedClient:
             id=id,
             key=key,
             value=value,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_priority_set(
+        self,
+        id: GlobalId | str,
+        priority: Priority | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskPrioritySet:
+        """Run ``onetaskgraph task priority set``."""
+        return await self._invoke(
+            ["task", "priority", "set"],
+            TaskPrioritySet,
+            id=id,
+            priority=priority,
             default_sources=default_sources,
             page_size=page_size,
             set=set,

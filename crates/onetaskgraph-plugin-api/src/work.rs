@@ -39,6 +39,16 @@ pub struct Task {
     pub content: Option<String>,
     /// The source's status, normalised and preserved.
     pub status: Status,
+    /// The task's priority; `none` means none is set, and a source that cannot hold one
+    /// reports `none`.
+    ///
+    /// Defaulted when a document omits it, so a task written before this field existed —
+    /// and every task of a plugin that predates it — reads as [`Priority::None`]. Always
+    /// written, so a reader never has to tell an absent member from a `none` one. Whether a
+    /// source can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),
+    /// and the engine never hands a source declaring it cannot a priority other than `none`.
+    #[serde(default)]
+    pub priority: Priority,
     /// Inline rather than by id: a source returning a task already knows them.
     pub labels: Vec<Label>,
     /// `None` is a first-class case — an orphan task — not an edge case.
@@ -518,6 +528,74 @@ pub enum StatusCategory {
     Cancelled,
     /// The source reported a status this vocabulary cannot place.
     Unknown,
+}
+
+/// How much a task matters, in the one vocabulary every source is normalised into.
+///
+/// Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+/// exactly these, and a source whose backend has none of its own maps its representation
+/// onto them. `none` is a value rather than an absent field, because "no priority is set" is
+/// something a person sets — writing `none` clears a priority — and a reader tells it apart
+/// from nothing by the value alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Priority {
+    /// No priority is set.
+    #[default]
+    None,
+    /// Drop everything for it.
+    Urgent,
+    /// Next, before the rest.
+    High,
+    /// In its turn.
+    Medium,
+    /// When there is nothing more pressing.
+    Low,
+}
+
+impl Priority {
+    /// Every value, in the order the vocabulary lists them.
+    pub const ALL: [Self; 5] = [
+        Self::None,
+        Self::Urgent,
+        Self::High,
+        Self::Medium,
+        Self::Low,
+    ];
+
+    /// The value as the wire spells it: `none`, `urgent`, `high`, `medium` or `low`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Urgent => "urgent",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+}
+
+impl std::fmt::Display for Priority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Priority {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|priority| priority.as_str() == value)
+            .ok_or_else(|| {
+                format!(
+                    "{value:?} is not a priority; a priority is one of none, urgent, high, \
+                     medium or low"
+                )
+            })
+    }
 }
 
 /// A dependency between two work items.

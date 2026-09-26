@@ -24,13 +24,16 @@ use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
 };
-use onetaskgraph_status_options::{GitHubProjectsConfig, StatusOptionsMode, StatusOptionsReport};
+use onetaskgraph_status_options::{
+    FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
+};
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, CommentCommand, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand,
-    DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs,
-    ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs, DependencyArgs,
+    DocumentCommand, DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand,
+    MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand, SelectionArgs, ShowArgs,
+    SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -170,49 +173,42 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Sources {
             command: SourcesCommand::StatusOptions(args),
         } => {
-            // llmlint: ignore-block[changed_behavior_has_e2e] The status-options journeys drive
-            // this boundary through unknown and wrong-plugin sources. Invalid source tokens
-            // and malformed plugin configuration are the shared configuration boundary's
-            // existing validation, while construction errors are exercised by this plugin's
-            // configuration tests rather than duplicated for each CLI verb.
-            let name = SourceName::try_from(args.source.clone())
-                .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
-            let source = loaded.config.sources().get(&name).ok_or_else(|| {
-                Failure::decided(
-                    "status-options",
-                    format!("no configured source is named {name}"),
-                )
+            let (name, config) = github_projects_source(loaded, &args.source, "status-options")?;
+            let report = onetaskgraph_status_options::reconcile(
+                &name,
+                config,
+                &loaded.secrets,
+                setup_mode(args.apply),
+            )
+            .await
+            .map_err(|error| {
+                Failure::decided("status-options", format!("source {name}: {error}"))
             })?;
-            if source.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
-                return Err(Failure::decided(
-                    "status-options",
-                    format!(
-                        "source {name} uses plugin {}, not github-projects; status-options is only available for github-projects sources",
-                        source.plugin()
-                    ),
-                ));
-            }
-            let config: GitHubProjectsConfig = serde_json::from_value(source.config().clone())
-                .map_err(|error| {
-                    Failure::decided("status-options", format!("source {name}: {error}"))
-                })?;
-            // llmlint: ignore-end[changed_behavior_has_e2e]
-            let mode = if args.apply {
-                StatusOptionsMode::Apply
-            } else {
-                StatusOptionsMode::Plan
-            };
-            let report =
-                onetaskgraph_status_options::reconcile(&name, config, &loaded.secrets, mode)
-                    .await
-                    .map_err(|error| {
-                        Failure::decided("status-options", format!("source {name}: {error}"))
-                    })?;
             let rendered = match loaded.config.output() {
                 OutputFormat::Json => json(&report, "the status-options report")?,
                 OutputFormat::Text => render::status_options(&report),
             };
             emit(out, rendered.trim_end(), "the status-options report")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Sources {
+            command: SourcesCommand::Fields(args),
+        } => {
+            let (name, config) = github_projects_source(loaded, &args.source, "fields")?;
+            let report = onetaskgraph_status_options::reconcile_fields(
+                &name,
+                config,
+                &loaded.secrets,
+                setup_mode(args.apply),
+            )
+            .await
+            .map_err(|error| Failure::decided("fields", format!("source {name}: {error}")))?;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Json => json(&report, "the fields report")?,
+                OutputFormat::Text => render::fields(&report),
+            };
+            emit(out, rendered.trim_end(), "the fields report")?;
             Ok(EXIT_OK)
         }
 
@@ -224,6 +220,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 sources: selection(&args.selection)?,
                 filters: filters(&args.filters)?,
                 project: selector(&engine, args.project.as_deref(), args.no_project),
+                priorities: args
+                    .priority
+                    .iter()
+                    .map(|priority| priority.priority())
+                    .collect(),
                 paging: paging(loaded, &args.paging)?,
             };
             let response = engine
@@ -272,6 +273,41 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let rendered = rendering(loaded, &set, render::status_set, "the status")?;
             emit(out, rendered.trim_end(), "the status")?;
             Ok(delivery_exit(&set.delivered))
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Priority {
+                    command: PriorityCommand::Set(args),
+                },
+        } => {
+            let task = qualified(&args.id)?;
+            let set = engine(loaded)
+                .set_task_priority(&task, args.priority.priority())
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::priority_set, "the priority")?;
+            emit(out, rendered.trim_end(), "the priority")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Content {
+                    command: ContentCommand::Set(args),
+                },
+        } => {
+            // The file is read, and refused, before anything is built or asked: a content
+            // write that could not be read reaches no source.
+            let task = qualified(&args.id)?;
+            let content = content(&args.file)?;
+            let set = engine(loaded)
+                .set_task_content(&task, &content)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::content_set, "the content")?;
+            emit(out, rendered.trim_end(), "the content")?;
+            Ok(EXIT_OK)
         }
 
         Command::Task {
@@ -588,6 +624,49 @@ fn show_rendered<T>(
     }
 }
 
+/// The configured `github-projects` source a guarded board setup verb names, and its
+/// configuration, refused with `verb` as the failure's kind when there is no such source or it
+/// is not a `github-projects` one.
+fn github_projects_source(
+    loaded: &Loaded,
+    source: &str,
+    verb: &str,
+) -> Result<(SourceName, GitHubProjectsConfig), Failure> {
+    // llmlint: ignore-block[changed_behavior_has_e2e] The status-options and fields journeys
+    // drive this boundary through unknown and wrong-plugin sources. Invalid source tokens and
+    // malformed plugin configuration are the shared configuration boundary's existing
+    // validation, while construction errors are exercised by this plugin's configuration tests
+    // rather than duplicated for each CLI verb.
+    let name = SourceName::try_from(source.to_owned())
+        .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+    let configured =
+        loaded.config.sources().get(&name).ok_or_else(|| {
+            Failure::decided(verb, format!("no configured source is named {name}"))
+        })?;
+    if configured.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
+        return Err(Failure::decided(
+            verb,
+            format!(
+                "source {name} uses plugin {}, not github-projects; {verb} is only available for github-projects sources",
+                configured.plugin()
+            ),
+        ));
+    }
+    let config: GitHubProjectsConfig = serde_json::from_value(configured.config().clone())
+        .map_err(|error| Failure::decided(verb, format!("source {name}: {error}")))?;
+    // llmlint: ignore-end[changed_behavior_has_e2e]
+    Ok((name, config))
+}
+
+/// Whether a guarded board setup verb plans or applies, from its `--apply` flag.
+fn setup_mode(apply: bool) -> SetupMode {
+    if apply {
+        SetupMode::Apply
+    } else {
+        SetupMode::Plan
+    }
+}
+
 /// Drive one comment verb and write what it answered.
 ///
 /// Each is one call to one source, so there is no partial answer to report: a refusal is
@@ -705,6 +784,34 @@ fn body(path: Option<&std::path::Path>) -> Result<CommentBody, Failure> {
             format!(
                 "the comment body on {from} is empty, and a comment has to say something\n\
                 next: write the comment's text to {from} and run the command again."
+            ),
+        )
+    })
+}
+
+/// A task's new content, read byte for byte from `path`.
+///
+/// Never trimmed and never normalised, for the reason a comment body is not: a trailing
+/// newline is part of what was written. Text that is not UTF-8 is refused rather than
+/// repaired. An empty file is content like any other — it empties the task's body.
+fn content(path: &std::path::Path) -> Result<String, Failure> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        Failure::decided(
+            "content-file",
+            format!(
+                "--file {}: could not read it: {error}\n\
+                 next: name a readable file holding the task's new content.",
+                path.display()
+            ),
+        )
+    })?;
+    String::from_utf8(bytes).map_err(|error| {
+        Failure::decided(
+            "content-file",
+            format!(
+                "the content in --file {} is not UTF-8 text: {error}\n\
+                 next: save the content as UTF-8 and pass it again.",
+                path.display()
             ),
         )
     })
@@ -1002,6 +1109,8 @@ fn schema_bundle() -> Result<String, Failure> {
         schemars::schema_for!(StatusOptionsReport),
         "the status-options schema",
     )?;
+    bundle["roots"]["FieldsReport"] =
+        json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }
@@ -1093,6 +1202,36 @@ fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure>
 mod tests {
     use super::*;
 
+    /// The command line's priority vocabulary is the contract's, in its order and spelling.
+    ///
+    /// `PriorityArg` mirrors `Priority` so clap can derive its parser; its `priority` is a
+    /// wildcard-free match, so a variant added here fails to compile until it is mapped, and
+    /// this reconciles the two the other way, so a priority the contract gains is one the
+    /// command line cannot silently lack.
+    #[test]
+    fn the_command_lines_priorities_are_the_contracts() {
+        use clap::ValueEnum as _;
+        use onetaskgraph_plugin_api::Priority;
+
+        let spelled: Vec<(String, Priority)> = crate::cli::PriorityArg::value_variants()
+            .iter()
+            .map(|arg| {
+                (
+                    arg.to_possible_value()
+                        .expect("every variant is spelled")
+                        .get_name()
+                        .to_owned(),
+                    arg.priority(),
+                )
+            })
+            .collect();
+        let contract: Vec<(String, Priority)> = Priority::ALL
+            .iter()
+            .map(|priority| (priority.as_str().to_owned(), *priority))
+            .collect();
+        assert_eq!(spelled, contract);
+    }
+
     struct RefusesSerialization;
 
     impl Serialize for RefusesSerialization {
@@ -1136,6 +1275,7 @@ mod tests {
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
         assert!(bundle["roots"]["Task"].is_object());
         assert!(bundle["roots"]["StatusOptionsReport"].is_object());
+        assert!(bundle["roots"]["FieldsReport"].is_object());
         assert!(bundle["plugin_config"]["in-memory"].is_object());
         assert_eq!(
             bundle["commands"],
@@ -1144,6 +1284,7 @@ mod tests {
                 "config show",
                 "sources list",
                 "sources status-options",
+                "sources fields",
                 "task list",
                 "task show",
                 "task deps",
@@ -1153,6 +1294,8 @@ mod tests {
                 "task comment edit",
                 "task comment delete",
                 "task status set",
+                "task priority set",
+                "task content set",
                 "task metadata set",
                 "project list",
                 "project show",
