@@ -1890,7 +1890,7 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing issueUpdate.issue".into(),
             })?;
-        backend_id(issue, "id")?;
+        written_is(issue, &task.id)?;
         issue_priority(issue).map(Some)
     }
     async fn set_task_content(
@@ -1933,7 +1933,7 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing issueUpdate.issue".into(),
             })?;
-        backend_id(written, "id")?;
+        written_is(written, &issue)?;
         Ok(Some(()))
     }
     async fn set_delivered_by(
@@ -1944,6 +1944,20 @@ impl TaskSource for LinearSource {
         let _ = (id, delivered_by);
         Err(self.undeliverable("delivered_by", "task"))
     }
+}
+
+/// Refuse a narrow write's payload naming an issue other than the one it was sent for.
+///
+/// An `issueUpdate` answering with another issue is not this write landing, so it is reported
+/// as the malformed answer it is rather than as the task having been written.
+fn written_is(issue: &Value, asked: &NativeId) -> Result<(), SourceError> {
+    let written = backend_id(issue, "id")?;
+    if written == asked.0 {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!("issueUpdate for {asked} answered with the issue {written}"),
+    })
 }
 
 /// Why this source carries neither [`Task::delivers`] nor [`Task::delivered_by`].

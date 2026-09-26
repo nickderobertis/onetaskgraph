@@ -905,6 +905,14 @@ struct GitHubBoard {
     status_options: Vec<Value>,
     /// The `Priority` field's whole option set, or `None` for a board without the field.
     priority_options: Option<Vec<Value>>,
+    /// Whether the next whole-list update of the `Priority` field deliberately changes an
+    /// item's value, as `drift_after_status_update` does for `Status`.
+    drift_after_priority_update: bool,
+    /// Whether a `Priority` value write is answered as landed and not kept.
+    drops_priority_writes: bool,
+    /// Fields of a person's own beside the ones this product sets up, each with one item's
+    /// value of it.
+    persons_fields: Vec<Value>,
     /// Whether the next whole-list update deliberately changes an assignment.
     drift_after_status_update: bool,
     remint_after_status_update: bool,
@@ -991,6 +999,23 @@ impl GitHubBoardFields {
     /// Force Status snapshots to span pages even though the client requests 100 items.
     pub fn paginate_status_snapshots(&self) {
         self.board.lock().unwrap().status_snapshot_page_size = Some(2);
+    }
+
+    /// Make the fixture change one item's `Priority` value after the next update of that
+    /// field's option list.
+    pub fn drift_after_priority_update(&self) {
+        self.board.lock().unwrap().drift_after_priority_update = true;
+    }
+
+    /// Give the board a single-select field of a person's own, `field`, holding the first of
+    /// its options on `T-1`.
+    pub fn with_persons_field(&self, field: Value) {
+        self.board.lock().unwrap().persons_fields.push(field);
+    }
+
+    /// Make every `Priority` value write answer as landed without the board keeping it.
+    pub fn drop_priority_writes(&self) {
+        self.board.lock().unwrap().drops_priority_writes = true;
     }
 
     /// Remove the board's `Priority` field entirely, and every item's value of it.
@@ -1159,6 +1184,7 @@ impl GitHubBoard {
             nodes.push(json!({"__typename":"ProjectV2SingleSelectField",
                 "id":"FIELD-priority","name":"Priority","options":options}));
         }
+        nodes.extend(self.persons_fields.iter().cloned());
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -1307,6 +1333,14 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
 /// GitHub records the account a token belongs to as the author of every comment made with
 /// it, and this board's token is its owner's.
 pub const GITHUB_COMMENTER: &str = "fixture-owner";
+
+/// The shared board, refusing each operation `fail_first` names once, with its handle.
+pub fn github_projects_with_board_failing(
+    sandbox: &Sandbox,
+    fail_first: &'static [&'static str],
+) -> (Value, GitHubBoardFields) {
+    github_projects_board(sandbox, None, fail_first)
+}
 
 /// The id of the one draft item [`github_projects_with_draft`] adds to the shared board.
 pub const GITHUB_DRAFT_TASK: &str = "DRAFT-1";
@@ -1464,6 +1498,9 @@ fn github_projects_board_at(
             .unwrap()
             .clone(),
         ),
+        drift_after_priority_update: false,
+        drops_priority_writes: false,
+        persons_fields: Vec::new(),
         drift_after_status_update: false,
         remint_after_status_update: false,
         omit_added_status_option: false,
@@ -1652,8 +1689,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
         }
         board.priority_options = Some(next.clone());
-        if board.drift_after_status_update {
-            board.drift_after_status_update = false;
+        if board.drift_after_priority_update {
+            board.drift_after_priority_update = false;
             if let Some(item) = board
                 .items
                 .iter_mut()
@@ -1773,6 +1810,15 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     vec![json!({"name":name,"optionId":option["id"],
                     "field":{"id":"FIELD-status","name":"Status"}})]
                 });
+                // A person's own field's value on the first item, as GitHub answers it — the
+                // setup reads past it.
+                if let Some(own) = board.persons_fields.first()
+                    && item["id"] == "T-1"
+                {
+                    values.push(json!({"name":own["options"][0]["name"],
+                        "optionId":own["options"][0]["id"],
+                        "field":{"id":own["id"],"name":own["name"]}}));
+                }
                 if let (Some(name), Some(options)) =
                     (item["priority"].as_str(), &board.priority_options)
                 {
@@ -1939,6 +1985,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         );
         let item_id = input["itemId"].clone();
         let priority_field = input["fieldId"] == "FIELD-priority";
+        let drops_priority_writes = board.drops_priority_writes;
         let options = if priority_field {
             Value::Array(
                 board
@@ -1965,6 +2012,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .find(|item| item["item"] == item_id)
             .expect("a field update names a board item");
         match option {
+            Some(_) if priority_field && drops_priority_writes => {}
             Some(option) if priority_field => held["priority"] = option,
             Some(option) => held["status"] = option,
             None => {}

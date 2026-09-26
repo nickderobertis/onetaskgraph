@@ -5770,6 +5770,11 @@ async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
             serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","priority":9}}}),
             false,
         ),
+        // An answer naming another issue is not this write landing.
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2","priority":2}}}),
+            false,
+        ),
     ] {
         let (endpoint, _) = response_server(vec![
             prioritised_issue("I-1", None, 0.into()),
@@ -5794,6 +5799,10 @@ async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
         ),
         (
             serde_json::json!({"issueUpdate":{"success":true,"issue":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2"}}}),
             false,
         ),
     ] {

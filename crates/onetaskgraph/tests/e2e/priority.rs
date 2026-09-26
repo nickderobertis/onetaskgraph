@@ -703,6 +703,24 @@ fn a_board_field_write_reaches_the_priority_field_and_a_missing_option_or_field_
         "a clear of nothing is not sent"
     );
 
+    // The answer is what the board holds afterwards, read back, not the value asked for: a
+    // write the board answers as landed and does not keep is reported as it stands.
+    board.drop_priority_writes();
+    let unkept = answered(
+        "board",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "priority",
+            "set",
+            &qualified(SOURCE, "T-1"),
+            "low",
+        ],
+    );
+    assert_eq!(unkept["priority"], "high");
+    assert_eq!(board.priority("T-1").as_deref(), Some("High"));
+
     // An option the board lacks is refused by name, pointing at the verb that adds it.
     board.without_priority_option("Urgent");
     let refused = exits(

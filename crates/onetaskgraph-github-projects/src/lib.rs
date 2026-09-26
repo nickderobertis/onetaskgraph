@@ -2131,6 +2131,22 @@ struct StatusSnapshot {
 /// The name of the board field a status is held in.
 const STATUS_FIELD: &str = "Status";
 
+/// Every board field the guarded setup reads, and the only ones it writes.
+const SET_UP_FIELDS: [&str; 2] = [STATUS_FIELD, PRIORITY_FIELD];
+
+/// Every item's value of each field `report` names, as it stood before the setup wrote
+/// anything — what a person puts back when the setup is refused part way.
+fn recovery(report: &FieldsReport, before: &BoardSnapshot) -> Result<String, SourceError> {
+    let assignments: BTreeMap<&str, Vec<StatusAssignment>> = report
+        .fields
+        .iter()
+        .map(|field| (field.field.name(), before.assignments(field.field.name())))
+        .collect();
+    serde_json::to_string_pretty(&assignments).map_err(|error| SourceError::Malformed {
+        message: format!("cannot render the pre-write field recovery snapshot: {error}"),
+    })
+}
+
 /// One board field the guarded setup reads and writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub enum BoardField {
@@ -2408,8 +2424,9 @@ impl GitHubProjectsSource {
                 });
             }
             let mut fields = BTreeMap::new();
-            // A node the single-select fragment did not match — a text field, an iteration —
-            // carries no options, and is no field this setup reads or writes.
+            // Only the fields this setup owns: a node the single-select fragment did not
+            // match carries no options, and a person's own single-select field — a `Size`, a
+            // `Team` — is none of this setup's business, so nothing about it can refuse one.
             for field in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
@@ -2421,6 +2438,10 @@ impl GitHubProjectsSource {
                     field
                         .get("options")
                         .is_some_and(|options| !options.is_null())
+                        && field
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|name| SET_UP_FIELDS.contains(&name))
                 })
             {
                 let options = field
@@ -2499,7 +2520,11 @@ impl GitHubProjectsSource {
                     })?;
                 let mut assigned = BTreeMap::new();
                 for value in values {
-                    let Some(field) = value.pointer("/field/name").and_then(Value::as_str) else {
+                    let Some(field) = value
+                        .pointer("/field/name")
+                        .and_then(Value::as_str)
+                        .filter(|name| SET_UP_FIELDS.contains(name))
+                    else {
                         continue;
                     };
                     assigned.insert(
@@ -2630,12 +2655,13 @@ impl GitHubProjectsSource {
         if mode == StatusOptionsMode::Plan || writes.is_empty() {
             return Ok(report);
         }
+        let mut landed: Vec<&str> = Vec::new();
         for field in &writes {
             let added = field
                 .missing
                 .iter()
                 .map(|name| json!({"name": name, "color": "GRAY", "description": ""}));
-            match before.fields.get(field.field.name()) {
+            let sent = match before.fields.get(field.field.name()) {
                 Some(held) => {
                     let mut options = held
                         .options
@@ -2655,7 +2681,7 @@ impl GitHubProjectsSource {
                             "singleSelectOptions": options,
                         }}),
                     )
-                    .await?;
+                    .await
                 }
                 None => {
                     self.graphql(
@@ -2666,7 +2692,25 @@ impl GitHubProjectsSource {
                             "singleSelectOptions": added.collect::<Vec<_>>(),
                         }}),
                     )
-                    .await?;
+                    .await
+                }
+            };
+            match sent {
+                Ok(_) => landed.push(field.field.name()),
+                // Nothing has changed yet, so the failure is the whole of what to say.
+                Err(error) if landed.is_empty() => return Err(error),
+                // One field was written and another was not: the board is part way through,
+                // and what to put back is the recovery data a drift refusal carries.
+                Err(error) => {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "the guarded field setup changed the {} field and then failed on the \
+                             {} field: {error}; the pre-write item assignments are:\n{}",
+                            landed.join(" and "),
+                            field.field.name(),
+                            recovery(&report, &before)?
+                        ),
+                    });
                 }
             }
         }
@@ -2695,23 +2739,12 @@ impl GitHubProjectsSource {
             }
         }
         if !moved.is_empty() {
-            let recovery: BTreeMap<&str, Vec<StatusAssignment>> = report
-                .fields
-                .iter()
-                .map(|field| (field.field.name(), before.assignments(field.field.name())))
-                .collect();
-            let recovery = serde_json::to_string_pretty(&recovery).map_err(|error| {
-                SourceError::Malformed {
-                    message: format!(
-                        "cannot render the pre-write field recovery snapshot: {error}"
-                    ),
-                }
-            })?;
             return Err(SourceError::Refused {
                 message: format!(
                     "GitHub changed {} after the guarded field setup; the pre-write item \
-                     assignments are:\n{recovery}",
-                    moved.join(", ")
+                     assignments are:\n{}",
+                    moved.join(", "),
+                    recovery(&report, &before)?
                 ),
             });
         }
@@ -4515,7 +4548,7 @@ impl GitHubProjectsSource {
         if self.priorities.is_none() {
             return Err(self.holds_no_priority());
         }
-        let Some(mut item) = self
+        let Some(item) = self
             .item_by_id(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
@@ -4534,13 +4567,25 @@ impl GitHubProjectsSource {
             },
             _ => self.board_fields().await?,
         };
-        if let Some(write) = self.priority_write(&board.fields, Some(&item), priority)? {
-            self.write_priority(board.id.as_str(), &item.item_id, &write)
-                .await?;
+        let Some(write) = self.priority_write(&board.fields, Some(&item), priority)? else {
+            return Ok(Some(priority));
+        };
+        self.write_priority(board.id.as_str(), &item.item_id, &write)
+            .await?;
+        // Read back rather than echoed: the answer is what the board now holds, read by the
+        // item's own id — strongly consistent, unlike a search — and past what this run
+        // remembers writing, so a write the board did not keep is reported as it stands.
+        let read = match self.reach(id).await? {
+            Reached::Held(item) => Some(*item),
+            Reached::Draft => self.draft_by_id(id).await?,
+            Reached::Nothing => None,
         }
-        item.priority = HeldPriority::Read(priority);
-        self.remember_written(item, false)?;
-        Ok(Some(priority))
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("task {id} was written and then could not be read back"),
+        })?;
+        let answer = read.task()?.priority;
+        self.remember_written(read, false)?;
+        Ok(Some(answer))
     }
 
     /// Replace one task's visible body and nothing else; see

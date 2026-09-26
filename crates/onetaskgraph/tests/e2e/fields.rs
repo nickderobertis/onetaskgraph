@@ -4,7 +4,9 @@
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
+use crate::fixtures::{
+    GitHubBoardFields, document, github_projects_with_board, github_projects_with_board_failing,
+};
 
 // llmlint: ignore-block[tests_mirror_real_usage] Every test below drives the compiled CLI
 // against the real loopback HTTP boundary. What the verb owes is a wire effect — the whole
@@ -269,10 +271,72 @@ fn the_human_rendering_says_what_an_apply_added_and_verified() {
 }
 
 #[test]
+fn a_second_field_failing_after_the_first_changed_is_refused_with_the_recovery_data() {
+    let sandbox = Sandbox::new();
+    let (config, board) =
+        github_projects_with_board_failing(&sandbox, &["createProjectV2Field(input:$input)"]);
+    sandbox.project_document(&document(&json!({"board": {
+        "plugin": "github-projects", "config": config
+    }})));
+    board.without_option("Queued");
+    board.without_priority_field();
+    let output = sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains("changed the Status field and then failed on the Priority field")
+            && said.contains("createProjectV2Field")
+            && said.contains("the pre-write item assignments are:")
+            && said.contains("\"Status\"")
+            && said.contains("OPT-todo"),
+        "{said}"
+    );
+    // The Status half landed, which is exactly what the message says.
+    assert!(
+        board
+            .status_options()
+            .iter()
+            .any(|option| option["name"] == "Queued")
+    );
+    assert!(board.priority_options().is_none());
+}
+
+#[test]
+fn a_persons_own_field_is_read_past_whatever_it_holds() {
+    let (sandbox, board) = configured();
+    // A colour this product's vocabulary has no member for, on a field it never set up.
+    board.with_persons_field(json!({"__typename": "ProjectV2SingleSelectField",
+        "id": "FIELD-size", "name": "Size",
+        "options": [{"id": "OPT-size-s", "name": "S", "color": "TEAL", "description": ""}]}));
+    board.without_priority_option("Low");
+    let planned = report(&sandbox, &["--json", "sources", "fields", "board"]);
+    let names: Vec<&Value> = planned["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| &field["field"])
+        .collect();
+    assert_eq!(names, [&json!("Status"), &json!("Priority")]);
+    assert_eq!(planned["fields"][1]["missing"], json!(["Low"]));
+    let status = report(&sandbox, &["--json", "sources", "status-options", "board"]);
+    assert_eq!(status["missing"], json!([]));
+    let applied = report(
+        &sandbox,
+        &["--json", "sources", "fields", "board", "--apply"],
+    );
+    assert_eq!(applied["fields"][1]["outcome"], "applied");
+}
+
+#[test]
 fn drift_after_the_write_is_refused_with_the_pre_write_assignments() {
     let (sandbox, board) = configured();
     board.without_priority_option("Medium");
-    board.drift_after_status_update();
+    board.drift_after_priority_update();
     let output = sandbox
         .command()
         .args(["sources", "fields", "board", "--apply"])
