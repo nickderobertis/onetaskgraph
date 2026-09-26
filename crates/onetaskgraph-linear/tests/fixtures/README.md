@@ -123,6 +123,26 @@ types nothing checked. `pinned_schema_names_every_write_operation_the_plugin_sen
 walks those literals against the pinned input types, and refuses exactly the pair Linear
 refused, naming the variable and the location.
 
+## `Issue.identifier`, the handle a person says out loud
+
+`Issue.identifier: String!` carries a seventh date. It was read on **2026-09-25** from
+Linear's published SDK schema — `packages/sdk/src/schema.graphql` in the `linear/linear`
+repository, at commit `41cff77b3a62d93a30c3c3ceabc92ab77333f9da`, that file's last change
+at the time of reading, dated 2026-09-24 — where it is declared non-null and described as
+"Issue's human readable identifier (e.g. ENG-123)." It is byte-identical at
+`23f11eb41ef63ba219ec582911079c19d1abbf62`, the commit the comment and status pins above
+name, so nothing here turns on which of the two was read. Nothing was captured from the
+real API; this repository's own credentialed Linear lane, which runs on the merge path, is
+what compares the pin against it.
+
+`ISSUE` and `ISSUES` select it, and it is what this source reports as a task's `key`. The
+same schema records why that field is documented as liable to change: `Issue` also declares
+`previousIdentifiers`, "previous identifiers of the issue if it has been moved between
+teams", so an issue's identifier is not stable across a team move and `id` stays the thing
+everything stores and matches on. `issues.json` gains the member for the same reason every
+other selected field is in it — the pinned-schema check validates each selected response
+fixture against the type it stands for.
+
 ## The comment contract, and the two things in it that are not observed
 
 The comment contract carries a fifth date. `Query.comment(id: String): Comment!`,

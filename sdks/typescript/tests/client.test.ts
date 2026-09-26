@@ -637,6 +637,48 @@ test("one metadata key of a task, a project and a document is set through the re
   }
 });
 
+test("a task's key reaches list, show and search beside its id, and is absent where none", async () => {
+  const keyedRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-key-"));
+  try {
+    writeFileSync(
+      resolve(keyedRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          tracker: {
+            plugin: "subprocess",
+            // Absolute, because the engine spawns a plugin with a cleared environment and so
+            // no PATH to resolve a bare name against.
+            config: {
+              command: process.execPath,
+              args: [resolve(import.meta.dir, "keyed_source.ts")],
+            },
+          },
+        },
+      }),
+    );
+    const keyedClient = new OnetaskgraphClient({ binaryPath: binary, cwd: keyedRoot });
+
+    const listed = (await keyedClient.taskList()).items.map((task) => [task.id, task.item.key]);
+    expect(listed).toEqual([
+      ["tracker:iss_8f2c", "ENG-7"],
+      ["tracker:iss_91d0", null],
+    ]);
+
+    const shown = (await keyedClient.taskShow("tracker:iss_8f2c")).items[0];
+    expect([shown?.id, shown?.item.id, shown?.item.key]).toEqual([
+      "tracker:iss_8f2c",
+      "iss_8f2c",
+      "ENG-7",
+    ]);
+    expect((await keyedClient.taskShow("tracker:iss_91d0")).items[0]?.item.key).toBeNull();
+
+    const hit = (await keyedClient.search("Engine handle", { kind: "task" })).items[0];
+    expect([hit?.item.id, hit?.item.key]).toEqual(["iss_8f2c", "ENG-7"]);
+  } finally {
+    rmSync(keyedRoot, { recursive: true, force: true });
+  }
+});
+
 // One folder of Markdown, `work`, which outlives the invocation so what one call writes the
 // next one reads back. `P` delivers a task of `nowhere`, which no configuration names, so every
 // write of its status re-evaluates a delivered task that cannot be read.

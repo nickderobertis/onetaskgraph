@@ -274,6 +274,7 @@ type ProjectV2SingleSelectFieldOption {
 
 type Issue implements Node {
   id: ID!
+  number: Int!
   title: String!
   body: String!
   url: URI!

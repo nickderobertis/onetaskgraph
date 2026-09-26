@@ -11,6 +11,7 @@
           {
             "__typename": "Issue",
             "id": "I_task",
+            "number": 1002,
             "title": "Ship it",
             "body": "details\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->",
             "url": "https://github.example/issues/2",

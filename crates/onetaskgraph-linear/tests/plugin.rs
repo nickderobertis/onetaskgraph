@@ -108,10 +108,10 @@ fn team_filtering_server(projects: bool) -> String {
             let second = if narrowed {
                 ""
             } else {
-                r#",{"id":"i2","title":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}"#
+                r#",{"id":"i2","identifier":"ENG-2","title":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}"#
             };
             format!(
-                r#"{{"data":{{"issues":{{"nodes":[{{"id":"i1","title":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{{"name":"Todo","type":"unstarted"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
+                r#"{{"data":{{"issues":{{"nodes":[{{"id":"i1","identifier":"ENG-1","title":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{{"name":"Todo","type":"unstarted"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
             )
         };
         write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
@@ -593,7 +593,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
     };
     let body = serde_json::json!({"data":{
         "viewer": {"id":"U"},
-        "issue": {"id":"I","title":"issue","description":null,"url":null,"createdAt":null,
+        "issue": {"id":"I","identifier":"ENG-1","title":"issue","description":null,"url":null,"createdAt":null,
                   "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
                   "labels":{"nodes":[]},"project":null,
                   "relations":relations("blocks","relatedIssue","issue","IR"),
@@ -1074,7 +1074,7 @@ async fn an_archived_or_trashed_item_is_not_held_by_this_source_over_real_http()
     for (root, body) in [
         (
             "issue",
-            serde_json::json!({"issue":{"id":"I","title":"gone","description":null,"url":null,
+            serde_json::json!({"issue":{"id":"I","identifier":"ENG-1","title":"gone","description":null,"url":null,
                 "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
                 "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}}),
         ),
@@ -1178,7 +1178,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
-        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
         id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),
@@ -2091,6 +2091,12 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
         .await
         .unwrap();
     assert_eq!(page.items[0].title, "Fixture issue");
+    // The handle a person says out loud, beside the id and never instead of it: this is
+    // the issue's own `identifier`, which the recorded fixture carries because Linear
+    // declares the field non-null on every issue.
+    assert_eq!(page.items[0].key.as_deref(), Some("ENG-1"));
+    assert_eq!(page.items[0].id.0, "i1");
+    assert_eq!(page.items[1].key.as_deref(), Some("ENG-2"));
     assert_eq!(page.items[0].status.name, "In Progress");
     assert_eq!(page.items[0].content.as_deref(), Some("Recorded body"));
     assert_eq!(
@@ -2124,6 +2130,9 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     assert_eq!(page.next.unwrap().0, "next-1");
     let wire = request.recv().unwrap();
     assert!(wire.contains("issues(first:$first"));
+    // And the read asks for it, so the value above is Linear's own rather than something
+    // this source made up from the id it already had.
+    assert!(wire.contains("identifier"), "{wire}");
     assert!(
         wire.contains(r#"{"or":[{"labels":{"some":{"name":{"eqIgnoreCase":"Bug"}}}}]}"#),
         "{wire}"
@@ -3007,18 +3016,20 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
     }
     let (endpoint, _) = server("200 OK", "", r#"{"data":{"viewer":{"id":"u"}}}"#);
     assert!(source(&endpoint).health().await.unwrap().reachable);
-    let issue = r#"{"data":{"issue":{"id":"i1","title":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Backlog","type":"backlog"},"labels":{"nodes":[]},"project":null}}}"#;
-    let (endpoint, _) = server("200 OK", "", issue);
-    assert_eq!(
-        source(&endpoint)
-            .get_task(&"i1".into())
-            .await
-            .unwrap()
-            .unwrap()
-            .status
-            .category,
-        StatusCategory::Backlog
-    );
+    let issue = r#"{"data":{"issue":{"id":"i1","identifier":"ENG-1","title":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Backlog","type":"backlog"},"labels":{"nodes":[]},"project":null}}}"#;
+    let (endpoint, wire) = server("200 OK", "", issue);
+    let one = source(&endpoint)
+        .get_task(&"i1".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(one.status.category, StatusCategory::Backlog);
+    // A single-issue read carries the handle too, and the native id is untouched beside
+    // it: `ISSUE` and `ISSUES` select `identifier` alike, so one verb cannot report it
+    // while the other does not.
+    assert_eq!(one.key.as_deref(), Some("ENG-1"));
+    assert_eq!(one.id.0, "i1");
+    assert!(wire.recv().unwrap().contains("identifier"));
     let project = r#"{"data":{"project":{"id":"p1","name":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}}}"#;
     let (endpoint, _) = server("200 OK", "", project);
     assert_eq!(
@@ -3089,7 +3100,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
 
 #[tokio::test]
 async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
-    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","title":"A","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","title":"B","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","title":"C","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","title":"D","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
+    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","identifier":"ENG-1","title":"A","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","identifier":"ENG-2","title":"B","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","identifier":"ENG-3","title":"C","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","identifier":"ENG-4","title":"D","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
     let (endpoint, wire) = server("200 OK", "", body);
     let query = TaskQuery {
         labels: LabelFilter {
@@ -3224,15 +3235,23 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         r#"{"data":{"issues":{"nodes":[{}],"pageInfo":{}}}}"#,
         r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"}}],"pageInfo":{}}}}"#,
         r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"},"labels":{}}],"pageInfo":{}}}}"#,
+        // An issue with no `identifier`. Linear declares it `String!` and both read
+        // operations select it, so a response without one is a response this source cannot
+        // read — not an issue with no handle, which Linear has no way to be.
+        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
+        // And one whose identifier is not a string, which is the other half: present is
+        // not the same as readable.
+        r#"{"data":{"issues":{"nodes":[{"id":"i","identifier":7,"title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
     ] {
         let (endpoint, _) = server("200 OK", "", body);
-        assert!(matches!(
-            source(&endpoint)
-                .query_tasks(&TaskQuery::default(), &request)
-                .await
-                .unwrap_err(),
-            SourceError::Malformed { .. }
-        ));
+        // Named per body, so a shape this source stopped refusing says which one it was.
+        let read = source(&endpoint)
+            .query_tasks(&TaskQuery::default(), &request)
+            .await;
+        assert!(
+            matches!(read, Err(SourceError::Malformed { .. })),
+            "{body} was read as {read:?}"
+        );
     }
     for body in [
         r#"{"data":{"projects":{"nodes":[{"id":"p","name":"p","labels":{"nodes":[]}}],"pageInfo":{}}}}"#,
@@ -3250,7 +3269,7 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
     let (endpoint, _) = server(
         "200 OK",
         "",
-        r#"{"data":{"issue":{"id":"i","title":"t","createdAt":"yesterday","state":{"name":"x","type":"started"},"labels":{"nodes":[]}}}}"#,
+        r#"{"data":{"issue":{"id":"i","identifier":"ENG-1","title":"t","createdAt":"yesterday","state":{"name":"x","type":"started"},"labels":{"nodes":[]}}}}"#,
     );
     assert!(matches!(
         source(&endpoint).get_task(&"i".into()).await.unwrap_err(),
@@ -3988,12 +4007,23 @@ fn sent(request: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("the body is JSON")
 }
 
+/// The `identifier` Linear gives one issue, derived from its id so a fixture and what a
+/// test asserts about it cannot drift.
+///
+/// Linear declares `Issue.identifier` as `String!` and this source never parses one, so
+/// any distinct string is a faithful stand-in; what would not be faithful is two issues in
+/// one answer sharing it.
+fn identifier(id: &str) -> String {
+    format!("ENG-{}", id.replace('-', ""))
+}
+
 /// What `issue(id:)` answers for an issue this workspace holds under the backend id `id`.
 ///
 /// Every comment write resolves its task through `get_task` first, so every one of them
 /// begins with this answer.
 fn held_issue(id: &str) -> serde_json::Value {
-    serde_json::json!({"issue":{"id":id,"title":"Fixture issue","description":null,"url":null,
+    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
+        "description":null,"url":null,
         "createdAt":null,"updatedAt":null,"archivedAt":null,
         "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}})
 }
@@ -4648,7 +4678,8 @@ fn status_honouring_server() -> (String, mpsc::Receiver<serde_json::Value>) {
         "queued",
     ]
     .map(|kind| {
-        serde_json::json!({"id":format!("i-{kind}"),"title":kind,"description":null,"url":null,
+        serde_json::json!({"id":format!("i-{kind}"),"identifier":format!("ENG-{kind}"),
+            "title":kind,"description":null,"url":null,
             "createdAt":null,"updatedAt":null,"project":null,
             "state":{"name":kind,"type":kind},"labels":{"nodes":[]}})
     });
@@ -4846,7 +4877,8 @@ async fn no_linear_state_or_project_status_reads_back_as_queued() {
 
 /// What `issue(id:)` answers for an issue in a workflow state of `name` and `kind`.
 fn issue_in_state(id: &str, name: &str, kind: &str) -> serde_json::Value {
-    serde_json::json!({"issue":{"id":id,"title":"Fixture issue","description":null,"url":null,
+    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
+        "description":null,"url":null,
         "createdAt":null,"updatedAt":null,"archivedAt":null,
         "state":{"name":name,"type":kind},"labels":{"nodes":[]},"project":null}})
 }

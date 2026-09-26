@@ -67,6 +67,7 @@ fn one_page() -> Paging {
 fn task() -> Task {
     Task {
         id: NativeId::from("T-1"),
+        key: None,
         title: "Land the engine".to_owned(),
         content: Some("a body".to_owned()),
         status: Status {

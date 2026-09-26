@@ -386,16 +386,24 @@ pub fn hits(items: &[SearchHit]) -> String {
 }
 
 /// One task in full, body last.
+///
+/// The `key` line sits directly under `id` and only when the source gives one: it is the
+/// short handle that backend shows people — `ENG-123`, `1043` — and a reader looking for
+/// the thing they say out loud looks next to the id they were given. A source with no
+/// separate handle prints no line at all, rather than printing its id twice.
 pub fn task_detail(task: &Qualified<Task>) -> String {
     let item = &task.item;
-    let mut fields = vec![
-        ("id", task.id.to_string()),
+    let mut fields = vec![("id", task.id.to_string())];
+    if let Some(key) = &item.key {
+        fields.push(("key", key.clone()));
+    }
+    fields.extend([
         ("title", item.title.clone()),
         (
             "status",
             format!("{} ({})", wire(&item.status.category), item.status.name),
         ),
-    ];
+    ]);
     fields.push((
         "project",
         match &item.project {

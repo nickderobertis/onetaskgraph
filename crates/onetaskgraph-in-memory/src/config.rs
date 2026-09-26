@@ -185,6 +185,21 @@ impl InMemoryConfig {
             }
         }
 
+        // A handle this source cannot have issued: nothing outside this process ever named
+        // one of its tasks. Refused rather than dropped, because `key` is in this plugin's
+        // published configuration schema, and a member it accepts and then discards in
+        // silence is the worse failure.
+        for task in &self.tasks {
+            if let Some(key) = &task.key {
+                problems.push(format!(
+                    "task {} is configured with the key {key}; `key` is the short handle a \
+                     backend shows people, and an in-memory source has none of its own — \
+                     remove it, or configure this work under a source whose backend issues one",
+                    task.id
+                ));
+            }
+        }
+
         // A task's two task lists, held to what every source holds them to: no entry naming
         // the task itself, and none naming one task twice.
         for task in &self.tasks {

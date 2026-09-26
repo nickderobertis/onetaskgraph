@@ -1985,6 +1985,10 @@ impl LocalMdSource {
 fn task(d: Entry) -> Task {
     Task {
         id: d.common.id,
+        // A folder of Markdown has no handle of its own: a task's id *is* the path a
+        // person reads it by, so a key here would be a second spelling of the id rather
+        // than the short backend handle the field means.
+        key: None,
         title: d.common.title,
         content: d.common.body,
         status: d.status,

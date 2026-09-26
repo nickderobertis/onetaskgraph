@@ -29,6 +29,7 @@ DEADLINE_SOURCE="$ROOT/crates/onetaskgraph-core/src/subprocess/source.rs" \
 SUBPROCESS_CONFIG="$ROOT/crates/onetaskgraph-core/src/subprocess/plugin.rs" \
 WIRE="$ROOT/crates/onetaskgraph-core/src/subprocess/wire.rs" \
 python3 <<'PY'
+import json
 import os
 import re
 import sys
@@ -616,6 +617,38 @@ STRUCT_SECTIONS = {
     "Metered": "### 4.14 `metering`",
 }
 
+# A member specified in a section of its own, rather than as part of a struct the map
+# above reconciles whole. `Task` cannot go in STRUCT_SECTIONS: no section enumerates a
+# task's members — §4.13 and §4.13a each explain one — so a struct-level entry would demand
+# a section naming every member, which is a different document rather than a drift check.
+#
+# Each entry is reconciled against both sides: the Rust field exists, is an `Option` and
+# carries its serde default as recorded, and the section's body names the member and says
+# the recorded words — so neither side can drift from what §6 rests on while the other
+# still reads correctly.
+MEMBER_SECTIONS = {
+    ("Task", "key"): {
+        "heading": "### 4.13a A task's `key`",
+        # The whole declared type, not only its `Option`: a peer may omit the member, which
+        # is why it needed no protocol bump, and the section's JSON example has to carry it
+        # as the wire type of what is inside.
+        "type": "Option<String>",
+        # `#[serde(default)]`: an omitted member reads as absent rather than refusing.
+        "defaulted": True,
+        # The sentences the section has to say, whole, because a word can survive a rewrite
+        # that reverses what it meant. Compared with runs of whitespace folded to one space.
+        "states": (
+            "The member is **optional** and an absent one means `null`",
+            "one that has none sends nothing rather than a copy of the `id`",
+        ),
+    },
+}
+
+
+# The JSON type a declared Rust type is sent as, for the types MEMBER_SECTIONS names.
+WIRE_TYPES = {"String": str, "bool": bool, "u64": int, "u32": int}
+
+
 def wire_members(struct):
     """The members a hand-written `Serialize` puts on the wire, which no field scan sees.
 
@@ -671,6 +704,104 @@ for struct, heading in STRUCT_SECTIONS.items():
                 f"`{struct}` carries the field \"{member}\" but \"{heading}\" never "
                 f"names it. Specify it there — a plugin author writing from that section "
                 f"would never handle it."
+            )
+
+for (struct, member), specified in MEMBER_SECTIONS.items():
+    heading = specified["heading"]
+    declaration = re.search(
+        r"pub struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct),
+        source_rs + contract_rs,
+        re.DOTALL,
+    )
+    if declaration is None:
+        refuse(
+            f"could not read the `{struct}` struct from the api crate.",
+            "restore it, or teach this script the shape it has now — a struct whose "
+            "members this document specifies cannot go unreconciled.",
+        )
+    # The field and everything attached to it: the attributes between the previous member
+    # and this one are this member's own, which is where `#[serde(...)]` sits.
+    field = re.search(
+        r"\n((?:    #\[[^\n]*\]\n|    ///[^\n]*\n)*)    pub %s: ([^\n,]+),"
+        % re.escape(member),
+        declaration.group(1),
+    )
+    if field is None:
+        failures.append(
+            f'"{heading}" specifies the member "{member}", but `{struct}` no longer '
+            f"carries it. Restore the field, or remove that section — a plugin author "
+            f"implementing from it would send a member the engine has nowhere to put."
+        )
+    else:
+        attributes, rust_type = field.group(1), field.group(2).strip()
+        if rust_type != specified["type"]:
+            failures.append(
+                f'`{struct}::{member}` is declared `{rust_type}`, but MEMBER_SECTIONS records '
+                f'`{specified["type"]}` as the type "{heading}" specifies. Whether a peer may '
+                f"omit the member and what it sends when present are both part of its wire "
+                f"form. Make the declaration, the table and that section say one thing."
+            )
+        if ("#[serde(default" in attributes) != specified["defaulted"]:
+            failures.append(
+                f'`{struct}::{member}` disagrees with MEMBER_SECTIONS about its serde '
+                f'default. "{heading}" specifies what an omitted member means, and the '
+                f"default is what makes that true of the type — a peer written before this "
+                f"member existed omits it, and §6 rests on that being read rather than "
+                f"refused. Restore `#[serde(default)]` on that field; if the member is "
+                f"deliberately no longer defaulted, set `\"defaulted\": False` in "
+                f"MEMBER_SECTIONS and say in that section what a peer omitting it now gets."
+            )
+    # The section BODY, not the heading: a heading that names the member — this one does —
+    # would satisfy `spelled` on its own, and a section reduced to its title would pass a
+    # check that was supposed to notice exactly that. HTML comments are not the section
+    # either: a lint directive inside it names the member too, and a reader never sees it.
+    whole = section(heading)
+    body = re.sub(r"<!--.*?-->", "", whole.split("\n", 1)[1] if "\n" in whole else "", flags=re.DOTALL)
+    if not spelled(member, body):
+        failures.append(
+            f'`{struct}` carries the field "{member}" but "{heading}", which is the '
+            f"section that specifies it, never names it. Name it there — this section is "
+            f"the only place the wire form of that member is written down."
+        )
+    prose = " ".join(body.split())
+    for sentence in specified["states"]:
+        if sentence not in prose:
+            failures.append(
+                f'"{heading}" no longer says "{sentence}" about `{struct}::{member}`. A '
+                f"plugin author reads that section to learn whether they may leave the member "
+                f"out and what leaving it out means, and MEMBER_SECTIONS records this sentence "
+                f"as what it says. Put it back; if the wire form really changed, change the "
+                f"Rust declaration and the `states` entry in MEMBER_SECTIONS in the same edit."
+            )
+    inner = specified["type"].removeprefix("Option<").removesuffix(">")
+    if inner not in WIRE_TYPES:
+        refuse(
+            f"MEMBER_SECTIONS declares `{struct}::{member}` as `{specified['type']}`, whose "
+            f"wire type this script does not know.",
+            "add it to WIRE_TYPES, so the section's JSON example can be held to it.",
+        )
+    examples = []
+    for block in re.findall(r"```json\n(.*?)\n```", body, re.DOTALL):
+        try:
+            examples.append(json.loads(block))
+        except ValueError as error:
+            failures.append(
+                f'"{heading}" has a JSON example that is not JSON ({error}):\n{block}\n'
+                f"Make that block parse as JSON — use a quoted placeholder member such as "
+                f'"…": "…" for what the example leaves out — or mark it as another language.'
+            )
+    sent = [example[member] for example in examples if isinstance(example, dict) and member in example]
+    if not sent:
+        failures.append(
+            f'"{heading}" has no JSON example carrying "{member}". Show the member as a peer '
+            f"sends it, so its wire type is written down where it is specified."
+        )
+    for value in sent:
+        if not isinstance(value, WIRE_TYPES[inner]):
+            failures.append(
+                f'"{heading}" shows "{member}" as {json.dumps(value)}, but `{struct}::{member}` '
+                f"is `{specified['type']}`, which a peer sends as a JSON "
+                f"{WIRE_TYPES[inner].__name__}. Make the example and the declaration agree."
             )
 
 # The framing limit is a number rather than a name, so neither of the two scans above

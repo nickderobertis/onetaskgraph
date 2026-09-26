@@ -1600,6 +1600,7 @@ fn artifact_task(
 ) -> Task {
     Task {
         id: NativeId("live-source-item".into()),
+        key: None,
         title: title.to_owned(),
         content: Some(content),
         status: status.clone(),

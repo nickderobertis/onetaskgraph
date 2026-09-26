@@ -641,7 +641,7 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
+                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id project{id number}
         "#,
@@ -711,7 +711,7 @@ pub mod graphql {
       items(first:$first,after:$after){nodes{id "#,
         board_item_values!(),
         r#" content{
-        ... on Issue{__typename id title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }} pageInfo{hasNextPage endCursor}}
@@ -799,7 +799,7 @@ pub mod graphql {
       }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
     /// Creates one issue in the configured repository.
     pub const CREATE_ISSUE: &str =
-        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id url}}}"#;
+        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id number url}}}"#;
     /// Puts an existing issue on the configured board.
     pub const ADD_TO_BOARD: &str = r#"mutation($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}"#;
     /// Updates an issue's visible fields and its open or closed state in one call.
@@ -3522,6 +3522,13 @@ impl GitHubProjectsSource {
             labels: labels(content)?,
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
+            number: match content_kind {
+                ContentKind::Issue => Some(issue_number(content)?),
+                // A draft is filed in no repository, so nothing ever numbered it:
+                // `DraftIssue` declares no `number` at all, exactly as it declares no
+                // `subIssuesSummary` the branch above reads.
+                ContentKind::DraftIssue => None,
+            },
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
@@ -4393,11 +4400,21 @@ impl GitHubProjectsSource {
             None => None,
         };
 
-        let (content_id, item_id, url) = match existing {
+        let Landed {
+            content_id,
+            item_id,
+            url,
+            number,
+        } = match existing {
             Some(item) => {
                 self.update_existing(item, incoming, &body, status_target.as_ref())
                     .await?;
-                (item.id.clone(), item.item_id.clone(), item.url.clone())
+                Landed {
+                    content_id: item.id.clone(),
+                    item_id: item.item_id.clone(),
+                    url: item.url.clone(),
+                    number: item.number,
+                }
             }
             None => {
                 let target = creation_target
@@ -4490,8 +4507,9 @@ impl GitHubProjectsSource {
             labels: incoming.labels.to_vec(),
             parent: incoming.parent.cloned(),
             origin: (!origin.is_empty()).then(|| origin.to_owned()),
+            number,
             // In the update path this is the item's own url, read off `existing` where the
-            // tuple above was bound, so one expression serves both halves.
+            // record above was bound, so one expression serves both halves.
             url,
             created_at: existing.and_then(|item| item.created_at),
             updated_at: existing.and_then(|item| item.updated_at),
@@ -4836,17 +4854,17 @@ impl GitHubProjectsSource {
     /// terminal status is not written here: `finish_write` selects its option first and
     /// closes the issue after, so a close never lands on an item whose board cannot show it.
     ///
-    /// The address comes back here because this is the only place it is known before
-    /// GitHub's own board read catches up — an item this run created answers the reads
-    /// that follow it out of the record below, and one remembered without its address
-    /// would report no location for the rest of the run.
+    /// The address and the number come back here because this is the only place either is
+    /// known before GitHub's own board read catches up — an item this run created answers
+    /// the reads that follow it out of the record below, and one remembered without them
+    /// would report no location and no key for the rest of the run.
     async fn create_and_file_issue(
         &self,
         board_id: &str,
         repository: &RepositoryTarget,
         incoming: &Incoming<'_>,
         body: &Option<String>,
-    ) -> Result<(NativeId, String, Option<String>), SourceError> {
+    ) -> Result<Landed, SourceError> {
         let repository_id = self.repository_id(repository, incoming).await?;
         let data = self
             .graphql(
@@ -4867,9 +4885,21 @@ impl GitHubProjectsSource {
         // a response without it is not worth failing a landed write over — the item simply
         // reports no location until the board read catches up, which is what it did before.
         let url = optional_str(created, "url")?.map(str::to_owned);
-        // The issue exists from here on, so a failure filing it on the board takes it
-        // back: an issue in the repository that is on no board is an item nobody asked for
-        // and nothing here would find again.
+        // The issue exists from here on, so an unreadable number and a refused board
+        // filing below each try, best effort, to take it back: an issue in the repository
+        // that is on no board is an item nobody asked for and nothing here would find again.
+        //
+        // Its number is optional on the same terms its address is — a landed write is not
+        // worth failing over a member that came back missing, and such an item reports no
+        // handle until a board read catches up. A number that is *present* and is not an
+        // unsigned integer is still a response this source cannot read.
+        let number = match created_issue_number(created) {
+            Ok(number) => number,
+            Err(error) => {
+                let _ = self.delete_issue(&content_id).await;
+                return Err(error);
+            }
+        };
         let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,
@@ -4889,7 +4919,12 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub board addition returned no project item".into(),
             })?;
-        Ok((content_id, required_str(item, "id")?.to_owned(), url))
+        Ok(Landed {
+            content_id,
+            item_id: required_str(item, "id")?.to_owned(),
+            url,
+            number,
+        })
     }
 
     /// Move one issue under the project it now belongs to, or out of the one it left.
@@ -5057,6 +5092,24 @@ struct BoardFields {
 #[derive(Clone)]
 struct BoardId(String);
 
+/// Where one write left its item, for the record the rest of the command reads it out of.
+///
+/// A named record rather than a tuple because the update arm and the create arm each fill
+/// all four, and two `Option`s of different meaning side by side in a tuple are two
+/// positions a reader has to count.
+struct Landed {
+    /// The issue's own node id, which is the [`NativeId`] this source reports.
+    content_id: NativeId,
+    /// The board item's id, which is what a field write addresses.
+    // llmlint: ignore[invalid_states_unrepresentable] This field and the one below are `Resolved::item_id` and `Resolved::url` carried out of one call: the update arm assigns them from an existing `Resolved` and the whole record is assigned straight back into one. A newtype introduced here alone would be wrapped at both of those boundaries and unwrapped at every use, and would make this private record disagree with the type the same values have on the struct they come from and return to. Where the board item id gets a newtype is on `Resolved`, which is the contract's own shape and not this change's to move.
+    item_id: String,
+    /// The web address GitHub gave the issue, when it gave one.
+    // llmlint: ignore[invalid_states_unrepresentable] The answer `Resolved::url` and the contract's `Task::url` already record: a web address this source never parses, resolves or compares — it reads GitHub's string and hands it back, and `Location::Url` is where the contract gives it a shape. Validating it here would have this plugin decide what GitHub may call an address.
+    url: Option<String>,
+    /// The issue's number on its repository, when GitHub reported one.
+    number: Option<u64>,
+}
+
 impl BoardId {
     fn parse(id: &str) -> Result<Self, SourceError> {
         if id.trim().is_empty() {
@@ -5113,6 +5166,14 @@ struct Resolved {
     parent: Option<NativeId>,
     // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
     origin: Option<String>,
+    /// The issue's own number on its repository, as GitHub reports it.
+    ///
+    /// `None` in exactly two cases: a draft, which has no number at all — `DraftIssue`
+    /// declares none, and a draft is not filed in a repository to be numbered by one — and
+    /// an issue this run created whose creating mutation answered without one, which is a
+    /// response GitHub's own schema says cannot happen and which a landed write is not
+    /// worth failing over. An `Issue` read off the board always has one.
+    number: Option<u64>,
     url: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -5182,9 +5243,22 @@ impl Resolved {
         self.url.clone().map(Location::Url)
     }
 
+    /// The short handle this board's backend shows people for a task: the issue's number
+    /// alone, as a decimal string.
+    ///
+    /// The number alone rather than `owner/repo#1043`, because that is the contract's
+    /// value for this backend. A draft has no number and so no handle, which is the
+    /// contract's *absent* rather than a handle of some other shape — and the native
+    /// [`Task::id`] here is the issue's GraphQL node id, which this neither replaces nor
+    /// derives from.
+    fn key(&self) -> Option<String> {
+        self.number.map(|number| number.to_string())
+    }
+
     fn task(&self) -> Task {
         Task {
             id: self.id.clone(),
+            key: self.key(),
             title: self.title.clone(),
             content: self.body.clone(),
             status: self.status.clone(),
@@ -6246,6 +6320,37 @@ fn sub_issue_total(issue: &Value) -> Result<u64, SourceError> {
         .ok_or_else(|| SourceError::Malformed {
             message: "GitHub issue subIssuesSummary.total is not an unsigned integer".into(),
         })
+}
+
+/// One issue's own `number`.
+///
+/// An issue always has one: GitHub declares `Issue.number` as `Int!` and every selection of
+/// an issue in this module asks for it. So a read of one that comes back without it, or
+/// with something that is not an unsigned integer, is a response this source cannot read —
+/// absence here is **not** "this issue has no number". A draft is the content that has
+/// none, and a draft never reaches this: the caller decides on `__typename` first, the way
+/// it does for `subIssuesSummary`, which `DraftIssue` equally declares nothing for.
+fn issue_number(issue: &Value) -> Result<u64, SourceError> {
+    issue
+        .get("number")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub issue number is missing or is not an unsigned integer".into(),
+        })
+}
+
+/// The `number` a creating mutation answered with, and `None` when it answered without one;
+/// why a missing one is tolerated is at the call in `create_and_file_issue`.
+fn created_issue_number(created: &Value) -> Result<Option<u64>, SourceError> {
+    match created.get("number") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub created issue number is not an unsigned integer".into(),
+            }),
+    }
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, SourceError> {

@@ -13,6 +13,26 @@ use crate::{NativeId, SourceName};
 pub struct Task {
     /// The source's own opaque identifier.
     pub id: NativeId,
+    /// The short handle the backend shows people, beside [`id`](Self::id) and never
+    /// instead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.
+    ///
+    /// **It is human-facing and it may change.** A Linear issue moved between teams gets a
+    /// new identifier and a GitHub issue transferred between repositories gets a new
+    /// number, so nothing stores this in place of [`id`](Self::id) and nothing matches on
+    /// it: `id` is what everything stores and matches on, and this is what a person says
+    /// out loud.
+    ///
+    /// Absent by default, so a source that predates this field — and every source with no
+    /// separate handle of its own — reads as `None`, which means *this backend has no
+    /// short handle for this task* rather than *the handle is the id*. A source never
+    /// copies [`id`](Self::id) here.
+    ///
+    /// **Read-only.** A source derives it on a read and never stores one it is handed: a
+    /// task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+    /// and a destination ignores it.
+    // llmlint: ignore[invalid_states_unrepresentable] The answer `Task::url` and `Project::url` below already record: this crate's field types are the contract itself, and the contract approving this field states its shape as `Option<String>`. A backend's handle is also the one value this product never parses, matches on or resolves by — `id` does all three — so the confusion a newtype prevents is confusion no code here can act on.
+    #[serde(default)]
+    pub key: Option<String>,
     /// The one-line summary a user recognises the task by.
     pub title: String,
     /// The long-form body, when the source has one.

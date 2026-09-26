@@ -443,6 +443,9 @@ impl TaskSource for InMemorySource {
         self.declared().writes
     }
 
+    /// A written task's `key` is dropped rather than refused: it is the handle of wherever
+    /// the task was read, and refusing it would stop a copy out of Linear or a GitHub board
+    /// landing here at all. A configured key is refused; see [`InMemoryConfig::validate`].
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
         let near = write.target.as_ref().unwrap_or(&write.item.id);
@@ -456,6 +459,7 @@ impl TaskSource for InMemorySource {
                     .ok_or_else(|| missing(target, "task"))?;
                 held.tasks[position] = Task {
                     id: target.clone(),
+                    key: None,
                     ..write.item.clone()
                 };
                 target.clone()
@@ -464,6 +468,7 @@ impl TaskSource for InMemorySource {
                 let id = unused(held.tasks.iter().map(|task| &task.id), &write.item.id);
                 held.tasks.push(Task {
                     id: id.clone(),
+                    key: None,
                     ..write.item.clone()
                 });
                 id

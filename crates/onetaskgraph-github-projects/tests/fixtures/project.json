@@ -69,6 +69,7 @@
               "content": {
                 "__typename": "Issue",
                 "id": "I_plan",
+                "number": 1001,
                 "title": "Delivery plan",
                 "body": "the delivery plan\n\n<!-- onetaskgraph.metadata\n{\"caller.enabled\":true}\n-->",
                 "url": "https://github.example/issues/1",
@@ -127,6 +128,7 @@
               "content": {
                 "__typename": "Issue",
                 "id": "I_task",
+                "number": 1002,
                 "title": "Ship it",
                 "body": "details\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->",
                 "url": "https://github.example/issues/2",
@@ -191,6 +193,7 @@
               "content": {
                 "__typename": "Issue",
                 "id": "I_next",
+                "number": 1003,
                 "title": "Next quarter",
                 "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
                 "url": "https://github.example/issues/3",
@@ -242,6 +245,7 @@
               "content": {
                 "__typename": "Issue",
                 "id": "I_notes",
+                "number": 1004,
                 "title": "Draft the notes",
                 "body": "what next quarter needs written down",
                 "url": "https://github.example/issues/4",
@@ -301,6 +305,7 @@
               "content": {
                 "__typename": "Issue",
                 "id": "I_loose",
+                "number": 1005,
                 "title": "Sweep the backlog",
                 "body": "work nobody has filed under a plan",
                 "url": "https://github.example/issues/5",

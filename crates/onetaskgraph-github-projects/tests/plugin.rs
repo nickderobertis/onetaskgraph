@@ -176,6 +176,15 @@ struct Item {
     body: Option<String>,
     state: &'static str,
     state_reason: Option<String>,
+    /// This issue's own number on its repository, which is the short handle GitHub shows
+    /// people and this source reports as a task's `key`.
+    ///
+    /// Every fixture issue wears the same one unless a case says otherwise, because only
+    /// the cases about the handle care which number it is — and those set their own, so
+    /// two issues they compare cannot accidentally agree. A draft carries it and never
+    /// sends it: `DraftIssue` declares no `number`, which is what having no handle looks
+    /// like on the wire.
+    number: u64,
     parent: Option<String>,
     sub_issues: u64,
     /// `owner/name` of the repository this issue is in — the one the `createIssue` that
@@ -249,6 +258,7 @@ impl Item {
             body: None,
             state: "OPEN",
             state_reason: None,
+            number: 1043,
             parent: None,
             sub_issues: 0,
             repository: Some("acme/work".to_owned()),
@@ -286,6 +296,10 @@ impl Item {
     }
     fn parent(mut self, parent: &str) -> Self {
         self.parent = Some(parent.to_owned());
+        self
+    }
+    fn number(mut self, number: u64) -> Self {
+        self.number = number;
         self
     }
     fn sub_issues(mut self, total: u64) -> Self {
@@ -412,7 +426,8 @@ impl Item {
             "PullRequest" => json!({"__typename":"PullRequest","id":self.content_id}),
             "DraftIssue" => json!({"__typename":"DraftIssue","id":self.content_id,
                 "title":self.title,"body":self.body,"createdAt":null,"updatedAt":null}),
-            _ => json!({"__typename":"Issue","id":self.content_id,"title":self.title,
+            _ => json!({"__typename":"Issue","id":self.content_id,"number":self.number,
+                "title":self.title,
                 "body":self.body.clone().unwrap_or_default(),
                 "url":format!("https://github.example/{}", self.content_id),
                 "createdAt":null,"updatedAt":null,"state":self.state,
@@ -487,6 +502,22 @@ struct State {
     guarded_status_options: Option<Vec<Value>>,
     /// Whether the first post-update read changes existing option metadata.
     drift_guarded_status_description: bool,
+    /// Whether `createIssue` answers with a `number` that is not an unsigned integer.
+    ///
+    /// The other half of the tolerated-absence rule: a member that came back *missing* is
+    /// not worth failing a landed write over, and one that came back unreadable is a
+    /// response this source cannot read at all. Only a fixture reaches it, because GitHub
+    /// answers with an `Int!`.
+    creation_number_is_unreadable: bool,
+    /// Whether `createIssue` answers with the new issue's `number`.
+    ///
+    /// GitHub declares `Issue.number` non-null and always answers with one, which is the
+    /// default here. A board that leaves it out models the response this source is
+    /// deliberately lenient about: a landed write is not worth failing over a member that
+    /// came back missing, so the item reports no handle until a read of the board catches
+    /// up. Nothing else can produce that state, and it is not one a board is ever *seen*
+    /// in — which is exactly why it needs a fixture to reach it.
+    creation_reports_number: bool,
     /// Which identifier the next guarded snapshot returns blank, for boundary validation.
     blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
@@ -959,6 +990,15 @@ impl Fixture {
     fn drift_guarded_status_description(&self) {
         self.state.lock().unwrap().drift_guarded_status_description = true;
     }
+    /// Answer every `createIssue` from here on without the issue's `number`.
+    fn creation_reports_no_number(&self) {
+        self.state.lock().unwrap().creation_reports_number = false;
+    }
+
+    /// Answer every `createIssue` from here on with a `number` that is not an integer.
+    fn creation_reports_an_unreadable_number(&self) {
+        self.state.lock().unwrap().creation_number_is_unreadable = true;
+    }
 
     fn blank_status_snapshot_id(&self, target: &'static str) {
         self.state.lock().unwrap().blank_status_snapshot_id = Some(target);
@@ -985,6 +1025,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         ],
         guarded_status_options: None,
         drift_guarded_status_description: false,
+        creation_number_is_unreadable: false,
+        creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
         status_field,
@@ -1346,6 +1388,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
+        // Its own band, so an assertion about a created issue's number cannot pass against
+        // a number a seeded board item happened to be wearing.
+        created.number = 2000 + state.next as u64;
         created.body = input["body"].as_str().map(str::to_owned);
         // The issue is in the repository whose node id the input carried, which is how a
         // read of it derives the repository the source chose rather than the board's own.
@@ -1356,9 +1401,22 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .expect("createIssue names a repository this board resolved")
                 .to_owned(),
         );
+        let number = if state.creation_number_is_unreadable {
+            json!("not-a-number")
+        } else {
+            state
+                .creation_reports_number
+                .then_some(created.number)
+                .map_or(Value::Null, |number| json!(number))
+        };
         state.pending.push(created);
-        return json!({"createIssue":{"issue":{"id":id,
-            "url":format!("https://github.example/{id}")}}});
+        // GitHub answers the creating mutation with the issue's own address and number,
+        // which is the only place a run learns either before its board read catches up.
+        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}")});
+        if !number.is_null() {
+            issue["number"] = number;
+        }
+        return json!({ "createIssue": { "issue": issue } });
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         let content = input["contentId"]
@@ -2021,6 +2079,7 @@ fn build_refusal(config: Value) -> String {
 fn task(id: &str, title: &str, status: Status) -> Task {
     Task {
         id: NativeId(id.to_owned()),
+        key: None,
         title: title.to_owned(),
         content: None,
         status,
@@ -7165,7 +7224,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         ),
         (
             board(
-                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
+                json!({"nodes":[{"id":"PVTI","content":{"__typename":"Issue","id":"I","number":1043,"subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "missing fieldValues",
@@ -7173,7 +7232,7 @@ async fn malformed_board_shapes_are_named_rather_than_guessed_at() {
         (
             board(
                 json!({"nodes":[{"id":"PVTI","fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":true}},
-                                 "content":{"__typename":"Issue","id":"I","subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
+                                 "content":{"__typename":"Issue","id":"I","number":1043,"subIssuesSummary":{"total":0}}}],"pageInfo":{"hasNextPage":false}}),
                 complete.clone(),
             ),
             "exceeds the supported nested connection size",
@@ -7269,7 +7328,7 @@ fn fields_json(id: &str, fields: Value) -> Value {
 /// One issue's own node read, placing it on the configured board and holding no field
 /// values — so what a write needs of the board's fields comes from [`fields_json`].
 fn held_issue(id: &str, title: &str, parent: Option<&str>) -> Value {
-    json!({"data":{"node":{"__typename":"Issue","id":id,"title":title,"body":"",
+    json!({"data":{"node":{"__typename":"Issue","id":id,"number":1043,"title":title,"body":"",
         "state":"OPEN","stateReason":null,"repository":{"nameWithOwner":"acme/work"},
         "parent":parent.map(|parent| json!({"id":parent})),"subIssuesSummary":{"total":0},
         "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},
@@ -7279,7 +7338,7 @@ fn held_issue(id: &str, title: &str, parent: Option<&str>) -> Value {
                         "pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
 }
 fn plain_issue() -> Value {
-    json!({"__typename":"Issue","id":"I_1","title":"one","body":"","state":"OPEN",
+    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"","state":"OPEN",
            "stateReason":null,"repository":{"nameWithOwner":"acme/work"},
            "parent":null,"subIssuesSummary":{"total":0},
            "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
@@ -7319,7 +7378,7 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
             board_json(
                 usable_fields(),
                 complete(json!([issue_item(
-                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"",
                     "createdAt":"not-a-time","subIssuesSummary":{"total":0}})
                 )])),
             ),
@@ -7329,7 +7388,7 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
             board_json(
                 usable_fields(),
                 complete(json!([issue_item(
-                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    json!({"__typename":"Issue","id":"I_1","number":1043,"title":"one","body":"",
                     "subIssuesSummary":{"total":0},
                     "labels":{"nodes":"no","pageInfo":{"hasNextPage":false}}})
                 )])),
@@ -7339,6 +7398,35 @@ async fn every_board_shape_this_source_will_not_guess_at_is_named() {
         (
             board_json(usable_fields(), json!({"nodes":[],"pageInfo":{}})),
             "missing boolean field hasNextPage",
+        ),
+        // An issue with no number. GitHub declares `Issue.number` as `Int!`, so this is a
+        // shape that cannot come back from the real API — and reading it as *an issue with
+        // no handle* would be guessing, which is what every case in this list exists to
+        // refuse. Only a draft has no number, and a draft is decided on `__typename`
+        // before this is ever read.
+        (
+            board_json(
+                usable_fields(),
+                complete(json!([issue_item(
+                    json!({"__typename":"Issue","id":"I_1","title":"one","body":"",
+                    "subIssuesSummary":{"total":0},
+                    "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
+                )])),
+            ),
+            "GitHub issue number is missing or is not an unsigned integer",
+        ),
+        // And one whose number is a string, which is the other half: present is not the
+        // same as readable.
+        (
+            board_json(
+                usable_fields(),
+                complete(json!([issue_item(
+                    json!({"__typename":"Issue","id":"I_1","number":"1043","title":"one",
+                    "body":"","subIssuesSummary":{"total":0},
+                    "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}})
+                )])),
+            ),
+            "GitHub issue number is missing or is not an unsigned integer",
         ),
     ];
     for (body, expected) in cases {
@@ -10174,6 +10262,303 @@ async fn every_predicate_a_document_query_carries_is_applied_before_it_is_paged(
         ["I_filed"]
     );
     assert!(second.next.is_none(), "the walk reached the end");
+}
+
+#[tokio::test]
+async fn a_task_reports_the_issue_number_alone_as_its_key_and_a_draft_reports_none() {
+    // The short handle this backend shows people is the issue's **number alone**, as a
+    // decimal string — `1043`, never `owner/repo#1043` — and the native id stays the
+    // issue's GraphQL node id beside it. A draft has no number at all: `DraftIssue`
+    // declares none, so it reports no handle rather than one of some other shape.
+    let fixture = board(vec![
+        Item::issue("I_task", "Alpha engine").number(1043),
+        Item::issue("I_other", "Beta").number(7),
+        Item::draft("D_1", "a draft"),
+    ]);
+    let source = source(&fixture);
+
+    let task = source
+        .get_task(&NativeId("I_task".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.key.as_deref(), Some("1043"));
+    assert_eq!(
+        task.id,
+        NativeId("I_task".to_owned()),
+        "the node id is what everything stores and matches on, and the key never displaces it"
+    );
+
+    // A second issue, so the handle is read off each item rather than being one constant
+    // this board happens to answer everything with.
+    assert_eq!(
+        source
+            .get_task(&NativeId("I_other".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .key
+            .as_deref(),
+        Some("7")
+    );
+
+    assert_eq!(
+        source
+            .get_task(&NativeId("D_1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .key,
+        None,
+        "a draft is filed in no repository, so nothing numbered it"
+    );
+
+    // And a listing reports it too, so one verb cannot carry the handle while another
+    // drops it: the board query and the node read compose the same fragment.
+    let listed = source
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .unwrap()
+        .items;
+    let keys: Vec<(String, Option<String>)> = listed
+        .iter()
+        .map(|task| (task.id.0.clone(), task.key.clone()))
+        .collect();
+    assert!(
+        keys.contains(&("I_task".to_owned(), Some("1043".to_owned())))
+            && keys.contains(&("I_other".to_owned(), Some("7".to_owned())))
+            && keys.contains(&("D_1".to_owned(), None)),
+        "{keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_issue_this_run_created_reports_its_key_before_the_board_read_catches_up() {
+    // The creating mutation is the only place a run learns the new issue's number, because
+    // GitHub's own board read is behind for a moment after a create — so an item this run
+    // made and then read back answers out of what this source remembered, and an item
+    // remembered without its number would report no handle for the rest of the run.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    let source = source(&fixture);
+
+    let created = source
+        .write_task(&write(task(
+            "ignored",
+            "Third step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a task this board accepts");
+
+    let read = source
+        .get_task(&created)
+        .await
+        .expect("this source answers")
+        .expect("the item it just created is there");
+    assert_eq!(
+        read.key.as_deref(),
+        Some("2001"),
+        "the number the creating mutation answered with is the handle this item reports"
+    );
+    assert_eq!(
+        read.id, created,
+        "and its node id is the one the write returned"
+    );
+}
+
+#[tokio::test]
+async fn an_issue_created_without_a_number_reports_no_key_rather_than_failing_the_write() {
+    // GitHub declares `Issue.number` non-null, so this is a response that should not
+    // happen — and a landed write is not worth failing over a member that came back
+    // missing anyway. The item reports no handle until a read of the board catches up,
+    // which is the same answer as a backend that has none, and the write still lands
+    // whole: this is the lenient branch, driven rather than assumed.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    fixture.creation_reports_no_number();
+    let source = source(&fixture);
+
+    let created = source
+        .write_task(&write(task(
+            "ignored",
+            "Third step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a create whose answer omits the number still lands");
+
+    let read = source
+        .get_task(&created)
+        .await
+        .expect("this source answers")
+        .expect("the item it just created is there");
+    assert_eq!(
+        read.key, None,
+        "no handle, rather than a guess or a failure"
+    );
+    assert_eq!(
+        read.title, "Third step",
+        "and the rest of the write is exactly what it was"
+    );
+}
+
+#[tokio::test]
+async fn a_creation_answering_with_an_unreadable_number_is_refused_and_the_issue_taken_back() {
+    // Unlike a missing number, an unreadable one is not guessed at as *no handle*; and the
+    // issue already exists by then, so the refusal takes it back rather than leave it in the
+    // repository on no board.
+    let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    fixture.creation_reports_an_unreadable_number();
+    let source = source(&fixture);
+
+    let message = refusal(
+        source
+            .write_task(&write(task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            )))
+            .await
+            .expect_err("a created issue whose number cannot be read is refused"),
+    );
+    assert!(
+        message.contains("GitHub created issue number is not an unsigned integer"),
+        "the refusal names what it could not read: {message}"
+    );
+    assert!(
+        fixture.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "the issue this call created was left behind: {:?}",
+        fixture.seen()
+    );
+    assert!(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .all(|held| held.title != "Third step"),
+        "and the board holds nothing this failed write made"
+    );
+}
+
+#[tokio::test]
+async fn a_board_that_will_not_take_the_issue_back_still_reports_why_the_write_failed() {
+    // The take-back is best effort on purpose: the caller is told why the *write* failed,
+    // not why the tidy-up did, because a cleanup failure reported in place of the cause
+    // would name the wrong problem — and the residue a refused cleanup leaves is real, so
+    // the attempt is made and its outcome is what this pins. Nothing else in this suite
+    // reaches a delete that fails, so the discarded result is unproved without it.
+    let stuck = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
+    stuck.creation_reports_an_unreadable_number();
+    stuck.refuse("deleteIssue");
+    let source = source(&stuck);
+
+    let message = refusal(
+        source
+            .write_task(&write(task(
+                "ignored",
+                "Third step",
+                status(StatusCategory::Todo, "Todo"),
+            )))
+            .await
+            .expect_err("a created issue whose number cannot be read is still refused"),
+    );
+    assert!(
+        message.contains("GitHub created issue number is not an unsigned integer"),
+        "the cause survives the failed cleanup rather than being replaced by it: {message}"
+    );
+    assert!(
+        !message.contains("deleteIssue"),
+        "and the cleanup's own failure is not what the caller is told: {message}"
+    );
+    assert!(
+        stuck.seen().iter().any(|call| call[0] == "deleteIssue"),
+        "the take-back was attempted even though this board refuses it: {:?}",
+        stuck.seen()
+    );
+}
+
+#[tokio::test]
+async fn an_update_keeps_the_destinations_own_key_whatever_the_incoming_task_carried() {
+    // A key is read-only, so an `ItemWrite` arriving with one is an item read somewhere
+    // that has a handle — a Linear issue's `ENG-123` — on its way into an item this board
+    // already numbered. The handle stays the destination's own.
+    //
+    // A list either side of the write is what makes that a real question rather than one
+    // the board answers for free: a write records what it wrote over this source's own
+    // view of the board, so the second list answers out of the record the update built
+    // rather than by asking GitHub again. An update that carried no number into that
+    // record would have the item report no handle for the rest of the run, while a direct
+    // read of the issue went on reporting one.
+    let fixture = board(vec![Item::issue("I_1", "one").number(4242).status("Todo")]);
+    let source = source(&fixture);
+
+    let before = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("this board lists")
+        .items;
+    assert_eq!(
+        before
+            .iter()
+            .map(|task| (task.id.0.as_str(), task.key.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("I_1", Some("4242"))]
+    );
+
+    let mut revised = task(
+        "ignored",
+        "one, revised",
+        status(StatusCategory::Todo, "Todo"),
+    );
+    revised.key = Some("ENG-999".to_owned());
+    revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let written = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_1".to_owned())),
+            item: revised,
+            depends_on: vec![],
+        })
+        .await
+        .expect("this board takes the update");
+    assert_eq!(
+        written,
+        NativeId("I_1".to_owned()),
+        "the update addressed the item that was already there"
+    );
+
+    let after = source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .expect("this board lists")
+        .items;
+    assert_eq!(
+        after
+            .iter()
+            .map(|task| (task.id.0.as_str(), task.title.as_str(), task.key.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("I_1", "one, revised", Some("4242"))],
+        "the destination's own number, not the handle the write carried, and the rest of \
+         the update landed with it"
+    );
+
+    // And a direct read of the issue says the same, so the two halves cannot disagree.
+    assert_eq!(
+        source
+            .get_task(&written)
+            .await
+            .expect("this source answers")
+            .expect("the item it just updated is there")
+            .key
+            .as_deref(),
+        Some("4242")
+    );
 }
 
 #[tokio::test]

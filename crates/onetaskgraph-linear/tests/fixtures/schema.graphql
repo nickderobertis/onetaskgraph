@@ -102,6 +102,7 @@ type User {
 }
 type Issue {
   id: ID!
+  identifier: String!
   title: String!
   description: String
   url: String

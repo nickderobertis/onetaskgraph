@@ -56,7 +56,10 @@ pub struct ItemWrite<T> {
     /// updating an item addresses [`target`](Self::target) and ignores it; a destination
     /// creating one may derive a name from it and is free not to. Its `url`, `location`,
     /// `created_at` and `updated_at` are the destination's own and are never written —
-    /// where the *source* holds an item says nothing about where the destination does.
+    /// where the *source* holds an item says nothing about where the destination does. A
+    /// [`Task::key`](crate::Task::key) that arrives here is read exactly as an absent one:
+    /// a handle is derived by the backend that issues it, so the source's is not the
+    /// destination's to wear and no destination stores one it was handed.
     pub item: T,
     /// The forward dependency edges the copy read, with their far ends already resolved.
     ///

@@ -277,6 +277,7 @@ async fn a_written_task_carries_both_lists_and_refuses_one_naming_itself_or_one_
     let (root, source) = folder(&[], json!({}));
     let task = |delivers: Vec<TaskRef>, delivered_by: Vec<TaskRef>| Task {
         id: id("a"),
+        key: None,
         title: "Alpha".to_owned(),
         content: None,
         status: Status {

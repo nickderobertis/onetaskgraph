@@ -817,6 +817,7 @@ fn dependency_endpoints_validate_and_preserve_qualified_ids() {
 fn a_task_round_trips_through_json_with_every_field_populated() {
     let task = Task {
         id: NativeId::from("ENG-1"),
+        key: Some("ENG-1".to_owned()),
         title: "Ship the contract".to_owned(),
         content: Some("Two crates, one direction.".to_owned()),
         status: Status {
@@ -891,6 +892,76 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
     .expect("decodes");
     assert!(orphan.project.is_none());
     assert_eq!(orphan.status.category, StatusCategory::Todo);
+}
+
+#[test]
+fn a_task_from_a_plugin_that_predates_the_key_reads_as_one_with_no_handle() {
+    // The whole of why `key` needed no protocol version bump (docs/plugin-protocol.md §6):
+    // a plugin written before the member existed sends a task without it, and the engine
+    // reads that as *this backend has no short handle for this task* rather than failing
+    // the response or inventing one from the id. Driven on the wire shape such a plugin
+    // really sends, which is this object with no `key` member at all — not `"key": null`.
+    let before: Task = serde_json::from_value(serde_json::json!({
+        "id": "tasks/migrate.md",
+        "title": "Migrate the store",
+        "content": null,
+        "status": { "category": "todo", "name": "Todo" },
+        "labels": [],
+        "project": null,
+        "url": null,
+        "location": null,
+        "created_at": null,
+        "updated_at": null,
+    }))
+    .expect("a task from a plugin that predates the field still decodes");
+    assert_eq!(before.key, None);
+    assert_eq!(
+        before.id,
+        NativeId::from("tasks/migrate.md"),
+        "and the id it does carry is untouched"
+    );
+
+    // An explicit null says the same thing, because a plugin that knows the member and has
+    // no handle sends one — the two spellings cannot mean different things.
+    let explicit: Task = serde_json::from_value(serde_json::json!({
+        "id": "tasks/migrate.md",
+        "key": null,
+        "title": "Migrate the store",
+        "content": null,
+        "status": { "category": "todo", "name": "Todo" },
+        "labels": [],
+        "project": null,
+        "url": null,
+        "location": null,
+        "created_at": null,
+        "updated_at": null,
+    }))
+    .expect("decodes");
+    assert_eq!(explicit, before);
+
+    // And a handle that is there survives the round trip under its own name, so the
+    // tolerance above is not tolerance of losing one.
+    let carried: Task = serde_json::from_value(serde_json::json!({
+        "id": "I_kwDOAbc123",
+        "key": "1043",
+        "title": "Rate-limit the sync loop",
+        "content": null,
+        "status": { "category": "todo", "name": "Todo" },
+        "labels": [],
+        "project": null,
+        "url": null,
+        "location": null,
+        "created_at": null,
+        "updated_at": null,
+    }))
+    .expect("decodes");
+    assert_eq!(carried.key.as_deref(), Some("1043"));
+    let encoded = serde_json::to_value(&carried).expect("encodes");
+    assert_eq!(encoded["key"], serde_json::json!("1043"));
+    assert_eq!(
+        serde_json::from_value::<Task>(encoded).expect("decodes"),
+        carried
+    );
 }
 
 #[test]
@@ -1348,6 +1419,9 @@ fn source_name_validation_agrees_with_the_pattern_it_publishes() {
 fn outgoing() -> Task {
     Task {
         id: NativeId::from("T-1"),
+        // No handle: this item is authored for a write rather than read from a source,
+        // and a source derives a handle only on a read.
+        key: None,
         title: "Alpha engine".to_owned(),
         content: None,
         status: Status {
