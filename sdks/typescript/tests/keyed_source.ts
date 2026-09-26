@@ -60,6 +60,11 @@ function requestOf(line: string): Request | undefined {
   return { id, method, params };
 }
 
+// A request this source cannot read, answered as the contract's `malformed` (§5).
+function malformed(message: string): object {
+  return { error: { kind: "malformed", message } };
+}
+
 function answer(request: Request): object {
   switch (request.method) {
     case "initialize":
@@ -73,20 +78,20 @@ function answer(request: Request): object {
       };
     case "health":
       return { result: { reachable: true, detail: `${tasks.length} task(s)` } };
-    case "get_task":
-      return { result: { task: tasks.find((task) => task.id === request.params.id) ?? null } };
+    case "get_task": {
+      const wanted = request.params.id;
+      if (typeof wanted !== "string") return malformed("get_task names its task by a string `id`");
+      return { result: { task: tasks.find((task) => task.id === wanted) ?? null } };
+    }
     case "query_tasks":
       return { result: { items: tasks, next: null } };
     case "labels":
     case "task_dependencies":
       return { result: { items: [], next: null } };
     default:
-      return {
-        error: {
-          kind: "malformed",
-          message: `protocol version ${PROTOCOL_VERSION} has no method ${request.method} this source serves`,
-        },
-      };
+      return malformed(
+        `protocol version ${PROTOCOL_VERSION} has no method ${request.method} this source serves`,
+      );
   }
 }
 

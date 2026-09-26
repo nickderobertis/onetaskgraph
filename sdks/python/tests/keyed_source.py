@@ -126,6 +126,11 @@ CAPABILITIES: Capabilities = {
 }
 
 
+def malformed(message: str) -> Refused:
+    """A request this source cannot read, answered as the contract's `malformed`."""
+    return {"error": {"kind": "malformed", "message": message}}
+
+
 def answer(request: Request) -> Answered | Refused:
     """The result for one method, or a `SourceError` for one this source does not serve."""
     match request.method:
@@ -141,17 +146,19 @@ def answer(request: Request) -> Answered | Refused:
         case "health":
             return {"result": {"reachable": True, "detail": f"{len(TASKS)} task(s)"}}
         case "get_task":
-            found = [task for task in TASKS if task["id"] == request.params.get("id")]
+            wanted = request.params.get("id")
+            if not isinstance(wanted, str):
+                return malformed("get_task names its task by a string `id`")
+            found = [task for task in TASKS if task["id"] == wanted]
             return {"result": {"task": found[0] if found else None}}
         case "query_tasks":
             return {"result": {"items": TASKS, "next": None}}
         case "labels" | "task_dependencies":
             return {"result": {"items": [], "next": None}}
         case method:
-            message = (
+            return malformed(
                 f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
             )
-            return {"error": {"kind": "malformed", "message": message}}
 
 
 def request_of(line: str) -> Request | None:
