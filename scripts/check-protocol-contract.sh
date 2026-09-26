@@ -784,8 +784,12 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
     for block in re.findall(r"```json\n(.*?)\n```", body, re.DOTALL):
         try:
             examples.append(json.loads(block))
-        except ValueError:
-            failures.append(f'"{heading}" has a JSON example that is not JSON:\n{block}')
+        except ValueError as error:
+            failures.append(
+                f'"{heading}" has a JSON example that is not JSON ({error}):\n{block}\n'
+                f"Make that block parse as JSON — use a quoted placeholder member such as "
+                f'"…": "…" for what the example leaves out — or mark it as another language.'
+            )
     sent = [example[member] for example in examples if isinstance(example, dict) and member in example]
     if not sent:
         failures.append(
