@@ -5848,6 +5848,14 @@ async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
             format!("new body\nsecond line\n\n{slot}"),
             Some("new body\nsecond line"),
         ),
+        // Whitespace at the content's end is content: it goes before the separator, and a
+        // read takes off the separator alone.
+        (
+            Some(format!("old body\n\n{slot}")),
+            "new body  \n\n\n",
+            format!("new body  \n\n\n\n\n{slot}"),
+            Some("new body  \n\n\n"),
+        ),
         // Content emptied beside a slot: the slot alone.
         (
             Some(format!("old body\n\n{slot}")),

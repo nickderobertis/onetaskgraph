@@ -736,7 +736,8 @@ impl LocalMdSource {
                     .to_string_lossy()
                     .into_owned()
             });
-        let body = body.trim();
+        // Exactly the content the file holds — `body_text` has already taken off the file's
+        // own framing — so whitespace at either end is content like any other.
         Ok(Common {
             id: NativeId(id),
             title: front.title.unwrap_or(fallback),
@@ -774,8 +775,11 @@ impl LocalMdSource {
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
         let content = match kind {
-            WorkKind::Task => sectioned(body).0,
-            WorkKind::Project => body,
+            WorkKind::Task => {
+                let (above, comments) = sectioned(body);
+                body_text(above, comments.is_some())
+            }
+            WorkKind::Project => body_text(body, false),
         };
         let common = self.common(kind.kind(), path, content, shared)?;
         let status = Status {
@@ -893,7 +897,7 @@ impl LocalMdSource {
             serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let common = self.common(Kind::Document, path, body, front.into())?;
+        let common = self.common(Kind::Document, path, body_text(body, false), front.into())?;
         Ok(Document {
             id: common.id,
             title: common.title,
@@ -1342,15 +1346,10 @@ impl TaskSource for LocalMdSource {
     /// Replace the task's content — the body between its front matter and its comments
     /// section — with `content` byte for byte, and nothing else.
     ///
-    /// The front matter and the comments section are kept byte for byte; when there is a
-    /// section, the one blank line that separates it from the content is kept too, added
-    /// after `content` if `content` does not already end in one. Content identical to what
-    /// the file holds writes nothing.
-    ///
-    /// What a later read answers is `content` as this source reports every task's content:
-    /// with the whitespace around it trimmed, and none at all for content that is only
-    /// whitespace. The bytes in the file are exactly those given, so a trailing newline is
-    /// kept in the file and is simply not part of what a read reports.
+    /// The front matter and the comments section are kept byte for byte, and the content is
+    /// framed by [`framed`], so a later read answers exactly `content` — whitespace at either
+    /// end included — or none for content with no text at all. Content identical to what the
+    /// file holds writes nothing.
     ///
     /// The edited text is read back before anything is written, and the write is refused,
     /// the file left as it was, when it would read back as more than the content changed:
@@ -1589,22 +1588,17 @@ impl TaskFile {
     /// and removed with it, so a task that gains and then loses its only comment reads back
     /// with the content it had.
     fn rewrite(&self) -> Result<(), SourceError> {
-        let content = &self.text[self.body_at..self.section_at];
+        let above = &self.text[self.body_at..self.section_at];
+        let had_section = self.section_at < self.text.len();
+        let content = body_text(above, had_section);
         let mut written = String::with_capacity(self.text.len() + 256);
         written.push_str(&self.text[..self.body_at]);
         if self.comments.is_empty() {
-            match content.strip_suffix("\n\n") {
-                Some(above) => {
-                    written.push_str(above);
-                    written.push('\n');
-                }
-                None => written.push_str(content),
-            }
+            written.push_str(&framed(content, false));
         } else {
-            written.push_str(content);
-            while !written.ends_with("\n\n") {
-                written.push('\n');
-            }
+            // The content above is kept as it reads, so a comment added, edited or removed
+            // never moves a byte of what a read reports as the task's content.
+            written.push_str(&framed(content, true));
             written.push_str(&rendered_section(&self.comments));
         }
         fs::write(&self.path, written).map_err(|e| SourceError::Unavailable {
@@ -1852,6 +1846,52 @@ fn unfronted(path: &Path) -> SourceError {
 /// Earliest first is what keeps a body's own `## Comments` line — inside a comment, or in
 /// content followed by prose — from being read as the section: a comment's body is consumed
 /// whole up to its closing line, and a heading followed by prose is not a run of blocks.
+/// The content a body holds, given the text above its comments section (or the whole body)
+/// and whether a section follows it.
+///
+/// Exactly the bytes a person wrote, less only this format's own framing: at most one line
+/// break straight after the front matter, the one line break that ends the file's content,
+/// and — when a comments section follows — the one blank line that separates it. So content
+/// with leading or trailing whitespace reads back as itself, and a hand-written file with a
+/// blank line under its front matter or before its comments reads as it always did.
+/// [`framed`] is the inverse, and every write of content goes through it.
+fn body_text(above: &str, sectioned: bool) -> &str {
+    let break_off = |text: &str| -> usize {
+        if text.ends_with("\r\n") {
+            2
+        } else if text.ends_with('\n') {
+            1
+        } else {
+            0
+        }
+    };
+    let mut text = above;
+    text = text
+        .strip_prefix("\r\n")
+        .or_else(|| text.strip_prefix('\n'))
+        .unwrap_or(text);
+    for _ in 0..if sectioned { 2 } else { 1 } {
+        text = &text[..text.len() - break_off(text)];
+    }
+    text
+}
+
+/// The text a body holds above its comments section so that [`body_text`] reads `content`
+/// back exactly: a leading line break when the content itself begins with one, the line break
+/// that ends it, and the blank line before a section when one follows.
+fn framed(content: &str, sectioned: bool) -> String {
+    let mut text = String::with_capacity(content.len() + 3);
+    if content.starts_with('\n') || content.starts_with("\r\n") {
+        text.push('\n');
+    }
+    text.push_str(content);
+    text.push('\n');
+    if sectioned {
+        text.push('\n');
+    }
+    text
+}
+
 fn sectioned(body: &str) -> (&str, Option<Vec<Comment>>) {
     let mut at = 0;
     while at <= body.len() {
@@ -2503,14 +2543,9 @@ impl LocalMdSource {
         let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(path))?;
         let body = &text[body_at..];
         let section = &body[sectioned(body).0.len()..];
-        let mut edited = String::with_capacity(body_at + content.len() + section.len() + 2);
+        let mut edited = String::with_capacity(body_at + content.len() + section.len() + 3);
         edited.push_str(&text[..body_at]);
-        edited.push_str(content);
-        if !section.is_empty() {
-            while !edited.ends_with("\n\n") {
-                edited.push('\n');
-            }
-        }
+        edited.push_str(&framed(content, !section.is_empty()));
         let written_to = edited.len();
         edited.push_str(section);
         if edited == text {
@@ -2532,6 +2567,16 @@ impl LocalMdSource {
             ));
         }
         let after = task(self.parse_text(WorkKind::Task, path, &edited)?);
+        // What a read will report is exactly what was asked for, or nothing is written.
+        if after.content.as_deref().unwrap_or_default() != content {
+            return Err(refused(
+                format!(
+                    "it would read back as {:?} rather than as itself",
+                    after.content.as_deref().unwrap_or_default()
+                ),
+                "end the content with something other than a lone carriage return",
+            ));
+        }
         if after.title != before.title {
             return Err(refused(
                 format!(

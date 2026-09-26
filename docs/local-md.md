@@ -174,14 +174,17 @@ source held one.
 `onetaskgraph task content set <source>:<id> --file <path>` replaces the task's content — the
 Markdown between the front matter and the comments section — with the file's bytes, byte for
 byte, line endings and all. **The front matter and the comments section are left byte for
-byte**; when there is a section, the one blank line that separates it from the content is
-kept, added after the new content if it does not already end in one. Content identical to what
-the file holds writes nothing.
+byte.** Content identical to what the file holds writes nothing.
 
-What `task show` then reports is the new content as this source reports every task's content:
-with the whitespace around it trimmed, and no content at all for one that is only whitespace.
-The file holds exactly the bytes given, so a trailing newline is in the file and is not part
-of what a read reports.
+What `task show` then reports is exactly those bytes, whitespace at either end included:
+trailing spaces, a run of trailing newlines, an indented first line. The file frames the
+content in the one way this source reads back: the content, then the one line break that ends
+it, then — when there is a comments section — the one blank line that sets the section off; and
+content that itself begins with a line break is written with one more above it. A read takes
+that framing off and nothing else, which is also why a hand-written file with a blank line
+under its front matter or before its comments reads as it always did. Content with no text at
+all reads as none. The edited file is read back before it is written, and content that would
+not read back as itself is refused rather than written.
 
 Two things are refused, naming the file and the field, and leave the file as it was: content
 that would itself read back as a comments section, which would turn part of it into comments

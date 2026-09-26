@@ -394,35 +394,31 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
             row.name
         );
 
-        // A trailing newline is written as given, and read back as each store reports a body:
-        // a folder of Markdown trims the body it reads, and so does Linear's reader beside the
-        // metadata slot this task's description carries, while a board keeps it byte for byte.
-        let trailing = "Ends with a newline.\n";
-        std::fs::write(&file, trailing).expect("the content file");
-        answered(
-            row.name,
-            &sandbox,
-            &[
-                "--json",
-                "task",
-                "content",
-                "set",
-                &id,
-                "--file",
-                file.to_str().expect("a UTF-8 path"),
-            ],
-        );
-        let reported = if row.plugin == "github-projects" {
-            trailing
-        } else {
-            trailing.trim_end()
-        };
-        assert_eq!(
-            shown(row.name, &sandbox, &id)["content"],
-            reported,
-            "{}",
-            row.name
-        );
+        // Whitespace at either end is content like any other: every store reads back exactly
+        // the bytes the file held — trailing spaces, a run of trailing newlines, and an indented
+        // first line included — whether or not it keeps a metadata block beside them.
+        for exact in [
+            "Ends with a newline.\n",
+            "  Indented first line.\nTrailing spaces   \n\n\n",
+        ] {
+            std::fs::write(&file, exact).expect("the content file");
+            answered(
+                row.name,
+                &sandbox,
+                &[
+                    "--json",
+                    "task",
+                    "content",
+                    "set",
+                    &id,
+                    "--file",
+                    file.to_str().expect("a UTF-8 path"),
+                ],
+            );
+            let after = shown(row.name, &sandbox, &id);
+            assert_eq!(after["content"], exact, "{}: {exact:?}", row.name);
+            assert_eq!(kept(&after), kept(&before), "{}", row.name);
+        }
     }
 }
 

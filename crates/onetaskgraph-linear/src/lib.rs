@@ -1932,6 +1932,18 @@ impl TaskSource for LinearSource {
                 ),
             });
         }
+        // And what a read will report is exactly what was asked for, or nothing is sent.
+        let (reads, _) = metadata_description(Some(description.clone()))?;
+        if reads.as_deref().unwrap_or_default() != content {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this content would read back from source {} as {:?} rather than as itself; \
+                     next: change how the content ends",
+                    self.name,
+                    reads.as_deref().unwrap_or_default()
+                ),
+            });
+        }
         // `description` alone, for the reason `set_task_priority` sends `priority` alone.
         let data = self
             .send(
@@ -2754,7 +2766,14 @@ fn metadata_description(
                 ),
             }
         })?;
-    let visible = description[..start].trim_end();
+    // Exactly the text above the slot less the one blank line `long_form` sets it off by, so
+    // content whose own end is whitespace reads back as itself. A description edited in Linear
+    // down to a single line break before the slot loses just that one.
+    let above = &description[..start];
+    let visible = above
+        .strip_suffix("\n\n")
+        .or_else(|| above.strip_suffix('\n'))
+        .unwrap_or(above);
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
 }
 

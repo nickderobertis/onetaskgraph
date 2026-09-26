@@ -144,14 +144,17 @@ async fn a_content_set_replaces_the_body_and_keeps_the_front_matter_and_the_comm
 }
 
 #[tokio::test]
-async fn content_ending_in_a_blank_line_needs_no_separator_before_the_section() {
+async fn content_ending_in_a_blank_line_keeps_it_and_the_section_keeps_its_own() {
     let (root, source) = folder(&[("tasks/a.md", &format!("{FRONT}{BODY}{SECTION}"))]);
     let content = "# Alpha\n\nEnds with a blank line.\n\n";
     source.set_task_content(&id("a"), content).await.unwrap();
+    // The content's own line break, then the one blank line every section is set off by.
     assert_eq!(
         read(&root, "tasks/a.md"),
-        format!("{FRONT}{content}{SECTION}")
+        format!("{FRONT}{content}\n\n{SECTION}")
     );
+    let task = source.get_task(&id("a")).await.unwrap().expect("held");
+    assert_eq!(task.content.as_deref(), Some(content));
 }
 
 #[tokio::test]
@@ -162,18 +165,32 @@ async fn a_file_with_no_comments_holds_exactly_the_front_matter_and_the_content(
         "# Alpha\n\nWith a trailing newline.\n",
         "# Alpha\r\n\r\nWith a CRLF one.\r\n",
         "# Alpha\n\nWith none at all.",
+        "# Alpha\n\nTrailing spaces   \n\n\n",
     ] {
         source.set_task_content(&id("a"), content).await.unwrap();
-        assert_eq!(read(&root, "tasks/a.md"), format!("{FRONT}{content}"));
+        // The content, then the one line break that ends a file's content.
+        assert_eq!(read(&root, "tasks/a.md"), format!("{FRONT}{content}\n"));
         let after = source.get_task(&id("a")).await.unwrap().expect("held");
-        // This source reports every task's content with the whitespace around it trimmed,
-        // so a trailing line ending is in the file and not in what a read answers.
-        assert_eq!(after.content.as_deref(), Some(content.trim_end()));
+        // And a read answers the content exactly, whitespace at its end included.
+        assert_eq!(after.content.as_deref(), Some(content));
         every_member_but_content_kept(&before, &after);
+    }
+    // Content beginning with a line break keeps it: one more is written above it, and that is
+    // the one a read takes off.
+    let (leading_root, leading) = folder(&[("tasks/b.md", "---\ntitle: B\n---\nold\n")]);
+    for content in ["\n\nTwo blank lines first.", "   Indented first line."] {
+        leading.set_task_content(&id("b"), content).await.unwrap();
+        let task = leading.get_task(&id("b")).await.unwrap().expect("held");
+        assert_eq!(
+            task.content.as_deref(),
+            Some(content),
+            "{:?}",
+            read(&leading_root, "tasks/b.md")
+        );
     }
     // Emptied: the task reads as having no content, and the front matter is untouched.
     source.set_task_content(&id("a"), "").await.unwrap();
-    assert_eq!(read(&root, "tasks/a.md"), FRONT);
+    assert_eq!(read(&root, "tasks/a.md"), format!("{FRONT}\n"));
     let after = source.get_task(&id("a")).await.unwrap().expect("held");
     assert_eq!(after.content, None);
     every_member_but_content_kept(&before, &after);
@@ -187,7 +204,10 @@ async fn a_windows_file_keeps_its_front_matter_byte_for_byte() {
         .set_task_content(&id("a"), "new\r\ncontent")
         .await
         .unwrap();
-    assert_eq!(read(&root, "tasks/a.md"), format!("{front}new\r\ncontent"));
+    assert_eq!(
+        read(&root, "tasks/a.md"),
+        format!("{front}new\r\ncontent\n")
+    );
     let task = source.get_task(&id("a")).await.unwrap().expect("held");
     assert_eq!(task.content.as_deref(), Some("new\r\ncontent"));
     assert_eq!(task.priority, Priority::Low);
