@@ -2185,9 +2185,6 @@ fn both_renderings_report_a_tasks_key_where_its_backend_has_one_and_omit_it_wher
             seen.push(expected.clone());
             let shown = ok(row, &sandbox, &["task", "show", &qualified(SOURCE, id)]);
 
-            // The human rendering prints the handle beside the id it belongs to, and a
-            // source with none prints no line at all — the reader is told this backend has
-            // nothing to say rather than handed the id twice under a second label.
             assert_eq!(
                 field(&shown, "key"),
                 expected,

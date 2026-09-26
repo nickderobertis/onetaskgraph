@@ -670,7 +670,6 @@ test("a task's key reaches list, show and search beside its id, and is absent wh
       "iss_8f2c",
       "ENG-7",
     ]);
-    // A plugin that sends no `key` member reads as a task with no handle, not as its id.
     expect((await keyedClient.taskShow("tracker:iss_91d0")).items[0]?.item.key).toBeNull();
 
     const hit = (await keyedClient.search("Engine handle", { kind: "task" })).items[0];

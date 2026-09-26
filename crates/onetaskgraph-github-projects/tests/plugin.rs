@@ -10409,14 +10409,9 @@ async fn an_issue_created_without_a_number_reports_no_key_rather_than_failing_th
 
 #[tokio::test]
 async fn a_creation_answering_with_an_unreadable_number_is_refused_and_the_issue_taken_back() {
-    // The other side of the lenient branch. A number that came back *missing* is tolerated
-    // — the item reports no handle until a board read catches up — but one that came back
-    // as something other than an unsigned integer is a response this source cannot read,
-    // and reading it as *no handle* would be guessing. What the refusal owes is the
-    // take-back every failure past the creating mutation owes: the issue exists by the time
-    // the number is read, so returning without deleting it would leave an issue in the
-    // repository on no board, which is the item nobody asked for that nothing here would
-    // find again.
+    // Unlike a missing number, an unreadable one is not guessed at as *no handle*; and the
+    // issue already exists by then, so the refusal takes it back rather than leave it in the
+    // repository on no board.
     let fixture = board(vec![Item::issue("I_plan", "Engine").sub_issues(0)]);
     fixture.creation_reports_an_unreadable_number();
     let source = source(&fixture);

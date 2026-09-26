@@ -14,10 +14,15 @@ and none of the SDK's own models, so what the SDK decodes is not its own types r
 import json
 import sys
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NewType, NotRequired, TypedDict
 
 KIND = "keyed-source"
 PROTOCOL_VERSION = 2
+
+# The source's own id for a task, and the id a request is answered under: two domains that
+# are both strings on the wire and never interchangeable.
+NativeId = NewType("NativeId", str)
+RequestId = NewType("RequestId", str)
 
 type Support = Literal["native", "unsupported"]
 type DependencySupport = Literal["both-directions", "forward-only"]
@@ -33,7 +38,7 @@ class Status(TypedDict):
 class Task(TypedDict):
     """A task on the wire (§4.4); `key` is left out entirely where the backend has none."""
 
-    id: str
+    id: NativeId
     key: NotRequired[str]
     title: str
     content: str | None
@@ -84,12 +89,12 @@ class Refused(TypedDict):
 class Request:
     """One request line (§2): an `id` to echo, the method, and its object `params`."""
 
-    id: str
+    id: RequestId
     method: str
     params: dict[str, object]
 
 
-def unfiled(identifier: str, title: str) -> Task:
+def unfiled(identifier: NativeId, title: str) -> Task:
     """A task in no project, with nothing but its id and title to tell it apart."""
     return {
         "id": identifier,
@@ -106,8 +111,8 @@ def unfiled(identifier: str, title: str) -> Task:
 
 
 TASKS: list[Task] = [
-    {**unfiled("iss_8f2c", "Engine handle"), "key": "ENG-7"},
-    unfiled("iss_91d0", "Engine without a handle"),
+    {**unfiled(NativeId("iss_8f2c"), "Engine handle"), "key": "ENG-7"},
+    unfiled(NativeId("iss_91d0"), "Engine without a handle"),
 ]
 
 # Everything a query could narrow by is declared unsupported, so this peer answers every
@@ -173,7 +178,7 @@ def request_of(line: str) -> Request | None:
         return None
     match decoded:
         case {"id": str(identifier), "method": str(method), "params": dict(params)}:
-            return Request(identifier, method, params)
+            return Request(RequestId(identifier), method, params)
         case _:
             return None
 

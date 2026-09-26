@@ -961,7 +961,6 @@ def test_a_tasks_key_reaches_every_read_model_beside_its_id(binary: Path, tmp_pa
         "iss_8f2c",
         "ENG-7",
     )
-    # A plugin that sends no `key` member reads as a task with no handle, not as its id.
     assert run(client.task_show(id="tracker:iss_91d0")).items[0].item.key is None
 
     hit = run(client.search(text="Engine handle", kind="task")).items[0].root
