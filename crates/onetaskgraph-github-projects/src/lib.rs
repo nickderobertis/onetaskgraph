@@ -2650,6 +2650,33 @@ impl GitHubProjectsSource {
                 wanted: mapping.names().map(str::to_owned).collect(),
             });
         }
+        // The snapshot reads single-select fields alone, so a field it did not find may still
+        // be on the board under the name, of another type: creating one beside it would fail
+        // part way, or leave two fields of one name. Asked of the board's own field list, and
+        // only when a field is missing.
+        if plans
+            .iter()
+            .any(|plan| !before.fields.contains_key(&plan.field))
+        {
+            let board = self.board_fields().await?;
+            for plan in plans
+                .iter()
+                .filter(|plan| !before.fields.contains_key(&plan.field))
+            {
+                if let Some(field) = Board::field(&board.fields, plan.field.name())? {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "source {}'s board has a {} field that is not a single-select field \
+                             (it is a {}), so it cannot hold this source's options; next: rename \
+                             or remove that field, then run this again",
+                            self.name,
+                            plan.field.name(),
+                            optional_str(field, "__typename")?.unwrap_or("field of another type")
+                        ),
+                    });
+                }
+            }
+        }
         let mut reports = Vec::new();
         for plan in &plans {
             let held = before.fields.get(&plan.field);

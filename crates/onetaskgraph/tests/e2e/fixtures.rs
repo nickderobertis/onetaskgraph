@@ -1839,6 +1839,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 // A person's own field's value on the first item, as GitHub answers it — the
                 // setup reads past it.
                 if let Some(own) = board.persons_fields.first()
+                    && own["__typename"] == "ProjectV2SingleSelectField"
                     && item["id"] == "T-1"
                 {
                     values.push(json!({"name":own["options"][0]["name"],
@@ -1859,7 +1860,15 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 "pageInfo":{"hasNextPage":false}}})
             })
             .collect::<Vec<_>>();
-        return json!({"owner":{"projectV2":{"id":"PVT-board","fields":board.fields(),
+        // The snapshot selects single-select fields alone, so GitHub answers every other field
+        // as an empty node.
+        let mut fields = board.fields();
+        for field in fields["nodes"].as_array_mut().expect("field nodes") {
+            if field["__typename"] != "ProjectV2SingleSelectField" {
+                *field = json!({});
+            }
+        }
+        return json!({"owner":{"projectV2":{"id":"PVT-board","fields":fields,
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
                 "endCursor":end.to_string()}}}}});
     }

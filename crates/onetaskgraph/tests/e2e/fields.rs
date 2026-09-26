@@ -380,6 +380,35 @@ fn a_priority_field_status_options_does_not_own_cannot_refuse_it() {
 }
 
 #[test]
+fn a_priority_field_of_another_type_is_refused_rather_than_created_beside() {
+    let (sandbox, board) = configured();
+    board.without_priority_field();
+    board.with_persons_field(json!({"__typename": "ProjectV2Field",
+        "id": "FIELD-priority-text", "name": "Priority"}));
+    for arguments in [
+        &["sources", "fields", "board"][..],
+        &["sources", "fields", "board", "--apply"][..],
+    ] {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(
+            stderr(&output).contains(
+                "board's board has a Priority field that is not a single-select field (it is a \
+                 ProjectV2Field)"
+            ) && stderr(&output).contains("next:"),
+            "{}",
+            stderr(&output)
+        );
+    }
+    assert!(mutations(&board).is_empty(), "nothing was created");
+}
+
+#[test]
 fn drift_after_the_write_is_refused_with_the_pre_write_assignments() {
     let (sandbox, board) = configured();
     board.without_priority_option("Medium");
