@@ -25,7 +25,7 @@ use onetaskgraph_plugin_api::{
     TextQuery,
 };
 use onetaskgraph_status_options::{
-    FieldsReport, GitHubProjectsConfig, StatusOptionsMode, StatusOptionsReport,
+    FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
 };
 use serde::Serialize;
 
@@ -659,11 +659,11 @@ fn github_projects_source(
 }
 
 /// Whether a guarded board setup verb plans or applies, from its `--apply` flag.
-fn setup_mode(apply: bool) -> StatusOptionsMode {
+fn setup_mode(apply: bool) -> SetupMode {
     if apply {
-        StatusOptionsMode::Apply
+        SetupMode::Apply
     } else {
-        StatusOptionsMode::Plan
+        SetupMode::Plan
     }
 }
 
@@ -1201,6 +1201,36 @@ fn emit(out: &mut impl Write, rendered: &str, what: &str) -> Result<(), Failure>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The command line's priority vocabulary is the contract's, in its order and spelling.
+    ///
+    /// `PriorityArg` mirrors `Priority` so clap can derive its parser; its `priority` is a
+    /// wildcard-free match, so a variant added here fails to compile until it is mapped, and
+    /// this reconciles the two the other way, so a priority the contract gains is one the
+    /// command line cannot silently lack.
+    #[test]
+    fn the_command_lines_priorities_are_the_contracts() {
+        use clap::ValueEnum as _;
+        use onetaskgraph_plugin_api::Priority;
+
+        let spelled: Vec<(String, Priority)> = crate::cli::PriorityArg::value_variants()
+            .iter()
+            .map(|arg| {
+                (
+                    arg.to_possible_value()
+                        .expect("every variant is spelled")
+                        .get_name()
+                        .to_owned(),
+                    arg.priority(),
+                )
+            })
+            .collect();
+        let contract: Vec<(String, Priority)> = Priority::ALL
+            .iter()
+            .map(|priority| (priority.as_str().to_owned(), *priority))
+            .collect();
+        assert_eq!(spelled, contract);
+    }
 
     struct RefusesSerialization;
 

@@ -2117,6 +2117,16 @@ fn a_priority_is_one_of_five_kebab_case_values_and_defaults_to_none() {
             serde_json::json!("low"),
         ]
     );
+    // `ALL` restates the variants, so it is reconciled against the enum's own derived schema,
+    // which is generated from them: a priority added without joining `ALL` fails here.
+    let schema = serde_json::to_value(schemars::schema_for!(Priority)).expect("serializes");
+    let declared: Vec<serde_json::Value> = schema["oneOf"]
+        .as_array()
+        .expect("a unit-variant enum schema lists its variants")
+        .iter()
+        .map(|variant| variant["const"].clone())
+        .collect();
+    assert_eq!(declared, spelled);
     assert_eq!(Priority::default(), Priority::None);
     for priority in Priority::ALL {
         assert_eq!(priority.as_str().parse::<Priority>(), Ok(priority));

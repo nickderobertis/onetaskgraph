@@ -1418,12 +1418,30 @@ pub const PRIORITY_FIELD: &str = "Priority";
 
 /// The four priorities a board option can hold, in the order a new `Priority` field lists
 /// them. `none` is not among them: it is the field holding no value.
-const PRIORITY_LEVELS: [Priority; 4] = [
+///
+/// This list mirrors `Priority`, so it carries its own drift gate, in the shape [`CATEGORIES`]
+/// does: [`level_position`] is a wildcard-free match, so a priority added to the shared
+/// vocabulary fails to compile until it is placed there, and this crate's suite reconciles
+/// this list and [`PriorityMappingConfig`]'s members against that enum's own derived schema.
+pub const PRIORITY_LEVELS: [Priority; 4] = [
     Priority::Urgent,
     Priority::High,
     Priority::Medium,
     Priority::Low,
 ];
+
+/// Where one priority sits in [`PRIORITY_LEVELS`], or `None` for `none`, which is no option;
+/// see that list for what this pins.
+#[must_use]
+pub const fn level_position(priority: Priority) -> Option<usize> {
+    match priority {
+        Priority::None => None,
+        Priority::Urgent => Some(0),
+        Priority::High => Some(1),
+        Priority::Medium => Some(2),
+        Priority::Low => Some(3),
+    }
+}
 
 /// This instance's complete priority-to-option mapping, read in both directions.
 ///
@@ -1466,10 +1484,7 @@ impl PriorityMapping {
 
     /// The option `priority` lands on, or `None` for `none`, which is no option at all.
     fn option(&self, priority: Priority) -> Option<&str> {
-        PRIORITY_LEVELS
-            .iter()
-            .position(|level| *level == priority)
-            .map(|index| self.options[index].as_str())
+        level_position(priority).map(|index| self.options[index].as_str())
     }
 
     /// The priority a board option name reports, or `None` when nothing maps to it.
@@ -2026,14 +2041,19 @@ pub enum StatusOptionColor {
     Pink,
 }
 
-/// Whether the guarded operation plans or applies additions.
+/// Whether a guarded board setup — of the fields, or of the Status options alone — plans or
+/// applies its additions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatusOptionsMode {
+pub enum SetupMode {
     /// Read without mutation.
     Plan,
     /// Apply and verify.
     Apply,
 }
+
+/// The name [`SetupMode`] had when Status was the one field set up, kept so a caller written
+/// against it goes on compiling.
+pub type StatusOptionsMode = SetupMode;
 
 /// The explicit result of the requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -2212,6 +2232,11 @@ pub struct FieldsReport {
     /// The configured source name.
     pub source: SourceName,
     /// `Status`, always, and `Priority` when the source sets `priority_mapping`.
+    // llmlint: ignore[invalid_states_unrepresentable] A list is the report's wire shape as its
+    // consumer's contract fixes it — `{"source", "fields": [...]}` — so a struct with one member
+    // per field would change a published JSON shape. The states the list could hold and the
+    // contract forbids cannot be built: `GitHubProjectsSource::fields` is the one constructor,
+    // and it pushes `Status` first and exactly once, then `Priority` exactly when configured.
     pub fields: Vec<FieldReport>,
 }
 
@@ -2571,7 +2596,7 @@ impl GitHubProjectsSource {
     // llmlint: ignore-end[changed_behavior_has_e2e]
 
     /// Report every board field this source's configuration names and, with
-    /// [`StatusOptionsMode::Apply`], set each up: add the options a field lacks, and create
+    /// [`SetupMode::Apply`], set each up: add the options a field lacks, and create
     /// the `Priority` field when the board has none.
     ///
     /// The fields are `Status`, always, with the options `status_mapping` resolves to; and
@@ -2589,7 +2614,7 @@ impl GitHubProjectsSource {
     // unchanged apply, a created field, an added option to each field, drift refusal, a board
     // with no Status field and a non-github-projects source through the compiled CLI against
     // the loopback board. Transport errors are the shared `graphql` boundary's behavior.
-    pub async fn fields(&self, mode: StatusOptionsMode) -> Result<FieldsReport, SourceError> {
+    pub async fn fields(&self, mode: SetupMode) -> Result<FieldsReport, SourceError> {
         let before = self.board_snapshot().await?;
         let mut plans = vec![FieldPlan {
             field: BoardField::Status,
@@ -2634,10 +2659,10 @@ impl GitHubProjectsSource {
                 field: plan.field,
                 exists: held.is_some(),
                 outcome: match (mode, held.is_some(), missing.is_empty()) {
-                    (StatusOptionsMode::Plan, _, _) => FieldOutcome::Planned,
-                    (StatusOptionsMode::Apply, true, true) => FieldOutcome::Unchanged,
-                    (StatusOptionsMode::Apply, true, false) => FieldOutcome::Applied,
-                    (StatusOptionsMode::Apply, false, _) => FieldOutcome::Created,
+                    (SetupMode::Plan, _, _) => FieldOutcome::Planned,
+                    (SetupMode::Apply, true, true) => FieldOutcome::Unchanged,
+                    (SetupMode::Apply, true, false) => FieldOutcome::Applied,
+                    (SetupMode::Apply, false, _) => FieldOutcome::Created,
                 },
                 missing,
                 existing,
@@ -2652,7 +2677,7 @@ impl GitHubProjectsSource {
             .iter()
             .filter(|field| !field.missing.is_empty() || !field.exists)
             .collect();
-        if mode == StatusOptionsMode::Plan || writes.is_empty() {
+        if mode == SetupMode::Plan || writes.is_empty() {
             return Ok(report);
         }
         let mut landed: Vec<&str> = Vec::new();

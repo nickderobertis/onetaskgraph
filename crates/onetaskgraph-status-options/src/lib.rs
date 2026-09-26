@@ -1,3 +1,4 @@
+// llmlint: ignore[names_match_behavior] The crate keeps its name from when Status was the one field it set up, deliberately: it is a published crate a `release-targets.toml` target covers and its dependents name, so renaming it for the Priority field it now also sets up would break them. The task that generalised it states the name is kept, and this module's own documentation says so.
 //! The guarded, plugin-specific board field setup: `sources fields`, and the Status-only
 //! `sources status-options` it supersedes.
 //!
@@ -10,8 +11,8 @@ use onetaskgraph_github_projects::GitHubProjectsSource;
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName};
 
 pub use onetaskgraph_github_projects::{
-    BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, StatusOptionsMode,
-    StatusOptionsOutcome, StatusOptionsReport,
+    BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, SetupMode,
+    StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
 };
 
 /// Plan or apply the guarded setup of every board field one configured source names: its
@@ -26,7 +27,7 @@ pub async fn reconcile_fields(
     name: &SourceName,
     config: GitHubProjectsConfig,
     secrets: &impl SecretResolver,
-    mode: StatusOptionsMode,
+    mode: SetupMode,
 ) -> Result<FieldsReport, SourceError> {
     GitHubProjectsSource::new(name, config, secrets)?
         .fields(mode)
