@@ -41,7 +41,24 @@ const capabilities = {
   max_page_size: 50,
 };
 
-type Request = { id: string; method: string; params: { id?: string } };
+type Request = { id: string; method: string; params: { id?: unknown } };
+
+// The `id`, `method` and `params` of one request line (§2). A line without a string `id` has
+// no address a response could echo, so the caller sets it aside rather than answering it.
+function requestOf(line: string): Request | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null) return undefined;
+  if (!("id" in value && "method" in value && "params" in value)) return undefined;
+  const { id, method, params } = value;
+  if (typeof id !== "string" || typeof method !== "string") return undefined;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return undefined;
+  return { id, method, params };
+}
 
 function answer(request: Request): object {
   switch (request.method) {
@@ -75,6 +92,10 @@ function answer(request: Request): object {
 
 for await (const line of createInterface({ input: process.stdin })) {
   if (line.trim() === "") continue;
-  const request = JSON.parse(line) as Request;
+  const request = requestOf(line);
+  if (request === undefined) {
+    process.stderr.write("keyed-source: ignoring a line that is not a request\n");
+    continue;
+  }
   process.stdout.write(`${JSON.stringify({ id: request.id, ...answer(request) })}\n`);
 }

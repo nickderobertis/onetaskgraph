@@ -62,24 +62,47 @@ CAPABILITIES = {
 
 def answer(method: str, params: dict[str, object]) -> dict[str, object]:
     """The result for one method, or a `SourceError` for one this source does not serve."""
-    if method == "initialize":
-        return {
-            "result": {
-                "protocol_version": PROTOCOL_VERSION,
-                "kind": KIND,
-                "capabilities": CAPABILITIES,
-                "writes": "unsupported",
+    match method:
+        case "initialize":
+            return {
+                "result": {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "kind": KIND,
+                    "capabilities": CAPABILITIES,
+                    "writes": "unsupported",
+                }
             }
-        }
-    if method == "health":
-        return {"result": {"reachable": True, "detail": f"{len(TASKS)} task(s)"}}
-    if method == "get_task":
-        found = [task for task in TASKS if task["id"] == params.get("id")]
-        return {"result": {"task": found[0] if found else None}}
-    if method in ("query_tasks", "labels", "task_dependencies"):
-        return {"result": {"items": TASKS if method == "query_tasks" else [], "next": None}}
-    message = f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
-    return {"error": {"kind": "malformed", "message": message}}
+        case "health":
+            return {"result": {"reachable": True, "detail": f"{len(TASKS)} task(s)"}}
+        case "get_task":
+            found = [task for task in TASKS if task["id"] == params.get("id")]
+            return {"result": {"task": found[0] if found else None}}
+        case "query_tasks":
+            return {"result": {"items": TASKS, "next": None}}
+        case "labels" | "task_dependencies":
+            return {"result": {"items": [], "next": None}}
+        case _:
+            message = (
+                f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
+            )
+            return {"error": {"kind": "malformed", "message": message}}
+
+
+def request_of(line: str) -> tuple[str, str, dict[str, object]] | None:
+    """The `id`, `method` and `params` of one request line (§2), or `None` if it has none.
+
+    A line without a string `id` has no address a response could echo, so it is set aside on
+    stderr rather than answered.
+    """
+    try:
+        request = json.loads(line)
+    except ValueError:
+        return None
+    match request:
+        case {"id": str(identifier), "method": str(method), "params": dict(params)}:
+            return identifier, method, params
+        case _:
+            return None
 
 
 def main() -> None:
@@ -87,8 +110,12 @@ def main() -> None:
     for line in sys.stdin:
         if not line.strip():
             continue
-        request = json.loads(line)
-        reply = {"id": request["id"], **answer(request["method"], request["params"])}
+        request = request_of(line)
+        if request is None:
+            print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
+            continue
+        identifier, method, params = request
+        reply = {"id": identifier, **answer(method, params)}
         sys.stdout.write(json.dumps(reply) + "\n")
         sys.stdout.flush()
 
