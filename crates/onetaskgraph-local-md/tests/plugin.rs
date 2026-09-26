@@ -1384,7 +1384,7 @@ fn capability_folder() -> (tempfile::TempDir, Box<dyn TaskSource>) {
     .expect("project");
     fs::write(
         root.path().join("tasks/first.md"),
-        "---\ntitle: Alpha task\nstatus: todo\nlabels: [Backend]\nproject: alpha\n---\nordinary body\n",
+        "---\ntitle: Alpha task\nstatus: todo\npriority: high\nlabels: [Backend]\nproject: alpha\n---\nordinary body\n",
     )
     .expect("task");
     fs::write(
@@ -1459,8 +1459,8 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             projects: onetaskgraph_plugin_api::Support::Native,
             documents: onetaskgraph_plugin_api::Support::Native,
             comments: onetaskgraph_plugin_api::Support::Native,
-            priority: Support::Unsupported,
-            filter_by_priority: Support::Unsupported,
+            priority: Support::Native,
+            filter_by_priority: Support::Native,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,
@@ -1632,6 +1632,36 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
         );
     }
     fs::remove_file(root.path().join("documents/rejected.md")).expect("the rejected document");
+
+    // `priority` and `filter_by_priority`: the one task carrying `priority: high` reads as
+    // it, the two carrying no key read as `none`, and a filter keeps exactly the tasks
+    // holding any value it asks for.
+    let first = source
+        .get_task(&NativeId("first".into()))
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(first.priority, Priority::High);
+    let prioritised = |priorities: Vec<Priority>| TaskQuery {
+        priorities,
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        task_ids(source.as_ref(), &prioritised(vec![Priority::High])).await,
+        ["first"]
+    );
+    assert_eq!(
+        task_ids(source.as_ref(), &prioritised(vec![Priority::None])).await,
+        ["orphan", "second"]
+    );
+    assert_eq!(
+        task_ids(
+            source.as_ref(),
+            &prioritised(vec![Priority::Urgent, Priority::Low])
+        )
+        .await,
+        Vec::<String>::new()
+    );
 
     // `orphan_tasks`: the one document with no `project:` key, and neither of the two
     // that have one.

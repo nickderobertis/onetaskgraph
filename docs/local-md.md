@@ -33,6 +33,7 @@ Each file starts with YAML front matter and continues with ordinary Markdown:
 ---
 title: Ship the release
 status: doing
+priority: high
 labels: [release, urgent]
 project: platform
 metadata:
@@ -54,14 +55,19 @@ Long-form task content goes here.
 
 `title` is optional; it falls back to the first level-one heading, then the file name.
 `status` defaults to `backlog`, so a task that says nothing about its status is
-work that has been written down but not yet queued. `labels`, `project`, `metadata`, `repositories`, and
+work that has been written down but not yet queued. `priority` is optional and holds one of
+`none`, `urgent`, `high`, `medium` or `low`; a task with no `priority:` key has priority
+`none`, and any other value makes the file malformed, naming the key `priority` and the five
+it may hold. `task list --priority <value>` keeps the tasks holding any value it names, and is
+applied here. `labels`, `project`, `metadata`, `repositories`, and
 `depends_on` are optional. `metadata` is an ordered mapping of JSON-compatible YAML
 values; `repositories` is an ordered list of normalized origins. A simple
 dependency is a blocking edge; the expanded form accepts `kind: blocks` or `related`.
 Labels may also use `{id: label-id, name: release, color: red}` when an explicit stable
 identifier or color is useful. `url` is optional.
 Projects use the same fields except that `project` is ignored conceptually and should be
-omitted.
+omitted, and a project has no priority: a `priority:` key in a project's file is refused
+naming the key rather than read and ignored.
 
 A bare `depends_on` entry is this source's own item, colons and all, so an identifier
 containing one is never mistaken for a source name. The expanded form is where an author
@@ -150,10 +156,43 @@ with no word is refused in the words a copy of that status is refused with — `
 reads "queued" as unknown, not queued` — and a task with no `status:` line gains one as the
 last line of its front matter.
 
-A status write, and the `delivered_by:` write a copy makes, replace the file the way a
-metadata write does — through a staging file beside it and a rename, described under the next
-heading — so a reader listing or reading the folder while either lands sees the task as it was
-or as it is now, never part of it.
+## Setting a priority on its own
+
+`onetaskgraph task priority set <source>:<id> <priority>` rewrites the one `priority:` line of
+the task's front matter and **no other byte of the file**, exactly as a status write rewrites
+`status:`. A task with no `priority:` line gains one as the last line of its front matter;
+`none` removes the line, so a task whose priority is cleared is byte for byte the file it was
+before it had one. A task already holding the priority is left byte for byte, an explicit
+`priority: none` included.
+
+A copy writes `priority:` on the same terms: under `status:` for any priority but `none`, and
+not at all for `none`, so a task with no priority is written exactly as it was before this
+source held one.
+
+## Replacing a task's content on its own
+
+`onetaskgraph task content set <source>:<id> --file <path>` replaces the task's content — the
+Markdown between the front matter and the comments section — with the file's bytes, byte for
+byte, line endings and all. **The front matter and the comments section are left byte for
+byte**; when there is a section, the one blank line that separates it from the content is
+kept, added after the new content if it does not already end in one. Content identical to what
+the file holds writes nothing.
+
+What `task show` then reports is the new content as this source reports every task's content:
+with the whitespace around it trimmed, and no content at all for one that is only whitespace.
+The file holds exactly the bytes given, so a trailing newline is in the file and is not part
+of what a read reports.
+
+Two things are refused, naming the file and the field, and leave the file as it was: content
+that would itself read back as a comments section, which would turn part of it into comments
+nobody wrote; and, for a task whose front matter has no `title:`, content whose first `# `
+heading would change the title the task is read with. The refusal's next action for the second
+is to give the task a `title:` or keep its heading.
+
+A status write, a priority write, a content write, and the `delivered_by:` write a copy makes,
+replace the file the way a metadata write does — through a staging file beside it and a
+rename, described under the next heading — so a reader listing or reading the folder while one
+lands sees the task as it was or as it is now, never part of it.
 
 ## Setting one metadata key on its own
 
