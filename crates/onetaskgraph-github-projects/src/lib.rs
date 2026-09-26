@@ -121,6 +121,8 @@
 //! | `projects` | **Supported and proven,** and the one predicate here that is pushed down rather than applied in process: a task's project is the issue it is a sub-issue of, so a listing scoped to one *asks that issue* for its own sub-issues. This is the field that was declared and then not applied, which silently returned another project's tasks. |
 //! | `documents` | **Supported and proven.** A board holds issues, so a document is one: the issue whose title begins [`DESIGN_TITLE_PREFIX`]. Reads, filters and paging answer on exactly the terms a task read does, and a write puts the prefix back. |
 //! | `comments` | **Supported and proven,** over the task issue's own comment connection, oldest first and paged by GitHub's own cursor; added, edited and removed through GitHub's comment mutations, paced as every other mutation is. A draft item has no comments on GitHub and is refused, and so is an author, because GitHub records the signed-in account as every comment's author. |
+//! | `priority` | **Supported and proven** by an instance configured with `priority_mapping`, and declared unsupported by one without it, which reports every task's priority as `none` and sends exactly the requests it sent before priorities existed. The priority is the board's single-select `Priority` field: no value is `none`, a mapped option is its level, matched case-insensitively, and an option the mapping does not name fails the read of that task, naming the option. A write selects the mapped option, or clears the value for `none`; a board without the field or the option is refused, pointing at `sources fields`, which is the one thing that creates either. |
+//! | `filter_by_priority` | **Supported and proven,** over the priority each task reads as — `none` for every task of an instance without `priority_mapping`. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
@@ -6231,6 +6233,7 @@ fn text_matches(title: &str, content: Option<&str>, query: &TextQuery) -> bool {
 fn task_matches(task: &Task, query: &TaskQuery, project: &ProjectFilter) -> bool {
     labels_match(&task.labels, &query.labels)
         && status_matches(task.status.category, &query.statuses)
+        && (query.priorities.is_empty() || query.priorities.contains(&task.priority))
         && match project {
             ProjectFilter::Any => true,
             ProjectFilter::Orphans => task.project.is_none(),
@@ -6285,9 +6288,7 @@ impl TaskSource for GitHubProjectsSource {
             } else {
                 Support::Unsupported
             },
-            // The engine narrows: every read here is of the whole board or a whole project,
-            // and a priority is one more comparison over rows the engine already holds.
-            filter_by_priority: Support::Unsupported,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

@@ -287,7 +287,7 @@ pub(crate) struct InitializeResult {
     /// and each is refused by name before anything is sent.
     #[serde(default)]
     pub(crate) metadata_updates: bool,
-    /// Whether this plugin answers `set_task_content` (§3.8).
+    /// Whether this plugin answers `set_task_content` (§3.9).
     ///
     /// Optional, and absent means it does not: such a plugin is never sent the method, and a
     /// content write naming it is refused by name before anything is sent.

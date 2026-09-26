@@ -110,7 +110,7 @@ pub struct SubprocessSource {
     /// Whether the plugin said it answers the three narrow metadata writes (§3.7), read at the
     /// same handshake.
     metadata_updates: bool,
-    /// Whether the plugin said it answers the narrow content write (§3.8), read at the same
+    /// Whether the plugin said it answers the narrow content write (§3.9), read at the same
     /// handshake.
     content_updates: bool,
     /// The live process.
@@ -744,7 +744,7 @@ impl TaskSource for SubprocessSource {
         id: &NativeId,
         content: &str,
     ) -> Result<Option<()>, SourceError> {
-        // §3.8: sent only to a plugin whose handshake sets content_updates.
+        // §3.9: sent only to a plugin whose handshake sets content_updates.
         if !self.content_updates {
             return Err(unwritable_field(self.kind, "content"));
         }

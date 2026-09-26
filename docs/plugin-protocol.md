@@ -203,6 +203,7 @@ the source can do natively, and what configuration it is being built with.
 | `statuses` | array of strings | The status categories this plugin knows. Optional; see §3.5. |
 | `task_updates` | boolean | Whether this plugin answers the two narrow task writes and holds a task's `delivers` and `delivered_by`. Optional; see §3.6. |
 | `metadata_updates` | boolean | Whether this plugin answers the three narrow metadata writes. Optional; see §3.7. |
+| `content_updates` | boolean | Whether this plugin answers the narrow content write. Optional; see §3.9. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -340,6 +341,16 @@ was added without a protocol version bump. The directory is always absolute; a p
 receives one that is not answers `initialize` with `{"kind": "config"}` rather than
 measuring from its own working directory.
 
+### 3.9 `content_updates`
+
+A boolean: `true` when this plugin answers `set_task_content` (§4.20), and `false` when it
+does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method: the call is refused before anything is sent with `{"kind": "refused"}` and the message
+`the <kind> plugin cannot write a task's content on its own`, which is exactly what a plugin
+that declares the member and cannot make the write answers with.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -372,6 +383,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `delete_comment` | `TaskSource::delete_comment` |
 | `set_task_status` | `TaskSource::set_task_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
+| `set_task_priority` | `TaskSource::set_task_priority` |
+| `set_task_content` | `TaskSource::set_task_content` |
 | `set_task_metadata` | `TaskSource::set_task_metadata` |
 | `set_project_metadata` | `TaskSource::set_project_metadata` |
 | `set_document_metadata` | `TaskSource::set_document_metadata` |
@@ -405,17 +418,18 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `documents`, `comments`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
-`search_title` and `search_content` are each `"native"` or `"unsupported"`.
+`projects`, `documents`, `comments`, `priority`, `filter_by_priority`, `orphan_tasks`,
+`filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
+`"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents` and `comments` are the two members of this object that are **optional**, and an
-absent one means `"unsupported"`. That is §2.1 doing its job, exactly as it does for the
-write-support member §3.3 specifies: a plugin written before there were documents or
-comments says nothing here and is read as the source without them it is, with no version
-bump on either side.
+`documents`, `comments`, `priority` and `filter_by_priority` are the four members of this
+object that are **optional**, and an absent one means `"unsupported"`. That is §2.1 doing its
+job, exactly as it does for the write-support member §3.3 specifies: a plugin written before
+there were documents, comments or priorities says nothing here and is read as the source
+without them it is, with no version bump on either side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
 this source has documents at all, in the shape `projects` uses, so there is no wider result
@@ -429,6 +443,13 @@ tasks have comments at all. The engine never sends a comment method to a plugin 
 answered `"unsupported"` — see §4.15 — and sends the three that write (§4.16) only to a
 plugin whose write-support member (§3.3) also says it can be written.
 
+`priority` is not a predicate either: it says whether this source's tasks hold a priority
+(§4.13b) at all. A plugin that answered `"unsupported"` reports every task's priority as none,
+is never sent the narrow priority write (§4.19), and is never handed a task write (§4.9)
+carrying a priority other than none — the engine refuses such a write before anything is sent,
+naming the source and the field. `filter_by_priority` **is** a predicate, the priority filter a
+task query carries (§4.5), and the rules below reach it like any other.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 
@@ -439,9 +460,9 @@ all three hold:
    a source can only *half* apply — a `title-or-content` search where only titles are
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
-3. This reaches the six `"native"`/`"unsupported"` predicates alone — not `documents` or
-   `comments`, which are not among them. A dependency read is never ignored and never
-   silently empty.
+3. This reaches the seven `"native"`/`"unsupported"` predicates alone — not `documents`,
+   `comments` or `priority`, which are not among them. A dependency read is never ignored
+   and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
 ### 4.3 `health`
@@ -480,7 +501,8 @@ look like a failure of the source.
       "text": { "terms": "migration", "fields": "title-or-content" },
       "labels": { "any_of": ["bug"], "all_of": [], "none_of": ["wontfix"] },
       "statuses": ["todo", "in-progress"],
-      "project": { "is": "PRJ-4" }
+      "project": { "is": "PRJ-4" },
+      "priorities": ["urgent", "high"]
     },
     "page": { "cursor": null, "limit": 50 }
   }
@@ -504,6 +526,11 @@ look like a failure of the source.
   project — or the object `{"is": "<native id>"}`. It is externally tagged, unlike
   `SourceError` (§5), which is tagged on `kind`; both shapes are as
   `onetaskgraph schema` emits them.
+- `priorities` holds `Priority` values (§4.13b); a task matches when its priority is any one
+  of them, none included. It is **optional**: absent — which is how the engine sends an empty
+  list — is not a filter, and the engine sends a non-empty one only to a plugin that declared
+  `filter_by_priority` native (§4.2), so a plugin written before priorities never receives
+  one.
 
 ### 4.6 `query_projects`
 
@@ -797,6 +824,25 @@ It is **read-only**. A plugin derives it on a read and never stores one it is ha
 A `Project` and a `Document` have no `key` at all.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+### 4.13b A task's `priority`
+
+How much a task matters, as one of five values: `"none"`, `"urgent"`, `"high"`, `"medium"`
+and `"low"`.
+
+```json
+{ "id": "ENG-1", "key": "ENG-1", "title": "Rate-limit the sync loop", "priority": "high", "…": "…" }
+```
+
+The member is **optional** and an absent one means `"none"`, which says *no priority is set*
+— and is what a source that cannot hold a priority reports for every task. The engine always
+sends it, so a reader never has to tell an absent member from a `"none"` one; a plugin written
+before this member omits it and is read as the source without priorities it is.
+
+It is written, unlike `key`: a `write_task` carries the priority the item should hold, and
+`"none"` clears one. A plugin that declared `priority` unsupported (§4.2) is never handed a
+task carrying another value, so it never has a priority to drop. A `Project` and a `Document`
+have no `priority` at all.
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
@@ -1035,6 +1081,45 @@ else — a record whose stored form it cannot edit that narrowly — refuses wit
 `{"kind": "refused"}`, naming the record and why. Metadata is not status: the engine keeps no
 delivered task in step after any of these.
 
+### 4.19 `set_task_priority`
+
+Only a plugin that answered `"supported"` to §3.3 **and** declared `priority` `"native"` (§4.2)
+is ever sent this. It sets one task's priority and changes nothing else.
+
+```json
+{ "id": "21", "method": "set_task_priority", "params": { "id": "ENG-1", "priority": "urgent" } }
+{ "id": "21", "result": { "priority": "urgent" } }
+```
+
+`id` is the `NativeId` of a task at **this** source, and `priority` is a `Priority` (§4.13b);
+`"none"` clears it. `result.priority` is the priority as the plugin reads the task **after**
+the write, or `null` when this plugin holds no such task. Title, content, status, labels,
+metadata, dependencies, `delivers`, `delivered_by`, project and comments stay as they are.
+
+A plugin that has nowhere to put this priority — a board with no option for it — refuses with
+`{"kind": "refused"}`, naming what it lacks. Priority is not status: the engine keeps no
+delivered task in step after it.
+
+### 4.20 `set_task_content`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `content_updates: true` to §3.9 is
+ever sent this. It replaces one task's content and changes nothing else.
+
+```json
+{ "id": "22", "method": "set_task_content", "params": { "id": "ENG-1", "content": "Why this matters.\n" } }
+{ "id": "22", "result": { "id": "ENG-1" } }
+```
+
+`id` is the `NativeId` of a task at **this** source, and `content` is a string: what the task's
+`content` holds afterwards, as `get_task` reports it (§4.4). `result.id` is the task's id, or
+`null` when this plugin holds no such task: the trait method carries `()` inside its `Option`,
+so all a plugin says is that it wrote the content, or that there was no task to write it on.
+Where the plugin keeps something else in the same
+backend field as the content — a metadata block in an issue body — that is kept as it was, and
+so is every other member: title, status, priority, labels, metadata, dependencies,
+`delivers`, `delivered_by`, project and comments. There is no compare-and-set: the content is
+replaced whatever it held a moment before.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -1108,6 +1193,21 @@ source with no short handle it is; an engine written before it ignores one a plu
 exactly as it ignored `location`. Nothing is gated on it because nothing has to be — no
 method takes it, no method returns only it, and no request is decided by whether a peer
 understands it, so there is no shape a peer could be handed that it was not written for.
+
+A task's `priority` (§4.13b), the `priority` and `filter_by_priority` members of §4.2 and the
+`priorities` member of §4.5 were added **without** a bump, beside `location` and `key` and for
+their reason, with one gate more. Unlike a `key`, a priority is *written*, so a plugin written
+before it could be handed one it would drop in silence under §2.1 — and it never is: such a
+plugin omits `priority` from its capabilities, §4.2 reads that as `"unsupported"`, and the
+engine refuses, by the source's name and the field's, every write that would carry it a
+priority other than `"none"`. A `"none"` it already reports for every task, so a copy carrying
+one writes exactly as before. It likewise omits `filter_by_priority`, so it is never sent a
+`priorities` filter, and the engine narrows the wider set it returns.
+
+`set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
+§3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a
+plugin that declared `priority` `"native"`, and the second only one that answered
+`content_updates: true`, neither of which a plugin written before them can have done.
 
 `metering` (§4.14) and the `meters` member of §3.4 were added **without** a bump, for the
 same reason the documents were: the engine sends `metering` only to a plugin that answered
