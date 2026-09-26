@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.44](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.43...onetaskgraph-core-v0.2.44) - 2026-09-26
+
+### Added
+
+- *(task)* report the backend's short handle as a task's key ([#2585](https://github.com/nickderobertis/onetaskgraph/pull/2585))
+
+### Documentation
+
+- *(readme)* lead with hash-gated captures of the real CLI ([#2561](https://github.com/nickderobertis/onetaskgraph/pull/2561))
+
 ## [0.2.40](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.39...onetaskgraph-core-v0.2.40) - 2026-09-19
 
 ### Fixed
