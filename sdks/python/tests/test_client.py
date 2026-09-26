@@ -789,7 +789,6 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
         def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
             length = int(self.headers["content-length"])
             request = json.loads(self.rfile.read(length))
-            assert "optionId" in request["query"]
             statuses = [
                 {"id": f"OPT-{index}", "name": name, "color": "GRAY", "description": ""}
                 for index, name in enumerate(
@@ -797,6 +796,35 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
                     start=1,
                 )
             ]
+            # The board's own field list, which the setup reads when a field it owns is not
+            # among the single-select ones — to refuse a same-named field of another type.
+            if "boardFields" in request["query"]:
+                data: dict[str, object] = {
+                    "boardFields": {
+                        "projectV2": {
+                            "id": "PVT-board",
+                            "fields": {
+                                "nodes": [
+                                    {
+                                        "__typename": "ProjectV2SingleSelectField",
+                                        "id": "FIELD-status",
+                                        "name": "Status",
+                                        "options": statuses,
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False},
+                            },
+                        }
+                    }
+                }
+                response = json.dumps({"data": data}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            assert "optionId" in request["query"]
             response = json.dumps(
                 {
                     "data": {
