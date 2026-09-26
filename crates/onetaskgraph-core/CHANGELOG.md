@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.45](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.44...onetaskgraph-core-v0.2.45) - 2026-09-26
+
+### Added
+
+- *(task)* add a first-class task priority and a field-setup verb ([#2613](https://github.com/nickderobertis/onetaskgraph/pull/2613))
+
 ## [0.2.44](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.43...onetaskgraph-core-v0.2.44) - 2026-09-26
 
 ### Added
