@@ -788,9 +788,14 @@ It is **human-facing and it may change**: an issue moved between teams or transf
 between repositories gets a new one. So `id` stays what the engine and every consumer
 store and match on, and nothing resolves a task by its key.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour
+     rather than by words: `an_update_keeps_the_destinations_own_key_whatever_the_incoming_task_carried`
+     (github-projects), `a_write_carrying_a_key_lands_and_the_item_reads_back_without_one`
+     (in-memory) and the copy journey's absent `key` each fail if a written key is stored. -->
 It is **read-only**. A plugin derives it on a read and never stores one it is handed: an
 `ItemWrite` whose task holds one is read exactly as one that does not.
 A `Project` and a `Document` have no `key` at all.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### 4.14 `metering`
 

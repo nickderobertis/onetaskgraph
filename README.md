@@ -267,7 +267,9 @@ read, nothing is written, and each item is reported with the action it would hav
 
 ![A terminal showing a dry-run copy of two tasks into another source: the first names its counterpart there and reads `updated`, the second has none and reads `created`, followed by the line counting rewritten, unresolved and ambiguous references](docs/screenshots/task-copy-dry-run.svg)
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The rule's executable source for this sentence is the shared journey `every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_intact`, which drives every configured source kind and asserts both halves of it: the fields named as written come back equal, and `url` and `key` are absent on the copied item even where the source reported one. A drift gate here could only reconcile this prose against a Rust doc comment, which is one prose spelling checked against another. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journey
+     `every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_intact`,
+     which asserts the written fields equal and `url` and `key` absent on every copy. -->
 Every field a copy read is written — title, content, status, labels, project,
 repositories, metadata and the edges — except `url`, `location`, `key`, `created_at` and
 `updated_at`, which are the destination's own: the short handle a backend shows people is
@@ -275,6 +277,7 @@ issued by that backend, so the one the source wore is not the one the destinatio
 represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
 deletes work either, so a destination item the source no longer holds is left exactly as it
 is and reported as `orphaned`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **A copy either completes or leaves the destination as it found it.** A copy that cannot
 finish — a field the destination refuses, a credential that expires, a rate limiter —
