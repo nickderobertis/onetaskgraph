@@ -18,6 +18,7 @@ import type {
   QueryResponseOfQualifiedProject,
   QueryResponseOfQualifiedTask,
   QueryResponseOfSearchHit,
+  RenderedTemplate,
   SourceListings,
   StatusCategory,
   StatusOptionsReport,
@@ -25,6 +26,7 @@ import type {
   TaskDetail,
   TaskPrioritySet,
   TaskStatusSet,
+  TemplateVariables,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
@@ -57,6 +59,16 @@ export type CopyOptions = {
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = { body: string } | { bodyFile: string };
 export type CommentAddOptions = CommentBodyOptions & { author?: string };
+// Where `extends`, `include` and `import` names resolve: these directories, in order, and never
+// the working directory unless it is one of them.
+export type TemplateOptions = { searchPath?: string[] };
+// A template's answers: a mapping the client writes to the binary's standard input, and
+// `vars` as `--var NAME=VALUE`, which outrank it — literal text for a `string` or `text`
+// variable, YAML for any other.
+export type TemplateRenderOptions = TemplateOptions & {
+  answers?: Record<string, unknown>;
+  vars?: Record<string, string>;
+};
 export type ClientOptions = {
   binaryPath?: string;
   cwd?: string;
@@ -115,6 +127,8 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "document metadata set": "MetadataSet",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
+  "template variables": "TemplateVariables",
+  "template render": "RenderedTemplate",
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
@@ -124,7 +138,7 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails.
+// fails. A template verb reads no source at all.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
@@ -134,7 +148,8 @@ const partialResponseCommands = new Set(
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
-      !command.endsWith(" content set"),
+      !command.endsWith(" content set") &&
+      !command.startsWith("template "),
   ),
 );
 
@@ -182,6 +197,10 @@ function addFilters(args: string[], options: FilterOptions): void {
   for (const status of options.statuses ?? []) args.push("--status", status);
   if (options.search !== undefined) args.push("--search", options.search);
   if (options.fields !== undefined) args.push("--in", options.fields);
+}
+
+function searchPathFlags(options: TemplateOptions): string[] {
+  return (options.searchPath ?? []).flatMap((directory) => ["--search-path", directory]);
 }
 
 function copyFlags(options: CopyOptions): string[] {
@@ -352,8 +371,24 @@ export class OnetaskgraphClient {
     return this.run("search", args);
   }
 
+  templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
+    return this.run("template variables", [file, ...searchPathFlags(options)]);
+  }
+  // The answers go over standard input as JSON, which is YAML, so no file is written for them.
+  templateRender(file: string, options: TemplateRenderOptions = {}): Promise<RenderedTemplate> {
+    const args = [file, ...searchPathFlags(options)];
+    for (const [name, value] of Object.entries(options.vars ?? {})) {
+      args.push("--var", `${name}=${value}`);
+    }
+    if (options.answers === undefined) return this.run("template render", args);
+    args.push("--answers", "-");
+    return this.run("template render", args, JSON.stringify(options.answers));
+  }
+
   private run<T>(command: string, args: string[], input?: string): Promise<T> {
-    const commandArgs = [...command.split(" "), ...args, "--json"];
+    // Every call is non-interactive: a library caller has no terminal to be asked on, and a
+    // command that would prompt refuses what it was not given instead of waiting.
+    const commandArgs = [...command.split(" "), ...args, "--json", "--no-interactive"];
     return new Promise((resolvePromise, reject) => {
       // Standard input is always a pipe, written with the body when there is one and closed
       // at once either way: a command that reads a body there must never wait on this

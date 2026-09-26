@@ -134,7 +134,7 @@ test("status options forwards apply through the executable boundary", async () =
         JSON.stringify({ source: "board", missing: [], outcome: "unchanged", existing: [] }),
         "",
         0,
-        ["sources", "status-options", "board", "--apply", "--json"],
+        ["sources", "status-options", "board", "--apply", "--json", "--no-interactive"],
       ),
     });
 
@@ -732,7 +732,7 @@ test("task status set answers when a delivered task could not be kept in step", 
     // The invocation the client makes, observed at the process boundary: it exits 4.
     const observed = spawnSync(
       binary,
-      ["task", "status", "set", "work:P", "in-progress", "--json"],
+      ["task", "status", "set", "work:P", "in-progress", "--json", "--no-interactive"],
       { cwd: statusRoot, encoding: "utf8" },
     );
     expect(observed.status).toBe(4);
@@ -851,6 +851,7 @@ test("sources fields forwards apply through the executable boundary", async () =
         "board",
         "--apply",
         "--json",
+        "--no-interactive",
       ]),
     });
     const answered = await applyClient.sourcesFields("board", { apply: true });

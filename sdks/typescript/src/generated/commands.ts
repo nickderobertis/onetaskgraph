@@ -28,5 +28,7 @@ export const binaryCommands = [
   "document copy",
   "document metadata set",
   "label list",
-  "search"
+  "search",
+  "template variables",
+  "template render"
 ] as const;
