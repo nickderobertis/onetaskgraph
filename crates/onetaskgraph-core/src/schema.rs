@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
+use crate::template::{
+    ItemType, RenderedTemplate, TemplateVariable, TemplateVariables, VariableType,
+};
 use crate::{
     CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
     Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
@@ -39,7 +42,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 20;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 21;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -160,6 +163,14 @@ pub fn schema_bundle() -> Value {
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));
     roots.insert("CopyAction", schema_for!(CopyAction));
+
+    // What `template variables` and `template render` answer with, and the declaration and
+    // the two vocabularies inside the first, which a caller branches on by name.
+    roots.insert("TemplateVariables", schema_for!(TemplateVariables));
+    roots.insert("TemplateVariable", schema_for!(TemplateVariable));
+    roots.insert("VariableType", schema_for!(VariableType));
+    roots.insert("ItemType", schema_for!(ItemType));
+    roots.insert("RenderedTemplate", schema_for!(RenderedTemplate));
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

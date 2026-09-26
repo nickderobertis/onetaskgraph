@@ -40,6 +40,7 @@ mod resolve;
 mod schema;
 mod secrets;
 pub mod subprocess;
+pub mod template;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
@@ -63,4 +64,8 @@ pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, 
 pub use subprocess::{
     MAX_LINE, Program, RequestDeadline, SubprocessConfig, SubprocessPlugin, SubprocessSource,
     serve, serve_plugin,
+};
+pub use template::{
+    Answers, ItemType, RenderedTemplate, Template, TemplateError, TemplateLoader, TemplateVariable,
+    TemplateVariables, VariableType,
 };

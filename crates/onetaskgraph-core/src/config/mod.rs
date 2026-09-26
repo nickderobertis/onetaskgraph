@@ -54,6 +54,9 @@ pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";
 /// How many items a page holds when nothing sets `page_size`.
 pub const DEFAULT_PAGE_SIZE: NonZeroU32 = NonZeroU32::new(50).expect("50 is not zero");
 
+/// Whether a command may prompt when nothing sets `interactive`.
+pub const DEFAULT_INTERACTIVE: bool = true;
+
 /// How output is rendered.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -142,6 +145,7 @@ pub struct Config {
     default_sources: Option<Vec<SourceName>>,
     page_size: NonZeroU32,
     output: OutputFormat,
+    interactive: bool,
     sources: BTreeMap<SourceName, SourceConfig>,
 }
 
@@ -153,6 +157,7 @@ struct DocumentShape {
     default_sources: Option<Vec<String>>,
     page_size: NonZeroU32,
     output: OutputFormat,
+    interactive: bool,
     sources: BTreeMap<String, SourceShape>,
 }
 
@@ -162,6 +167,7 @@ impl Default for DocumentShape {
             default_sources: None,
             page_size: DEFAULT_PAGE_SIZE,
             output: OutputFormat::default(),
+            interactive: DEFAULT_INTERACTIVE,
             sources: BTreeMap::new(),
         }
     }
@@ -250,6 +256,7 @@ impl Config {
             default_sources,
             page_size: shape.page_size,
             output: shape.output,
+            interactive: shape.interactive,
             sources,
         };
         // Here rather than at the call site, so "a `Config` exists" means "every block in
@@ -270,6 +277,16 @@ impl Config {
     #[must_use]
     pub fn output(&self) -> OutputFormat {
         self.output
+    }
+
+    /// Whether a command may prompt for what it was not given — today, `template render`
+    /// asking for each variable no answer covers.
+    ///
+    /// Off, a command never prompts: what it was not given is refused instead, so automation
+    /// neither hangs on a prompt nor renders a required answer empty.
+    #[must_use]
+    pub fn interactive(&self) -> bool {
+        self.interactive
     }
 
     /// Every configured source, in name order.

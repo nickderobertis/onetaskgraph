@@ -21,7 +21,16 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (
         &["--help"],
         &[
-            "sources", "task", "project", "label", "search", "schema", "config",
+            "sources",
+            "task",
+            "project",
+            "label",
+            "search",
+            "schema",
+            "config",
+            "template",
+            "--interactive",
+            "--no-interactive",
         ],
     ),
     (&["help", "sources"], &["list", "fields"]),
@@ -84,6 +93,22 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "project", "deps"], &["--direction", "<ID>"]),
     (&["help", "label", "list"], &["--source"]),
     (&["help", "search"], &["--in", "--kind", "<TEXT>"]),
+    (&["help", "template"], &["variables", "render"]),
+    (
+        &["help", "template", "variables"],
+        &["<FILE>", "--search-path", "--json"],
+    ),
+    (
+        &["help", "template", "render"],
+        &[
+            "<FILE>",
+            "--search-path",
+            "--answers",
+            "--var",
+            "--no-interactive",
+            "--json",
+        ],
+    ),
 ];
 
 #[test]
@@ -169,7 +194,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 20);
+    assert_eq!(bundle["version"], 21);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -204,7 +229,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "document copy",
             "document metadata set",
             "label list",
-            "search"
+            "search",
+            "template variables",
+            "template render"
         ])
     );
 
@@ -564,6 +591,8 @@ const README_COMMAND_LINES: &[(&[&str], Option<&str>)] = &[
     (&["task", "list"], Some("--priority")),
     (&["task", "priority", "set"], Some("<PRIORITY>")),
     (&["task", "content", "set"], None),
+    (&["template", "variables"], None),
+    (&["template", "render"], None),
 ];
 
 #[test]

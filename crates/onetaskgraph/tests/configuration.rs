@@ -2031,3 +2031,105 @@ fn an_empty_root_a_document_supplies_behind_the_seam_is_not_rebased_onto_the_doc
         "the failure names the source that could not be read: {message}"
     );
 }
+
+/// `interactive`: its default, each of the two documents, the environment and both flags, in
+/// the store's one precedence, each reported with the layer it came from exactly as `output`
+/// is.
+#[test]
+fn interactive_is_set_at_every_layer_in_the_stores_precedence_and_reported_with_its_origin() {
+    let interactive = |sandbox: &Sandbox, environment: Option<&str>, flags: &[&str]| {
+        let mut command = sandbox.command();
+        if let Some(value) = environment {
+            command.env("ONETASKGRAPH_INTERACTIVE", value);
+        }
+        let output = command
+            .args(["config", "show", "--json"])
+            .args(flags)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        setting(&shown(&output), "interactive").clone()
+    };
+
+    let sandbox = Sandbox::new();
+    let setting = interactive(&sandbox, None, &[]);
+    assert_eq!(setting["value"], true, "on unless something turns it off");
+    assert_eq!(setting["origin"]["layer"], "default");
+
+    let user = sandbox.user_document("interactive: false\n");
+    let setting = interactive(&sandbox, None, &[]);
+    assert_eq!(setting["value"], false);
+    assert_eq!(
+        setting["origin"]["path"],
+        user.to_string_lossy().to_string()
+    );
+
+    let project = sandbox.project_document("interactive: true\n");
+    let setting = interactive(&sandbox, None, &[]);
+    assert_eq!(
+        setting["value"], true,
+        "the project document over the user's"
+    );
+    assert_eq!(
+        setting["origin"]["path"],
+        project.to_string_lossy().to_string()
+    );
+
+    let setting = interactive(&sandbox, Some("false"), &[]);
+    assert_eq!(
+        setting["value"], false,
+        "the environment over the documents"
+    );
+    assert_eq!(setting["origin"]["variable"], "ONETASKGRAPH_INTERACTIVE");
+
+    let setting = interactive(&sandbox, Some("false"), &["--interactive"]);
+    assert_eq!(setting["value"], true, "a flag over the environment");
+    assert_eq!(setting["origin"]["flag"], "--interactive");
+
+    let setting = interactive(&sandbox, Some("true"), &["--no-interactive"]);
+    assert_eq!(setting["value"], false);
+    assert_eq!(setting["origin"]["flag"], "--no-interactive");
+
+    let text = sandbox
+        .command()
+        .args(["config", "show", "--no-interactive"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        stdout(&text)
+            .lines()
+            .any(|line| line.starts_with("interactive ") && line.contains("flag --no-interactive")),
+        "{}",
+        stdout(&text)
+    );
+
+    // The two flags contradict each other, which is the invocation's mistake.
+    let both = sandbox
+        .command()
+        .args(["config", "show", "--interactive", "--no-interactive"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(both.status.code(), Some(2));
+    assert!(
+        stderr(&both).contains("cannot be used with"),
+        "{}",
+        stderr(&both)
+    );
+
+    // A value the setting cannot hold is refused by name.
+    let refused = sandbox
+        .command()
+        .env("ONETASKGRAPH_INTERACTIVE", "sometimes")
+        .args(["config", "show"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("interactive"),
+        "{}",
+        stderr(&refused)
+    );
+}

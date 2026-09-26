@@ -26,6 +26,9 @@ path = "src/bin/onetaskgraph-source.rs"
 [dependencies]
 schemars.workspace = true
 clap.workspace = true
+# The per-variable prompts of `template render`. This crate alone: nothing below the command
+# line prompts, so no other crate may depend on it.
+dialoguer.workspace = true
 # Both network destinations: the binary this repository ships registers every plugin kind,
 # and so does `onetaskgraph-source`, the reference host the journeys drive them through.
 onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
@@ -36,6 +39,7 @@ onetaskgraph-plugin-api.workspace = true
 onetaskgraph-status-options.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
@@ -50,3 +54,7 @@ onetaskgraph-linear.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+
+# A pseudo-terminal for the template prompting journeys, which only a Unix host can open.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["pty", "fs", "termios"] }

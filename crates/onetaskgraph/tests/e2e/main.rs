@@ -75,3 +75,4 @@ mod source_host;
 // subprocess journey; the plugin-isolation contract forbids moving it into a plugin crate.
 mod status_options;
 mod surface;
+mod templates;

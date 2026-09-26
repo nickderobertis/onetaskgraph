@@ -7,6 +7,7 @@
 
 mod cli;
 mod render;
+mod template;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -507,6 +508,8 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 "labels",
             )
         }
+
+        Command::Template { command } => template::run(out, loaded, command),
 
         Command::Search(args) => {
             let request = SearchRequest {
@@ -1307,7 +1310,9 @@ mod tests {
                 "document copy",
                 "document metadata set",
                 "label list",
-                "search"
+                "search",
+                "template variables",
+                "template render"
             ])
         );
     }
