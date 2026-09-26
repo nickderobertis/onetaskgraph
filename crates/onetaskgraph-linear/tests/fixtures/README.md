@@ -143,6 +143,24 @@ everything stores and matches on. `issues.json` gains the member for the same re
 other selected field is in it — the pinned-schema check validates each selected response
 fixture against the type it stands for.
 
+## `Issue.priority`, and the two inputs that write it
+
+A task's priority carries an eighth date. `Issue.priority: Float!`, `IssueCreateInput.priority:
+Int` and `IssueUpdateInput.priority: Int` were pinned on **2026-09-26** from Linear's
+published schema, which describes all three in the same words: "The priority of the issue.
+0 = No priority, 1 = Urgent, 2 = High, 3 = Normal, 4 = Low." Nothing was captured from the
+real API; the credentialed Linear lane is what compares the pin against it.
+
+The read is a `Float` and the inputs are `Int`s, as published, so the plugin reads `2` and
+`2.0` as one answer, sends a whole number, and refuses a value that is none of the five as a
+malformed response naming the field. Linear's "Normal" is this contract's `medium`.
+`IssueFilter.priority` is published too and is not pinned, because nothing sends it: the
+plugin declares `filter_by_priority` unsupported and the engine narrows. `ISSUE` and
+`ISSUES` select the field, `ISSUE_PRIORITY_UPDATE` selects it in the `issueUpdate` payload,
+and `issues.json` gains it — `2` on the first issue and `0` on the second, documentation-
+derived like the rest of that file — because the pinned-schema check validates each
+selected response fixture against the type it stands for.
+
 ## The comment contract, and the two things in it that are not observed
 
 The comment contract carries a fifth date. `Query.comment(id: String): Comment!`,

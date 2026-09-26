@@ -28,6 +28,8 @@
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `comments` | **Supported and proven,** as the issue's own comments: read oldest first through `issue(id:){comments(last:,before:)}`, added with `commentCreate`, edited with `commentUpdate` and removed with `commentDelete` — each of the last two only once `comment(id:)` has placed the comment on that very issue. See the ruling below on the order and on the author. |
+//! | `priority` | **Supported,** as Linear's own `Issue.priority`: read on every issue, written by `issueCreate`/`issueUpdate` through `IssueCreateInput.priority`/`IssueUpdateInput.priority`, and set on its own by an `issueUpdate` carrying nothing else. See the ruling below on the scale. |
+//! | `filter_by_priority` | **Unsupported, and unimplemented** rather than a limit of the API: Linear's `IssueFilter` has a `priority` comparator this source does not send yet, so the engine narrows the wider page it returns. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
 //! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows with `state:{type:{in:[…]}}` over `WorkflowState.type`; a project narrows with `status:{type:{in:[…]}}` over `ProjectStatusType`, a different member of a different filter over a different vocabulary. See the ruling below. |
@@ -170,6 +172,25 @@
 //! Linear has no field for either, so a write carrying either list or either reserved key,
 //! and every `set_delivered_by`, is refused by name before any request.
 //!
+//! ## Ruling: a priority is Linear's own, and content shares a field with the slot
+//!
+//! A task's priority is `Issue.priority`, on Linear's scale: `0` none, `1` urgent, `2` high,
+//! `3` normal — this contract's `medium` — and `4` low. Linear declares the field `Float!`
+//! while `IssueCreateInput.priority` and `IssueUpdateInput.priority` are `Int`, so a read
+//! accepts `2` and `2.0` alike and refuses anything that is not one of the five as a
+//! malformed response naming the field. A copy sends it on a create and on an update, `0`
+//! included, so a task moved back to no priority is not left holding its old one.
+//! `set_task_priority` reads the issue first — no such issue, or a trashed one, is `None`
+//! with nothing written — then sends `issueUpdate` with `priority` alone and answers with
+//! the priority the mutation's own payload reports.
+//!
+//! `set_task_content` sends `issueUpdate` with `description` alone, and that description is
+//! the given content followed by the issue's metadata slot exactly as it was stored, so the
+//! slot, and every key in it, is untouched. What a later read reports as the content is the
+//! given bytes, with one exception the reader owns: an issue that carries a slot has the
+//! whitespace at the end of its visible description trimmed on every read, a copy's
+//! included, so trailing whitespace given to such an issue does not come back.
+//!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. The live journey in
 //! `tests/live.rs` drives every field of the table above against Linear itself: it builds its own fixture
 //! on the scratch team `LINEAR_WRITE_TEAM` names — two projects, one issue filed under
@@ -229,11 +250,11 @@ pub mod graphql {
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
     /// Fetch one issue.
-    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} labels{nodes{id name color}} project{id} } }";
+    pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
     pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
     /// List issues.
-    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
+    pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
     /// List projects.
     pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
     /// List issue labels.
@@ -307,6 +328,13 @@ pub mod graphql {
         "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id}} }";
     /// Update an issue.
     pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id}} }";
+    /// Set an issue's priority on its own, and read back the priority Linear now holds.
+    ///
+    /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting `priority` in the payload
+    /// because a narrow priority write answers with what the source reads back rather than
+    /// an echo of what it sent. A document of its own rather than a wider [`ISSUE_UPDATE`],
+    /// so every other issue write keeps asking for exactly what it reads.
+    pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
     /// Create a project.
     pub const PROJECT_CREATE: &str =
         "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
@@ -1289,7 +1317,7 @@ impl TaskSource for LinearSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            priority: Support::Unsupported,
+            priority: Support::Native,
             filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
@@ -1407,7 +1435,10 @@ impl TaskSource for LinearSource {
             &edges,
             WriteKind::Task,
         )?;
-        let input = json!({"title":write.item.title,"description":description,"stateId":state,"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
+        // `priority` on a create and on an update alike, `0` included: an update that left
+        // it out would keep whatever the destination held, so a copy moving an issue back to
+        // no priority would report success for a priority the destination still carries.
+        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":write.item.project.as_ref().map(|id| id.0.clone())});
         let (query, variables, root) = match &write.target {
             Some(id) => (
                 graphql::ISSUE_UPDATE,
@@ -1833,6 +1864,78 @@ impl TaskSource for LinearSource {
         backend_id(issue, "id")?;
         Ok(Some(Status { category, name }))
     }
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        // Read first, on exactly the terms `set_task_status` reads: Linear answers an
+        // `issueUpdate` naming no issue with an errored response rather than a null, so the
+        // read is what tells "no such task" from a refusal — and a trashed issue is not one
+        // this source holds, so it is never written to.
+        let Some(task) = self.get_task(id).await? else {
+            return Ok(None);
+        };
+        // `priority` alone: every member of `IssueUpdateInput` is optional and Linear leaves
+        // an absent one as the issue holds it, so nothing else about the issue can move.
+        let data = self
+            .send(
+                graphql::ISSUE_PRIORITY_UPDATE,
+                json!({"id":task.id.0,"input":{"priority":linear_priority(priority)}}),
+            )
+            .await?;
+        let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
+            .get("issue")
+            .filter(|issue| !issue.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing issueUpdate.issue".into(),
+            })?;
+        backend_id(issue, "id")?;
+        issue_priority(issue).map(Some)
+    }
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        // The raw description, because the metadata slot lives in that same field and has to
+        // go back byte for byte: re-encoding it would be a metadata write nobody asked for.
+        // The whole issue is read as `get_task` reads it first, so an issue this source could
+        // not read is refused before anything is written rather than overwritten blind.
+        let data = self.send(ISSUE, json!({"id":id.0})).await?;
+        let Some((issue, slot)) = optional(&data, "issue", |v| {
+            map_task(v, &self.name)?;
+            let slot = match optional_str(v, "description")? {
+                Some(description) => metadata_slot(description)?.map(str::to_owned),
+                None => None,
+            };
+            Ok((NativeId(backend_id(v, "id")?.into()), slot))
+        })?
+        else {
+            return Ok(None);
+        };
+        let description = match slot {
+            None => content.to_owned(),
+            Some(slot) if content.is_empty() => slot,
+            // The separator `long_form` writes, so a content write and a copy leave one shape.
+            Some(slot) => format!("{content}\n\n{slot}"),
+        };
+        // `description` alone, for the reason `set_task_priority` sends `priority` alone.
+        let data = self
+            .send(
+                graphql::ISSUE_UPDATE,
+                json!({"id":issue.0,"input":{"description":description}}),
+            )
+            .await?;
+        let written = mutation_payload(&data, MutationRoot::IssueUpdate)?
+            .get("issue")
+            .filter(|issue| !issue.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing issueUpdate.issue".into(),
+            })?;
+        backend_id(written, "id")?;
+        Ok(Some(()))
+    }
     async fn set_delivered_by(
         &self,
         id: &NativeId,
@@ -2213,7 +2316,7 @@ fn map_task(v: &Value, source: &SourceName) -> Result<Task, SourceError> {
         status: status(v.get("state").ok_or_else(|| SourceError::Malformed {
             message: "missing state".into(),
         })?)?,
-        priority: Priority::None,
+        priority: issue_priority(v)?,
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
             message: "missing labels".into(),
         })?)?,
@@ -2228,6 +2331,42 @@ fn map_task(v: &Value, source: &SourceName) -> Result<Task, SourceError> {
         delivered_by,
     })
 }
+/// A priority as Linear's `Issue.priority` and its two input members spell it.
+///
+/// Linear's own scale, as its published schema describes the field: `0` is no priority,
+/// `1` urgent, `2` high, `3` normal and `4` low. Normal is this contract's `medium`.
+const fn linear_priority(priority: Priority) -> u8 {
+    match priority {
+        Priority::None => 0,
+        Priority::Urgent => 1,
+        Priority::High => 2,
+        Priority::Medium => 3,
+        Priority::Low => 4,
+    }
+}
+
+/// The priority an issue carries, read from `Issue.priority`.
+///
+/// Linear declares that field `Float!` while its inputs take an `Int`, so `2` and `2.0` are
+/// the same answer. Anything else — absent, null, fractional, or outside `0` to `4` — is a
+/// response this source cannot read, never a guess at the nearest level: a priority reported
+/// that a filter for it could not find is capability rule 1 broken.
+fn issue_priority(v: &Value) -> Result<Priority, SourceError> {
+    let raw = v.get("priority").ok_or_else(|| SourceError::Malformed {
+        message: "missing number field priority".into(),
+    })?;
+    let level = raw.as_f64().filter(|level| level.fract() == 0.0);
+    Priority::ALL
+        .into_iter()
+        .find(|priority| level == Some(f64::from(linear_priority(*priority))))
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!(
+                "field priority is {raw}, which is none of Linear's priorities 0 (none), \
+                 1 (urgent), 2 (high), 3 (normal) and 4 (low)"
+            ),
+        })
+}
+
 /// One delivery list read out of an issue's metadata slot, and removed from it.
 ///
 /// An entry that is not a task id, that names the issue itself, or that repeats is a
@@ -2537,14 +2676,14 @@ const METADATA_CLOSE: &str = "\n-->";
 /// project's `description` comes back as written. The write side keeps the one encoding.
 const METADATA_CLOSE_ESCAPED: &str = "\n\\-->";
 
-fn metadata_description(
-    description: Option<String>,
-) -> Result<(Option<String>, std::collections::BTreeMap<String, Value>), SourceError> {
-    let Some(description) = description else {
-        return Ok((None, Default::default()));
-    };
+/// Where the trailing metadata slot of `description` is: the byte its opening marker starts
+/// at, and the span of the encoded JSON inside it — or `None` when it ends in no slot.
+///
+/// The one place the slot is recognised, so what [`metadata_description`] reads out and
+/// what [`metadata_slot`] keeps for a content write are the same bytes.
+fn slot_bounds(description: &str) -> Result<Option<(usize, usize, usize)>, SourceError> {
     let Some(start) = description.rfind(METADATA_OPEN) else {
-        return Ok((Some(description), Default::default()));
+        return Ok(None);
     };
     let encoded_start = start + METADATA_OPEN.len();
     let close = [METADATA_CLOSE, METADATA_CLOSE_ESCAPED]
@@ -2562,8 +2701,25 @@ fn metadata_description(
     };
     let encoded_end = encoded_start + relative_end;
     if !description[encoded_end + close_len..].trim().is_empty() {
-        return Ok((Some(description), Default::default()));
+        return Ok(None);
     }
+    Ok(Some((start, encoded_start, encoded_end)))
+}
+
+/// The metadata slot `description` ends in, exactly as it is stored, or `None`.
+fn metadata_slot(description: &str) -> Result<Option<&str>, SourceError> {
+    Ok(slot_bounds(description)?.map(|(start, _, _)| &description[start..]))
+}
+
+fn metadata_description(
+    description: Option<String>,
+) -> Result<(Option<String>, std::collections::BTreeMap<String, Value>), SourceError> {
+    let Some(description) = description else {
+        return Ok((None, Default::default()));
+    };
+    let Some((start, encoded_start, encoded_end)) = slot_bounds(&description)? else {
+        return Ok((Some(description), Default::default()));
+    };
     let metadata =
         serde_json::from_str(&description[encoded_start..encoded_end]).map_err(|error| {
             SourceError::Malformed {
