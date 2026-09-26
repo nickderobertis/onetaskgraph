@@ -17,8 +17,9 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, MetadataKey,
-    NativeId, PageRequest, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
+    NativeId, PageRequest, Priority, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource,
+    WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -2069,4 +2070,137 @@ async fn the_narrow_metadata_writes_cross_the_wire_and_land_in_the_hosted_source
         };
         assert!(answered.expect("answered"), "{record} X-9 is not held");
     }
+}
+
+#[tokio::test]
+async fn a_handshake_written_before_priorities_is_never_handed_a_priority_or_a_content_write() {
+    // The literal handshake a pre-priority plugin sends: no `priority`, no
+    // `filter_by_priority` and no `content_updates`. It is read as a source holding no
+    // priority, and the seam itself refuses — before anything is sent — a narrow priority
+    // write, a narrow content write, and a task write carrying a priority it would drop.
+    let (source, heard) = recording(vec![json!({
+        "protocol_version": 2, "kind": "earlier",
+        "capabilities": capabilities(),
+        "writes": "supported", "task_updates": true, "metadata_updates": true
+    })]);
+    let source = source.expect("the handshake completes");
+    assert_eq!(source.capabilities().priority, Support::Unsupported);
+    assert_eq!(
+        source.capabilities().filter_by_priority,
+        Support::Unsupported
+    );
+    let id = NativeId::from("T-1");
+    assert_eq!(
+        source
+            .set_task_priority(&id, Priority::High)
+            .await
+            .expect_err("never sent"),
+        SourceError::Refused {
+            message: "the earlier plugin cannot write a task's priority on its own".to_owned()
+        }
+    );
+    assert_eq!(
+        source
+            .set_task_content(&id, "body")
+            .await
+            .expect_err("never sent"),
+        SourceError::Refused {
+            message: "the earlier plugin cannot write a task's content on its own".to_owned()
+        }
+    );
+    let mut task: Task = serde_json::from_value(json!({
+        "id": "T-1", "title": "Alpha", "content": null,
+        "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": null,
+        "url": null, "created_at": null, "updated_at": null
+    }))
+    .expect("a task");
+    task.priority = Priority::Urgent;
+    assert!(
+        source
+            .write_task(&ItemWrite {
+                target: None,
+                item: task,
+                depends_on: Vec::new(),
+            })
+            .await
+            .is_err(),
+        "a task carrying a priority never reaches a plugin that would drop it"
+    );
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, ["initialize"], "{heard:?}");
+}
+
+#[tokio::test]
+async fn the_narrow_priority_and_content_writes_cross_the_wire_and_land_in_the_hosted_source() {
+    let mut settings = hosted_settings();
+    settings["config"]["tasks"][0]["priority"] = json!("low");
+    let there = a_process_away(settings).expect("connects");
+    assert_eq!(there.capabilities().priority, Support::Native);
+    let id = NativeId::from("T-1");
+    let before = there.get_task(&id).await.expect("answered").expect("held");
+    assert_eq!(before.priority, Priority::Low);
+
+    assert_eq!(
+        there
+            .set_task_priority(&id, Priority::Urgent)
+            .await
+            .expect("answered"),
+        Some(Priority::Urgent)
+    );
+    assert_eq!(
+        there
+            .set_task_content(&id, "replaced\r\nbody\n")
+            .await
+            .expect("answered"),
+        Some(())
+    );
+    let after = there.get_task(&id).await.expect("answered").expect("held");
+    assert_eq!(
+        after,
+        Task {
+            priority: Priority::Urgent,
+            content: Some("replaced\r\nbody\n".to_owned()),
+            ..before
+        }
+    );
+
+    // A priority filter crosses the wire to the hosted source, which applies it.
+    let urgent = there
+        .query_tasks(
+            &TaskQuery {
+                priorities: vec![Priority::Urgent],
+                ..everything()
+            },
+            &page(2),
+        )
+        .await
+        .expect("answered");
+    assert_eq!(
+        urgent
+            .items
+            .iter()
+            .map(|task| task.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["T-1"]
+    );
+
+    let nothing = NativeId::from("X-9");
+    assert_eq!(
+        there
+            .set_task_priority(&nothing, Priority::None)
+            .await
+            .expect("answered"),
+        None
+    );
+    assert_eq!(
+        there
+            .set_task_content(&nothing, "x")
+            .await
+            .expect("answered"),
+        None
+    );
 }
