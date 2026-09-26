@@ -628,13 +628,15 @@ STRUCT_SECTIONS = {
 MEMBER_SECTIONS = {
     ("Task", "key"): {
         "heading": "### 4.13a A task's `key`",
-        # `Option<T>`: a peer may omit it, which is why it needed no protocol bump.
-        "optional": True,
+        # The whole declared type, not only its `Option`: a peer may omit the member, which
+        # is why it needed no protocol bump, and what it sends when present is a string,
+        # which is what the section's example and its wording promise a plugin author.
+        "type": "Option<String>",
         # `#[serde(default)]`: an omitted member reads as absent rather than refusing.
         "defaulted": True,
         # The word the section has to use for each, so the document cannot quietly stop
         # promising what the type provides.
-        "states": ("optional", "absent"),
+        "states": ("optional", "absent", "string"),
     },
 }
 
@@ -724,12 +726,12 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
         )
     else:
         attributes, rust_type = field.group(1), field.group(2).strip()
-        if rust_type.startswith("Option<") != specified["optional"]:
+        if rust_type != specified["type"]:
             failures.append(
-                f'`{struct}::{member}` is declared `{rust_type}`, which disagrees with '
-                f'MEMBER_SECTIONS about whether "{heading}" specifies an optional member. '
-                f"A member a peer may omit is an `Option`; one it may not is not. Make the "
-                f"declaration, the table and that section say one thing."
+                f'`{struct}::{member}` is declared `{rust_type}`, but MEMBER_SECTIONS records '
+                f'`{specified["type"]}` as the type "{heading}" specifies. Whether a peer may '
+                f"omit the member and what it sends when present are both part of its wire "
+                f"form. Make the declaration, the table and that section say one thing."
             )
         if ("#[serde(default" in attributes) != specified["defaulted"]:
             failures.append(
