@@ -596,13 +596,8 @@ pub fn github_projects_recording(sandbox: &Sandbox, recorded: Value) -> Value {
     github_projects_server(sandbox, Some(recorded))
 }
 
-/// The repository issue number this fixture board gives one item.
-///
-/// One derivation, used by the responses this fake sends and by the journey that asserts
-/// what the CLI printed. GitHub numbers an issue by its repository, so the number is not an
-/// index into anything on the board: it starts well above the count of fixture items, and
-/// its last digits come from the id so a reader of a failure message can tell which item
-/// they are looking at.
+/// The issue number this fixture board gives one item, shared by the fake and the journey
+/// that asserts on it so the two cannot drift.
 pub fn github_number(id: &str) -> u64 {
     let digits: String = id.chars().filter(char::is_ascii_digit).collect();
     let tail: u64 = digits.parse().expect("a fixture id ends in digits");
@@ -3239,16 +3234,9 @@ fn linear_project_status(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
-/// The `identifier` this workspace gives one issue: the handle a person says out loud.
-///
-/// One derivation, used by the responses this fake sends and by the journey that asserts
-/// what the CLI printed, so the fixture and the expectation cannot drift. The shape is
-/// Linear's — a team key, a dash, then what distinguishes the issue — and what
-/// distinguishes it here is the fixture's own id with its dash taken out, which keeps every
-/// identifier in this workspace distinct including the ones a write creates (`T-W1`).
-/// Linear declares `Issue.identifier` as `String!` and this plugin never parses one, so any
-/// distinct string is a faithful stand-in; what would not be faithful is two issues sharing
-/// one.
+/// The `identifier` this workspace gives one issue, shared by the fake and the journey that
+/// asserts on it so the two cannot drift. It only has to be distinct per issue: the plugin
+/// never parses one.
 pub fn linear_identifier(id: &str) -> String {
     format!("ENG-{}", id.replace('-', ""))
 }

@@ -296,7 +296,6 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
 
 
 def _schema_path(schema: JsonValue, *keys: str) -> dict[str, JsonValue]:
-    """The object at `keys` inside `schema`, failing the test where one is not an object."""
     for key in keys:
         assert isinstance(schema, dict), key
         schema = schema[key]
@@ -305,7 +304,6 @@ def _schema_path(schema: JsonValue, *keys: str) -> dict[str, JsonValue]:
 
 
 def _generated_task_fields() -> set[str]:
-    """The field names of the `Task` model this package generated and ships."""
     from onetaskgraph_sdk._generated.task_detail import Task
 
     return set(Task.model_fields)
