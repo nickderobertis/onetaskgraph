@@ -334,6 +334,75 @@ fn a_persons_own_field_is_read_past_whatever_it_holds() {
     assert_eq!(applied["fields"][1]["outcome"], "applied");
 }
 
+/// Plan and apply `sources fields` on a board whose answer is ambiguous, expecting each to be
+/// refused naming `refusal` and neither to write anything.
+fn refused_without_a_write(sandbox: &Sandbox, board: &GitHubBoardFields, refusal: &str) {
+    for arguments in [
+        &["sources", "fields", "board"][..],
+        &["sources", "fields", "board", "--apply"][..],
+    ] {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(
+            stderr(&output).contains(refusal),
+            "`onetaskgraph {}` did not refuse naming {refusal:?}:\n{}",
+            arguments.join(" "),
+            stderr(&output)
+        );
+    }
+    assert!(mutations(board).is_empty(), "{:?}", mutations(board));
+}
+
+#[test]
+fn a_board_answering_two_status_or_two_priority_fields_is_refused_rather_than_one_chosen() {
+    for name in ["Status", "Priority"] {
+        let (sandbox, board) = configured();
+        // A person's own single-select field beside the two is read past, as always.
+        board.with_persons_field(json!({"__typename": "ProjectV2SingleSelectField",
+            "id": "FIELD-size", "name": "Size",
+            "options": [{"id": "OPT-size-s", "name": "S", "color": "TEAL", "description": ""}]}));
+        let planned = report(&sandbox, &["--json", "sources", "fields", "board"]);
+        assert_eq!(planned["fields"].as_array().expect("fields").len(), 2);
+
+        // A second field of one name leaves no way to tell which the setup would act on.
+        board.with_persons_field(json!({"__typename": "ProjectV2SingleSelectField",
+            "id": format!("FIELD-{name}-again"), "name": name,
+            "options": [{"id": "OPT-again", "name": "Again", "color": "GRAY",
+                         "description": ""}]}));
+        refused_without_a_write(
+            &sandbox,
+            &board,
+            &format!("GitHub answered two {name} fields for this board"),
+        );
+    }
+}
+
+#[test]
+fn an_item_answered_with_two_values_of_one_field_is_refused_rather_than_one_kept() {
+    for name in ["Status", "Priority"] {
+        let (sandbox, board) = configured();
+        let applied = report(
+            &sandbox,
+            &["--json", "sources", "fields", "board", "--apply"],
+        );
+        assert_eq!(applied["fields"][0]["outcome"], "unchanged");
+
+        // Keeping either value would verify an apply against an assignment the item may not
+        // hold, and recovery data built on it would restore the wrong one.
+        board.repeat_snapshot_value(name);
+        refused_without_a_write(
+            &sandbox,
+            &board,
+            &format!("GitHub answered two {name} values for board item"),
+        );
+    }
+}
+
 #[test]
 fn a_verification_read_that_fails_after_the_write_is_refused_with_the_recovery_data() {
     let (sandbox, board) = configured();

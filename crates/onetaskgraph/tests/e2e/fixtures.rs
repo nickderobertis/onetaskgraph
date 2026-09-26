@@ -919,6 +919,11 @@ struct GitHubBoard {
     /// Fields of a person's own beside the ones this product sets up, each with one item's
     /// value of it.
     persons_fields: Vec<Value>,
+    /// Whether the `Priority` field answers its `options` as something other than a list.
+    malformed_priority_options: bool,
+    /// A field whose value the board snapshot answers twice on `T-1`, the second time naming
+    /// another of that field's options.
+    repeated_snapshot_value: Option<&'static str>,
     /// Whether the next whole-list update deliberately changes an assignment.
     drift_after_status_update: bool,
     remint_after_status_update: bool,
@@ -1017,6 +1022,19 @@ impl GitHubBoardFields {
     /// its options on `T-1`.
     pub fn with_persons_field(&self, field: Value) {
         self.board.lock().unwrap().persons_fields.push(field);
+    }
+
+    /// Make the board answer its `Priority` field's `options` as a string rather than a list,
+    /// as a response this product cannot read would — in the board's field list and in every
+    /// item value that carries the field's definition alike.
+    pub fn malform_priority_options(&self) {
+        self.board.lock().unwrap().malformed_priority_options = true;
+    }
+
+    /// Make the board snapshot answer `field`'s value on `T-1` twice, the second time naming
+    /// that field's last option, as a response that cannot say which one the item holds.
+    pub fn repeat_snapshot_value(&self, field: &'static str) {
+        self.board.lock().unwrap().repeated_snapshot_value = Some(field);
     }
 
     /// Make the next `Priority` option-list update change one pre-existing option's id.
@@ -1206,6 +1224,17 @@ impl GitHubBoard {
         Value::Array(self.status_options.clone())
     }
 
+    /// The `Priority` field's options as every read that defines the field answers them, or
+    /// `None` for a board without the field.
+    fn priority_field_options(&self) -> Option<Value> {
+        let options = self.priority_options.as_ref()?;
+        Some(if self.malformed_priority_options {
+            json!("Urgent, High, Medium, Low")
+        } else {
+            json!(options)
+        })
+    }
+
     fn fields(&self) -> Value {
         let mut nodes = vec![json!({"__typename":"ProjectV2Field","id":"FIELD-origin",
             "name":"onetaskgraph.origin"})];
@@ -1216,7 +1245,7 @@ impl GitHubBoard {
                 "id":"FIELD-status","name":"Status","options":self.options()}),
             );
         }
-        if let Some(options) = &self.priority_options {
+        if let Some(options) = self.priority_field_options() {
             nodes.push(json!({"__typename":"ProjectV2SingleSelectField",
                 "id":"FIELD-priority","name":"Priority","options":options}));
         }
@@ -1318,7 +1347,9 @@ impl GitHubBoard {
         ];
         // An item with no `Priority` value carries no node for the field, as GitHub leaves
         // an empty single-select out of `fieldValues`.
-        if let (Some(name), Some(options)) = (item["priority"].as_str(), &self.priority_options) {
+        if let (Some(name), Some(options)) =
+            (item["priority"].as_str(), self.priority_field_options())
+        {
             values.push(
                 json!({"name":name,"field":{"id":"FIELD-priority","name":"Priority",
                                "options":options}}),
@@ -1540,6 +1571,8 @@ fn github_projects_board_at(
         remints_after_priority_update: false,
         omits_added_priority_option: false,
         persons_fields: Vec::new(),
+        malformed_priority_options: false,
+        repeated_snapshot_value: None,
         drift_after_status_update: false,
         remint_after_status_update: false,
         omit_added_status_option: false,
@@ -1879,6 +1912,20 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                         .expect("an assigned priority option exists");
                     values.push(json!({"name":name,"optionId":option["id"],
                     "field":{"id":"FIELD-priority","name":"Priority"}}));
+                }
+                if let Some(field) = board.repeated_snapshot_value
+                    && item["id"] == "T-1"
+                {
+                    let (id, options) = if field == "Status" {
+                        ("FIELD-status", Some(&board.status_options))
+                    } else {
+                        ("FIELD-priority", board.priority_options.as_ref())
+                    };
+                    let last = options
+                        .and_then(|options| options.last())
+                        .expect("the repeated field has an option");
+                    values.push(json!({"name":last["name"],"optionId":last["id"],
+                    "field":{"id":id,"name":field}}));
                 }
                 json!({"id":item["item"],"fieldValues":{"nodes":values,
                 "pageInfo":{"hasNextPage":false}}})

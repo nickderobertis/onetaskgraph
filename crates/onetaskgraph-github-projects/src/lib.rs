@@ -2507,13 +2507,20 @@ impl GitHubProjectsSource {
                         })
                     })
                     .collect::<Result<Vec<_>, SourceError>>()?;
-                fields.insert(
-                    owned,
-                    SnapshotField {
-                        field_id: required_nonblank_str(field, "id")?.to_owned(),
-                        options,
-                    },
-                );
+                let snapshot = SnapshotField {
+                    field_id: required_nonblank_str(field, "id")?.to_owned(),
+                    options,
+                };
+                // A board's field names are unique, so a second one is an answer that cannot
+                // say which field the setup would act on — refused rather than one chosen.
+                if fields.insert(owned, snapshot).is_some() {
+                    return Err(SourceError::Malformed {
+                        message: format!(
+                            "GitHub answered two {} fields for this board",
+                            owned.name()
+                        ),
+                    });
+                }
             }
             let board_id = required_nonblank_str(board, "id")?.to_owned();
             let current = snapshot.get_or_insert_with(|| BoardSnapshot {
@@ -2548,6 +2555,7 @@ impl GitHubProjectsSource {
                     .ok_or_else(|| SourceError::Malformed {
                         message: "GitHub project item fieldValues.nodes is not an array".into(),
                     })?;
+                let item_id = required_nonblank_str(item, "id")?;
                 let mut assigned = BTreeMap::new();
                 for value in values {
                     let Some(field) = value
@@ -2558,7 +2566,7 @@ impl GitHubProjectsSource {
                     else {
                         continue;
                     };
-                    assigned.insert(
+                    let held = assigned.insert(
                         field,
                         AssignedStatusOption {
                             id: StatusOptionId::try_from(
@@ -2574,10 +2582,19 @@ impl GitHubProjectsSource {
                                 })?,
                         },
                     );
+                    // An item holds one value of a field, so a second one leaves no way to
+                    // tell which it holds — and a verification or recovery built on either
+                    // could restore the wrong one.
+                    if held.is_some() {
+                        return Err(SourceError::Malformed {
+                            message: format!(
+                                "GitHub answered two {} values for board item {item_id}",
+                                field.name()
+                            ),
+                        });
+                    }
                 }
-                current
-                    .items
-                    .push((required_nonblank_str(item, "id")?.to_owned(), assigned));
+                current.items.push((item_id.to_owned(), assigned));
             }
             let page = board.get("items").ok_or_else(|| SourceError::Malformed {
                 message: "GitHub project is missing items".into(),
@@ -4549,16 +4566,20 @@ impl GitHubProjectsSource {
                 "this board's {PRIORITY_FIELD} field is not a single-select field"
             )));
         }
+        // An options list that is absent or not a list is an answer this source cannot read,
+        // not a board lacking the option: `sources fields --apply` is no remedy for it.
         let option = field
             .get("options")
             .and_then(Value::as_array)
-            .and_then(|options| {
-                options.iter().find(|option| {
-                    option
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
-                })
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub {PRIORITY_FIELD} field options is not an array"),
+            })?
+            .iter()
+            .find(|option| {
+                option
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
             })
             .ok_or_else(|| missing("this board does not have it"))?;
         Ok(Some(PriorityWrite::Select {

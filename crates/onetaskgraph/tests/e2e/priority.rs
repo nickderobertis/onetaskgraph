@@ -787,6 +787,57 @@ fn a_board_field_write_reaches_the_priority_field_and_a_missing_option_or_field_
 }
 
 #[test]
+fn a_priority_field_whose_options_are_not_a_list_is_refused_as_malformed_rather_than_missing() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "github-projects", "config": config}
+    })));
+    let id = qualified(SOURCE, "T-2");
+    answered(
+        "board",
+        &sandbox,
+        &["--json", "task", "priority", "set", &id, "medium"],
+    );
+    assert_eq!(board.priority("T-2").as_deref(), Some("Medium"));
+    answered(
+        "board",
+        &sandbox,
+        &["--json", "task", "priority", "set", &id, "none"],
+    );
+    assert_eq!(board.priority("T-2"), None);
+
+    // An answer this product cannot read is not a board lacking the option: telling the user
+    // to add an option the board may well have would send them to fix the wrong thing. Both
+    // places the field's definition is read from are held to it — the board's field list, for
+    // an item holding no value, and the item's own value, for one holding a value already.
+    board.malform_priority_options();
+    for (task, held) in [("T-2", None), ("T-1", Some("High"))] {
+        let before = board.served().len();
+        let refused = run(
+            &sandbox,
+            &["task", "priority", "set", &qualified(SOURCE, task), "low"],
+        );
+        let said = stderr(&refused);
+        assert!(
+            !refused.status.success()
+                && said.contains("GitHub Priority field options is not an array")
+                && !said.contains("does not have it")
+                && !said.contains("sources fields"),
+            "{task}: exited {:?}\n{said}",
+            refused.status.code()
+        );
+        assert!(
+            board.served()[before..]
+                .iter()
+                .all(|(query, _)| !query.contains("mutation")),
+            "{task}: nothing is written on a response that could not be read"
+        );
+        assert_eq!(board.priority(task).as_deref(), held, "{task}");
+    }
+}
+
+#[test]
 fn an_option_the_mapping_does_not_name_is_that_tasks_error_rather_than_a_level_or_none() {
     let sandbox = Sandbox::new();
     let (config, board) = github_projects_with_board(&sandbox);
