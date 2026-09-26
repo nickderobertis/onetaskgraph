@@ -2404,7 +2404,7 @@ impl GitHubProjectsSource {
             }
             let mut fields = BTreeMap::new();
             // A node the single-select fragment did not match — a text field, an iteration —
-            // carries no name, and is no field this setup reads or writes.
+            // carries no options, and is no field this setup reads or writes.
             for field in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
@@ -2412,7 +2412,11 @@ impl GitHubProjectsSource {
                     message: "GitHub project fields.nodes is not an array".into(),
                 })?
                 .iter()
-                .filter(|field| field.get("name").and_then(Value::as_str).is_some())
+                .filter(|field| {
+                    field
+                        .get("options")
+                        .is_some_and(|options| !options.is_null())
+                })
             {
                 let options = field
                     .get("options")

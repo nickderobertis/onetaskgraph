@@ -2354,9 +2354,31 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
                     variables.get("input"),
-                    &["teamId", "title", "stateId", "labelIds"],
+                    &["teamId", "title", "stateId", "labelIds", "priority"],
                     &["description", "projectId"],
                 )
+        }
+        // The two narrow issue writes: exactly one member, and nothing beside it.
+        graphql::ISSUE_PRIORITY_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["priority"], &[])
+        }
+        graphql::ISSUE_UPDATE
+            if variables
+                .pointer("/input")
+                .and_then(Value::as_object)
+                .is_some_and(|input| !input.contains_key("title")) =>
+        {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["description"], &[])
         }
         graphql::PROJECT_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
@@ -2445,7 +2467,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     if operation == graphql::ISSUE_UPDATE {
-                        &["title", "stateId", "labelIds"]
+                        &["title", "stateId", "labelIds", "priority"]
                     } else {
                         &["name", "statusId", "labelIds"]
                     },
@@ -2486,6 +2508,8 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
         }),
         "description" | "content" => value.is_null() || value.is_string(),
         "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
+        // Linear's `priority` input is an `Int` on its own 0–4 scale.
+        "priority" => value.as_u64().is_some_and(|number| number <= 4),
         _ => value.as_str().is_some_and(|text| !text.is_empty()),
     })
 }
@@ -2572,6 +2596,7 @@ fn linear_response(
         graphql::PROJECT_LABEL,
         graphql::ISSUE_CREATE,
         graphql::ISSUE_UPDATE,
+        graphql::ISSUE_PRIORITY_UPDATE,
         graphql::PROJECT_CREATE,
         graphql::PROJECT_UPDATE,
         graphql::ISSUE_RELATION_CREATE,
@@ -2614,6 +2639,15 @@ fn linear_response(
     }
     if operation == graphql::PROJECT_LABEL {
         return Ok(json!({"projectLabels":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    // A narrow write sends an issue's `priority` alone, or its `description` alone, and
+    // Linear leaves every input member it was not sent as it was.
+    if matches!(
+        operation,
+        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE
+    ) && vars["input"].get("title").is_none()
+    {
+        return linear_narrow_issue_update(data, &vars, operation);
     }
     if matches!(operation, graphql::ISSUE_CREATE | graphql::ISSUE_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::ISSUE_CREATE, false);
@@ -2799,6 +2833,9 @@ fn linear_write_item(
     });
     if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
         row["project"] = project_id.clone();
+    }
+    if !project && let Some(priority) = input.get("priority") {
+        row["priority"] = linear_priority_name(priority);
     }
     if let Some(index) = existing {
         rows[index] = row;
@@ -3245,8 +3282,62 @@ fn linear_handle(id: &str) -> Option<String> {
     Some(linear_identifier(id))
 }
 
+/// Linear's own number for one of the shared dataset's priorities: `0` none, `1` urgent, `2`
+/// high, `3` medium — Linear's "normal" — and `4` low, sent as the `Float` its schema
+/// declares.
+fn linear_priority(priority: &Value) -> Value {
+    json!(match priority.as_str().unwrap_or("none") {
+        "urgent" => 1.0,
+        "high" => 2.0,
+        "medium" => 3.0,
+        "low" => 4.0,
+        _ => 0.0,
+    })
+}
+
+/// The shared dataset's spelling of one of Linear's priority numbers.
+fn linear_priority_name(number: &Value) -> Value {
+    json!(match number.as_f64() {
+        Some(1.0) => "urgent",
+        Some(2.0) => "high",
+        Some(3.0) => "medium",
+        Some(4.0) => "low",
+        _ => "none",
+    })
+}
+
+/// One narrow `issueUpdate`: the `priority` alone or the `description` alone of an issue this
+/// workspace holds, answered with what the issue holds afterwards.
+fn linear_narrow_issue_update(
+    data: &mut Value,
+    vars: &Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    let id = vars["id"].as_str().ok_or("update id must be a string")?;
+    let row = data["tasks"]
+        .as_array_mut()
+        .ok_or("fixture collection is not an array")?
+        .iter_mut()
+        .find(|row| row["id"] == id)
+        .ok_or("update target does not exist")?;
+    if let Some(priority) = vars["input"].get("priority") {
+        row["priority"] = linear_priority_name(priority);
+    }
+    if let Some(description) = vars["input"].get("description") {
+        row["_linear_description"] = description.clone();
+    }
+    Ok(
+        if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
+            json!({"issueUpdate":{"success":true,
+                   "issue":{"id":id,"priority":linear_priority(&row["priority"])}}})
+        } else {
+            json!({"issueUpdate":{"success":true,"issue":{"id":id}}})
+        },
+    )
+}
+
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
