@@ -2,9 +2,9 @@ use std::fs;
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Project,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 
@@ -822,6 +822,7 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
             category,
             name: status.into(),
         },
+        priority: Priority::None,
         labels: vec![Label {
             id: NativeId("L-1".into()),
             name: "bug".into(),
@@ -1331,6 +1332,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
                     category: StatusCategory::Draft,
                     name: "draft".into(),
                 },
+                priority: Priority::None,
                 labels: Vec::new(),
                 project: None,
                 url: None,
@@ -1457,6 +1459,8 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             projects: onetaskgraph_plugin_api::Support::Native,
             documents: onetaskgraph_plugin_api::Support::Native,
             comments: onetaskgraph_plugin_api::Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,

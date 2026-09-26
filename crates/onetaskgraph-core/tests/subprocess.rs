@@ -134,6 +134,7 @@ fn everything() -> TaskQuery {
         labels: LabelFilter::default(),
         statuses: Vec::new(),
         project: ProjectFilter::Any,
+        priorities: Vec::new(),
     }
 }
 
@@ -533,6 +534,7 @@ async fn a_predicate_crosses_the_wire_and_the_hosted_source_applies_it() {
         },
         statuses: Vec::new(),
         project: ProjectFilter::Any,
+        priorities: Vec::new(),
     };
 
     let kept: Vec<String> = there

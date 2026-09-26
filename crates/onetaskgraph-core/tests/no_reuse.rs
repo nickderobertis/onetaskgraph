@@ -19,8 +19,8 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId, Page,
-    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Support,
-    Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 
 /// A source that answers everything and counts every call it receives.
@@ -74,6 +74,7 @@ fn task() -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -118,6 +119,8 @@ impl TaskSource for Counting {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

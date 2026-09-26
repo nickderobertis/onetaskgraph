@@ -454,6 +454,8 @@ impl From<&CapabilityConfig> for Capabilities {
             projects: value.projects,
             documents: value.documents,
             comments: value.comments,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

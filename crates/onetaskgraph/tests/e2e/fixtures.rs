@@ -181,6 +181,8 @@ impl Declared {
             projects: self.projects,
             documents: self.documents,
             comments: self.comments,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,

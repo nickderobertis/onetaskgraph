@@ -7,7 +7,7 @@ use onetaskgraph_core::{
     SourcePlan, classify, plugin_for, plugin_kinds, registry, schema_bundle,
 };
 use onetaskgraph_plugin_api::{
-    NativeId, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
+    NativeId, Priority, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -1619,6 +1619,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
                 category: StatusCategory::InProgress,
                 name: "In Review".to_owned(),
             },
+            priority: Priority::None,
             labels: Vec::new(),
             project: None,
             url: None,

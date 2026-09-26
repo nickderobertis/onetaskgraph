@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use onetaskgraph_plugin_api::{
-    ItemWrite, NativeId, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    ItemWrite, NativeId, Priority, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
     StatusCategory, Task, TaskRef, TaskSource,
 };
 use secrecy::SecretString;
@@ -284,6 +284,7 @@ async fn a_written_task_carries_both_lists_and_refuses_one_naming_itself_or_one_
             category: StatusCategory::Todo,
             name: "todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,

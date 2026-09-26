@@ -57,7 +57,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `TaskRef`,
+  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Priority`,
+  `TaskRef`,
   `Repository`,
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,

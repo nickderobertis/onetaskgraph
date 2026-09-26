@@ -422,10 +422,10 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
-    WriteSupport,
+    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
+    TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -5262,6 +5262,7 @@ impl Resolved {
             title: self.title.clone(),
             content: self.body.clone(),
             status: self.status.clone(),
+            priority: Priority::None,
             labels: self.labels.clone(),
             project: self.parent.clone(),
             url: self.url.clone(),
@@ -5501,6 +5502,8 @@ impl TaskSource for GitHubProjectsSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

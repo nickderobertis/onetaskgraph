@@ -186,9 +186,9 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
+    LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -1289,6 +1289,8 @@ impl TaskSource for LinearSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -2211,6 +2213,7 @@ fn map_task(v: &Value, source: &SourceName) -> Result<Task, SourceError> {
         status: status(v.get("state").ok_or_else(|| SourceError::Malformed {
             message: "missing state".into(),
         })?)?,
+        priority: Priority::None,
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
             message: "missing labels".into(),
         })?)?,
