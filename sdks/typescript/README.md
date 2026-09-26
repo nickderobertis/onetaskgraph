@@ -26,6 +26,11 @@ schemas generated from `onetaskgraph schema` before returning it. Query response
 their `plan` and typed `errors`; exit code 4 therefore resolves to the validated partial
 response instead of discarding the successful sources.
 
+Every invocation also passes `--no-interactive`, so no call ever waits on a prompt: a
+template variable nothing answers takes its default, and a required one left unanswered is
+refused with exit 2. `templateRender(file, { searchPath, answers, vars })` hands `answers`
+to the binary on standard input, and `vars` outrank them as `--var NAME=VALUE`.
+
 Run `bun run --cwd sdks/typescript generate` after changing the binary contract. The gate's
 `./scripts/nx.sh run sdk-typescript:generate-check` target builds the binary and then fails
 naming any generated file that would change.
