@@ -6339,14 +6339,8 @@ fn issue_number(issue: &Value) -> Result<u64, SourceError> {
         })
 }
 
-/// The `number` a creating mutation answered with, and `None` when it answered without one.
-///
-/// The one place a missing number is tolerated, on exactly the terms the `url` beside it is
-/// tolerated: by the time this is read the issue exists, and a landed write is not worth
-/// failing over a member that came back missing. Such an item reports no handle until a
-/// board read catches up, which is what every item did before there were handles at all.
-/// A number that is *present* and is not an unsigned integer is still a response this
-/// source cannot read.
+/// The `number` a creating mutation answered with, and `None` when it answered without one;
+/// why a missing one is tolerated is at the call in `create_and_file_issue`.
 fn created_issue_number(created: &Value) -> Result<Option<u64>, SourceError> {
     match created.get("number") {
         None | Some(Value::Null) => Ok(None),

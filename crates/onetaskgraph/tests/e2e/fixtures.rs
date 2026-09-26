@@ -612,8 +612,6 @@ pub fn github_number(id: &str) -> u64 {
     1000 + level + tail
 }
 
-/// What the `github-projects` row reports as a task's key: the issue's number alone, as a
-/// decimal string — never `owner/repo#1043`.
 fn github_handle(id: &str) -> Option<String> {
     Some(github_number(id).to_string())
 }
@@ -3241,7 +3239,6 @@ pub fn linear_identifier(id: &str) -> String {
     format!("ENG-{}", id.replace('-', ""))
 }
 
-/// What the `linear` row reports as a task's key: that issue's own identifier.
 fn linear_handle(id: &str) -> Option<String> {
     Some(linear_identifier(id))
 }

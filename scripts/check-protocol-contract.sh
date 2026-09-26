@@ -29,6 +29,7 @@ DEADLINE_SOURCE="$ROOT/crates/onetaskgraph-core/src/subprocess/source.rs" \
 SUBPROCESS_CONFIG="$ROOT/crates/onetaskgraph-core/src/subprocess/plugin.rs" \
 WIRE="$ROOT/crates/onetaskgraph-core/src/subprocess/wire.rs" \
 python3 <<'PY'
+import json
 import os
 import re
 import sys
@@ -629,16 +630,23 @@ MEMBER_SECTIONS = {
     ("Task", "key"): {
         "heading": "### 4.13a A task's `key`",
         # The whole declared type, not only its `Option`: a peer may omit the member, which
-        # is why it needed no protocol bump, and what it sends when present is a string,
-        # which is what the section's example and its wording promise a plugin author.
+        # is why it needed no protocol bump, and the section's JSON example has to carry it
+        # as the wire type of what is inside.
         "type": "Option<String>",
         # `#[serde(default)]`: an omitted member reads as absent rather than refusing.
         "defaulted": True,
-        # The word the section has to use for each, so the document cannot quietly stop
-        # promising what the type provides.
-        "states": ("optional", "absent", "string"),
+        # The sentences the section has to say, whole, because a word can survive a rewrite
+        # that reverses what it meant. Compared with runs of whitespace folded to one space.
+        "states": (
+            "The member is **optional** and an absent one means `null`",
+            "one that has none sends nothing rather than a copy of the `id`",
+        ),
     },
 }
+
+
+# The JSON type a declared Rust type is sent as, for the types MEMBER_SECTIONS names.
+WIRE_TYPES = {"String": str, "bool": bool, "u64": int, "u32": int}
 
 
 def wire_members(struct):
@@ -755,16 +763,41 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
             f"section that specifies it, never names it. Name it there — this section is "
             f"the only place the wire form of that member is written down."
         )
-    for word in specified["states"]:
-        if word not in body:
+    prose = " ".join(body.split())
+    for sentence in specified["states"]:
+        if sentence not in prose:
             failures.append(
-                f'"{heading}" no longer says "{word}" about `{struct}::{member}`, which '
-                f"is one of the facts about its wire form MEMBER_SECTIONS records. A "
-                f"plugin author reads that section to learn whether they may leave the "
-                f'member out and what leaving it out means. Put the word "{word}" back in '
-                f"that section's body, saying what it said about the member; if the wire "
-                f"form really changed, change the Rust declaration and the `states` entry "
-                f"in MEMBER_SECTIONS in the same edit."
+                f'"{heading}" no longer says "{sentence}" about `{struct}::{member}`. A '
+                f"plugin author reads that section to learn whether they may leave the member "
+                f"out and what leaving it out means, and MEMBER_SECTIONS records this sentence "
+                f"as what it says. Put it back; if the wire form really changed, change the "
+                f"Rust declaration and the `states` entry in MEMBER_SECTIONS in the same edit."
+            )
+    inner = specified["type"].removeprefix("Option<").removesuffix(">")
+    if inner not in WIRE_TYPES:
+        refuse(
+            f"MEMBER_SECTIONS declares `{struct}::{member}` as `{specified['type']}`, whose "
+            f"wire type this script does not know.",
+            "add it to WIRE_TYPES, so the section's JSON example can be held to it.",
+        )
+    examples = []
+    for block in re.findall(r"```json\n(.*?)\n```", body, re.DOTALL):
+        try:
+            examples.append(json.loads(block))
+        except ValueError:
+            failures.append(f'"{heading}" has a JSON example that is not JSON:\n{block}')
+    sent = [example[member] for example in examples if isinstance(example, dict) and member in example]
+    if not sent:
+        failures.append(
+            f'"{heading}" has no JSON example carrying "{member}". Show the member as a peer '
+            f"sends it, so its wire type is written down where it is specified."
+        )
+    for value in sent:
+        if not isinstance(value, WIRE_TYPES[inner]):
+            failures.append(
+                f'"{heading}" shows "{member}" as {json.dumps(value)}, but `{struct}::{member}` '
+                f"is `{specified['type']}`, which a peer sends as a JSON "
+                f"{WIRE_TYPES[inner].__name__}. Make the example and the declaration agree."
             )
 
 # The framing limit is a number rather than a name, so neither of the two scans above
