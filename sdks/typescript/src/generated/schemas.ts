@@ -2140,7 +2140,7 @@ export const runtimeSchemas = {
   "FieldsReport": {
     "$defs": {
       "BoardField": {
-        "description": "One board field the guarded setup reads and writes.",
+        "description": "One board field the guarded setup reads and writes — every one it reads, and the only\nones it writes.",
         "oneOf": [
           {
             "const": "Status",
