@@ -289,8 +289,10 @@ fn a_second_field_failing_after_the_first_changed_is_refused_with_the_recovery_d
         .clone();
     let said = stderr(&output);
     assert!(
-        said.contains("changed the Status field and then failed on the Priority field")
-            && said.contains("createProjectV2Field")
+        said.contains(
+            "changed the Status field and then failed on the Priority field, which it may have \
+             changed part way"
+        ) && said.contains("createProjectV2Field")
             && said.contains("the pre-write item assignments are:")
             && said.contains("\"Status\"")
             && said.contains("OPT-todo"),
@@ -330,6 +332,28 @@ fn a_persons_own_field_is_read_past_whatever_it_holds() {
         &["--json", "sources", "fields", "board", "--apply"],
     );
     assert_eq!(applied["fields"][1]["outcome"], "applied");
+}
+
+#[test]
+fn a_verification_read_that_fails_after_the_write_is_refused_with_the_recovery_data() {
+    let (sandbox, board) = configured();
+    board.without_priority_option("Low");
+    board.hide_after_update();
+    let output = sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains(
+            "changed the Priority field and then could not read the board back to verify it"
+        ) && said.contains("the pre-write item assignments are:")
+            && said.contains("OPT-p-high"),
+        "{said}"
+    );
 }
 
 #[test]

@@ -16,7 +16,7 @@ impl SecretResolver for NoSecrets {
     }
 }
 
-/// Four tasks, one at each of four priorities and one with none written at all.
+/// Four tasks: one each at urgent, high and low, and one with no priority written at all.
 fn source(capabilities: Value) -> Result<Box<dyn TaskSource>, SourceError> {
     Plugin.build(
         &SourceName::new("work").expect("a name"),

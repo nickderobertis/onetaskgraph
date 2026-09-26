@@ -241,7 +241,8 @@ fn every_row_filters_by_priority_exactly_whether_it_applies_the_filter_or_the_en
             row.name
         );
 
-        // Beside another filter, both narrow: only T-3 is urgent *and* carries `bug`.
+        // Beside other filters, every one narrows: of the tasks at urgent or high, both carry
+        // `bug` and are `todo`, so both stay — and T-2 and T-4, which are at neither, do not.
         let both = answered(
             row.name,
             &sandbox,
@@ -390,6 +391,36 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
             )["items"],
             dependencies_before,
             "{}: the dependencies moved",
+            row.name
+        );
+
+        // A trailing newline is written as given, and read back as each store reports a body:
+        // a folder of Markdown trims the body it reads, and so does Linear's reader beside the
+        // metadata slot this task's description carries, while a board keeps it byte for byte.
+        let trailing = "Ends with a newline.\n";
+        std::fs::write(&file, trailing).expect("the content file");
+        answered(
+            row.name,
+            &sandbox,
+            &[
+                "--json",
+                "task",
+                "content",
+                "set",
+                &id,
+                "--file",
+                file.to_str().expect("a UTF-8 path"),
+            ],
+        );
+        let reported = if row.plugin == "github-projects" {
+            trailing
+        } else {
+            trailing.trim_end()
+        };
+        assert_eq!(
+            shown(row.name, &sandbox, &id)["content"],
+            reported,
+            "{}",
             row.name
         );
     }

@@ -2449,9 +2449,10 @@ impl GitHubProjectsSource {
                 });
             }
             let mut fields = BTreeMap::new();
-            // Only the fields this setup owns: a node the single-select fragment did not
-            // match carries no options, and a person's own single-select field — a `Size`, a
-            // `Team` — is none of this setup's business, so nothing about it can refuse one.
+            // Only the fields this setup owns, by name: a node the single-select fragment did not
+            // match carries no name, and a person's own single-select field — a `Size`, a
+            // `Team` — is none of this setup's business, so nothing about it can refuse one. A
+            // `Status` or `Priority` field without its options is malformed, not absent.
             for field in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
@@ -2461,12 +2462,9 @@ impl GitHubProjectsSource {
                 .iter()
                 .filter(|field| {
                     field
-                        .get("options")
-                        .is_some_and(|options| !options.is_null())
-                        && field
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| SET_UP_FIELDS.contains(&name))
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| SET_UP_FIELDS.contains(&name))
                 })
             {
                 let options = field
@@ -2720,18 +2718,21 @@ impl GitHubProjectsSource {
                     .await
                 }
             };
+            // A mutation that failed does not establish that GitHub left its field as it was,
+            // so every failure from here on carries the recovery data a drift refusal does.
             match sent {
                 Ok(_) => landed.push(field.field.name()),
-                // Nothing has changed yet, so the failure is the whole of what to say.
-                Err(error) if landed.is_empty() => return Err(error),
-                // One field was written and another was not: the board is part way through,
-                // and what to put back is the recovery data a drift refusal carries.
                 Err(error) => {
+                    let changed = if landed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("changed the {} field and then ", landed.join(" and "))
+                    };
                     return Err(SourceError::Refused {
                         message: format!(
-                            "the guarded field setup changed the {} field and then failed on the \
-                             {} field: {error}; the pre-write item assignments are:\n{}",
-                            landed.join(" and "),
+                            "the guarded field setup {changed}failed on the {} field, which it may \
+                             have changed part way: {error}; the pre-write item assignments \
+                             are:\n{}",
                             field.field.name(),
                             recovery(&report, &before)?
                         ),
@@ -2739,7 +2740,21 @@ impl GitHubProjectsSource {
                 }
             }
         }
-        let after = self.board_snapshot().await?;
+        // The board has been written, so a verification read that fails leaves it unverified
+        // rather than unchanged, and says what to put back.
+        let after = match self.board_snapshot().await {
+            Ok(after) => after,
+            Err(error) => {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the guarded field setup changed the {} field and then could not read the \
+                         board back to verify it: {error}; the pre-write item assignments are:\n{}",
+                        landed.join(" and "),
+                        recovery(&report, &before)?
+                    ),
+                });
+            }
+        };
         let mut moved = Vec::new();
         for field in &report.fields {
             let name = field.field.name();
@@ -4112,11 +4127,13 @@ impl GitHubProjectsSource {
         let Some(mapping) = &self.priorities else {
             return Ok(HeldPriority::Read(Priority::None));
         };
+        // A value of the field that names no option — a text field someone called `Priority` —
+        // is malformed rather than `none`: reading it as no priority would let the next copy
+        // clear one a person set.
         let Some(option) = field_values
             .iter()
             .find(|value| {
                 value.pointer("/field/name").and_then(Value::as_str) == Some(PRIORITY_FIELD)
-                    && value.get("name").is_some()
             })
             .map(|value| required_str(value, "name"))
             .transpose()?

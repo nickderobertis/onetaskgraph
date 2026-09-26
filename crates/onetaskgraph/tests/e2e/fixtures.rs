@@ -910,6 +910,8 @@ struct GitHubBoard {
     drift_after_priority_update: bool,
     /// Whether a `Priority` value write is answered as landed and not kept.
     drops_priority_writes: bool,
+    /// Whether the board goes out of the token's sight after the next option-list update.
+    hides_after_update: bool,
     /// Fields of a person's own beside the ones this product sets up, each with one item's
     /// value of it.
     persons_fields: Vec<Value>,
@@ -1011,6 +1013,12 @@ impl GitHubBoardFields {
     /// its options on `T-1`.
     pub fn with_persons_field(&self, field: Value) {
         self.board.lock().unwrap().persons_fields.push(field);
+    }
+
+    /// Make the board go out of the token's sight once the next `Priority` option-list update
+    /// has landed, so the read that would verify it fails.
+    pub fn hide_after_update(&self) {
+        self.board.lock().unwrap().hides_after_update = true;
     }
 
     /// Make every `Priority` value write answer as landed without the board keeping it.
@@ -1500,6 +1508,7 @@ fn github_projects_board_at(
         ),
         drift_after_priority_update: false,
         drops_priority_writes: false,
+        hides_after_update: false,
         persons_fields: Vec::new(),
         drift_after_status_update: false,
         remint_after_status_update: false,
@@ -1689,6 +1698,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
         }
         board.priority_options = Some(next.clone());
+        if board.hides_after_update {
+            board.status_board_accessible = false;
+        }
         if board.drift_after_priority_update {
             board.drift_after_priority_update = false;
             if let Some(item) = board
