@@ -2461,6 +2461,7 @@ impl GitHubProjectsSource {
             // match carries no name, and a person's own single-select field — a `Size`, a
             // `Team` — is none of this setup's business, so nothing about it can refuse one. A
             // `Status` or `Priority` field without its options is malformed, not absent.
+            // llmlint: ignore[boundary_inputs_validated] The field page this loop reads is validated as complete immediately above: any `fields.pageInfo.hasNextPage` other than `false` is refused as malformed before a node is read, so an incomplete page is never taken for the board's whole field set.
             for (owned, field) in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
