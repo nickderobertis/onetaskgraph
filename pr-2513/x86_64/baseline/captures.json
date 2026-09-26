@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "shots": [
+    {
+      "name": "config-show",
+      "toggles": {},
+      "hash": "7ea43bf54df5e00b6d8b6616c205781baa39ee5ae493c174f47c181891d80fa9",
+      "image": "config-show.svg"
+    },
+    {
+      "name": "sources-list",
+      "toggles": {},
+      "hash": "1fbecb59ca56bf1e33a19eeab02740c0025a005507c6cc2611cb001664b0d456",
+      "image": "sources-list.svg"
+    },
+    {
+      "name": "task-copy-dry-run",
+      "toggles": {},
+      "hash": "32848c9ba80d5fcafe90c123a671fae449bf85ddc64e3c75c08c333724e818d2",
+      "image": "task-copy-dry-run.svg"
+    },
+    {
+      "name": "task-deps",
+      "toggles": {},
+      "hash": "58433b0af80e6915ce952d9fcf8b03686580061a20374dc9f9eaeea0df8ad89f",
+      "image": "task-deps.svg"
+    },
+    {
+      "name": "task-list-explain",
+      "toggles": {},
+      "hash": "2646abf9b6af4eb2b04ff2cad16d0284df916a9a9674fabb7cee5c2b7073c823",
+      "image": "task-list-explain.svg"
+    },
+    {
+      "name": "task-list",
+      "toggles": {},
+      "hash": "07f5e6ec43f00e9d8fedcfda7ca1026e56c22759dfc01525299194ec3852ed33",
+      "image": "task-list.svg"
+    },
+    {
+      "name": "task-show",
+      "toggles": {},
+      "hash": "3438944ca8461a20b29b68572d155612d07396d12d896633f0c799bec5dc4711",
+      "image": "task-show.svg"
+    }
+  ]
+}

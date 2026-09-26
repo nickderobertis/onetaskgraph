@@ -4,24 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Visual docs</title>
-<style>body{font-family:system-ui,sans-serif;margin:2rem;color:#222}section.shot{margin-bottom:2.5rem}section.shot[hidden]{display:none}h2{margin-bottom:.5rem}.toggles{display:flex;flex-wrap:wrap;gap:1rem;margin:0 0 1.5rem;position:sticky;top:0;background:#fff;padding:.75rem 0;z-index:1}.toggle{display:flex;align-items:center;gap:.4rem}.dim-label{font-size:.8rem;color:#555}.toggle button{font:inherit;font-size:.8rem;padding:.15rem .6rem;border:1px solid #bbb;background:#f6f6f6;border-radius:999px;cursor:pointer}.toggle button.active{background:#222;color:#fff;border-color:#222}.variants img{max-width:100%;height:auto;border:1px solid #ddd;border-radius:4px}.variant[hidden]{display:none}</style>
+<style>body{font-family:system-ui,sans-serif;margin:2rem;color:#222}h1{margin-bottom:.5rem}section{margin:1.5rem 0}table.summary{border-collapse:collapse;margin:1rem 0}table.summary th,table.summary td{border:1px solid #ddd;padding:.3rem .8rem;text-align:right}.badge{font-size:.75rem;padding:.1rem .5rem;border-radius:999px;margin-left:.5rem;color:#fff;vertical-align:middle}.badge.changed{background:#b8860b}.badge.added{background:#2e7d32}.badge.removed{background:#c62828}.badge.unchanged{background:#888}figure{margin:0 0 1.5rem}figcaption{font-weight:600;margin-bottom:.4rem}.pair{display:grid;grid-template-columns:1fr 1fr;gap:1rem;max-width:760px}.lbl{display:block;font-size:.8rem;color:#666;margin-bottom:.25rem}img{width:100%;height:auto;border:1px solid #ddd;border-radius:4px}.single{max-width:380px}.unchanged img{opacity:.55}.missing{color:#888;font-style:italic}</style>
 </head>
 <body>
 <h1>Visual docs</h1>
-<section class="shot"><h2>config-show</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="config-show.svg" alt="config-show"></div></section>
-<section class="shot"><h2>sources-list</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="sources-list.svg" alt="sources-list"></div></section>
-<section class="shot"><h2>task-copy-dry-run</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="task-copy-dry-run.svg" alt="task-copy-dry-run"></div></section>
-<section class="shot"><h2>task-deps</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="task-deps.svg" alt="task-deps"></div></section>
-<section class="shot"><h2>task-list</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="task-list.svg" alt="task-list"></div></section>
-<section class="shot"><h2>task-list-explain</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="task-list-explain.svg" alt="task-list-explain"></div></section>
-<section class="shot"><h2>task-show</h2>
-<div class="variants"><img class="variant" data-variant="" loading="lazy" src="task-show.svg" alt="task-show"></div></section>
-<script>const bar=document.querySelector('.toggles');if(bar){const sel={};for(const t of bar.querySelectorAll('.toggle')){const a=t.querySelector('button.active')||t.querySelector('button');if(a)sel[t.dataset.dim]=a.dataset.val;}const parse=s=>{const o={};if(s)for(const p of s.split(';')){const i=p.indexOf('=');o[p.slice(0,i)]=p.slice(i+1);}return o;};const match=v=>{for(const k in v)if(sel[k]!==v[k])return false;return true;};const apply=()=>{for(const sec of document.querySelectorAll('.shot')){const imgs=sec.querySelectorAll('.variant');if(!imgs.length)continue;let any=false;for(const img of imgs){const ok=match(parse(img.dataset.variant));img.hidden=!ok;if(ok)any=true;}sec.hidden=!any;}for(const b of bar.querySelectorAll('.toggle button'))b.classList.toggle('active',sel[b.parentElement.dataset.dim]===b.dataset.val);};for(const b of bar.querySelectorAll('.toggle button'))b.addEventListener('click',()=>{sel[b.parentElement.dataset.dim]=b.dataset.val;apply();});apply();}</script>
+<table class="summary"><tr><th>Added</th><th>Changed</th><th>Removed</th><th>Unchanged</th></tr><tr><td>0</td><td>0</td><td>0</td><td>7</td></tr></table>
+<p class="empty">No visual changes.</p>
+<details><summary>Unchanged (7)</summary><p>Unchanged screenshots are omitted from this focused diff.</p></details>
 </body>
 </html>
