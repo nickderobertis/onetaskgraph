@@ -2204,3 +2204,52 @@ async fn the_narrow_priority_and_content_writes_cross_the_wire_and_land_in_the_h
         None
     );
 }
+
+#[tokio::test]
+async fn a_narrow_priority_or_content_answer_that_does_not_say_what_it_wrote_is_malformed() {
+    let mut declared = capabilities();
+    declared["priority"] = json!("native");
+    let handshake = json!({"protocol_version": 2, "kind": "later", "capabilities": declared,
+                           "writes": "supported", "content_updates": true});
+    let id = NativeId::from("T-1");
+
+    // An answer leaving the member out says nothing about whether the task is there.
+    let (source, _) = recording(vec![handshake.clone(), json!({})]);
+    let refused = source
+        .expect("the handshake completes")
+        .set_task_priority(&id, Priority::Low)
+        .await
+        .expect_err("an answer without its member");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message }
+            if message.contains("set_task_priority") && message.contains("priority")),
+        "{refused:?}"
+    );
+    let (source, _) = recording(vec![handshake.clone(), json!({})]);
+    assert!(matches!(
+        source
+            .expect("the handshake completes")
+            .set_task_content(&id, "x")
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+
+    // And one naming a task it was not asked to write is not that write landing.
+    let (source, heard) = recording(vec![handshake, json!({"id": "T-2"})]);
+    let refused = source
+        .expect("the handshake completes")
+        .set_task_content(&id, "the body")
+        .await
+        .expect_err("the wrong task");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message }
+            if message.contains("T-2") && message.contains("T-1")),
+        "{refused:?}"
+    );
+    let heard = heard.lock().expect("the record").clone();
+    assert_eq!(
+        heard[1],
+        json!({"id": heard[1]["id"], "method": "set_task_content",
+               "params": {"id": "T-1", "content": "the body"}})
+    );
+}

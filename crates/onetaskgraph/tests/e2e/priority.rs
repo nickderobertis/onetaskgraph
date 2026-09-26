@@ -358,6 +358,20 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
             ],
         );
         assert_eq!(set, json!({"id": id}), "{}", row.name);
+        let human = exits(
+            row.name,
+            &sandbox,
+            &[
+                "task",
+                "content",
+                "set",
+                &id,
+                "--file",
+                file.to_str().expect("a UTF-8 path"),
+            ],
+            0,
+        );
+        assert_eq!(stdout(&human), format!("id:  {id}\n"), "{}", row.name);
         if !PERSISTENT.contains(&row.plugin) {
             continue;
         }
@@ -435,6 +449,29 @@ fn a_narrow_write_to_a_source_that_cannot_take_it_is_refused_by_name() {
             "{message}"
         );
     }
+
+    // A file that is not UTF-8 text is refused rather than repaired, before any source is
+    // asked.
+    let latin = sandbox.subdirectory("content").join("latin1.md");
+    std::fs::write(&latin, b"caf\xe9").expect("the content file");
+    let refused = exits(
+        "unranked",
+        &sandbox,
+        &[
+            "task",
+            "content",
+            "set",
+            "unranked:T-1",
+            "--file",
+            latin.to_str().expect("a UTF-8 path"),
+        ],
+        1,
+    );
+    assert!(
+        stderr(&refused).contains("is not UTF-8 text") && stderr(&refused).contains("next:"),
+        "{}",
+        stderr(&refused)
+    );
 
     // A file that cannot be read is refused before any source is asked.
     let unreadable = exits(

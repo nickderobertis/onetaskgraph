@@ -2171,6 +2171,11 @@ pub struct FieldReport {
     /// Which field.
     pub field: BoardField,
     /// Whether the board had the field before the operation.
+    // llmlint: ignore[invalid_states_unrepresentable] `exists` beside `outcome` is the report's
+    // wire shape as its consumer's contract fixes it — `{"field", "exists", "missing",
+    // "outcome", "existing"}` — so folding one into the other would change a published JSON
+    // shape. The contradictory pairings cannot be built: `GitHubProjectsSource::fields` is the
+    // one constructor, and it derives `outcome` from `exists` in one match.
     pub exists: bool,
     /// Configured option names the field lacked before the operation — every one of them,
     /// in the order a new field lists them, when the field was not there at all.

@@ -538,8 +538,9 @@ pub(crate) struct PriorityParams {
 /// `null` when there is no such task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PriorityResult {
-    /// The priority, or `null`.
-    #[serde(default)]
+    /// The priority, or `null`. Required: an answer without the member says nothing about
+    /// whether the task is there, so it is malformed rather than read as `null`.
+    #[serde(deserialize_with = "present")]
     pub(crate) priority: Option<Priority>,
 }
 
@@ -556,9 +557,22 @@ pub(crate) struct ContentParams {
 /// no such task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ContentResult {
-    /// The task's id, or `null`.
-    #[serde(default)]
+    /// The task's id, or `null`. Required, for the reason [`PriorityResult::priority`] is.
+    #[serde(deserialize_with = "present")]
     pub(crate) id: Option<NativeId>,
+}
+
+/// A member that may be `null` and may not be absent.
+///
+/// Serde reads an absent `Option` member as `None` of its own accord; naming a deserializer
+/// takes that away, so an answer that leaves the member out is refused as the malformed
+/// answer it is rather than read as one saying there is no such task.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 /// `set_delivered_by` parameters (§4.17).

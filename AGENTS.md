@@ -695,8 +695,9 @@ them do; this is the inventory of what is owed, not a status board.
     namespace, and a value that is not JSON — each before any source is started — and an
     unknown source, a source with no write side, a record the source does not hold, and a
     stdio plugin whose handshake does not declare the write, which is never asked.
-50. A task's priority comes back out of every source kind in both renderings, `none` written
-    out rather than absent; `task list --priority` keeps exactly the tasks at any priority it
+50. A task's priority comes back out of every source kind — the machine rendering writing
+    `none` out rather than leaving it absent, the human one naming a priority only when one is
+    set; `task list --priority` keeps exactly the tasks at any priority it
     names on a source that applies the filter and on one the engine narrows for; and
     `task priority set` answers with what the source reads back and moves nothing else.
 51. A copy carries a task's priority on create and on update, back to `none` included; a copy

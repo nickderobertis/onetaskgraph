@@ -124,12 +124,18 @@ fn a_missing_priority_field_is_planned_then_created_with_the_mapped_options_in_o
         stdout(&text)
     );
 
-    let applied = report(
-        &sandbox,
-        &["--json", "sources", "fields", "board", "--apply"],
+    let applied = sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&applied),
+        "board: missing configured Status options: none\n\
+         board: created the Priority field with: Urgent, High, Medium, Low\n"
     );
-    assert_eq!(applied["fields"][0]["outcome"], "unchanged");
-    assert_eq!(applied["fields"][1]["outcome"], "created");
     let sent = mutations(&board);
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert!(sent[0].0.contains("createProjectV2Field(input:$input)"));
@@ -182,6 +188,18 @@ fn a_missing_option_of_either_field_is_added_with_every_existing_option_and_valu
     let priority_before = board.priority_options().expect("the field");
     let values_before = values(&sandbox);
 
+    let planned = sandbox
+        .command()
+        .args(["sources", "fields", "board"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&planned),
+        "board: missing configured Status options: Queued\n\
+         board: missing configured Priority options: Medium\n"
+    );
     let applied = report(
         &sandbox,
         &["--json", "sources", "fields", "board", "--apply"],
@@ -223,6 +241,31 @@ fn a_missing_option_of_either_field_is_added_with_every_existing_option_and_valu
             .all(|option| board.status_options().contains(option))
     );
     assert_eq!(values(&sandbox), values_before, "no item's values moved");
+}
+
+#[test]
+fn the_human_rendering_says_what_an_apply_added_and_verified() {
+    let (sandbox, board) = configured();
+    board.without_priority_option("Low");
+    let applied = sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&applied),
+        "board: missing configured Status options: none\n\
+         board: added and verified Priority options: Low\n"
+    );
+    assert!(
+        board
+            .priority_options()
+            .expect("the field")
+            .iter()
+            .any(|option| option["name"] == "Low")
+    );
 }
 
 #[test]
@@ -311,3 +354,4 @@ fn a_board_with_no_priority_mapping_sets_up_its_status_field_alone() {
     );
     assert!(mutations(&board).is_empty());
 }
+// llmlint: ignore-end[tests_mirror_real_usage]

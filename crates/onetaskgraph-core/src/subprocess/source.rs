@@ -757,7 +757,16 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.id.map(|_| ()))
+        match result.id {
+            None => Ok(None),
+            Some(written) if &written == id => Ok(Some(())),
+            Some(written) => Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered set_task_content for {id} with the id {written}, which \
+                     is not the task it was asked to write"
+                ),
+            }),
+        }
     }
 
     async fn set_delivered_by(
