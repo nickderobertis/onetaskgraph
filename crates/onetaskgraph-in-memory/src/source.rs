@@ -7,10 +7,10 @@ use chrono::Utc;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    MetadataKey, NativeId, NewComment, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
-    TaskRef, TaskSource, TextFields, TextQuery, WriteSupport, commentless, documentless,
-    unwritable,
+    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport, commentless,
+    documentless, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -181,6 +181,12 @@ impl InMemorySource {
         }
         if declared.filter_by_status.is_native()
             && !status_matches(task.status.category, &query.statuses)
+        {
+            return false;
+        }
+        if declared.filter_by_priority.is_native()
+            && !query.priorities.is_empty()
+            && !query.priorities.contains(&task.priority)
         {
             return false;
         }
@@ -448,6 +454,9 @@ impl TaskSource for InMemorySource {
     /// landing here at all. A configured key is refused; see [`InMemoryConfig::validate`].
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable(&write.item.metadata)?;
+        if write.item.priority != Priority::None && !self.declared().priority.is_native() {
+            return Err(unwritable_field(KIND, "priority"));
+        }
         let near = write.target.as_ref().unwrap_or(&write.item.id);
         listed("delivers", near, &write.item.delivers)?;
         listed("delivered_by", near, &write.item.delivered_by)?;
@@ -584,6 +593,44 @@ impl TaskSource for InMemorySource {
             };
         }
         Ok(Some(task.status.clone()))
+    }
+
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        if !self.declared().priority.is_native() {
+            return Err(unwritable_field(KIND, "priority"));
+        }
+        let mut held = self.held()?;
+        Ok(held
+            .tasks
+            .iter_mut()
+            .find(|task| &task.id == id)
+            .map(|task| {
+                task.priority = priority;
+                task.priority
+            }))
+    }
+
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        Ok(held
+            .tasks
+            .iter_mut()
+            .find(|task| &task.id == id)
+            .map(|task| task.content = Some(content.to_owned())))
     }
 
     async fn set_delivered_by(
