@@ -2123,7 +2123,10 @@ fn a_priority_is_one_of_five_kebab_case_values_and_defaults_to_none() {
         assert_eq!(priority.to_string(), priority.as_str());
     }
     let refused = "critical".parse::<Priority>().expect_err("not a priority");
-    assert!(refused.contains("\"critical\" is not a priority"), "{refused}");
+    assert!(
+        refused.contains("\"critical\" is not a priority"),
+        "{refused}"
+    );
     assert!(serde_json::from_value::<Priority>(serde_json::json!("Urgent")).is_err());
 }
 
@@ -2158,7 +2161,10 @@ fn a_task_written_before_there_were_priorities_reads_as_none_and_round_trips() {
         written, expected,
         "every member it arrived with, plus the one it lacked"
     );
-    assert_eq!(serde_json::from_value::<Task>(written).expect("decodes"), read);
+    assert_eq!(
+        serde_json::from_value::<Task>(written).expect("decodes"),
+        read
+    );
 
     // And a priority that is there survives the round trip, so the tolerance above is not
     // tolerance of losing one.

@@ -22,6 +22,7 @@ mod fetch;
 mod join;
 mod local;
 mod metadata;
+mod narrow;
 mod resume;
 
 use std::collections::BTreeMap;
@@ -30,7 +31,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
-    MetadataRecord, NativeId, Page, PageRequest, Project, ProjectFilter, ProjectQuery,
+    MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
     SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery, TextFields,
     TextQuery,
 };
@@ -56,6 +57,7 @@ pub use copy::{
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
+pub use narrow::{TaskContentSet, TaskPrioritySet};
 
 /// One item, under the qualified id the engine addresses it by.
 ///
@@ -191,6 +193,12 @@ pub struct TaskRequest {
     pub filters: Filters,
     /// Which project the tasks belong to.
     pub project: ProjectSelector,
+    /// Priorities to keep: a task matches when its priority is any one of these. Empty means
+    /// unfiltered.
+    ///
+    /// Here rather than in [`Filters`], because a project has no priority: the filters a
+    /// project list shares with a task list are the ones both kinds of item carry.
+    pub priorities: Vec<Priority>,
     /// Which page.
     pub paging: Paging,
 }
@@ -397,6 +405,55 @@ pub enum EngineError {
         kind: String,
         /// Which kind of record was named.
         record: MetadataRecord,
+    },
+
+    /// `task priority set` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot write a priority: its plugin is {kind}, which has no write side\n\
+         next: set the priority in that source itself, or name a task of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    PriorityNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// `task content set` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot write a task's content: its plugin is {kind}, which has no write \
+         side\n\
+         next: edit the content in that source itself, or name a task of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    ContentNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A priority other than `none` was to be written — by `task priority set` or by a copy —
+    /// to a source whose plugin declares it holds no priority.
+    ///
+    /// Refused before that source is asked anything, so a copy it stops has written nothing.
+    #[error(
+        "source {name} cannot hold the field priority, so {task}'s priority {priority} cannot \
+         be written to it: its plugin is {kind}, which declares priority unsupported\n\
+         next: write to a source whose plugin holds a priority — `onetaskgraph sources list` \
+         reports what each declares — or set the task's priority to none first; a \
+         github-projects source holds one once its configuration sets priority_mapping."
+    )]
+    NoPriority {
+        /// The configured name of the source that cannot hold it.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// The qualified id of the task whose priority it is.
+        task: String,
+        /// The priority that could not be written.
+        priority: onetaskgraph_plugin_api::Priority,
     },
 
     /// A metadata verb named a project its source does not hold.
@@ -780,7 +837,11 @@ impl Engine {
             self.known(&id.source)?;
             names.retain(|name| name == &id.source);
         }
-        let query = shape("task-list", &names, &(&request.filters, &request.project));
+        let query = shape(
+            "task-list",
+            &names,
+            &(&request.filters, &request.project, &request.priorities),
+        );
         let states = resumption(
             self,
             request.paging.token.as_ref(),
@@ -799,6 +860,7 @@ impl Engine {
                     &source.source().capabilities(),
                     &request.filters,
                     &project_filter(&request.project),
+                    &request.priorities,
                 )
             })
             .collect();
@@ -1918,6 +1980,7 @@ fn shape_tasks(
     capabilities: &Capabilities,
     filters: &Filters,
     project: &ProjectFilter,
+    priorities: &[Priority],
 ) -> TaskShape {
     let mut pushed = TaskQuery::default();
     let mut local = LocalTasks::default();
@@ -1939,6 +2002,15 @@ fn shape_tasks(
         } else {
             local.statuses.clone_from(&filters.statuses);
             outcomes.record(Predicate::Status, Outcome::AppliedLocally);
+        }
+    }
+    if !priorities.is_empty() {
+        if capabilities.filter_by_priority.is_native() {
+            pushed.priorities = priorities.to_vec();
+            outcomes.record(Predicate::Priority, Outcome::PushedDown);
+        } else {
+            local.priorities = priorities.to_vec();
+            outcomes.record(Predicate::Priority, Outcome::AppliedLocally);
         }
     }
     if let Some(text) = &filters.text {
@@ -2098,7 +2170,7 @@ fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind
             }
         }
         StreamKind::Items | StreamKind::Tasks => {
-            let shaped = shape_tasks(capabilities, filters, &ProjectFilter::Any);
+            let shaped = shape_tasks(capabilities, filters, &ProjectFilter::Any, &[]);
             HitShape {
                 stream,
                 tasks: shaped.pushed,

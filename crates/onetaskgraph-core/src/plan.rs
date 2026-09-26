@@ -89,6 +89,8 @@ pub enum Predicate {
     Label,
     /// Filter by status category.
     Status,
+    /// Filter by priority.
+    Priority,
     /// Search titles.
     SearchTitle,
     /// Search bodies.

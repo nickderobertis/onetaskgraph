@@ -105,6 +105,7 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             sources: vec![name(source)],
             filters: onetaskgraph_core::Filters::default(),
             project: onetaskgraph_core::ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1057,6 +1058,7 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             sources: vec![name(source)],
             filters: onetaskgraph_core::Filters::default(),
             project: onetaskgraph_core::ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: paging(),
         })
         .await

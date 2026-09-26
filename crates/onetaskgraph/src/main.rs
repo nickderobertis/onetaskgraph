@@ -28,9 +28,10 @@ use onetaskgraph_status_options::{GitHubProjectsConfig, StatusOptionsMode, Statu
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, CommentCommand, ConfigCommand, CopyArgs, DependencyArgs, DocumentCommand,
-    DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs,
-    ProjectCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs, DependencyArgs,
+    DocumentCommand, DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand,
+    MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand, SelectionArgs, ShowArgs,
+    SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -224,6 +225,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 sources: selection(&args.selection)?,
                 filters: filters(&args.filters)?,
                 project: selector(&engine, args.project.as_deref(), args.no_project),
+                priorities: args
+                    .priority
+                    .iter()
+                    .map(|priority| priority.priority())
+                    .collect(),
                 paging: paging(loaded, &args.paging)?,
             };
             let response = engine
@@ -272,6 +278,41 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let rendered = rendering(loaded, &set, render::status_set, "the status")?;
             emit(out, rendered.trim_end(), "the status")?;
             Ok(delivery_exit(&set.delivered))
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Priority {
+                    command: PriorityCommand::Set(args),
+                },
+        } => {
+            let task = qualified(&args.id)?;
+            let set = engine(loaded)
+                .set_task_priority(&task, args.priority.priority())
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::priority_set, "the priority")?;
+            emit(out, rendered.trim_end(), "the priority")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Content {
+                    command: ContentCommand::Set(args),
+                },
+        } => {
+            // The file is read, and refused, before anything is built or asked: a content
+            // write that could not be read reaches no source.
+            let task = qualified(&args.id)?;
+            let content = content(&args.file)?;
+            let set = engine(loaded)
+                .set_task_content(&task, &content)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::content_set, "the content")?;
+            emit(out, rendered.trim_end(), "the content")?;
+            Ok(EXIT_OK)
         }
 
         Command::Task {
@@ -705,6 +746,34 @@ fn body(path: Option<&std::path::Path>) -> Result<CommentBody, Failure> {
             format!(
                 "the comment body on {from} is empty, and a comment has to say something\n\
                 next: write the comment's text to {from} and run the command again."
+            ),
+        )
+    })
+}
+
+/// A task's new content, read byte for byte from `path`.
+///
+/// Never trimmed and never normalised, for the reason a comment body is not: a trailing
+/// newline is part of what was written. Text that is not UTF-8 is refused rather than
+/// repaired. An empty file is content like any other — it empties the task's body.
+fn content(path: &std::path::Path) -> Result<String, Failure> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        Failure::decided(
+            "content-file",
+            format!(
+                "--file {}: could not read it: {error}\n\
+                 next: name a readable file holding the task's new content.",
+                path.display()
+            ),
+        )
+    })?;
+    String::from_utf8(bytes).map_err(|error| {
+        Failure::decided(
+            "content-file",
+            format!(
+                "the content in --file {} is not UTF-8 text: {error}\n\
+                 next: save the content as UTF-8 and pass it again.",
+                path.display()
             ),
         )
     })
@@ -1153,6 +1222,8 @@ mod tests {
                 "task comment edit",
                 "task comment delete",
                 "task status set",
+                "task priority set",
+                "task content set",
                 "task metadata set",
                 "project list",
                 "project show",

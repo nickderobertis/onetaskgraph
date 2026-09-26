@@ -48,7 +48,7 @@ pub use engine::{
     DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LabelRequest, LeftBehind,
     MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
     QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
-    TaskDetail, TaskRequest, TaskStatusSet, settled,
+    TaskContentSet, TaskDetail, TaskPrioritySet, TaskRequest, TaskStatusSet, settled,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};

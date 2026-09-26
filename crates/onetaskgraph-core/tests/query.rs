@@ -133,6 +133,7 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         sources: Vec::new(),
         filters,
         project,
+        priorities: Vec::new(),
         paging,
     }
 }
@@ -418,6 +419,7 @@ async fn a_request_naming_a_source_nothing_configures_is_refused_with_the_names_
             sources: vec![name("elsewhere")],
             filters: Filters::default(),
             project: ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: page(10),
         })
         .await

@@ -13,10 +13,11 @@
 
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
-    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
+    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskContentSet,
+    TaskPrioritySet, TaskStatusSet,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
+    Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
 };
 use onetaskgraph_status_options::StatusOptionsReport;
 use serde::Serialize;
@@ -151,6 +152,19 @@ pub fn status_set(set: &TaskStatusSet) -> String {
         rendered.push_str(&delivered(&set.delivered));
     }
     rendered
+}
+
+/// What `task priority set` did: the task, and the priority its source now reads it as.
+pub fn priority_set(set: &TaskPrioritySet) -> String {
+    columns(&[
+        vec!["id:".to_owned(), set.id.to_string()],
+        vec!["priority:".to_owned(), wire(&set.priority)],
+    ])
+}
+
+/// What `task content set` did: the task whose content was replaced.
+pub fn content_set(set: &TaskContentSet) -> String {
+    columns(&[vec!["id:".to_owned(), set.id.to_string()]])
 }
 
 /// What a `metadata set` verb did: the record, the key, the value its source now holds there
@@ -404,6 +418,11 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
             format!("{} ({})", wire(&item.status.category), item.status.name),
         ),
     ]);
+    // Only when one is set: `none` is what every task of a source without priorities reads
+    // as, and a line saying so on each of them would say nothing.
+    if item.priority != Priority::None {
+        fields.push(("priority", wire(&item.priority)));
+    }
     fields.push((
         "project",
         match &item.project {
