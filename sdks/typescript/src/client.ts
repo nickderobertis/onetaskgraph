@@ -9,7 +9,9 @@ import type {
   CopyReport,
   DeletedComment,
   EffectiveConfig,
+  FieldsReport,
   MetadataSet,
+  Priority,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -19,7 +21,9 @@ import type {
   SourceListings,
   StatusCategory,
   StatusOptionsReport,
+  TaskContentSet,
   TaskDetail,
+  TaskPrioritySet,
   TaskStatusSet,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -87,6 +91,7 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "config show": "EffectiveConfig",
   "sources list": "SourceListings",
   "sources status-options": "StatusOptionsReport",
+  "sources fields": "FieldsReport",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   "task deps": "QueryResponseOfQualifiedEdge",
@@ -96,6 +101,8 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "task comment edit": "Comment",
   "task comment delete": "DeletedComment",
   "task status set": "TaskStatusSet",
+  "task priority set": "TaskPrioritySet",
+  "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
@@ -115,14 +122,17 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // step, which its response names. A comment verb is one call to one source and neither reads
 // several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
-// not status, so it keeps no delivered task in step.
+// not status, so it keeps no delivered task in step — and so are `priority set` and `content
+// set`, for the same reason.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
       command !== "config show" &&
       command !== "sources list" &&
       !command.startsWith("task comment ") &&
-      !command.endsWith(" metadata set"),
+      !command.endsWith(" metadata set") &&
+      !command.endsWith(" priority set") &&
+      !command.endsWith(" content set"),
   ),
 );
 
@@ -212,13 +222,21 @@ export class OnetaskgraphClient {
   ): Promise<StatusOptionsReport> {
     return this.run("sources status-options", [source, ...(options.apply ? ["--apply"] : [])]);
   }
+  sourcesFields(source: string, options: { apply?: boolean } = {}): Promise<FieldsReport> {
+    return this.run("sources fields", [source, ...(options.apply ? ["--apply"] : [])]);
+  }
   taskList(
-    options: FilterOptions & { project?: string; noProject?: boolean } = {},
+    options: FilterOptions & {
+      project?: string;
+      noProject?: boolean;
+      priorities?: Priority[];
+    } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
     const args: string[] = [];
     addFilters(args, options);
     if (options.project !== undefined) args.push("--project", options.project);
     if (options.noProject) args.push("--no-project");
+    for (const priority of options.priorities ?? []) args.push("--priority", priority);
     return this.run("task list", args);
   }
   taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {
@@ -241,6 +259,13 @@ export class OnetaskgraphClient {
   }
   taskStatusSet(id: string, category: StatusCategory): Promise<TaskStatusSet> {
     return this.run("task status set", [id, category]);
+  }
+  taskPrioritySet(id: string, priority: Priority): Promise<TaskPrioritySet> {
+    return this.run("task priority set", [id, priority]);
+  }
+  // `file` is read by the binary byte for byte, and its bytes replace the task's content.
+  taskContentSet(id: string, file: string): Promise<TaskContentSet> {
+    return this.run("task content set", [id, "--file", file]);
   }
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
   taskMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {

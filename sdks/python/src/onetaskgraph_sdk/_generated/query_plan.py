@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, RootModel
 class Predicate(StrEnum):
     PredicateLabel = "label"
     PredicateStatus = "status"
+    PredicatePriority = "priority"
     PredicateSearchTitle = "search-title"
     PredicateSearchContent = "search-content"
     PredicateProject = "project"

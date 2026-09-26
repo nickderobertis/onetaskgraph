@@ -68,11 +68,20 @@ class PageToken(RootModel[str]):
 class Predicate(StrEnum):
     PredicateLabel = "label"
     PredicateStatus = "status"
+    PredicatePriority = "priority"
     PredicateSearchTitle = "search-title"
     PredicateSearchContent = "search-content"
     PredicateProject = "project"
     PredicateDocument = "document"
     PredicateReverseDependencies = "reverse-dependencies"
+
+
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
 
 
 class Repository(RootModel[str]):
@@ -290,6 +299,12 @@ class Task(BaseModel):
             description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it."
         ),
     ] = {}
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+        ),
+    ] = Priority.PriorityNone
     project: Annotated[
         NativeId | None,
         Field(description="`None` is a first-class case — an orphan task — not an edge case."),

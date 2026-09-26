@@ -757,6 +757,112 @@ test("task status set answers when a delivered task could not be kept in step", 
   }
 });
 
+function priorityFolder(): string {
+  const priorityRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-priority-"));
+  mkdirSync(resolve(priorityRoot, "work/tasks"), { recursive: true });
+  writeFileSync(
+    resolve(priorityRoot, "work/tasks/T-1.md"),
+    "---\ntitle: Ranked\nstatus: todo\npriority: high\n---\nThe old body.\n",
+  );
+  writeFileSync(
+    resolve(priorityRoot, "work/tasks/T-2.md"),
+    "---\ntitle: Unranked\nstatus: todo\n---\nAnother body.\n",
+  );
+  writeFileSync(
+    resolve(priorityRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { work: { plugin: "local-md", config: { root: resolve(priorityRoot, "work") } } },
+    }),
+  );
+  return priorityRoot;
+}
+
+test("a task's priority is listed, filtered and set through the real binary", async () => {
+  const priorityRoot = priorityFolder();
+  try {
+    const priorityClient = new OnetaskgraphClient({ binaryPath: binary, cwd: priorityRoot });
+
+    const ranked = await priorityClient.taskList({ priorities: ["high", "urgent"] });
+    expect(ranked.items.map((task) => [task.id, task.item.priority])).toEqual([
+      ["work:T-1", "high"],
+    ]);
+    const unranked = await priorityClient.taskList({ priorities: ["none"] });
+    expect(unranked.items.map((task) => task.id)).toEqual(["work:T-2"]);
+
+    const answer = await priorityClient.taskPrioritySet("work:T-2", "urgent");
+    expect(answer).toEqual({ id: "work:T-2", priority: "urgent" });
+    const shown = await priorityClient.taskShow("work:T-2");
+    expect(shown.items[0]?.item.priority).toBe("urgent");
+
+    const refused = priorityClient.taskPrioritySet("missing:T-1", "low");
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+  } finally {
+    rmSync(priorityRoot, { recursive: true, force: true });
+  }
+});
+
+test("a task's content is replaced from a file through the real binary, and nothing else", async () => {
+  const contentRoot = priorityFolder();
+  try {
+    const contentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: contentRoot });
+    const before = (await contentClient.taskShow("work:T-1")).items[0]?.item;
+    const body = resolve(contentRoot, "body.md");
+    writeFileSync(body, "The new body.\n\nWith a second paragraph.");
+
+    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({ id: "work:T-1" });
+    const after = (await contentClient.taskShow("work:T-1")).items[0]?.item;
+    expect(after?.content).toBe("The new body.\n\nWith a second paragraph.");
+    expect({ ...after, content: null }).toEqual({ ...before, content: null });
+
+    const refused = contentClient.taskContentSet("work:T-1", resolve(contentRoot, "absent.md"));
+    await expect(refused).rejects.toThrow("--file");
+  } finally {
+    rmSync(contentRoot, { recursive: true, force: true });
+  }
+});
+
+test("sources fields names a source that is not backed by GitHub Projects", async () => {
+  await expect(client.sourcesFields("work")).rejects.toThrow(
+    "source work uses plugin in-memory, not github-projects; fields is only available",
+  );
+});
+
+test("sources fields forwards apply through the executable boundary", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-fields-"));
+  try {
+    const report = {
+      source: "board",
+      fields: [
+        { field: "Status", exists: true, missing: [], outcome: "unchanged", existing: [] },
+        {
+          field: "Priority",
+          exists: false,
+          missing: ["Urgent", "High", "Medium", "Low"],
+          outcome: "created",
+          existing: [],
+        },
+      ],
+    };
+    const applyClient = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "fields-apply", JSON.stringify(report), "", 0, [
+        "sources",
+        "fields",
+        "board",
+        "--apply",
+        "--json",
+      ]),
+    });
+    const answered = await applyClient.sourcesFields("board", { apply: true });
+    expect(answered.fields.map((field) => [field.field, field.outcome])).toEqual([
+      ["Status", "unchanged"],
+      ["Priority", "created"],
+    ]);
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
+
 test("a source failure remains typed for partial and accepted-partial exits", async () => {
   const failureRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-failure-"));
   writeFileSync(

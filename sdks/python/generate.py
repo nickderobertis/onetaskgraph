@@ -27,6 +27,8 @@ RESPONSE_ROOTS = {
     "task_comment_edit": "Comment",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
+    "task_priority_set": "TaskPrioritySet",
+    "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
@@ -41,6 +43,7 @@ RESPONSE_ROOTS = {
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
     "sources_status_options": "StatusOptionsReport",
+    "sources_fields": "FieldsReport",
     "config_show": "EffectiveConfig",
 }
 # Roots no command returns directly, which the package generates and exports anyway.
@@ -61,6 +64,7 @@ CONTRACT_ROOTS = {
     "QueryPlan",
     "GlobalId",
     "StatusCategory",
+    "Priority",
     "SourceName",
     "Document",
     "DocumentQuery",
@@ -80,6 +84,7 @@ OPTION_TYPES = {
     "default_sources": "list[str] | tuple[str, ...]",
     "direction": "choices",
     "explain": "bool",
+    "file": "str",
     "in_": "choices",
     "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
@@ -91,6 +96,7 @@ OPTION_TYPES = {
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
     "page_size": "int",
+    "priority": "choice_list",
     "project": "str",
     "recreate": "bool",
     "search": "str",
@@ -108,6 +114,7 @@ OPTION_PLACEHOLDERS = {
     "default_sources": "NAMES",
     "direction": "DIRECTION",
     "explain": None,
+    "file": "PATH",
     "in_": "FIELDS",
     "kind": "KIND",
     "label": "L",
@@ -119,6 +126,7 @@ OPTION_PLACEHOLDERS = {
     "not_label": "L",
     "page": "TOKEN",
     "page_size": "N",
+    "priority": "PRIORITY",
     "project": "P",
     "recreate": None,
     "search": "TEXT",
@@ -491,7 +499,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options"):
+        case ("sources", "status-options" | "fields"):
             return ("source",)
         case ("task" | "document", "copy"):
             return ("ids",)
@@ -501,6 +509,10 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "comment_id")
         case ("task", "status", "set"):
             return ("id", "category")
+        case ("task", "priority", "set"):
+            return ("id", "priority")
+        case ("task", "content", "set"):
+            return ("id",)
         case ("task" | "project" | "document", "metadata", "set"):
             return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
@@ -508,6 +520,12 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
         case _:
             return ()
 
+
+# Options a command cannot run without, which its generated method takes as required
+# parameters beside its operands rather than as optional keywords: `task content set` has
+# nothing to write without `--file`. Each is still passed to the binary as the flag it is, so
+# it is not an operand and is not in the table `operands` answers.
+REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {("task", "content", "set"): ("file",)}
 
 # The commands that read a body from standard input when `--body-file` is absent, which
 # generated methods expose as a `body` the client writes there — a body is never a word of
@@ -535,7 +553,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[
             f"    {root},"
             for root in sorted(
-                set(RESPONSE_ROOTS.values()) | {"GlobalId", "SourceName", "StatusCategory"}
+                set(RESPONSE_ROOTS.values())
+                | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
         ")",
@@ -576,6 +595,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        # `task priority set` takes the priority it sets as its second operand, spelled as the
+        # binary spells it — which is exactly the generated enum's values.
+        "priority": "Priority | str",
+        # `task content set` reads the task's new content from this file, byte for byte.
+        "file": "str",
         "source": "SourceName | str",
         # `metadata set` takes its key as a string, and its value as the JSON text the binary
         # parses strictly — exactly the word the command line takes, so what a caller writes
@@ -587,17 +611,23 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
         taken = positionals.get(command, ())
-        keywords = [item for item in option_names(command) if item not in taken]
+        required = REQUIRED_OPTIONS.get(command, ())
+        keywords = [
+            item for item in option_names(command) if item not in taken and item not in required
+        ]
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         parameters = (
-            [f"{positional}: {positional_types.get(positional, 'str')}" for positional in taken]
+            [
+                f"{positional}: {positional_types.get(positional, 'str')}"
+                for positional in (*taken, *required)
+            ]
             + ["*"]
             + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]
             + body
         )
         if parameters[-1] == "*":
             parameters.pop()
-        passed = [f"{item}={item}" for item in [*taken, *keywords]]
+        passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
         if body:
             passed.append("stdin=body")
         lines.extend(
