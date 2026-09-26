@@ -6,6 +6,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pydantic import JsonValue
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This is the sdk-python
@@ -270,7 +274,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # the bundle carrying one the generated model does not is exactly the drift the version
     # exists to make visible.
     for root in ("QueryResponseOfQualifiedTask", "TaskDetail"):
-        assert "key" in bundle["roots"][root]["$defs"]["Task"]["properties"], root
+        assert "key" in _schema_path(bundle["roots"][root], "$defs", "Task", "properties"), root
     assert "key" in _generated_task_fields()
     # Version 15 published what the three `metadata set` verbs answer with.
     assert "MetadataSet" in bundle["roots"]
@@ -289,6 +293,15 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
 
 
 # llmlint: ignore-end[async_typed_clients_at_boundaries]
+
+
+def _schema_path(schema: JsonValue, *keys: str) -> dict[str, JsonValue]:
+    """The object at `keys` inside `schema`, failing the test where one is not an object."""
+    for key in keys:
+        assert isinstance(schema, dict), key
+        schema = schema[key]
+    assert isinstance(schema, dict), keys
+    return schema
 
 
 def _generated_task_fields() -> set[str]:
