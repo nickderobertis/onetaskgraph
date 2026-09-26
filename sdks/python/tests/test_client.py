@@ -767,7 +767,9 @@ def test_task_content_set_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     client = Client(binary, cwd=cwd)
     before = run(client.task_show(id="work:T-1")).items[0].item
     body = tmp_path / "body.md"
-    body.write_text("The new body.\n\nWith a second paragraph.", encoding="utf-8")
+    # Bytes, not text: `write_text` would end these lines `\r\n` on Windows, and the verb
+    # stores the file's bytes exactly, so the read-back would differ from what was written.
+    body.write_bytes(b"The new body.\n\nWith a second paragraph.")
 
     answer = run(client.task_content_set("work:T-1", str(body)))
     assert isinstance(answer, TaskContentSet)
