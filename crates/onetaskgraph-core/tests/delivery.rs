@@ -10,7 +10,8 @@ use std::num::NonZeroU32;
 
 use onetaskgraph_core::{
     Config, CopyItems, CopyRequest, CopyScope, Delivered, DeliveryOutcome, Engine, EngineError,
-    Filters, GlobalId, Paging, ProjectSelector, SearchKind, SearchRequest, TaskRequest, settled,
+    Failure, FailureClass, Filters, GlobalId, Paging, ProjectSelector, SearchKind, SearchRequest,
+    TaskRequest, settled,
 };
 use onetaskgraph_plugin_api::{
     SecretResolver, SourceName, StatusCategory, TaskRef, TextFields, TextQuery,
@@ -572,4 +573,128 @@ async fn a_member_created_later_in_the_same_copy_is_named_by_its_destination_id(
         "the unrelated B is untouched"
     );
     assert_eq!(report.delivered.len(), 1);
+}
+
+/// Every member a [`Failure`]'s getters read, beside what its serialised form writes for the
+/// same member — so a getter and the document can never disagree about one failure.
+fn reads_as_written(failure: &Failure) {
+    let written = serde_json::to_value(failure).expect("a failure renders");
+    assert_eq!(json!(failure.class()), written["class"], "{written}");
+    assert_eq!(failure.kind(), written["kind"], "{written}");
+    assert_eq!(
+        json!(failure.source().map(ToString::to_string)),
+        written["source"],
+        "{written}"
+    );
+    assert_eq!(failure.message(), written["message"], "{written}");
+    assert_eq!(
+        json!(failure.retry_after_seconds()),
+        written["retry_after_seconds"],
+        "{written}"
+    );
+}
+
+#[cfg(unix)]
+fn failure_of(entry: &Delivered) -> &Failure {
+    match &entry.outcome {
+        DeliveryOutcome::Failed { failure, .. } => failure,
+        other => panic!("{} was not failed: {other:?}", entry.ticket),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linking_caller_reads_a_delivered_tickets_failure_through_its_getters() {
+    use onetaskgraph_plugin_api::SourceError;
+
+    // A real child refusing its handshake, because a transient failure a stand-in fakes is
+    // not the one a linking caller is handed.
+    let rate_limited = r#"read -r _request
+printf '%s\n' '{"id":"0","error":{"kind":"rate-limited","retry_after_seconds":45}}'"#;
+    let engine = engine_over(json!({
+        "from": source(vec![task(
+            "A",
+            Queued,
+            &["frozen:T-1", "limited:T-1", "nowhere:T-1"],
+            &[],
+        )]),
+        "into": source(vec![]),
+        "frozen": {"plugin": "in-memory", "config": {
+            "capabilities": {"writes": "unsupported"},
+            "tasks": [task("T-1", Todo, &[], &[])],
+        }},
+        "limited": {"plugin": "subprocess", "config": {
+            "command": "/bin/sh", "args": ["-c", rate_limited],
+        }},
+    }));
+    let report = engine
+        .copy(&copy(&["from:A"], CopyScope::Tasks, "into"))
+        .await
+        .expect("the copy itself lands");
+    let tickets: Vec<String> = report
+        .delivered
+        .iter()
+        .map(|entry| entry.ticket.to_string())
+        .collect();
+    assert_eq!(tickets, ["frozen:T-1", "limited:T-1", "nowhere:T-1"]);
+
+    let refused = failure_of(&report.delivered[0]);
+    assert_eq!(refused.class(), FailureClass::Refused);
+    assert_eq!(
+        refused.kind(),
+        serde_json::to_value(SourceError::Refused {
+            message: String::new()
+        })
+        .expect("renders")["kind"],
+        "the causing source error's own kind"
+    );
+    assert_eq!(
+        refused.source(),
+        Some(&SourceName::new("frozen").expect("a name"))
+    );
+    assert_eq!(
+        refused.retry_after_seconds(),
+        None,
+        "a refusal names no wait"
+    );
+    reads_as_written(refused);
+
+    let transient = failure_of(&report.delivered[1]);
+    assert_eq!(transient.class(), FailureClass::Transient);
+    assert_eq!(
+        transient.kind(),
+        serde_json::to_value(SourceError::RateLimited {
+            retry_after_seconds: None,
+            message: None
+        })
+        .expect("renders")["kind"],
+        "the causing source error's own kind"
+    );
+    assert_eq!(
+        transient.source(),
+        Some(&SourceName::new("limited").expect("a name"))
+    );
+    assert_eq!(
+        transient.retry_after_seconds(),
+        Some(45),
+        "the wait it named"
+    );
+    reads_as_written(transient);
+
+    let unconfigured = failure_of(&report.delivered[2]);
+    assert_eq!(unconfigured.class(), FailureClass::Refused);
+    assert_eq!(unconfigured.kind(), "unknown-source");
+    assert_eq!(unconfigured.source(), None, "no source caused it");
+    reads_as_written(unconfigured);
+}
+
+#[test]
+fn a_failure_the_engine_decided_names_no_source_and_no_wait() {
+    let decided = Failure::decided("invalid-id", "not qualified");
+    assert_eq!(decided.class(), FailureClass::Refused);
+    assert_eq!(decided.kind(), "invalid-id");
+    assert_eq!(decided.source(), None);
+    assert_eq!(decided.message(), "not qualified");
+    assert_eq!(decided.retry_after_seconds(), None);
+    reads_as_written(&decided);
 }

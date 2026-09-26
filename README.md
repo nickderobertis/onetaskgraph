@@ -472,6 +472,11 @@ Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust c
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
 remain the single implementation in either case.
 
+A failure reaches a linking caller as a typed value rather than as a document to parse: a
+write that landed while a task it delivers could not be kept in step reports that entry as
+`DeliveryOutcome::Failed`, whose `Failure` reads each member of the failure document —
+`class()` among them — through the read-only getters its own API documentation lists.
+
 To work on the repository instead, clone it and run `just bootstrap`; `just --list` shows
 the rest.
 
