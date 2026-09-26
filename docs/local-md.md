@@ -181,8 +181,10 @@ trailing spaces, a run of trailing newlines, an indented first line. The file fr
 content in the one way this source reads back: the content, then the one line break that ends
 it, then — when there is a comments section — the one blank line that sets the section off; and
 content that itself begins with a line break is written with one more above it. A read takes
-that framing off and nothing else, which is also why a hand-written file with a blank line
-under its front matter or before its comments reads as it always did. Content with no text at
+that framing off and nothing else, so a hand-written file with a single blank line under its
+front matter or before its comments reads without it; any further blank lines or spaces at
+either end of a hand-written body are read as the content they are, where a read once trimmed
+them. Content with no text at
 all reads as none. The edited file is read back before it is written, and content that would
 not read back as itself is refused rather than written.
 

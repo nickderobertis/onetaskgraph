@@ -912,6 +912,10 @@ struct GitHubBoard {
     drops_priority_writes: bool,
     /// Whether the board goes out of the token's sight after the next option-list update.
     hides_after_update: bool,
+    /// Whether the next `Priority` option-list update re-mints a pre-existing option's id.
+    remints_after_priority_update: bool,
+    /// Whether the next `Priority` option-list update drops the option it was asked to add.
+    omits_added_priority_option: bool,
     /// Fields of a person's own beside the ones this product sets up, each with one item's
     /// value of it.
     persons_fields: Vec<Value>,
@@ -1013,6 +1017,16 @@ impl GitHubBoardFields {
     /// its options on `T-1`.
     pub fn with_persons_field(&self, field: Value) {
         self.board.lock().unwrap().persons_fields.push(field);
+    }
+
+    /// Make the next `Priority` option-list update change one pre-existing option's id.
+    pub fn remint_after_priority_update(&self) {
+        self.board.lock().unwrap().remints_after_priority_update = true;
+    }
+
+    /// Make the next `Priority` option-list update leave out the option it was asked to add.
+    pub fn omit_added_priority_option(&self) {
+        self.board.lock().unwrap().omits_added_priority_option = true;
     }
 
     /// Make the board go out of the token's sight once the next `Priority` option-list update
@@ -1523,6 +1537,8 @@ fn github_projects_board_at(
         drift_after_priority_update: false,
         drops_priority_writes: false,
         hides_after_update: false,
+        remints_after_priority_update: false,
+        omits_added_priority_option: false,
         persons_fields: Vec::new(),
         drift_after_status_update: false,
         remint_after_status_update: false,
@@ -1696,7 +1712,15 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .priority_options
             .clone()
             .expect("an update of the Priority field names a field this board has");
-        let next = github_replaced_options(&old, &input, "OPT-p-new");
+        let mut next = github_replaced_options(&old, &input, "OPT-p-new");
+        if board.omits_added_priority_option {
+            board.omits_added_priority_option = false;
+            next.retain(|option| old.iter().any(|held| held["id"] == option["id"]));
+        }
+        if board.remints_after_priority_update {
+            board.remints_after_priority_update = false;
+            next[0]["id"] = json!("OPT-p-reminted");
+        }
         // As for Status below: an item assigned an option id the update did not send back
         // loses its value.
         for item in &mut board.items {

@@ -409,6 +409,38 @@ fn a_priority_field_of_another_type_is_refused_rather_than_created_beside() {
 }
 
 #[test]
+fn a_reminted_or_dropped_priority_option_is_refused_with_the_recovery_data() {
+    for (drift, said) in [
+        (
+            GitHubBoardFields::remint_after_priority_update as fn(&GitHubBoardFields),
+            "a pre-existing Priority option id, name, color or description",
+        ),
+        (
+            GitHubBoardFields::omit_added_priority_option,
+            "an added Priority option",
+        ),
+    ] {
+        let (sandbox, board) = configured();
+        board.without_priority_option("Medium");
+        drift(&board);
+        let output = sandbox
+            .command()
+            .args(["sources", "fields", "board", "--apply"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let stderr = stderr(&output);
+        assert!(
+            stderr.contains(&format!("GitHub changed {said}"))
+                && stderr.contains("the pre-write item assignments are:")
+                && stderr.contains("OPT-p-high"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
 fn drift_after_the_write_is_refused_with_the_pre_write_assignments() {
     let (sandbox, board) = configured();
     board.without_priority_option("Medium");

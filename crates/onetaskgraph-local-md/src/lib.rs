@@ -1839,21 +1839,16 @@ fn unfronted(path: &Path) -> SourceError {
     }
 }
 
-/// A task body split into its content and its trailing comments section, when it has one.
-///
-/// Every line that is exactly [`COMMENTS_HEADING`] is a candidate, earliest first, and the
-/// first from which the rest of the body reads as comment blocks to its end is the section.
-/// Earliest first is what keeps a body's own `## Comments` line — inside a comment, or in
-/// content followed by prose — from being read as the section: a comment's body is consumed
-/// whole up to its closing line, and a heading followed by prose is not a run of blocks.
 /// The content a body holds, given the text above its comments section (or the whole body)
 /// and whether a section follows it.
 ///
 /// Exactly the bytes a person wrote, less only this format's own framing: at most one line
 /// break straight after the front matter, the one line break that ends the file's content,
-/// and — when a comments section follows — the one blank line that separates it. So content
-/// with leading or trailing whitespace reads back as itself, and a hand-written file with a
-/// blank line under its front matter or before its comments reads as it always did.
+/// and — when a comments section follows — one blank line before it. So content with leading
+/// or trailing whitespace reads back as itself, and a hand-written file with a single blank
+/// line under its front matter or before its comments reads without it. What this no longer
+/// does is trim: a hand-written file with further blank lines, or spaces, at either end of its
+/// content reads with them, because they are the file's content.
 /// [`framed`] is the inverse, and every write of content goes through it.
 fn body_text(above: &str, sectioned: bool) -> &str {
     let break_off = |text: &str| -> usize {
@@ -1892,6 +1887,13 @@ fn framed(content: &str, sectioned: bool) -> String {
     text
 }
 
+/// A task body split into its content and its trailing comments section, when it has one.
+///
+/// Every line that is exactly [`COMMENTS_HEADING`] is a candidate, earliest first, and the
+/// first from which the rest of the body reads as comment blocks to its end is the section.
+/// Earliest first is what keeps a body's own `## Comments` line — inside a comment, or in
+/// content followed by prose — from being read as the section: a comment's body is consumed
+/// whole up to its closing line, and a heading followed by prose is not a run of blocks.
 fn sectioned(body: &str) -> (&str, Option<Vec<Comment>>) {
     let mut at = 0;
     while at <= body.len() {

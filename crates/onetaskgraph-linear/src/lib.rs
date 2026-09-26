@@ -187,9 +187,9 @@
 //! `set_task_content` sends `issueUpdate` with `description` alone, and that description is
 //! the given content followed by the issue's metadata slot exactly as it was stored, so the
 //! slot, and every key in it, is untouched. What a later read reports as the content is the
-//! given bytes, with one exception the reader owns: an issue that carries a slot has the
-//! whitespace at the end of its visible description trimmed on every read, a copy's
-//! included, so trailing whitespace given to such an issue does not come back.
+//! given bytes, trailing whitespace included: a read of an issue carrying a slot takes off only
+//! the one blank line that sets the slot off, and a write whose content would not read back as
+//! itself is refused before it is sent.
 //!
 //! Fixture provenance is recorded in `tests/fixtures/README.md`. The live journey in
 //! `tests/live.rs` drives every field of the table above against Linear itself: it builds its own fixture
