@@ -2394,7 +2394,9 @@ impl GitHubProjectsSource {
     ///
     /// Refuses a board without a single-select `Status` field, and one the token cannot see.
     async fn status_snapshot(&self) -> Result<StatusSnapshot, SourceError> {
-        let mut board = self.board_snapshot().await?;
+        // Status alone, as this operation has always read it: a `Priority` field is another
+        // operation's, so nothing about it can refuse this one.
+        let mut board = self.board_snapshot(&[BoardField::Status]).await?;
         let field = board
             .fields
             .remove(&BoardField::Status)
@@ -2418,9 +2420,10 @@ impl GitHubProjectsSource {
     // the real CLI loopback journey, including pagination. The individual malformed guards
     // are defensive validation of a schema-pinned third-party response, not separate user
     // journeys; drift and missing-field failures cover the operation's recovery behavior.
-    /// A fresh snapshot of every single-select field on the board, with its options, and of
-    /// every board item's value of each, walked to the end of the board's items.
-    async fn board_snapshot(&self) -> Result<BoardSnapshot, SourceError> {
+    /// A fresh snapshot of each of the `owned` fields on the board, with its options, and of
+    /// every board item's value of each, walked to the end of the board's items. A field not
+    /// in `owned` is read past whatever it holds.
+    async fn board_snapshot(&self, owned: &[BoardField]) -> Result<BoardSnapshot, SourceError> {
         let mut after: Option<String> = None;
         let mut snapshot: Option<BoardSnapshot> = None;
         loop {
@@ -2466,8 +2469,8 @@ impl GitHubProjectsSource {
                 })?
                 .iter()
                 .filter_map(|field| {
-                    let owned = BoardField::named(field.get("name")?.as_str()?)?;
-                    Some((owned, field))
+                    let named = BoardField::named(field.get("name")?.as_str()?)?;
+                    owned.contains(&named).then_some((named, field))
                 })
             {
                 let options = field
@@ -2550,6 +2553,7 @@ impl GitHubProjectsSource {
                         .pointer("/field/name")
                         .and_then(Value::as_str)
                         .and_then(BoardField::named)
+                        .filter(|field| owned.contains(field))
                     else {
                         continue;
                     };
@@ -2617,7 +2621,12 @@ impl GitHubProjectsSource {
     // with no Status field and a non-github-projects source through the compiled CLI against
     // the loopback board. Transport errors are the shared `graphql` boundary's behavior.
     pub async fn fields(&self, mode: SetupMode) -> Result<FieldsReport, SourceError> {
-        let before = self.board_snapshot().await?;
+        let owned: Vec<BoardField> = if self.priorities.is_some() {
+            vec![BoardField::Status, BoardField::Priority]
+        } else {
+            vec![BoardField::Status]
+        };
+        let before = self.board_snapshot(&owned).await?;
         let mut plans = vec![FieldPlan {
             field: BoardField::Status,
             wanted: self
@@ -2746,7 +2755,7 @@ impl GitHubProjectsSource {
         }
         // The board has been written, so a verification read that fails leaves it unverified
         // rather than unchanged, and says what to put back.
-        let after = match self.board_snapshot().await {
+        let after = match self.board_snapshot(&owned).await {
             Ok(after) => after,
             Err(error) => {
                 return Err(SourceError::Refused {

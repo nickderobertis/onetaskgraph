@@ -357,6 +357,29 @@ fn a_verification_read_that_fails_after_the_write_is_refused_with_the_recovery_d
 }
 
 #[test]
+fn a_priority_field_status_options_does_not_own_cannot_refuse_it() {
+    let (sandbox, board) = configured();
+    board.recolor_priority_option("High", "TEAL");
+    // The Status-only form reads Status alone, exactly as it always did.
+    let status = report(&sandbox, &["--json", "sources", "status-options", "board"]);
+    assert_eq!(status["missing"], json!([]));
+    assert_eq!(status["outcome"], "planned");
+    // The whole setup owns the Priority field, and refuses an answer it cannot read.
+    let output = sandbox
+        .command()
+        .args(["sources", "fields", "board"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stderr(&output).contains("GitHub single-select option color is invalid"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn drift_after_the_write_is_refused_with_the_pre_write_assignments() {
     let (sandbox, board) = configured();
     board.without_priority_option("Medium");

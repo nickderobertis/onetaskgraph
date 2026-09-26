@@ -1021,6 +1021,20 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().hides_after_update = true;
     }
 
+    /// Give one `Priority` option a colour GitHub's vocabulary has no member for, as a board
+    /// answering with something this product cannot read would.
+    pub fn recolor_priority_option(&self, name: &str, color: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .priority_options
+            .as_mut()
+            .expect("the board has a Priority field")
+            .iter_mut()
+            .find(|option| option["name"] == json!(name))
+            .expect("the option to recolour exists");
+        option["color"] = json!(color);
+    }
+
     /// Make every `Priority` value write answer as landed without the board keeping it.
     pub fn drop_priority_writes(&self) {
         self.board.lock().unwrap().drops_priority_writes = true;
