@@ -4007,8 +4007,6 @@ fn sent(request: &str) -> serde_json::Value {
     serde_json::from_str(body).expect("the body is JSON")
 }
 
-/// What `issue(id:)` answers for an issue this workspace holds under the backend id `id`.
-///
 /// The `identifier` Linear gives one issue, derived from its id so a fixture and what a
 /// test asserts about it cannot drift.
 ///
@@ -4019,6 +4017,8 @@ fn identifier(id: &str) -> String {
     format!("ENG-{}", id.replace('-', ""))
 }
 
+/// What `issue(id:)` answers for an issue this workspace holds under the backend id `id`.
+///
 /// Every comment write resolves its task through `get_task` first, so every one of them
 /// begins with this answer.
 fn held_issue(id: &str) -> serde_json::Value {

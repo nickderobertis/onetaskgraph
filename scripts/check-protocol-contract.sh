@@ -617,26 +617,14 @@ STRUCT_SECTIONS = {
 }
 
 # A member specified in a section of its own, rather than as part of a struct the map
-# above reconciles whole.
+# above reconciles whole. `Task` cannot go in STRUCT_SECTIONS: no section enumerates a
+# task's members — §4.13 and §4.13a each explain one — so a struct-level entry would demand
+# a section naming every member, which is a different document rather than a drift check.
 #
-# `Task` is not in STRUCT_SECTIONS and adding it would be a different document: no section
-# enumerates a task's members, because this one describes the members that need explaining
-# one at a time — §4.13 for `location`, §4.13a for `key` — while §4.4 simply says the
-# result *is* a `Task`. A struct-level entry would therefore demand that every member of
-# `Task` be named somewhere, which is a change to how this document is written rather than
-# a drift check.
-#
-# What this reconciles is the pair: the field has to be on the Rust struct, and the section
-# has to name it. So the field cannot be removed or renamed while the document goes on
-# specifying it, and the section cannot be renamed or dropped while the field remains.
-#
-# The value is the section plus the facts about the member's WIRE FORM that the section
-# states and the Rust declaration decides. Both sides are checked against this table rather
-# than against each other, so the table is the one place the pair is written down: a member
-# that stops being an `Option`, or loses its serde default, fails here even though the
-# document still reads correctly, and a section that stops saying so fails even though the
-# Rust is unchanged. Checking only that both spell the name would leave exactly that drift
-# invisible, which is the drift that matters — §6 rests on this member being omissible.
+# Each entry is reconciled against both sides: the Rust field exists, is an `Option` and
+# carries its serde default as recorded, and the section's body names the member and says
+# the recorded words — so neither side can drift from what §6 rests on while the other
+# still reads correctly.
 MEMBER_SECTIONS = {
     ("Task", "key"): {
         "heading": "### 4.13a A task's `key`",

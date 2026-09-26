@@ -292,13 +292,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
 
 
 def _generated_task_fields() -> set[str]:
-    """The field names of the `Task` model this package generated and ships.
-
-    Read off the model rather than the schema, because the schema is the *input* to
-    generation: a bundle that carries a property while the generated model does not is
-    exactly the drift the version is supposed to make visible, and comparing the schema with
-    itself would not see it.
-    """
+    """The field names of the `Task` model this package generated and ships."""
     from onetaskgraph_sdk._generated.task_detail import Task
 
     return set(Task.model_fields)

@@ -4885,15 +4885,14 @@ impl GitHubProjectsSource {
         // a response without it is not worth failing a landed write over — the item simply
         // reports no location until the board read catches up, which is what it did before.
         let url = optional_str(created, "url")?.map(str::to_owned);
-        // The issue exists from here on, so every failure past this point takes it back:
-        // an issue in the repository that is on no board is an item nobody asked for and
-        // nothing here would find again.
+        // The issue exists from here on, so an unreadable number and a refused board
+        // filing below each try, best effort, to take it back: an issue in the repository
+        // that is on no board is an item nobody asked for and nothing here would find again.
         //
         // Its number is optional on the same terms its address is — a landed write is not
         // worth failing over a member that came back missing, and such an item reports no
         // handle until a board read catches up. A number that is *present* and is not an
-        // unsigned integer is still a response this source cannot read, and that refusal
-        // owes the take-back exactly as a refused board filing does.
+        // unsigned integer is still a response this source cannot read.
         let number = match created_issue_number(created) {
             Ok(number) => number,
             Err(error) => {

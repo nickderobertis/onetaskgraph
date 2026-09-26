@@ -27,8 +27,9 @@ pub struct Task {
     /// short handle for this task* rather than *the handle is the id*. A source never
     /// copies [`id`](Self::id) here.
     ///
-    /// **Read-only.** A source derives it, no write type accepts one, and
-    /// [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+    /// **Read-only.** A source derives it on a read and never stores one it is handed: a
+    /// task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+    /// and a destination ignores it.
     // llmlint: ignore[invalid_states_unrepresentable] The answer `Task::url` and `Project::url` below already record: this crate's field types are the contract itself, and the contract approving this field states its shape as `Option<String>`. A backend's handle is also the one value this product never parses, matches on or resolves by — `id` does all three — so the confusion a newtype prevents is confusion no code here can act on.
     #[serde(default)]
     pub key: Option<String>,

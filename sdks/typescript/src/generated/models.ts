@@ -1996,8 +1996,9 @@ id: string
  * short handle for this task* rather than *the handle is the id*. A source never
  * copies [`id`](Self::id) here.
  *
- * **Read-only.** A source derives it, no write type accepts one, and
- * [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+ * **Read-only.** A source derives it on a read and never stores one it is handed: a
+ * task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+ * and a destination ignores it.
  */
 key?: (string | null)
 /**
@@ -2781,8 +2782,9 @@ id: string
  * short handle for this task* rather than *the handle is the id*. A source never
  * copies [`id`](Self::id) here.
  *
- * **Read-only.** A source derives it, no write type accepts one, and
- * [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+ * **Read-only.** A source derives it on a read and never stores one it is handed: a
+ * task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+ * and a destination ignores it.
  */
 key?: (string | null)
 /**
@@ -4192,8 +4194,9 @@ id: string
  * short handle for this task* rather than *the handle is the id*. A source never
  * copies [`id`](Self::id) here.
  *
- * **Read-only.** A source derives it, no write type accepts one, and
- * [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+ * **Read-only.** A source derives it on a read and never stores one it is handed: a
+ * task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+ * and a destination ignores it.
  */
 key?: (string | null)
 /**
@@ -5357,8 +5360,9 @@ id: string
  * short handle for this task* rather than *the handle is the id*. A source never
  * copies [`id`](Self::id) here.
  *
- * **Read-only.** A source derives it, no write type accepts one, and
- * [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+ * **Read-only.** A source derives it on a read and never stores one it is handed: a
+ * task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+ * and a destination ignores it.
  */
 key?: (string | null)
 /**
@@ -5724,8 +5728,9 @@ id: string
  * short handle for this task* rather than *the handle is the id*. A source never
  * copies [`id`](Self::id) here.
  *
- * **Read-only.** A source derives it, no write type accepts one, and
- * [`ItemWrite`](crate::ItemWrite) carries nothing for it.
+ * **Read-only.** A source derives it on a read and never stores one it is handed: a
+ * task arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,
+ * and a destination ignores it.
  */
 key?: (string | null)
 /**

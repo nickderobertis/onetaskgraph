@@ -444,8 +444,8 @@ impl TaskSource for InMemorySource {
     }
 
     /// The incoming task's `key` is dropped rather than refused, and the two halves of
-    /// that are one rule. A key is read-only — a source derives it and no write carries
-    /// one — so an `ItemWrite` arriving with one is an item read somewhere that *has* a
+    /// that are one rule. A key is read-only — a source derives it and never stores one it
+    /// is handed — so an `ItemWrite` arriving with one is an item read somewhere that *has* a
     /// handle, on its way into a source that does not, and refusing it would stop a copy
     /// out of Linear or a GitHub board landing here at all. What is refused instead is a
     /// key written down in this source's own configuration, where nobody is copying

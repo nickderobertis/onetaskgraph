@@ -788,8 +788,8 @@ It is **human-facing and it may change**: an issue moved between teams or transf
 between repositories gets a new one. So `id` stays what the engine and every consumer
 store and match on, and nothing resolves a task by its key.
 
-It is **read-only**. A plugin derives it on a read; no write carries one, an `ItemWrite`
-whose task holds one is read exactly as one that does not, and a plugin never stores it.
+It is **read-only**. A plugin derives it on a read and never stores one it is handed: an
+`ItemWrite` whose task holds one is read exactly as one that does not.
 A `Project` and a `Document` have no `key` at all.
 
 ### 4.14 `metering`

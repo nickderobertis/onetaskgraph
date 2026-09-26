@@ -1419,8 +1419,8 @@ fn source_name_validation_agrees_with_the_pattern_it_publishes() {
 fn outgoing() -> Task {
     Task {
         id: NativeId::from("T-1"),
-        // A write never carries a handle: a source derives one on a read, and a
-        // destination writing this item derives its own or has none.
+        // No handle: this item is authored for a write rather than read from a source,
+        // and a source derives a handle only on a read.
         key: None,
         title: "Alpha engine".to_owned(),
         content: None,
