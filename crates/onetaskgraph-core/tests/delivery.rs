@@ -14,7 +14,7 @@ use onetaskgraph_core::{
     TaskRequest, settled,
 };
 use onetaskgraph_plugin_api::{
-    SecretResolver, SourceError, SourceName, StatusCategory, TaskRef, TextFields, TextQuery,
+    SecretResolver, SourceName, StatusCategory, TaskRef, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -594,6 +594,7 @@ fn reads_as_written(failure: &Failure) {
     );
 }
 
+#[cfg(unix)]
 fn failure_of(entry: &Delivered) -> &Failure {
     match &entry.outcome {
         DeliveryOutcome::Failed { failure, .. } => failure,
@@ -604,6 +605,8 @@ fn failure_of(entry: &Delivered) -> &Failure {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_linking_caller_reads_a_delivered_tickets_failure_through_its_getters() {
+    use onetaskgraph_plugin_api::SourceError;
+
     // A real child refusing its handshake, because a transient failure a stand-in fakes is
     // not the one a linking caller is handed.
     let rate_limited = r#"read -r _request
