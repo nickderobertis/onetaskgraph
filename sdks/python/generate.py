@@ -689,8 +689,52 @@ def enum_defaults(lines: list[str]) -> list[str]:
     return rewritten
 
 
-def format_generated(destination: Path) -> None:
-    """Apply the package's locked formatter to deterministic generated output."""
+# Defaulted contract members that are never nullable: an omitted one takes its default — which
+# is how a document written before the member existed is read — and an explicit `null` is
+# refused, because the binary always writes the member and never writes `null` for it. The code
+# generator types every defaulted member `T | None`, so each of these is narrowed by name, and
+# only these: the rule is scoped to the members the priority contract added, keyed by the name
+# and the type it is declared with.
+NON_NULLABLE_DEFAULTED: dict[str, set[str]] = {
+    # `Task.priority`, defaulted to `none`.
+    "priority": {"Priority", "Support"},
+    # `Capabilities.priority` above and `Capabilities.filter_by_priority`, defaulted to
+    # `unsupported`.
+    "filter_by_priority": {"Support"},
+}
+
+
+def non_nullable_defaults(lines: list[str]) -> tuple[list[str], set[tuple[str, str]]]:
+    """Narrow each member [`NON_NULLABLE_DEFAULTED`] names from `T | None` to `T`.
+
+    Answers the rewritten lines and every (member, type) it narrowed, so the caller can refuse a
+    bundle in which one of them no longer appears rather than silently stop narrowing it. A
+    member whose default is `None` is left alone: narrowing it would make the default invalid.
+    """
+    rewritten = list(lines)
+    narrowed: set[tuple[str, str]] = set()
+    for index, line in enumerate(lines):
+        member = re.fullmatch(r"    (\w+): Annotated\[", line)
+        if member is None or member.group(1) not in NON_NULLABLE_DEFAULTED:
+            continue
+        name = member.group(1)
+        typed = re.fullmatch(r"        (\w+) \| None,", lines[index + 1])
+        if typed is None or typed.group(1) not in NON_NULLABLE_DEFAULTED[name]:
+            continue
+        closing = next((later for later in lines[index + 2 :] if later.startswith("    ]")), "")
+        if closing.endswith("= None"):
+            continue
+        rewritten[index + 1] = f"        {typed.group(1)},"
+        narrowed.add((name, typed.group(1)))
+    return rewritten, narrowed
+
+
+def format_generated(destination: Path) -> set[tuple[str, str]]:
+    """Apply the package's locked formatter to deterministic generated output.
+
+    Answers every (member, type) [`non_nullable_defaults`] narrowed, for [`generate`] to hold
+    against [`NON_NULLABLE_DEFAULTED`] over the whole package.
+    """
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
     subprocess.run(
         # `I001` alongside `F401` because the package's own lint enforces import order and
@@ -704,12 +748,15 @@ def format_generated(destination: Path) -> None:
     # After formatting rather than before it: the shape a field is written in is the
     # formatter's, and reading it back is what lets this be one rule rather than a guess
     # at what the code generator happened to emit on one line or several.
+    narrowed: set[tuple[str, str]] = set()
     for module in sorted(destination.glob("*.py")):
         lines = module.read_text(encoding="utf-8").splitlines()
-        rewritten = enum_defaults(lines)
+        rewritten, found = non_nullable_defaults(enum_defaults(lines))
+        narrowed |= found
         if rewritten != lines:
             module.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
+    return narrowed
 
 
 def check_generated(expected_dir: Path, actual_dir: Path) -> None:
@@ -762,7 +809,19 @@ def generate(bundle: SchemaBundle, *, check: bool, destination: Path = GENERATED
         target = Path(temporary) if check else destination
         generate_models(bundle, target)
         generate_client(commands, target)
-        format_generated(target)
+        narrowed = format_generated(target)
+        # Over the whole package: every member the table names has to have been found, so a
+        # contract member renamed or retyped fails generation rather than quietly going
+        # nullable again.
+        expected = {
+            (name, kind) for name, kinds in NON_NULLABLE_DEFAULTED.items() for kind in kinds
+        }
+        if narrowed != expected:
+            raise SystemExit(
+                "generate.py narrows the non-nullable defaulted members "
+                f"{sorted(expected)}, and the bundle yielded {sorted(narrowed)}; next: update "
+                "NON_NULLABLE_DEFAULTED to the members the contract really declares"
+            )
         if check:
             check_generated(target, destination)
 

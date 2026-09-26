@@ -121,7 +121,7 @@ class Capabilities(BaseModel):
         Support, Field(description="Whether the source filters by label itself.")
     ]
     filter_by_priority: Annotated[
-        Support | None,
+        Support,
         Field(
             description="Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
         ),
@@ -141,7 +141,7 @@ class Capabilities(BaseModel):
         Field(description="Whether the source can select tasks belonging to no project."),
     ]
     priority: Annotated[
-        Support | None,
+        Support,
         Field(
             description="Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
         ),

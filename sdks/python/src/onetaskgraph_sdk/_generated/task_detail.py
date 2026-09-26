@@ -326,7 +326,7 @@ class Task(BaseModel):
         ),
     ] = {}
     priority: Annotated[
-        Priority | None,
+        Priority,
         Field(
             description="The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
         ),
