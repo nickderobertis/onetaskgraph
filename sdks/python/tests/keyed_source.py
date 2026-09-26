@@ -7,20 +7,93 @@ peer, spoken to over `docs/plugin-protocol.md` exactly as the engine speaks to a
 holds two tasks: one whose backend gave it a handle, and one sent the way a plugin written
 before `key` existed sends a task, with no `key` member at all (§4.13a).
 
-It is spawned with a cleared environment (§3.1), so it imports only the standard library.
+It is spawned with a cleared environment (§3.1), so it imports only the standard library —
+and none of the SDK's own models, so what the SDK decodes is not its own types read back.
 """
 
 import json
 import sys
+from dataclasses import dataclass
+from typing import Literal, NotRequired, TypedDict
 
 KIND = "keyed-source"
 PROTOCOL_VERSION = 2
 
-TASKS = [
-    {
-        "id": "iss_8f2c",
-        "key": "ENG-7",
-        "title": "Engine handle",
+type Support = Literal["native", "unsupported"]
+type DependencySupport = Literal["both-directions", "forward-only"]
+
+
+class Status(TypedDict):
+    """A task's status, as `get_task` and `query_tasks` send it (§4.4, §4.5)."""
+
+    category: str
+    name: str
+
+
+class Task(TypedDict):
+    """A task on the wire (§4.4); `key` is left out entirely where the backend has none."""
+
+    id: str
+    key: NotRequired[str]
+    title: str
+    content: str | None
+    status: Status
+    labels: list[dict[str, str]]
+    project: str | None
+    url: str | None
+    location: dict[str, str] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class Capabilities(TypedDict):
+    """What this source declares once, at the handshake (§4.2)."""
+
+    projects: Support
+    documents: Support
+    orphan_tasks: Support
+    filter_by_label: Support
+    filter_by_status: Support
+    search_title: Support
+    search_content: Support
+    task_dependencies: DependencySupport
+    project_dependencies: DependencySupport
+    max_page_size: int
+
+
+class SourceError(TypedDict):
+    """The contract's `SourceError`, in its serialized shape (§5)."""
+
+    kind: Literal["malformed"]
+    message: str
+
+
+class Answered(TypedDict):
+    """A response carrying a result (§2)."""
+
+    result: object
+
+
+class Refused(TypedDict):
+    """A response carrying an error (§2)."""
+
+    error: SourceError
+
+
+@dataclass(frozen=True)
+class Request:
+    """One request line (§2): an `id` to echo, the method, and its object `params`."""
+
+    id: str
+    method: str
+    params: dict[str, object]
+
+
+def unfiled(identifier: str, title: str) -> Task:
+    """A task in no project, with nothing but its id and title to tell it apart."""
+    return {
+        "id": identifier,
+        "title": title,
         "content": None,
         "status": {"category": "todo", "name": "Todo"},
         "labels": [],
@@ -29,24 +102,17 @@ TASKS = [
         "location": None,
         "created_at": None,
         "updated_at": None,
-    },
-    {
-        "id": "iss_91d0",
-        "title": "Engine without a handle",
-        "content": None,
-        "status": {"category": "todo", "name": "Todo"},
-        "labels": [],
-        "project": None,
-        "url": None,
-        "location": None,
-        "created_at": None,
-        "updated_at": None,
-    },
+    }
+
+
+TASKS: list[Task] = [
+    {**unfiled("iss_8f2c", "Engine handle"), "key": "ENG-7"},
+    unfiled("iss_91d0", "Engine without a handle"),
 ]
 
 # Everything a query could narrow by is declared unsupported, so this peer answers every
 # `query_tasks` with the whole set and the engine applies the predicates itself (rule 2).
-CAPABILITIES = {
+CAPABILITIES: Capabilities = {
     "projects": "unsupported",
     "documents": "unsupported",
     "orphan_tasks": "native",
@@ -60,9 +126,9 @@ CAPABILITIES = {
 }
 
 
-def answer(method: str, params: dict[str, object]) -> dict[str, object]:
+def answer(request: Request) -> Answered | Refused:
     """The result for one method, or a `SourceError` for one this source does not serve."""
-    match method:
+    match request.method:
         case "initialize":
             return {
                 "result": {
@@ -75,32 +141,32 @@ def answer(method: str, params: dict[str, object]) -> dict[str, object]:
         case "health":
             return {"result": {"reachable": True, "detail": f"{len(TASKS)} task(s)"}}
         case "get_task":
-            found = [task for task in TASKS if task["id"] == params.get("id")]
+            found = [task for task in TASKS if task["id"] == request.params.get("id")]
             return {"result": {"task": found[0] if found else None}}
         case "query_tasks":
             return {"result": {"items": TASKS, "next": None}}
         case "labels" | "task_dependencies":
             return {"result": {"items": [], "next": None}}
-        case _:
+        case method:
             message = (
                 f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
             )
             return {"error": {"kind": "malformed", "message": message}}
 
 
-def request_of(line: str) -> tuple[str, str, dict[str, object]] | None:
-    """The `id`, `method` and `params` of one request line (§2), or `None` if it has none.
+def request_of(line: str) -> Request | None:
+    """One request line read into its shape, or `None` if it is not a request.
 
     A line without a string `id` has no address a response could echo, so it is set aside on
     stderr rather than answered.
     """
     try:
-        request = json.loads(line)
+        decoded = json.loads(line)
     except ValueError:
         return None
-    match request:
+    match decoded:
         case {"id": str(identifier), "method": str(method), "params": dict(params)}:
-            return identifier, method, params
+            return Request(identifier, method, params)
         case _:
             return None
 
@@ -114,9 +180,7 @@ def main() -> None:
         if request is None:
             print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
             continue
-        identifier, method, params = request
-        reply = {"id": identifier, **answer(method, params)}
-        sys.stdout.write(json.dumps(reply) + "\n")
+        sys.stdout.write(json.dumps({"id": request.id, **answer(request)}) + "\n")
         sys.stdout.flush()
 
 
