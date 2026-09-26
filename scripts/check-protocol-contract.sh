@@ -745,9 +745,10 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
             )
     # The section BODY, not the heading: a heading that names the member — this one does —
     # would satisfy `spelled` on its own, and a section reduced to its title would pass a
-    # check that was supposed to notice exactly that.
+    # check that was supposed to notice exactly that. HTML comments are not the section
+    # either: a lint directive inside it names the member too, and a reader never sees it.
     whole = section(heading)
-    body = whole.split("\n", 1)[1] if "\n" in whole else ""
+    body = re.sub(r"<!--.*?-->", "", whole.split("\n", 1)[1] if "\n" in whole else "", flags=re.DOTALL)
     if not spelled(member, body):
         failures.append(
             f'`{struct}` carries the field "{member}" but "{heading}", which is the '
