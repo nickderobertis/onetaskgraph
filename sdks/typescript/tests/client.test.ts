@@ -858,6 +858,15 @@ test("sources fields forwards apply through the executable boundary", async () =
       ["Status", "unchanged"],
       ["Priority", "created"],
     ]);
+
+    // One board, answered whole or not at all: exit 4 is no answer this verb gives, so a
+    // report beside it is refused rather than read as a partial one.
+    const partialClient = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "fields-partial", JSON.stringify(report), "", 4),
+    });
+    const refused = partialClient.sourcesFields("board");
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 4 });
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }

@@ -123,12 +123,14 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
-// set`, for the same reason.
+// set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
+// fails.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
       command !== "config show" &&
       command !== "sources list" &&
+      command !== "sources fields" &&
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
