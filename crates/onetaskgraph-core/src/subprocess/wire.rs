@@ -16,8 +16,8 @@ use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
-    Metering, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SourceError, Status,
-    StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
+    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
+    SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -287,6 +287,12 @@ pub(crate) struct InitializeResult {
     /// and each is refused by name before anything is sent.
     #[serde(default)]
     pub(crate) metadata_updates: bool,
+    /// Whether this plugin answers `set_task_content` (§3.9).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// content write naming it is refused by name before anything is sent.
+    #[serde(default)]
+    pub(crate) content_updates: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -517,6 +523,56 @@ pub(crate) struct StatusResult {
     /// The status, or `null`.
     #[serde(default)]
     pub(crate) status: Option<Status>,
+}
+
+/// `set_task_priority` parameters (§4.19).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PriorityParams {
+    /// The task whose priority is set.
+    pub(crate) id: NativeId,
+    /// The priority to set it to; `none` clears it.
+    pub(crate) priority: Priority,
+}
+
+/// The `set_task_priority` result (§4.19): the priority as the plugin now reads it, or
+/// `null` when there is no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PriorityResult {
+    /// The priority, or `null`. Required: an answer without the member says nothing about
+    /// whether the task is there, so it is malformed rather than read as `null`.
+    #[serde(deserialize_with = "present")]
+    pub(crate) priority: Option<Priority>,
+}
+
+/// `set_task_content` parameters (§4.20).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ContentParams {
+    /// The task whose content is replaced.
+    pub(crate) id: NativeId,
+    /// What it holds afterwards, byte for byte.
+    pub(crate) content: String,
+}
+
+/// The `set_task_content` result (§4.20): the id of the task written, or `null` when there is
+/// no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ContentResult {
+    /// The task's id, or `null`. Required, for the reason [`PriorityResult::priority`] is.
+    #[serde(deserialize_with = "present")]
+    pub(crate) id: Option<NativeId>,
+}
+
+/// A member that may be `null` and may not be absent.
+///
+/// Serde reads an absent `Option` member as `None` of its own accord; naming a deserializer
+/// takes that away, so an answer that leaves the member out is refused as the malformed
+/// answer it is rather than read as one saying there is no such task.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 /// `set_delivered_by` parameters (§4.17).

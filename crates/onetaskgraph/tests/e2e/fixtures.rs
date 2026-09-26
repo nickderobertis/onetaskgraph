@@ -152,6 +152,14 @@ pub struct Declared {
     /// Not a predicate either, on exactly the terms [`Self::documents`] is not: it says what
     /// the source holds, and a source declaring it unsupported is never sent a comment call.
     pub comments: Support,
+    /// Whether the source's tasks hold a priority at all.
+    ///
+    /// Not a predicate either, on the terms [`Self::documents`] is not: it says what the
+    /// source holds, and a source declaring it unsupported reports every task at `none` and
+    /// is never handed another priority.
+    pub priority: Support,
+    /// Whether the source keeps only the tasks whose priority a query lists, itself.
+    pub filter_by_priority: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -181,6 +189,8 @@ impl Declared {
             projects: self.projects,
             documents: self.documents,
             comments: self.comments,
+            priority: self.priority,
+            filter_by_priority: self.filter_by_priority,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -215,6 +225,12 @@ impl Declared {
             support("projects", claimed.projects, reported.projects),
             support("documents", claimed.documents, reported.documents),
             support("comments", claimed.comments, reported.comments),
+            support("priority", claimed.priority, reported.priority),
+            support(
+                "filter_by_priority",
+                claimed.filter_by_priority,
+                reported.filter_by_priority,
+            ),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
                 "filter_by_label",
@@ -387,6 +403,7 @@ pub const ROWS: &[Row] = &[
             declared: Declared {
                 documents: Support::Native,
                 comments: Support::Native,
+                priority: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
@@ -415,6 +432,10 @@ pub const ROWS: &[Row] = &[
                 // compensation with no coverage, not less of it.
                 documents: Support::Native,
                 comments: Support::Native,
+                // Held for the reason `documents` is: a task's priority is what the priority
+                // filter this row leaves to the engine compares against.
+                priority: Support::Native,
+                filter_by_priority: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -438,6 +459,7 @@ pub const ROWS: &[Row] = &[
             declared: Declared {
                 documents: Support::Native,
                 comments: Support::Native,
+                priority: Support::Native,
                 ..EVERY_PREDICATE_NATIVE
             },
         },
@@ -461,6 +483,8 @@ pub const ROWS: &[Row] = &[
                 documents: Support::Native,
                 // A trailing section of each task's own file.
                 comments: Support::Native,
+                // A `priority:` key in a task's front matter.
+                priority: Support::Native,
                 max_page_size: 200,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -496,6 +520,12 @@ pub const ROWS: &[Row] = &[
                 documents: Support::Native,
                 // A Linear issue's own comments.
                 comments: Support::Native,
+                // Linear's own issue priority, 0 to 4.
+                priority: Support::Native,
+                // Unimplemented rather than unsupportable, as the searches are, and so the
+                // engine narrows: this row is the one that proves that against a real remote
+                // protocol.
+                filter_by_priority: Support::Unsupported,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
@@ -533,6 +563,8 @@ pub const ROWS: &[Row] = &[
                 documents: Support::Native,
                 // An issue's own comments; a draft has none, and says so.
                 comments: Support::Native,
+                // The board's `Priority` field, which this row's configuration maps.
+                priority: Support::Native,
                 max_page_size: 100,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -575,6 +607,10 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     // native" says nothing about whether a source's tasks have comments. The rows whose
     // source really does hold them override it.
     comments: Support::Unsupported,
+    // Unsupported here for the reason `documents` is: whether a source's tasks hold a
+    // priority is not a predicate. Every row whose source holds one overrides it.
+    priority: Support::Unsupported,
+    filter_by_priority: Support::Native,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,
@@ -643,7 +679,7 @@ fn github_item(
            "state":at.state.0,"reason":at.state.1,
            "parent":at.parent.map_or(Value::Null, |id| json!(id)),
            "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":"",
-           "labels":labels})
+           "priority":at.priority,"labels":labels})
 }
 
 /// Where one fixture item sits on the board.
@@ -658,6 +694,8 @@ struct Placement<'a> {
     state: (&'a str, Option<&'a str>),
     /// The issue this one is filed under, which is what project membership is here.
     parent: Option<&'a str>,
+    /// The name of the board `Priority` option on this item, when it has one.
+    priority: Option<&'a str>,
 }
 
 fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
@@ -677,6 +715,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Todo",
                 state: ("OPEN", None),
                 parent: Some("P-1"),
+                priority: Some("High"),
             },
             json!([["L-1", "bug"], ["L-3", "core"]]),
             json!({"onepipeline.turn_budget":12,"caller.flags":[true,null],
@@ -691,6 +730,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Shipped",
                 state: ("CLOSED", Some("COMPLETED")),
                 parent: Some("P-1"),
+                priority: None,
             },
             json!([["L-2", "chore"]]),
             json!({}),
@@ -703,6 +743,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Todo",
                 state: ("OPEN", None),
                 parent: None,
+                priority: Some("Urgent"),
             },
             json!([["L-1", "bug"]]),
             json!({}),
@@ -715,6 +756,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Doing",
                 state: ("OPEN", None),
                 parent: Some("P-2"),
+                priority: Some("Low"),
             },
             json!([["L-3", "core"]]),
             json!({}),
@@ -727,6 +769,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Doing",
                 state: ("OPEN", None),
                 parent: None,
+                priority: None,
             },
             json!([["L-3", "core"]]),
             marked(json!({"onepipeline.publication":{"mode":"review"},
@@ -740,6 +783,7 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 status: "Todo",
                 state: ("OPEN", None),
                 parent: None,
+                priority: None,
             },
             json!([]),
             marked(json!({})),
@@ -801,6 +845,7 @@ fn github_document(
             status: "Todo",
             state: ("OPEN", None),
             parent,
+            priority: None,
         },
         labels,
         slot,
@@ -858,6 +903,27 @@ struct GitHubBoard {
     variables: Vec<Value>,
     /// The Status field's whole option set, replaced exactly as GitHub replaces it.
     status_options: Vec<Value>,
+    /// The `Priority` field's whole option set, or `None` for a board without the field.
+    priority_options: Option<Vec<Value>>,
+    /// Whether the next whole-list update of the `Priority` field deliberately changes an
+    /// item's value, as `drift_after_status_update` does for `Status`.
+    drift_after_priority_update: bool,
+    /// Whether a `Priority` value write is answered as landed and not kept.
+    drops_priority_writes: bool,
+    /// Whether the board goes out of the token's sight after the next option-list update.
+    hides_after_update: bool,
+    /// Whether the next `Priority` option-list update re-mints a pre-existing option's id.
+    remints_after_priority_update: bool,
+    /// Whether the next `Priority` option-list update drops the option it was asked to add.
+    omits_added_priority_option: bool,
+    /// Fields of a person's own beside the ones this product sets up, each with one item's
+    /// value of it.
+    persons_fields: Vec<Value>,
+    /// Whether the `Priority` field answers its `options` as something other than a list.
+    malformed_priority_options: bool,
+    /// A field whose value the board snapshot answers twice on `T-1`, the second time naming
+    /// another of that field's options.
+    repeated_snapshot_value: Option<&'static str>,
     /// Whether the next whole-list update deliberately changes an assignment.
     drift_after_status_update: bool,
     remint_after_status_update: bool,
@@ -946,6 +1012,133 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().status_snapshot_page_size = Some(2);
     }
 
+    /// Make the fixture change one item's `Priority` value after the next update of that
+    /// field's option list.
+    pub fn drift_after_priority_update(&self) {
+        self.board.lock().unwrap().drift_after_priority_update = true;
+    }
+
+    /// Give the board a single-select field of a person's own, `field`, holding the first of
+    /// its options on `T-1`.
+    pub fn with_persons_field(&self, field: Value) {
+        self.board.lock().unwrap().persons_fields.push(field);
+    }
+
+    /// Make the board answer its `Priority` field's `options` as a string rather than a list,
+    /// as a response this product cannot read would — in the board's field list and in every
+    /// item value that carries the field's definition alike.
+    pub fn malform_priority_options(&self) {
+        self.board.lock().unwrap().malformed_priority_options = true;
+    }
+
+    /// Make the board snapshot answer `field`'s value on `T-1` twice, the second time naming
+    /// that field's last option, as a response that cannot say which one the item holds.
+    pub fn repeat_snapshot_value(&self, field: &'static str) {
+        self.board.lock().unwrap().repeated_snapshot_value = Some(field);
+    }
+
+    /// Make the next `Priority` option-list update change one pre-existing option's id.
+    pub fn remint_after_priority_update(&self) {
+        self.board.lock().unwrap().remints_after_priority_update = true;
+    }
+
+    /// Make the next `Priority` option-list update leave out the option it was asked to add.
+    pub fn omit_added_priority_option(&self) {
+        self.board.lock().unwrap().omits_added_priority_option = true;
+    }
+
+    /// Make the board go out of the token's sight once the next `Priority` option-list update
+    /// has landed, so the read that would verify it fails.
+    pub fn hide_after_update(&self) {
+        self.board.lock().unwrap().hides_after_update = true;
+    }
+
+    /// Give one `Priority` option a colour GitHub's vocabulary has no member for, as a board
+    /// answering with something this product cannot read would.
+    pub fn recolor_priority_option(&self, name: &str, color: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .priority_options
+            .as_mut()
+            .expect("the board has a Priority field")
+            .iter_mut()
+            .find(|option| option["name"] == json!(name))
+            .expect("the option to recolour exists");
+        option["color"] = json!(color);
+    }
+
+    /// Make every `Priority` value write answer as landed without the board keeping it.
+    pub fn drop_priority_writes(&self) {
+        self.board.lock().unwrap().drops_priority_writes = true;
+    }
+
+    /// Remove the board's `Priority` field entirely, and every item's value of it.
+    pub fn without_priority_field(&self) {
+        let mut board = self.board.lock().unwrap();
+        board.priority_options = None;
+        for item in &mut board.items {
+            item["priority"] = Value::Null;
+        }
+    }
+
+    /// Take one `Priority` option off this board, and every item's value of it.
+    pub fn without_priority_option(&self, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        if let Some(options) = &mut board.priority_options {
+            options.retain(|option| option["name"] != json!(name));
+        }
+        for item in &mut board.items {
+            if item["priority"] == json!(name) {
+                item["priority"] = Value::Null;
+            }
+        }
+    }
+
+    /// Give the `Priority` field one more option, as a person adding a column would.
+    pub fn with_priority_option(&self, id: &str, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        board
+            .priority_options
+            .as_mut()
+            .expect("the board has a Priority field")
+            .push(json!({"id":id,"name":name,"color":"PINK","description":"a person's"}));
+    }
+
+    /// Put one item in the `Priority` option named `name`, or in none.
+    pub fn assign_priority(&self, id: &str, name: Option<&str>) {
+        let mut board = self.board.lock().unwrap();
+        let held = board
+            .items
+            .iter_mut()
+            .find(|item| item["id"] == json!(id))
+            .expect("the item to assign exists");
+        held["priority"] = name.map_or(Value::Null, |name| json!(name));
+    }
+
+    /// The name of the `Priority` option one item sits in, or `None`.
+    #[must_use]
+    pub fn priority(&self, id: &str) -> Option<String> {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["priority"].as_str().map(str::to_owned))
+    }
+
+    /// The `Priority` field's options, or `None` when the board has no such field.
+    #[must_use]
+    pub fn priority_options(&self) -> Option<Vec<Value>> {
+        self.board.lock().unwrap().priority_options.clone()
+    }
+
+    /// The Status field's options.
+    #[must_use]
+    pub fn status_options(&self) -> Vec<Value> {
+        self.board.lock().unwrap().status_options.clone()
+    }
+
     /// Remove the board's Status field entirely.
     pub fn without_status_field(&self) {
         self.board.lock().unwrap().status_field_present = false;
@@ -1031,6 +1224,17 @@ impl GitHubBoard {
         Value::Array(self.status_options.clone())
     }
 
+    /// The `Priority` field's options as every read that defines the field answers them, or
+    /// `None` for a board without the field.
+    fn priority_field_options(&self) -> Option<Value> {
+        let options = self.priority_options.as_ref()?;
+        Some(if self.malformed_priority_options {
+            json!("Urgent, High, Medium, Low")
+        } else {
+            json!(options)
+        })
+    }
+
     fn fields(&self) -> Value {
         let mut nodes = vec![json!({"__typename":"ProjectV2Field","id":"FIELD-origin",
             "name":"onetaskgraph.origin"})];
@@ -1041,6 +1245,11 @@ impl GitHubBoard {
                 "id":"FIELD-status","name":"Status","options":self.options()}),
             );
         }
+        if let Some(options) = self.priority_field_options() {
+            nodes.push(json!({"__typename":"ProjectV2SingleSelectField",
+                "id":"FIELD-priority","name":"Priority","options":options}));
+        }
+        nodes.extend(self.persons_fields.iter().cloned());
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -1131,11 +1340,21 @@ impl GitHubBoard {
     fn rendered(&self, item: &Value) -> Value {
         // No board field value carries labels: no document this source sends selects the
         // board's built-in `Labels` field, so an item's labels are its content's alone.
-        let values = vec![
+        let mut values = vec![
             json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
                    "options":self.options()}}),
             json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
         ];
+        // An item with no `Priority` value carries no node for the field, as GitHub leaves
+        // an empty single-select out of `fieldValues`.
+        if let (Some(name), Some(options)) =
+            (item["priority"].as_str(), self.priority_field_options())
+        {
+            values.push(
+                json!({"name":name,"field":{"id":"FIELD-priority","name":"Priority",
+                               "options":options}}),
+            );
+        }
         json!({"id":item["item"],
                "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
                "content":self.content(item)})
@@ -1181,6 +1400,14 @@ fn github_projects_server(sandbox: &Sandbox, recorded: Option<Value>) -> Value {
 /// GitHub records the account a token belongs to as the author of every comment made with
 /// it, and this board's token is its owner's.
 pub const GITHUB_COMMENTER: &str = "fixture-owner";
+
+/// The shared board, refusing each operation `fail_first` names once, with its handle.
+pub fn github_projects_with_board_failing(
+    sandbox: &Sandbox,
+    fail_first: &'static [&'static str],
+) -> (Value, GitHubBoardFields) {
+    github_projects_board(sandbox, None, fail_first)
+}
 
 /// The id of the one draft item [`github_projects_with_draft`] adds to the shared board.
 pub const GITHUB_DRAFT_TASK: &str = "DRAFT-1";
@@ -1327,6 +1554,25 @@ fn github_projects_board_at(
         .as_array()
         .unwrap()
         .clone(),
+        priority_options: Some(
+            json!([
+                {"id":"OPT-p-urgent","name":"Urgent","color":"RED","description":""},
+                {"id":"OPT-p-high","name":"High","color":"ORANGE","description":""},
+                {"id":"OPT-p-medium","name":"Medium","color":"YELLOW","description":""},
+                {"id":"OPT-p-low","name":"Low","color":"GRAY","description":""}
+            ])
+            .as_array()
+            .unwrap()
+            .clone(),
+        ),
+        drift_after_priority_update: false,
+        drops_priority_writes: false,
+        hides_after_update: false,
+        remints_after_priority_update: false,
+        omits_added_priority_option: false,
+        persons_fields: Vec::new(),
+        malformed_priority_options: false,
+        repeated_snapshot_value: None,
         drift_after_status_update: false,
         remint_after_status_update: false,
         omit_added_status_option: false,
@@ -1408,6 +1654,9 @@ fn github_projects_block_at(endpoint: &str) -> Value {
         // GitHub derives a project's `Sub-issues progress` from closed sub-issues, so a
         // plan whose finished tasks were only moved to a column reads 0% complete forever.
         "status_mapping": {"todo":"Todo","in-progress":"Doing"},
+        // Every level keeps its shipped option name, which is what the board's own
+        // `Priority` field below holds.
+        "priority_mapping": {},
         // This board is a socket on loopback, not github.com, and it has no rate
         // limiter to be paced for. The shipped default spaces a content-creating
         // mutation every 750 ms so a copy cannot trip GitHub's secondary limit; left
@@ -1468,9 +1717,105 @@ pub fn github_projects_unreachable(sandbox: &Sandbox) -> Value {
     github_projects_block_at(&format!("http://{address}/graphql"))
 }
 
+/// The option list a whole-list `singleSelectOptions` input leaves a field holding: each
+/// option sent with its id keeps it, and one sent without is minted a new one.
+fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<Value> {
+    input["singleSelectOptions"]
+        .as_array()
+        .expect("the whole option list")
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            let id = option["id"]
+                .as_str()
+                .map_or_else(|| format!("{minted}-{index}"), str::to_owned);
+            json!({"id":id,"name":option["name"],"color":option["color"],
+                   "description":option["description"]})
+        })
+        .collect()
+}
+
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
     let mut board = board.lock().unwrap();
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
+    if query.contains("updateProjectV2Field(input:$input)") && input["fieldId"] == "FIELD-priority"
+    {
+        assert_eq!(input["projectId"], "PVT-board");
+        let old = board
+            .priority_options
+            .clone()
+            .expect("an update of the Priority field names a field this board has");
+        let mut next = github_replaced_options(&old, &input, "OPT-p-new");
+        if board.omits_added_priority_option {
+            board.omits_added_priority_option = false;
+            next.retain(|option| old.iter().any(|held| held["id"] == option["id"]));
+        }
+        if board.remints_after_priority_update {
+            board.remints_after_priority_update = false;
+            next[0]["id"] = json!("OPT-p-reminted");
+        }
+        // As for Status below: an item assigned an option id the update did not send back
+        // loses its value.
+        for item in &mut board.items {
+            let Some(name) = item["priority"].as_str() else {
+                continue;
+            };
+            let old_id = old
+                .iter()
+                .find(|option| option["name"] == name)
+                .map(|option| option["id"].clone());
+            if old_id.is_some_and(|id| !next.iter().any(|option| option["id"] == id)) {
+                item["priority"] = Value::Null;
+            }
+        }
+        board.priority_options = Some(next.clone());
+        if board.hides_after_update {
+            board.status_board_accessible = false;
+        }
+        if board.drift_after_priority_update {
+            board.drift_after_priority_update = false;
+            if let Some(item) = board
+                .items
+                .iter_mut()
+                .find(|item| item["priority"].is_string())
+            {
+                item["priority"] = Value::Null;
+            }
+        }
+        return json!({"updateProjectV2Field":{"projectV2Field":{"id":"FIELD-priority",
+            "options":next}}});
+    }
+    if query.contains("createProjectV2Field(input:$input)") {
+        assert_eq!(input["projectId"], "PVT-board");
+        assert_eq!(input["dataType"], "SINGLE_SELECT");
+        assert_eq!(
+            input["name"], "Priority",
+            "only a Priority field is ever created"
+        );
+        assert!(
+            board.priority_options.is_none(),
+            "createProjectV2Field names a field this board already has"
+        );
+        let created = github_replaced_options(&[], &input, "OPT-p-new");
+        board.priority_options = Some(created.clone());
+        return json!({"createProjectV2Field":{"projectV2Field":{"id":"FIELD-priority",
+            "name":"Priority","options":created}}});
+    }
+    if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
+        assert_eq!(input["projectId"], "PVT-board");
+        assert_eq!(
+            input["fieldId"], "FIELD-priority",
+            "only a priority is ever cleared"
+        );
+        let item_id = input["itemId"].clone();
+        let held = board
+            .items
+            .iter_mut()
+            .find(|item| item["item"] == item_id)
+            .expect("a field clear names a board item");
+        held["priority"] = Value::Null;
+        return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
+    }
     if query.contains("updateProjectV2Field(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
         assert_eq!(input["fieldId"], "FIELD-status");
@@ -1539,7 +1884,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let nodes = board.items[offset..end]
             .iter()
             .map(|item| {
-                let values = item["status"].as_str().map_or_else(Vec::new, |name| {
+                let mut values = item["status"].as_str().map_or_else(Vec::new, |name| {
                     let option = board
                         .status_options
                         .iter()
@@ -1548,11 +1893,53 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     vec![json!({"name":name,"optionId":option["id"],
                     "field":{"id":"FIELD-status","name":"Status"}})]
                 });
+                // A person's own field's value on the first item, as GitHub answers it — the
+                // setup reads past it.
+                if let Some(own) = board.persons_fields.first()
+                    && own["__typename"] == "ProjectV2SingleSelectField"
+                    && item["id"] == "T-1"
+                {
+                    values.push(json!({"name":own["options"][0]["name"],
+                        "optionId":own["options"][0]["id"],
+                        "field":{"id":own["id"],"name":own["name"]}}));
+                }
+                if let (Some(name), Some(options)) =
+                    (item["priority"].as_str(), &board.priority_options)
+                {
+                    let option = options
+                        .iter()
+                        .find(|option| option["name"] == name)
+                        .expect("an assigned priority option exists");
+                    values.push(json!({"name":name,"optionId":option["id"],
+                    "field":{"id":"FIELD-priority","name":"Priority"}}));
+                }
+                if let Some(field) = board.repeated_snapshot_value
+                    && item["id"] == "T-1"
+                {
+                    let (id, options) = if field == "Status" {
+                        ("FIELD-status", Some(&board.status_options))
+                    } else {
+                        ("FIELD-priority", board.priority_options.as_ref())
+                    };
+                    let last = options
+                        .and_then(|options| options.last())
+                        .expect("the repeated field has an option");
+                    values.push(json!({"name":last["name"],"optionId":last["id"],
+                    "field":{"id":id,"name":field}}));
+                }
                 json!({"id":item["item"],"fieldValues":{"nodes":values,
                 "pageInfo":{"hasNextPage":false}}})
             })
             .collect::<Vec<_>>();
-        return json!({"owner":{"projectV2":{"id":"PVT-board","fields":board.fields(),
+        // The snapshot selects single-select fields alone, so GitHub answers every other field
+        // as an empty node.
+        let mut fields = board.fields();
+        for field in fields["nodes"].as_array_mut().expect("field nodes") {
+            if field["__typename"] != "ProjectV2SingleSelectField" {
+                *field = json!({});
+            }
+        }
+        return json!({"owner":{"projectV2":{"id":"PVT-board","fields":fields,
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < board.items.len(),
                 "endCursor":end.to_string()}}}}});
     }
@@ -1703,9 +2090,20 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .is_some_and(|value| value.len() == 1)
         );
         let item_id = input["itemId"].clone();
+        let priority_field = input["fieldId"] == "FIELD-priority";
+        let drops_priority_writes = board.drops_priority_writes;
+        let options = if priority_field {
+            Value::Array(
+                board
+                    .priority_options
+                    .clone()
+                    .expect("a Priority write names a field this board has"),
+            )
+        } else {
+            board.options()
+        };
         let option = input["value"]["singleSelectOptionId"].as_str().map(|id| {
-            board
-                .options()
+            options
                 .as_array()
                 .unwrap()
                 .iter()
@@ -1719,8 +2117,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .iter_mut()
             .find(|item| item["item"] == item_id)
             .expect("a field update names a board item");
-        if let Some(option) = option {
-            held["status"] = option;
+        match option {
+            Some(_) if priority_field && drops_priority_writes => {}
+            Some(option) if priority_field => held["priority"] = option,
+            Some(option) => held["status"] = option,
+            None => {}
         }
         if text.is_string() {
             held["origin"] = text;
@@ -2352,9 +2753,31 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
                     variables.get("input"),
-                    &["teamId", "title", "stateId", "labelIds"],
+                    &["teamId", "title", "stateId", "labelIds", "priority"],
                     &["description", "projectId"],
                 )
+        }
+        // The two narrow issue writes: exactly one member, and nothing beside it.
+        graphql::ISSUE_PRIORITY_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["priority"], &[])
+        }
+        graphql::ISSUE_UPDATE
+            if variables
+                .pointer("/input")
+                .and_then(Value::as_object)
+                .is_some_and(|input| !input.contains_key("title")) =>
+        {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["description"], &[])
         }
         graphql::PROJECT_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
@@ -2443,7 +2866,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     if operation == graphql::ISSUE_UPDATE {
-                        &["title", "stateId", "labelIds"]
+                        &["title", "stateId", "labelIds", "priority"]
                     } else {
                         &["name", "statusId", "labelIds"]
                     },
@@ -2484,6 +2907,8 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
         }),
         "description" | "content" => value.is_null() || value.is_string(),
         "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
+        // Linear's `priority` input is an `Int` on its own 0–4 scale.
+        "priority" => value.as_u64().is_some_and(|number| number <= 4),
         _ => value.as_str().is_some_and(|text| !text.is_empty()),
     })
 }
@@ -2570,6 +2995,7 @@ fn linear_response(
         graphql::PROJECT_LABEL,
         graphql::ISSUE_CREATE,
         graphql::ISSUE_UPDATE,
+        graphql::ISSUE_PRIORITY_UPDATE,
         graphql::PROJECT_CREATE,
         graphql::PROJECT_UPDATE,
         graphql::ISSUE_RELATION_CREATE,
@@ -2612,6 +3038,15 @@ fn linear_response(
     }
     if operation == graphql::PROJECT_LABEL {
         return Ok(json!({"projectLabels":{"nodes":[{"id":vars["name"]}]}}));
+    }
+    // A narrow write sends an issue's `priority` alone, or its `description` alone, and
+    // Linear leaves every input member it was not sent as it was.
+    if matches!(
+        operation,
+        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE
+    ) && vars["input"].get("title").is_none()
+    {
+        return linear_narrow_issue_update(data, &vars, operation);
     }
     if matches!(operation, graphql::ISSUE_CREATE | graphql::ISSUE_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::ISSUE_CREATE, false);
@@ -2797,6 +3232,9 @@ fn linear_write_item(
     });
     if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
         row["project"] = project_id.clone();
+    }
+    if !project && let Some(priority) = input.get("priority") {
+        row["priority"] = linear_priority_name(priority);
     }
     if let Some(index) = existing {
         rows[index] = row;
@@ -3243,8 +3681,62 @@ fn linear_handle(id: &str) -> Option<String> {
     Some(linear_identifier(id))
 }
 
+/// Linear's own number for one of the shared dataset's priorities: `0` none, `1` urgent, `2`
+/// high, `3` medium — Linear's "normal" — and `4` low, sent as the `Float` its schema
+/// declares.
+fn linear_priority(priority: &Value) -> Value {
+    json!(match priority.as_str().unwrap_or("none") {
+        "urgent" => 1.0,
+        "high" => 2.0,
+        "medium" => 3.0,
+        "low" => 4.0,
+        _ => 0.0,
+    })
+}
+
+/// The shared dataset's spelling of one of Linear's priority numbers.
+fn linear_priority_name(number: &Value) -> Value {
+    json!(match number.as_f64() {
+        Some(1.0) => "urgent",
+        Some(2.0) => "high",
+        Some(3.0) => "medium",
+        Some(4.0) => "low",
+        _ => "none",
+    })
+}
+
+/// One narrow `issueUpdate`: the `priority` alone or the `description` alone of an issue this
+/// workspace holds, answered with what the issue holds afterwards.
+fn linear_narrow_issue_update(
+    data: &mut Value,
+    vars: &Value,
+    operation: &str,
+) -> Result<Value, &'static str> {
+    let id = vars["id"].as_str().ok_or("update id must be a string")?;
+    let row = data["tasks"]
+        .as_array_mut()
+        .ok_or("fixture collection is not an array")?
+        .iter_mut()
+        .find(|row| row["id"] == id)
+        .ok_or("update target does not exist")?;
+    if let Some(priority) = vars["input"].get("priority") {
+        row["priority"] = linear_priority_name(priority);
+    }
+    if let Some(description) = vars["input"].get("description") {
+        row["_linear_description"] = description.clone();
+    }
+    Ok(
+        if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
+            json!({"issueUpdate":{"success":true,
+                   "issue":{"id":id,"priority":linear_priority(&row["priority"])}}})
+        } else {
+            json!({"issueUpdate":{"success":true,"issue":{"id":id}}})
+        },
+    )
+}
+
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
@@ -3463,7 +3955,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-1",
-            "title: Alpha engine\nstatus: Todo\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\nmetadata: {onepipeline.turn_budget: 12, caller.flags: [true, null]}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [T-2, {id: \"elsewhere:P-9\", item: project}]",
+            "title: Alpha engine\nstatus: Todo\npriority: high\nlabels: [{id: L-1, name: bug}, {id: L-3, name: core}]\nproject: P-1\nurl: https://example.invalid/T-1\nmetadata: {onepipeline.turn_budget: 12, caller.flags: [true, null]}\nrepositories: [github.com/nickderobertis/onetaskgraph]\ndepends_on: [T-2, {id: \"elsewhere:P-9\", item: project}]",
             "the engine core",
         ),
         (
@@ -3475,13 +3967,13 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-3",
-            "title: Gamma\nstatus: Todo\nlabels: [{id: L-1, name: bug}]\ndepends_on: [T-2]",
+            "title: Gamma\nstatus: Todo\npriority: urgent\nlabels: [{id: L-1, name: bug}]\ndepends_on: [T-2]",
             "unrelated",
         ),
         (
             "tasks",
             "T-4",
-            "title: Delta docs\nstatus: Doing\nlabels: [{id: L-3, name: core}]\nproject: P-2\ndepends_on:\n  - id: T-2\n    kind: related",
+            "title: Delta docs\nstatus: Doing\npriority: low\nlabels: [{id: L-3, name: core}]\nproject: P-2\ndepends_on:\n  - id: T-2\n    kind: related",
             "documentation",
         ),
         (
@@ -3585,6 +4077,7 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
         "comments": "native",
         "filter_by_label": "unsupported",
         "filter_by_status": "unsupported",
+        "filter_by_priority": "unsupported",
         "search_title": "unsupported",
         "search_content": "unsupported",
         "orphan_tasks": "unsupported",
@@ -3628,7 +4121,7 @@ pub fn dataset() -> Value {
     json!({
         "tasks": [
             {"id": "T-1", "title": "Alpha engine", "content": "the engine core",
-             "status": {"category": "todo", "name": "Todo"},
+             "status": {"category": "todo", "name": "Todo"}, "priority": "high",
              "labels": [{"id": "L-1", "name": "bug"}, {"id": "L-3", "name": "core"}],
             "project": "P-1", "url": "https://example.invalid/T-1",
             "location": {"url": "https://example.invalid/T-1"},
@@ -3638,10 +4131,10 @@ pub fn dataset() -> Value {
              "status": {"category": "done", "name": "Shipped"},
              "labels": [{"id": "L-2", "name": "chore"}], "project": "P-1"},
             {"id": "T-3", "title": "Gamma", "content": "unrelated",
-             "status": {"category": "todo", "name": "Todo"},
+             "status": {"category": "todo", "name": "Todo"}, "priority": "urgent",
              "labels": [{"id": "L-1", "name": "bug"}]},
             {"id": "T-4", "title": "Delta docs", "content": "documentation",
-             "status": {"category": "in-progress", "name": "Doing"},
+             "status": {"category": "in-progress", "name": "Doing"}, "priority": "low",
              "labels": [{"id": "L-3", "name": "core"}], "project": "P-2"}
         ],
         "projects": [

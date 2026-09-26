@@ -18,11 +18,15 @@ import pytest
 from onetaskgraph_sdk import (
     Client,
     Delivered,
+    FieldsReport,
     GlobalId,
     MetadataSet,
     OnetaskgraphError,
+    Priority,
     SourceName,
     StatusCategory,
+    TaskContentSet,
+    TaskPrioritySet,
     TaskStatusSet,
     __version__,
 )
@@ -711,6 +715,206 @@ def test_metadata_set_methods_drive_the_binary(binary: Path, tmp_path: Path) -> 
     assert shown.metadata == run(client.task_show(id="work:T-1")).items[0].item.metadata
 
 
+def priority_folder(tmp_path: Path) -> Path:
+    """Configure one real Markdown folder, `work`, holding two tasks: one ranked, one not."""
+    tasks = tmp_path / "work" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "T-1.md").write_text(
+        '---\ntitle: Ranked\nstatus: todo\npriority: high\nmetadata:\n  "myapp.kept": 1\n'
+        "---\nThe old body.\n",
+        encoding="utf-8",
+    )
+    (tasks / "T-2.md").write_text(
+        "---\ntitle: Unranked\nstatus: todo\n---\nAnother body.\n", encoding="utf-8"
+    )
+    work = {"plugin": "local-md", "config": {"root": str(tmp_path / "work")}}
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps({"sources": {"work": work}}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_priority_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
+    """List by priority, and set one task's priority, through the real binary and folder."""
+    client = Client(binary, cwd=priority_folder(tmp_path))
+
+    ranked = run(client.task_list(priority=["high", "urgent"]))
+    assert [task.id.root for task in ranked.items] == ["work:T-1"]
+    assert ranked.items[0].item.priority == Priority.PriorityHigh
+    unranked = run(client.task_list(priority=("none",)))
+    assert [(task.id.root, task.item.priority) for task in unranked.items] == [
+        ("work:T-2", Priority.PriorityNone)
+    ]
+
+    answer = run(client.task_priority_set("work:T-2", "urgent"))
+    assert isinstance(answer, TaskPrioritySet)
+    assert (answer.id.root, answer.priority) == ("work:T-2", Priority.PriorityUrgent)
+    # A later invocation reads what that one wrote.
+    assert run(client.task_show(id="work:T-2")).items[0].item.priority == "urgent"
+    cleared = run(client.task_priority_set(GlobalId(root="work:T-1"), Priority.PriorityNone))
+    assert cleared.priority == Priority.PriorityNone
+    assert "priority:" not in (tmp_path / "work" / "tasks" / "T-1.md").read_text(encoding="utf-8")
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_priority_set("nowhere:T-1", "low"))
+    assert refused.value.exit_code == 1
+    assert "no source named" in str(refused.value)
+
+
+def test_task_content_set_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Replace one task's content from a file, and nothing else about it."""
+    cwd = priority_folder(tmp_path)
+    client = Client(binary, cwd=cwd)
+    before = run(client.task_show(id="work:T-1")).items[0].item
+    body = tmp_path / "body.md"
+    body.write_text("The new body.\n\nWith a second paragraph.", encoding="utf-8")
+
+    answer = run(client.task_content_set("work:T-1", str(body)))
+    assert isinstance(answer, TaskContentSet)
+    assert answer.id.root == "work:T-1"
+    after = run(client.task_show(id="work:T-1")).items[0].item
+    assert after.content == "The new body.\n\nWith a second paragraph."
+    assert after.model_dump(exclude={"content"}) == before.model_dump(exclude={"content"})
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_content_set(id="work:T-1", file=str(tmp_path / "absent.md")))
+    assert refused.value.exit_code == 1
+    assert "--file" in str(refused.value)
+
+
+def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path: Path) -> None:
+    """Decode a board's field plan through the generated SDK model, and refuse a non-board."""
+
+    class BoardHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
+            length = int(self.headers["content-length"])
+            request = json.loads(self.rfile.read(length))
+            statuses = [
+                {"id": f"OPT-{index}", "name": name, "color": "GRAY", "description": ""}
+                for index, name in enumerate(
+                    ["Backlog", "Todo", "Queued", "In Progress", "Done", "Cancelled"],
+                    start=1,
+                )
+            ]
+            # The board's own field list, which the setup reads when a field it owns is not
+            # among the single-select ones — to refuse a same-named field of another type.
+            if "boardFields" in request["query"]:
+                data: dict[str, object] = {
+                    "boardFields": {
+                        "projectV2": {
+                            "id": "PVT-board",
+                            "fields": {
+                                "nodes": [
+                                    {
+                                        "__typename": "ProjectV2SingleSelectField",
+                                        "id": "FIELD-status",
+                                        "name": "Status",
+                                        "options": statuses,
+                                    }
+                                ],
+                                "pageInfo": {"hasNextPage": False},
+                            },
+                        }
+                    }
+                }
+                response = json.dumps({"data": data}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            assert "optionId" in request["query"]
+            response = json.dumps(
+                {
+                    "data": {
+                        "owner": {
+                            "projectV2": {
+                                "id": "PVT-board",
+                                "fields": {
+                                    "nodes": [
+                                        {
+                                            "id": "FIELD-status",
+                                            "name": "Status",
+                                            "options": statuses,
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                                "items": {
+                                    "nodes": [],
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                },
+                            }
+                        }
+                    }
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BoardHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        config = {
+            "sources": {
+                "board": {
+                    "plugin": "github-projects",
+                    "config": {
+                        "owner": "fixture-owner",
+                        "project_number": 7,
+                        "token_env": "TEST_GITHUB_TOKEN",
+                        "endpoint": f"http://127.0.0.1:{server.server_port}",
+                        "priority_mapping": {"medium": "Normal"},
+                    },
+                },
+                "memory": {"plugin": "in-memory", "config": {}},
+            }
+        }
+        (tmp_path / "onetaskgraph.yaml").write_text(json.dumps(config), encoding="utf-8")
+        client = Client(
+            binary,
+            cwd=tmp_path,
+            environment={**os.environ, "TEST_GITHUB_TOKEN": "fixture-token"},
+        )
+        report = run(client.sources_fields(SourceName(root="board")))
+        assert isinstance(report, FieldsReport)
+        assert report.source.root == "board"
+        status, priority = report.fields
+        assert (status.field.value, status.exists, status.missing, status.outcome.value) == (
+            "Status",
+            True,
+            [],
+            "planned",
+        )
+        assert [option.id.root for option in status.existing] == [
+            f"OPT-{index}" for index in range(1, 7)
+        ]
+        assert (priority.field.value, priority.exists, priority.outcome.value) == (
+            "Priority",
+            False,
+            "planned",
+        )
+        assert priority.missing == ["Urgent", "High", "Normal", "Low"]
+        assert priority.existing == []
+
+        with pytest.raises(OnetaskgraphError) as refused:
+            run(client.sources_fields("memory", apply=True))
+        assert refused.value.exit_code == 1
+        assert "source memory uses plugin in-memory" in str(refused.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_binary_resolution_order(binary: Path, tmp_path: Path) -> None:
     """Use environment before the packaged PATH fallback and reject no executable."""
     config = configured(tmp_path)
@@ -894,6 +1098,11 @@ def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
     generated_client = (destination / "client.py").read_text(encoding="utf-8")
     generated_report = (destination / "status_options_report.py").read_text(encoding="utf-8")
     assert "async def sources_status_options(" in generated_client
+    assert "async def sources_fields(" in generated_client
+    assert "async def task_priority_set(" in generated_client
+    assert "priority: Priority | str," in generated_client
+    assert "async def task_content_set(" in generated_client
+    assert "file: str," in generated_client
     assert "source: SourceName | str" in generated_client
     assert "apply: bool | None = None" in generated_client
     assert generated_report.count("min_length=1") == 2

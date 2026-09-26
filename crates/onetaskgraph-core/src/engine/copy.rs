@@ -41,6 +41,7 @@ use crate::resolve::ResolvedSource;
 use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
+use super::narrow::holds_priority;
 use super::{
     DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LeftBehind, Paging, Qualified,
     TaskRequest,
@@ -1320,6 +1321,7 @@ impl Engine {
             sources: vec![project.source.clone()],
             filters: Filters::default(),
             project: ProjectSelector::Qualified(project.clone()),
+            priorities: Vec::new(),
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
@@ -1882,6 +1884,12 @@ impl Engine {
                 .map(|document| Item::Document(Box::new(document))),
         }
         .ok_or_else(|| EngineError::NoSuchItem { id: id.to_string() })?;
+        // Before the destination is read, and so before it is written: a destination that
+        // holds no priority has nowhere to put one, and every item of a copy is planned before
+        // any of them lands. A task carrying `none` passes and writes exactly as it always did.
+        if let Item::Task(task) = &item {
+            holds_priority(destination, &id.to_string(), task.priority)?;
+        }
         let edges = forward_edges(source, &id.native, item.level()).await?;
         let (target, held) = self.target(destination, request, id, &item).await?;
         Ok(Planned {
@@ -2895,6 +2903,7 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.title == outgoing.title
                 && held.content == outgoing.content
                 && held.status == outgoing.status
+                && held.priority == outgoing.priority
                 && held.labels == outgoing.labels
                 && held.project == outgoing.project
                 && held.metadata == outgoing.metadata

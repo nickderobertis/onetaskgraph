@@ -316,6 +316,8 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::UPDATE_ISSUE, None, None),
         (graphql::UPDATE_DRAFT, None, None),
         (graphql::UPDATE_FIELD, None, None),
+        (graphql::CLEAR_FIELD, None, None),
+        (graphql::CREATE_FIELD, None, None),
         (graphql::STATUS_OPTIONS_UPDATE, None, None),
         (graphql::STATUS_OPTIONS_SNAPSHOT, None, None),
         (graphql::ADD_SUB_ISSUE, None, None),
@@ -626,4 +628,67 @@ fn the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact() 
         "the shipped interval stopped being the fastest rate the pinned per-minute \
          ceiling allows"
     );
+}
+
+/// The priority levels this source maps, and the configuration naming them, cannot silently
+/// lose a priority the vocabulary gains.
+///
+/// `PRIORITY_LEVELS` and `PriorityMappingConfig`'s members both restate `Priority` less its
+/// `none`, which is no option of a board field; `level_position` is a wildcard-free match, so a
+/// new priority fails to compile there, and this reconciles both lists against the enum's own
+/// derived schema — generated from the variants rather than written beside them.
+#[test]
+fn the_priority_levels_and_their_configuration_are_reconciled_against_the_vocabulary() {
+    use onetaskgraph_github_projects::{
+        GitHubProjectsConfig, PRIORITY_LEVELS, PriorityMappingConfig, level_position,
+    };
+    use onetaskgraph_plugin_api::Priority;
+
+    let spelled = |value: serde_json::Value| {
+        value
+            .as_str()
+            .expect("a priority serializes as a string")
+            .to_owned()
+    };
+    let schema = serde_json::to_value(schemars::schema_for!(Priority))
+        .expect("the derived schema serializes");
+    let declared = schema["oneOf"]
+        .as_array()
+        .expect("a unit-variant enum schema lists its variants")
+        .iter()
+        .map(|variant| spelled(variant["const"].clone()))
+        .filter(|name| name != "none")
+        .collect::<Vec<_>>();
+    let mirrored = PRIORITY_LEVELS
+        .iter()
+        .map(|level| spelled(serde_json::to_value(level).expect("serializes")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declared, mirrored,
+        "PRIORITY_LEVELS must name every priority but none, in the order the vocabulary does"
+    );
+    for (index, level) in PRIORITY_LEVELS.iter().enumerate() {
+        assert_eq!(level_position(*level), Some(index), "{level}");
+    }
+    assert_eq!(level_position(Priority::None), None);
+
+    let config = serde_json::to_value(schemars::schema_for!(PriorityMappingConfig))
+        .expect("the configuration schema serializes");
+    let mut members = config["properties"]
+        .as_object()
+        .expect("the mapping is an object of levels")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    members.sort();
+    let mut levels = mirrored.clone();
+    levels.sort();
+    assert_eq!(
+        members, levels,
+        "priority_mapping must take exactly one member per level"
+    );
+    // And the whole configuration schema reaches it under the name a document writes.
+    let whole = serde_json::to_value(schemars::schema_for!(GitHubProjectsConfig))
+        .expect("the configuration schema serializes");
+    assert!(whole["properties"]["priority_mapping"].is_object());
 }

@@ -57,7 +57,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
 
 - **`onetaskgraph-plugin-api`** — exactly what a plugin author needs, and nothing else:
   the traits `TaskSource`, `SourcePlugin` and `SecretResolver`; the work types `Task`,
-  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `TaskRef`,
+  `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Priority`,
+  `TaskRef`,
   `Repository`,
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
@@ -694,6 +695,23 @@ them do; this is the inventory of what is owed, not a status board.
     namespace, and a value that is not JSON — each before any source is started — and an
     unknown source, a source with no write side, a record the source does not hold, and a
     stdio plugin whose handshake does not declare the write, which is never asked.
+50. A task's priority comes back out of every source kind — the machine rendering writing
+    `none` out rather than leaving it absent, the human one naming a priority only when one is
+    set; `task list --priority` keeps exactly the tasks at any priority it
+    names on a source that applies the filter and on one the engine narrows for; and
+    `task priority set` answers with what the source reads back and moves nothing else.
+51. A copy carries a task's priority on create and on update, back to `none` included; a copy
+    or a `task priority set` that would write one to a source holding none — a GitHub board
+    with no `priority_mapping`, a stdio plugin whose handshake predates priorities — is
+    refused by name before that source is asked anything.
+52. `task content set` replaces a task's content with a file's bytes on every source that
+    writes, and every other member reads back unchanged; on a GitHub board a metadata write
+    and a content write in either order both read back.
+53. `sources fields` plans without writing, creates a missing `Priority` field with the mapped
+    options in order, adds a missing option to either field, preserves every existing
+    option and every item's values, answers `unchanged` on a board already set up, and
+    refuses drift with recovery data, a board with no `Status` field and a source that is not
+    a board.
 
 ## What a copied document's references are pointed at
 

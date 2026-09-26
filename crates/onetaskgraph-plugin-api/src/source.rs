@@ -8,9 +8,9 @@ use serde_json::Value;
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
     ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
-    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskQuery, TaskRef, WriteSupport, commentless, documentless, unwritable, unwritable_field,
-    unwritable_metadata,
+    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
+    Task, TaskQuery, TaskRef, WriteSupport, commentless, documentless, unwritable,
+    unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -214,6 +214,60 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<Status>, SourceError> {
         let _ = (id, category);
         Err(unwritable_field(self.kind(), "status"))
+    }
+
+    /// Set the priority of one task this source holds, and change nothing else about it,
+    /// answering with the priority as this source now reads it — or `None` when this source
+    /// holds no such task.
+    ///
+    /// [`Priority::None`] clears the priority. Title, content, status, labels, metadata,
+    /// repositories, dependencies and comments are left exactly as they are. Nothing about
+    /// the task's status moves, so the engine re-evaluates no delivered task after it.
+    ///
+    /// Defaulted to [`unwritable_field`], which is what keeps this an addition rather than a
+    /// break. A source declaring [`WriteSupport::Unsupported`], or declaring
+    /// [`Capabilities::priority`] unsupported, is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write a priority, or cannot
+    /// write this one — a board with no option for it, naming the option; and whatever else
+    /// the source could not do the write for.
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        let _ = (id, priority);
+        Err(unwritable_field(self.kind(), "priority"))
+    }
+
+    /// Replace the content of one task this source holds with `content`, byte for byte, and
+    /// change nothing else about it — or answer `None` when this source holds no such task.
+    ///
+    /// The content is [`Task::content`] exactly as this source reports it: what a later read
+    /// answers there is `content`. Where the source keeps something else inside the same
+    /// backend field — a metadata block in an issue body — that is kept as it was, and so is
+    /// every other member: title, status, priority, labels, metadata, repositories,
+    /// dependencies, project and comments. Nothing about the task's status moves, so the
+    /// engine re-evaluates no delivered task after it.
+    ///
+    /// Defaulted to [`unwritable_field`] on exactly the terms of
+    /// [`set_task_status`](Self::set_task_status). A source declaring
+    /// [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write a task's content on its
+    /// own, or cannot represent this one; and whatever else the source could not do the write
+    /// for.
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content);
+        Err(unwritable_field(self.kind(), "content"))
     }
 
     /// Replace the [`Task::delivered_by`] of one task this source holds, and change nothing

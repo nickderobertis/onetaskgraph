@@ -3,8 +3,9 @@
 use onetaskgraph_plugin_api::{
     Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
-    NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceError, SourceName, SourcePlugin, StatusCategory, Task, TaskQuery, TaskSource,
+    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, Task, TaskQuery,
+    TaskSource,
 };
 use secrecy::SecretString;
 use std::{
@@ -108,10 +109,10 @@ fn team_filtering_server(projects: bool) -> String {
             let second = if narrowed {
                 ""
             } else {
-                r#",{"id":"i2","identifier":"ENG-2","title":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}"#
+                r#",{"id":"i2","identifier":"ENG-2","title":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]}}"#
             };
             format!(
-                r#"{{"data":{{"issues":{{"nodes":[{{"id":"i1","identifier":"ENG-1","title":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{{"name":"Todo","type":"unstarted"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
+                r#"{{"data":{{"issues":{{"nodes":[{{"id":"i1","identifier":"ENG-1","title":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{{"name":"Todo","type":"unstarted"}},"priority":0,"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
             )
         };
         write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
@@ -153,13 +154,21 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                 "title",
                 "description",
                 "stateId",
+                "priority",
                 "labelIds",
                 "projectId",
             ][..],
         ),
         (
             "IssueUpdateInput",
-            &["title", "description", "stateId", "labelIds", "projectId"][..],
+            &[
+                "title",
+                "description",
+                "stateId",
+                "priority",
+                "labelIds",
+                "projectId",
+            ][..],
         ),
         (
             "ProjectCreateInput",
@@ -488,6 +497,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_LABEL, false),
         (graphql::ISSUE_CREATE, true),
         (graphql::ISSUE_UPDATE, true),
+        (graphql::ISSUE_PRIORITY_UPDATE, true),
         (graphql::PROJECT_CREATE, true),
         (graphql::PROJECT_UPDATE, true),
         (graphql::ISSUE_RELATION_CREATE, true),
@@ -594,7 +604,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
     let body = serde_json::json!({"data":{
         "viewer": {"id":"U"},
         "issue": {"id":"I","identifier":"ENG-1","title":"issue","description":null,"url":null,"createdAt":null,
-                  "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
+                  "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,
                   "labels":{"nodes":[]},"project":null,
                   "relations":relations("blocks","relatedIssue","issue","IR"),
                   "inverseRelations":relations("blocks","relatedIssue","issue","IR2"),
@@ -625,7 +635,9 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
         "workflowStates": {"nodes":[{"id":"STATE","name":"In Progress"}]},
         "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo"}]},
         "issueCreate": {"success":true,"issue":{"id":"I"}},
-        "issueUpdate": {"success":true,"issue":{"id":"I"}},
+        // `priority` for the narrow priority write, which reads it back from this payload;
+        // every other issue write reads the id alone and passes over it.
+        "issueUpdate": {"success":true,"issue":{"id":"I","priority":2}},
         "projectCreate": {"success":true,"project":{"id":"P"}},
         "projectUpdate": {"success":true,"project":{"id":"P"}},
         "documentCreate": {"success":true,"document":{"id":"D"}},
@@ -841,6 +853,18 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
             .name,
         "In Progress"
     );
+    assert_eq!(
+        source
+            .set_task_priority(&"I".into(), Priority::High)
+            .await
+            .unwrap(),
+        Some(Priority::High)
+    );
+    source
+        .set_task_content(&"I".into(), "replaced")
+        .await
+        .unwrap()
+        .expect("the superset holds the issue");
     source.delete_task(&"I".into()).await.unwrap();
     source.delete_project(&"P".into()).await.unwrap();
     source.delete_document(&"D".into()).await.unwrap();
@@ -1076,7 +1100,7 @@ async fn an_archived_or_trashed_item_is_not_held_by_this_source_over_real_http()
             "issue",
             serde_json::json!({"issue":{"id":"I","identifier":"ENG-1","title":"gone","description":null,"url":null,
                 "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
-                "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}}),
+                "state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}}),
         ),
         (
             "project",
@@ -1178,7 +1202,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
-        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("teams", "TEAM"),
         id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),
@@ -3016,7 +3040,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
     }
     let (endpoint, _) = server("200 OK", "", r#"{"data":{"viewer":{"id":"u"}}}"#);
     assert!(source(&endpoint).health().await.unwrap().reachable);
-    let issue = r#"{"data":{"issue":{"id":"i1","identifier":"ENG-1","title":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Backlog","type":"backlog"},"labels":{"nodes":[]},"project":null}}}"#;
+    let issue = r#"{"data":{"issue":{"id":"i1","identifier":"ENG-1","title":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Backlog","type":"backlog"},"priority":0,"labels":{"nodes":[]},"project":null}}}"#;
     let (endpoint, wire) = server("200 OK", "", issue);
     let one = source(&endpoint)
         .get_task(&"i1".into())
@@ -3100,7 +3124,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
 
 #[tokio::test]
 async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
-    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","identifier":"ENG-1","title":"A","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}, {"id":"b","identifier":"ENG-2","title":"B","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Doing","type":"started"},"labels":{"nodes":[]}}, {"id":"c","identifier":"ENG-3","title":"C","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Canceled","type":"canceled"},"labels":{"nodes":[]}}, {"id":"d","identifier":"ENG-4","title":"D","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Odd","type":"new-value"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
+    let body = r#"{"data":{"issues":{"nodes":[{"id":"a","identifier":"ENG-1","title":"A","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]}}, {"id":"b","identifier":"ENG-2","title":"B","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Doing","type":"started"},"priority":0,"labels":{"nodes":[]}}, {"id":"c","identifier":"ENG-3","title":"C","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Canceled","type":"canceled"},"priority":0,"labels":{"nodes":[]}}, {"id":"d","identifier":"ENG-4","title":"D","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"Odd","type":"new-value"},"priority":0,"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
     let (endpoint, wire) = server("200 OK", "", body);
     let query = TaskQuery {
         labels: LabelFilter {
@@ -3187,7 +3211,7 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         cursor: None,
         limit: 2,
     };
-    let valid_task = serde_json::json!({"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]}});
+    let valid_task = serde_json::json!({"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"project":null,"state":{"name":"x","type":"started"},"priority":0,"labels":{"nodes":[]}});
     for field in [
         "description",
         "state",
@@ -3234,14 +3258,14 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         r#"{"data":{"issues":{}}}"#,
         r#"{"data":{"issues":{"nodes":[{}],"pageInfo":{}}}}"#,
         r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"}}],"pageInfo":{}}}}"#,
-        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"},"labels":{}}],"pageInfo":{}}}}"#,
+        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","state":{"name":"x","type":"started"},"priority":0,"labels":{}}],"pageInfo":{}}}}"#,
         // An issue with no `identifier`. Linear declares it `String!` and both read
         // operations select it, so a response without one is a response this source cannot
         // read — not an issue with no handle, which Linear has no way to be.
-        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
+        r#"{"data":{"issues":{"nodes":[{"id":"i","title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
         // And one whose identifier is not a string, which is the other half: present is
         // not the same as readable.
-        r#"{"data":{"issues":{"nodes":[{"id":"i","identifier":7,"title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
+        r#"{"data":{"issues":{"nodes":[{"id":"i","identifier":7,"title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
     ] {
         let (endpoint, _) = server("200 OK", "", body);
         // Named per body, so a shape this source stopped refusing says which one it was.
@@ -3269,7 +3293,7 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
     let (endpoint, _) = server(
         "200 OK",
         "",
-        r#"{"data":{"issue":{"id":"i","identifier":"ENG-1","title":"t","createdAt":"yesterday","state":{"name":"x","type":"started"},"labels":{"nodes":[]}}}}"#,
+        r#"{"data":{"issue":{"id":"i","identifier":"ENG-1","title":"t","createdAt":"yesterday","state":{"name":"x","type":"started"},"priority":0,"labels":{"nodes":[]}}}}"#,
     );
     assert!(matches!(
         source(&endpoint).get_task(&"i".into()).await.unwrap_err(),
@@ -4025,7 +4049,7 @@ fn held_issue(id: &str) -> serde_json::Value {
     serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
         "description":null,"url":null,
         "createdAt":null,"updatedAt":null,"archivedAt":null,
-        "state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},"project":null}})
+        "state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}})
 }
 
 /// One comment as Linear's `Comment` selection answers it, written by the user `ada`.
@@ -4681,7 +4705,7 @@ fn status_honouring_server() -> (String, mpsc::Receiver<serde_json::Value>) {
         serde_json::json!({"id":format!("i-{kind}"),"identifier":format!("ENG-{kind}"),
             "title":kind,"description":null,"url":null,
             "createdAt":null,"updatedAt":null,"project":null,
-            "state":{"name":kind,"type":kind},"labels":{"nodes":[]}})
+            "state":{"name":kind,"type":kind},"priority":0,"labels":{"nodes":[]}})
     });
     let projects = [
         "backlog",
@@ -4880,7 +4904,7 @@ fn issue_in_state(id: &str, name: &str, kind: &str) -> serde_json::Value {
     serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
         "description":null,"url":null,
         "createdAt":null,"updatedAt":null,"archivedAt":null,
-        "state":{"name":name,"type":kind},"labels":{"nodes":[]},"project":null}})
+        "state":{"name":name,"type":kind},"priority":0,"labels":{"nodes":[]},"project":null}})
 }
 
 /// A status write reads the issue, resolves the configured team, finds that team's first
@@ -5476,4 +5500,453 @@ async fn a_write_carrying_a_delivery_list_is_refused_by_name_before_any_request(
         );
     }
     assert!(wire.try_iter().next().is_none(), "nothing was sent");
+}
+
+/// What `issue(id:)` answers for one issue carrying `description` and Linear's raw
+/// `priority`, with a label and a project so a write that moved either would show.
+fn prioritised_issue(
+    id: &str,
+    description: Option<&str>,
+    priority: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
+        "description":description,"url":"https://linear.app/acme/issue/ENG-1",
+        "createdAt":"2026-09-01T12:00:00Z","updatedAt":"2026-09-02T12:00:00Z","archivedAt":null,
+        "state":{"name":"In Progress","type":"started"},"priority":priority,
+        "labels":{"nodes":[{"id":"l1","name":"Bug","color":"#ff0000"}]},"project":{"id":"p1"}}})
+}
+
+/// Linear's scale, both ways: `0` none, `1` urgent, `2` high, `3` normal, `4` low.
+const LINEAR_SCALE: [(Priority, u8); 5] = [
+    (Priority::None, 0),
+    (Priority::Urgent, 1),
+    (Priority::High, 2),
+    (Priority::Medium, 3),
+    (Priority::Low, 4),
+];
+
+/// Every level of Linear's scale reads as its own priority, whether Linear spells it as the
+/// `Float!` its schema declares or as a whole number, on a read by id and on a listing.
+#[tokio::test]
+async fn each_of_linears_priorities_reads_as_its_own_level_over_real_http() {
+    for (priority, level) in LINEAR_SCALE {
+        for raw in [
+            serde_json::json!(level),
+            serde_json::json!(f64::from(level)),
+        ] {
+            let (endpoint, _) = response_server(vec![prioritised_issue("I-1", None, raw.clone())]);
+            let task = source(&endpoint)
+                .get_task(&"I-1".into())
+                .await
+                .unwrap()
+                .expect("the issue is held");
+            assert_eq!(task.priority, priority, "a read of {raw}");
+        }
+    }
+    let nodes = LINEAR_SCALE
+        .iter()
+        .map(|(_, level)| {
+            let mut issue = prioritised_issue(&format!("I-{level}"), None, (*level).into());
+            issue["issue"].take()
+        })
+        .collect::<Vec<_>>();
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"issues":{"nodes":nodes,
+        "pageInfo":{"hasNextPage":false,"endCursor":null}}})]);
+    let page = source(&endpoint)
+        .query_tasks(
+            &TaskQuery::default(),
+            &PageRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|task| task.priority)
+            .collect::<Vec<_>>(),
+        LINEAR_SCALE
+            .iter()
+            .map(|(priority, _)| *priority)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        sent(&wire.recv().unwrap())["query"],
+        onetaskgraph_linear::graphql::ISSUES
+    );
+}
+
+/// A priority that is none of the five is a response this source cannot read — never the
+/// nearest level, and never no priority.
+#[tokio::test]
+async fn a_priority_off_linears_scale_is_refused_naming_the_field() {
+    for raw in [
+        serde_json::json!(5),
+        serde_json::json!(-1),
+        serde_json::json!(2.5),
+        serde_json::json!("2"),
+        serde_json::Value::Null,
+    ] {
+        let (endpoint, _) = response_server(vec![prioritised_issue("I-1", None, raw.clone())]);
+        let refusal = source(&endpoint)
+            .get_task(&"I-1".into())
+            .await
+            .expect_err("no priority of Linear's is this");
+        assert!(
+            matches!(&refusal, SourceError::Malformed { message }
+                if message.contains("field priority is") && message.contains("4 (low)")),
+            "{raw}: {refusal:?}"
+        );
+    }
+    let mut absent = prioritised_issue("I-1", None, 0.into());
+    absent["issue"].as_object_mut().unwrap().remove("priority");
+    let (endpoint, _) = response_server(vec![absent]);
+    let refusal = source(&endpoint)
+        .get_task(&"I-1".into())
+        .await
+        .expect_err("the field is selected and `Float!`");
+    assert!(
+        matches!(&refusal, SourceError::Malformed { message } if message.contains("priority")),
+        "{refusal:?}"
+    );
+}
+
+/// A copy carries the priority as Linear's own number, on a create and on an update alike —
+/// `0` included, so moving a task back to no priority is written rather than left out.
+#[tokio::test]
+async fn a_copy_sends_linears_priority_on_create_and_on_update_including_none() {
+    let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
+    let no_relations = serde_json::json!({"issue":{"description":null,
+        "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+        "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+    for (priority, level) in LINEAR_SCALE {
+        for target in [None, Some(NativeId::from("I-OLD"))] {
+            let (mutation, root) = if target.is_some() {
+                (onetaskgraph_linear::graphql::ISSUE_UPDATE, "issueUpdate")
+            } else {
+                (onetaskgraph_linear::graphql::ISSUE_CREATE, "issueCreate")
+            };
+            let (endpoint, wire) = response_server(vec![
+                id_page("teams", "TEAM"),
+                id_page("workflowStates", "STATE"),
+                serde_json::json!({(root):{"success":true,"issue":{"id":"I-OLD"}}}),
+                no_relations.clone(),
+            ]);
+            let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T",
+                "title":"task","content":"body","status":{"category":"todo","name":"Todo"},
+                "priority":priority,"labels":[],"repositories":[],"metadata":{}}))
+            .unwrap();
+            writable_source(&endpoint)
+                .write_task(&ItemWrite {
+                    target: target.clone(),
+                    item: task,
+                    depends_on: Vec::new(),
+                })
+                .await
+                .unwrap();
+            let written = wire
+                .iter()
+                .map(|request| sent(&request))
+                .find(|request| request["query"] == mutation)
+                .expect("the issue was written");
+            assert_eq!(
+                written["variables"]["input"]["priority"],
+                serde_json::json!(level),
+                "{priority:?} into {target:?}"
+            );
+        }
+    }
+}
+
+/// A priority set on its own reads the issue, sends `issueUpdate` carrying `priority` and
+/// nothing else, and answers with the priority Linear's own payload reports — not an echo.
+#[tokio::test]
+async fn a_priority_is_set_by_sending_only_priority_and_answers_what_linear_read_back() {
+    use onetaskgraph_linear::graphql;
+    for (priority, level) in LINEAR_SCALE {
+        let (endpoint, wire) = response_server(vec![
+            prioritised_issue("I-1", Some("body"), 3.into()),
+            serde_json::json!({"issueUpdate":{"success":true,
+                "issue":{"id":"I-1","priority":f64::from(level)}}}),
+        ]);
+        let answered = writable_source(&endpoint)
+            .set_task_priority(&"ENG-1".into(), priority)
+            .await
+            .unwrap();
+        assert_eq!(answered, Some(priority));
+        let shapes = wire
+            .iter()
+            .map(|request| {
+                let request = sent(&request);
+                (request["query"].clone(), request["variables"].clone())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shapes,
+            vec![
+                (
+                    serde_json::json!(graphql::ISSUE),
+                    serde_json::json!({"id":"ENG-1"})
+                ),
+                // The backend id the read answered with, and `priority` alone.
+                (
+                    serde_json::json!(graphql::ISSUE_PRIORITY_UPDATE),
+                    serde_json::json!({"id":"I-1","input":{"priority":level}})
+                ),
+            ],
+            "{priority:?}"
+        );
+    }
+
+    // What Linear holds is the answer, even where it is not what was sent.
+    let (endpoint, _) = response_server(vec![
+        prioritised_issue("I-1", None, 0.into()),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","priority":4}}}),
+    ]);
+    assert_eq!(
+        writable_source(&endpoint)
+            .set_task_priority(&"I-1".into(), Priority::Urgent)
+            .await
+            .unwrap(),
+        Some(Priority::Low)
+    );
+}
+
+/// No such issue, and an issue Linear has trashed, are no such task for both narrow writes:
+/// `None`, after the read alone.
+#[tokio::test]
+async fn a_narrow_priority_or_content_write_answers_none_for_no_issue_and_writes_nothing() {
+    let answers = || {
+        [serde_json::json!({"issue":null}), {
+            let mut trashed = prioritised_issue("I-1", Some("body"), 2.into());
+            trashed["issue"]["archivedAt"] = serde_json::json!("2026-09-04T12:00:00Z");
+            trashed
+        }]
+    };
+    for answer in answers() {
+        let (endpoint, wire) = response_server(vec![answer]);
+        assert_eq!(
+            writable_source(&endpoint)
+                .set_task_priority(&"I-1".into(), Priority::High)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(wire.iter().count(), 1, "the read alone");
+    }
+    for answer in answers() {
+        let (endpoint, wire) = response_server(vec![answer]);
+        assert_eq!(
+            writable_source(&endpoint)
+                .set_task_content(&"I-1".into(), "new body")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(wire.iter().count(), 1, "the read alone");
+    }
+}
+
+/// Linear refusing either narrow write, or answering one with a payload this source cannot
+/// read, is a failure — never a priority or a content reported as written.
+#[tokio::test]
+async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
+    for (payload, refused) in [
+        (
+            serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
+            true,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","priority":9}}}),
+            false,
+        ),
+        // An answer naming another issue is not this write landing.
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2","priority":2}}}),
+            false,
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![
+            prioritised_issue("I-1", None, 0.into()),
+            payload.clone(),
+        ]);
+        let failure = writable_source(&endpoint)
+            .set_task_priority(&"I-1".into(), Priority::High)
+            .await
+            .expect_err("not confirmed");
+        assert!(
+            matches!(
+                (&failure, refused),
+                (SourceError::Refused { .. }, true) | (SourceError::Malformed { .. }, false)
+            ),
+            "{payload}: {failure:?}"
+        );
+    }
+    for (payload, refused) in [
+        (
+            serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
+            true,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2"}}}),
+            false,
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![
+            prioritised_issue("I-1", None, 0.into()),
+            payload.clone(),
+        ]);
+        let failure = writable_source(&endpoint)
+            .set_task_content(&"I-1".into(), "body")
+            .await
+            .expect_err("not confirmed");
+        assert!(
+            matches!(
+                (&failure, refused),
+                (SourceError::Refused { .. }, true) | (SourceError::Malformed { .. }, false)
+            ),
+            "{payload}: {failure:?}"
+        );
+    }
+    // An issue this source could not read is refused before anything is written over it.
+    let (endpoint, wire) = response_server(vec![prioritised_issue("I-1", None, 7.into())]);
+    assert!(matches!(
+        writable_source(&endpoint)
+            .set_task_content(&"I-1".into(), "body")
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+    assert_eq!(wire.iter().count(), 1, "no issueUpdate was sent");
+}
+
+/// A content write sends `issueUpdate` with `description` alone, and that description keeps
+/// the issue's metadata slot byte for byte — so a later read reports the given content and
+/// every other field, the metadata in the slot included, exactly as it was.
+#[tokio::test]
+async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
+    use onetaskgraph_linear::graphql;
+    let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->";
+    for (before, content, sent_description, read_content) in [
+        // A slot is kept as stored, after the separator a copy writes.
+        (
+            Some(format!("old body\n\n{slot}")),
+            "new body\nsecond line",
+            format!("new body\nsecond line\n\n{slot}"),
+            Some("new body\nsecond line"),
+        ),
+        // Whitespace at the content's end is content: it goes before the separator, and a
+        // read takes off the separator alone.
+        (
+            Some(format!("old body\n\n{slot}")),
+            "new body  \n\n\n",
+            format!("new body  \n\n\n\n\n{slot}"),
+            Some("new body  \n\n\n"),
+        ),
+        // Content emptied beside a slot: the slot alone.
+        (
+            Some(format!("old body\n\n{slot}")),
+            "",
+            slot.to_owned(),
+            None,
+        ),
+        // No slot: the content verbatim, its trailing newline included.
+        (
+            Some("old body".to_owned()),
+            "new body\n",
+            "new body\n".to_owned(),
+            Some("new body\n"),
+        ),
+        (None, "new body", "new body".to_owned(), Some("new body")),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            prioritised_issue("I-1", before.as_deref(), 2.into()),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+        ]);
+        assert_eq!(
+            writable_source(&endpoint)
+                .set_task_content(&"ENG-1".into(), content)
+                .await
+                .unwrap(),
+            Some(())
+        );
+        let requests = wire
+            .iter()
+            .map(|request| sent(&request))
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2, "one read and one write: {requests:?}");
+        assert_eq!(requests[0]["query"], graphql::ISSUE);
+        assert_eq!(requests[1]["query"], graphql::ISSUE_UPDATE);
+        // The backend id the read answered with, and `description` as the input's only member.
+        assert_eq!(
+            requests[1]["variables"],
+            serde_json::json!({"id":"I-1","input":{"description":sent_description}})
+        );
+
+        // Read back what was written, beside what was there before.
+        let (endpoint, _) = response_server(vec![
+            prioritised_issue("I-1", before.as_deref(), 2.into()),
+            prioritised_issue("I-1", Some(&sent_description), 2.into()),
+        ]);
+        let reader = source(&endpoint);
+        let was = reader.get_task(&"I-1".into()).await.unwrap().unwrap();
+        let now = reader.get_task(&"I-1".into()).await.unwrap().unwrap();
+        assert_eq!(now.content.as_deref(), read_content, "{content:?}");
+        assert_eq!(
+            Task {
+                content: was.content.clone(),
+                ..now
+            },
+            was,
+            "only the content moved"
+        );
+    }
+}
+
+/// Content ending in what this source reads as its own metadata slot is refused before
+/// anything is sent — written, it would read back as metadata rather than as the content it
+/// was — and one naming such a block anywhere but the end, beside the issue's real slot, reads
+/// back as the content it is.
+#[tokio::test]
+async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent() {
+    let lookalike = "Notes.\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":1}\n-->";
+    let (endpoint, wire) = response_server(vec![prioritised_issue("I-1", Some("Old."), 0.into())]);
+    let refused = writable_source(&endpoint)
+        .set_task_content(&"I-1".into(), lookalike)
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&refused, SourceError::Refused { message }
+            if message.contains("reads as its own metadata slot") && message.contains("next:")),
+        "{refused:?}"
+    );
+    assert_eq!(wire.iter().count(), 1, "no issueUpdate was sent");
+
+    let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->";
+    let (endpoint, wire) = response_server(vec![
+        prioritised_issue("I-1", Some(&format!("Old.\n\n{slot}")), 0.into()),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+    ]);
+    writable_source(&endpoint)
+        .set_task_content(&"I-1".into(), lookalike)
+        .await
+        .expect("the issue's own slot stays the slot");
+    let requests: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
+    assert_eq!(
+        requests[1]["variables"]["input"]["description"],
+        format!("{lookalike}\n\n{slot}")
+    );
 }

@@ -27,8 +27,9 @@ use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
-    PageRequest, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceName,
+    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -282,6 +283,7 @@ async fn drive_every_declared_capability(
         content: Some("temporary credentialed write; the live lane removes this".into()),
         status: status.clone(),
         labels,
+        priority: Priority::None,
         project: under.cloned(),
         url: None,
         location: None,
@@ -840,6 +842,8 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Native,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

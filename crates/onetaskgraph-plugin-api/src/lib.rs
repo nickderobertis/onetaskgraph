@@ -38,6 +38,6 @@ pub use query::{
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use work::{
     DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, ItemKind, Label,
-    Location, Project, Repository, Status, StatusCategory, Task, TaskRef,
+    Location, Priority, Project, Repository, Status, StatusCategory, Task, TaskRef,
 };
 pub use write::{ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};

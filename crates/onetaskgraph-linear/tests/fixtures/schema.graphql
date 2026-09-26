@@ -61,6 +61,14 @@
 # that same commit on 2026-09-15. That file spells `WorkflowStateFilter.team` a `TeamFilter`,
 # and this one keeps `NullableTeamFilter`: the real API's own refusal outranks the published
 # schema, as recorded above.
+#
+# A task's priority carries an eighth date. `Issue.priority: Float!`, and `priority: Int` on
+# `IssueCreateInput` and on `IssueUpdateInput`, are pinned 2026-09-26 from Linear's published
+# schema, which describes all three alike: "The priority of the issue. 0 = No priority,
+# 1 = Urgent, 2 = High, 3 = Normal, 4 = Low." The read is a `Float` and the two inputs an
+# `Int`, as published, which is why the plugin reads `2` and `2.0` as one answer and sends a
+# whole number. `IssueFilter.priority` exists there too and stays out, because nothing sends
+# it: the plugin declares `filter_by_priority` unsupported and the engine narrows.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -110,6 +118,7 @@ type Issue {
   updatedAt: DateTime
   archivedAt: DateTime
   state: WorkflowState!
+  priority: Float!
   labels: IssueLabelConnection!
   project: Project
   relations(first: Int!, after: String): IssueRelationConnection!
@@ -397,6 +406,7 @@ input IssueCreateInput {
   title: String!
   description: String
   stateId: String!
+  priority: Int
   labelIds: [String!]!
   projectId: String
 }
@@ -407,6 +417,7 @@ input IssueUpdateInput {
   title: String
   description: String
   stateId: String
+  priority: Int
   labelIds: [String!]
   projectId: String
 }

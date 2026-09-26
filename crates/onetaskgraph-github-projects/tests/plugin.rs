@@ -16,9 +16,10 @@ use std::{
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, MetadataKey, NativeId, NewComment, PageRequest, Project, ProjectFilter, ProjectQuery,
-    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport,
+    Location, MetadataKey, NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
+    WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -2083,6 +2084,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         title: title.to_owned(),
         content: None,
         status,
+        priority: Priority::None,
         labels: vec![],
         project: None,
         url: None,
@@ -3458,6 +3460,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             labels,
             statuses,
             project: ProjectFilter::Any,
+            priorities: Vec::new(),
         };
     let none = LabelFilter::default();
 
@@ -3546,6 +3549,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
                 labels: label_filter(&["chore"], &[], &["team"]),
                 statuses: vec![StatusCategory::Todo],
                 project: ProjectFilter::Orphans,
+                priorities: Vec::new(),
             },
         ),
     ] {
@@ -7062,6 +7066,8 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

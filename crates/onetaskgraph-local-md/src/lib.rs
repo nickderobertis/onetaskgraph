@@ -20,6 +20,8 @@
 //! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
 //! | `documents` | **Supported and proven.** `documents/` is a folder of its own beside the other two, read on the same terms: recursively, with a file's path under it and without `.md` as its identifier. A document's front matter is a task's minus the two things a document is not — no `status` and no `depends_on` — and both are refused rather than ignored. |
 //! | `comments` | **Supported and proven.** A task's comments are an optional trailing `## Comments` section of the task's own file — human-readable, full fidelity, never JSON — in exactly the shape [`COMMENTS_HEADING`] documents. The section is not the task's content, and nothing a copy writes into the file adds, changes or removes it. |
+//! | `priority` | **Supported,** and proven by this crate's `tests/priority.rs`. A task's optional `priority:` front-matter key holds `none`, `urgent`, `high`, `medium` or `low`; an absent key is `none`, `none` is never written, and any other value makes the file malformed naming the key. A project has no priority, so the key there is refused rather than ignored. |
+//! | `filter_by_priority` | **Supported,** and proven by this crate's `tests/priority.rs`, over that `priority:` key: a task is kept when its priority is any value asked for. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -49,13 +51,17 @@
 //!
 //! # What this source writes in place
 //!
-//! Beside a copy's whole-file write, three narrow writes edit a file that is already there
-//! and leave every byte they do not own as it was: a task's `status:` line, its
-//! `delivered_by:` entry, and one entry of the `metadata:` block of a task, a project or a
-//! document. All three replace the file through a staging file and a rename, so a reader
-//! sees the record before the write or after it and never part of either. The last is also
-//! verified by reading the edited text back before anything is written, and refuses rather
-//! than reformats a block it cannot edit narrowly; [`STAGING_SUFFIX`] states its rules.
+//! Beside a copy's whole-file write, five narrow writes edit a file that is already there
+//! and leave every byte they do not own as it was: a task's `status:` line, its `priority:`
+//! line, its `delivered_by:` entry, its content — the body between the front matter and the
+//! comments section — and one entry of the `metadata:` block of a task, a project or a
+//! document. All five replace the file through a staging file and a rename, so a reader
+//! sees the record before the write or after it and never part of either. The content write
+//! and the metadata write are also verified by reading the edited text back before anything
+//! is written, and refuse rather than reformat what they cannot edit narrowly;
+//! [`STAGING_SUFFIX`] states the metadata write's rules and
+//! [`set_task_content`](TaskSource::set_task_content) on [`LocalMdSource`] the content
+//! write's.
 #![deny(missing_docs)]
 
 use std::{
@@ -73,7 +79,7 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Project,
+    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
     Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
     WriteSupport,
@@ -206,6 +212,12 @@ struct FrontMatter {
     title: Option<String>,
     #[serde(default = "default_status")]
     status: String,
+    /// A task's priority, read as YAML's own value rather than as [`Priority`] so a value
+    /// that is not one is refused naming the key and the five it may be, rather than in
+    /// serde's words. `None` is the key being absent and nothing else: an explicit
+    /// `priority: null` is a value, and one that is not a priority.
+    #[serde(default, deserialize_with = "present_value")]
+    priority: Option<serde_json::Value>,
     #[serde(default)]
     labels: Vec<LabelInput>,
     project: FiledUnder,
@@ -258,7 +270,15 @@ struct SharedFront {
 
 impl FrontMatter {
     /// This front matter split into what every kind carries, and what only work does.
-    fn split(self) -> (SharedFront, String, Vec<Dependency>, Delivery) {
+    fn split(
+        self,
+    ) -> (
+        SharedFront,
+        String,
+        Vec<Dependency>,
+        Delivery,
+        Option<serde_json::Value>,
+    ) {
         (
             SharedFront {
                 title: self.title,
@@ -274,6 +294,7 @@ impl FrontMatter {
                 delivers: self.delivers,
                 delivered_by: self.delivered_by,
             },
+            self.priority,
         )
     }
 }
@@ -374,6 +395,8 @@ struct DocumentFrontMatter {
 struct Entry {
     common: Common,
     status: Status,
+    /// [`Priority::None`] for a project, which has no priority.
+    priority: Priority,
     dependencies: Vec<DependencyEdge>,
     /// Empty for a project, which delivers nothing and is delivered by nothing.
     delivers: Vec<TaskRef>,
@@ -713,7 +736,8 @@ impl LocalMdSource {
                     .to_string_lossy()
                     .into_owned()
             });
-        let body = body.trim();
+        // Exactly the content the file holds — `body_text` has already taken off the file's
+        // own framing — so whitespace at either end is content like any other.
         Ok(Common {
             id: NativeId(id),
             title: front.title.unwrap_or(fallback),
@@ -746,13 +770,16 @@ impl LocalMdSource {
             serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let (shared, status, depends_on, delivery) = front.split();
+        let (shared, status, depends_on, delivery, priority) = front.split();
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
         let content = match kind {
-            WorkKind::Task => sectioned(body).0,
-            WorkKind::Project => body,
+            WorkKind::Task => {
+                let (above, comments) = sectioned(body);
+                body_text(above, comments.is_some())
+            }
+            WorkKind::Project => body_text(body, false),
         };
         let common = self.common(kind.kind(), path, content, shared)?;
         let status = Status {
@@ -792,6 +819,19 @@ impl LocalMdSource {
                 }),
             })
             .collect::<Result<Vec<_>, SourceError>>()?;
+        let priority = match (kind, priority) {
+            (_, None) => Priority::None,
+            (WorkKind::Task, Some(value)) => priority_of(path, &value)?,
+            (WorkKind::Project, Some(_)) => {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "{}: `priority` belongs to a task, and this is a project; next: remove \
+                         it, or move it to a task of this project",
+                        path.display()
+                    ),
+                });
+            }
+        };
         let (delivers, delivered_by) = match kind {
             WorkKind::Task => (
                 self.task_list("delivers", &common.id, path, delivery.delivers.as_ref())?,
@@ -818,6 +858,7 @@ impl LocalMdSource {
         Ok(Entry {
             common,
             status,
+            priority,
             dependencies,
             delivers,
             delivered_by,
@@ -856,7 +897,7 @@ impl LocalMdSource {
             serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let common = self.common(Kind::Document, path, body, front.into())?;
+        let common = self.common(Kind::Document, path, body_text(body, false), front.into())?;
         Ok(Document {
             id: common.id,
             title: common.title,
@@ -967,6 +1008,29 @@ impl LocalMdSource {
     }
 }
 
+/// A key that is there, whatever it holds — `null` included, which serde would otherwise read
+/// as the key being absent.
+fn present_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
+/// The priority one task file's `priority:` key holds, or why the file is malformed.
+fn priority_of(path: &Path, value: &serde_json::Value) -> Result<Priority, SourceError> {
+    let parsed = match value {
+        serde_json::Value::String(word) => word.parse::<Priority>(),
+        other => Err(format!("{other} is not a priority")),
+    };
+    parsed.map_err(|reason| SourceError::Malformed {
+        message: format!(
+            "{}: `priority`: {reason}; next: write one of none, urgent, high, medium or low, \
+             or remove the key for none",
+            path.display()
+        ),
+    })
+}
+
 /// The labels one file's `labels:` key names, in the order it names them.
 fn labels_of(inputs: Vec<LabelInput>) -> Vec<Label> {
     inputs
@@ -1015,6 +1079,8 @@ impl TaskSource for LocalMdSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            priority: Support::Native,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1051,6 +1117,7 @@ impl TaskSource for LocalMdSource {
             .filter(|t| {
                 labels_match(&t.labels, &q.labels)
                     && (q.statuses.is_empty() || q.statuses.contains(&t.status.category))
+                    && (q.priorities.is_empty() || q.priorities.contains(&t.priority))
                     && match &q.project {
                         ProjectFilter::Any => true,
                         ProjectFilter::Orphans => t.project.is_none(),
@@ -1162,6 +1229,7 @@ impl TaskSource for LocalMdSource {
             &Outgoing::Work {
                 kind: WorkKind::Task,
                 status: &task.status,
+                priority: task.priority,
                 depends_on: &write.depends_on,
                 delivers: &task.delivers,
                 delivered_by: &task.delivered_by,
@@ -1184,6 +1252,7 @@ impl TaskSource for LocalMdSource {
             &Outgoing::Work {
                 kind: WorkKind::Project,
                 status: &project.status,
+                priority: Priority::None,
                 depends_on: &write.depends_on,
                 delivers: &[],
                 delivered_by: &[],
@@ -1251,6 +1320,52 @@ impl TaskSource for LocalMdSource {
         let rendered = serde_norway::to_string(&status.name).expect("a status word renders");
         self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
         Ok(Some(status))
+    }
+
+    /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
+    /// removing it for `none`, which is what an absent key reads as.
+    ///
+    /// A task already holding `priority` is left byte for byte as it is, an explicit
+    /// `priority: none` included. The file is replaced exactly as a status write replaces it.
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        if self.parse(WorkKind::Task, &path)?.priority == priority {
+            return Ok(Some(priority));
+        }
+        let written = (priority != Priority::None).then(|| priority.as_str());
+        self.rewrite_front_entry(&path, "priority", written)?;
+        Ok(Some(self.parse(WorkKind::Task, &path)?.priority))
+    }
+
+    /// Replace the task's content — the body between its front matter and its comments
+    /// section — with `content` byte for byte, and nothing else.
+    ///
+    /// The front matter and the comments section are kept byte for byte, and the content is
+    /// framed by [`framed`], so a later read answers exactly `content` — whitespace at either
+    /// end included — or none for content with no text at all. Content identical to what the
+    /// file holds writes nothing.
+    ///
+    /// The edited text is read back before anything is written, and the write is refused,
+    /// the file left as it was, when it would read back as more than the content changed:
+    /// content that would itself read as a comments section, or — for a task whose front
+    /// matter has no `title:` — content whose first `# ` heading would change the title the
+    /// task is read with. The file is replaced through a staging file and a rename, by the
+    /// rules [`STAGING_SUFFIX`] states.
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        self.replace_content(&path, content).map(Some)
     }
 
     /// Rewrite the one `delivered_by:` entry of the task's front matter, and nothing else —
@@ -1473,22 +1588,17 @@ impl TaskFile {
     /// and removed with it, so a task that gains and then loses its only comment reads back
     /// with the content it had.
     fn rewrite(&self) -> Result<(), SourceError> {
-        let content = &self.text[self.body_at..self.section_at];
+        let above = &self.text[self.body_at..self.section_at];
+        let had_section = self.section_at < self.text.len();
+        let content = body_text(above, had_section);
         let mut written = String::with_capacity(self.text.len() + 256);
         written.push_str(&self.text[..self.body_at]);
         if self.comments.is_empty() {
-            match content.strip_suffix("\n\n") {
-                Some(above) => {
-                    written.push_str(above);
-                    written.push('\n');
-                }
-                None => written.push_str(content),
-            }
+            written.push_str(&framed(content, false));
         } else {
-            written.push_str(content);
-            while !written.ends_with("\n\n") {
-                written.push('\n');
-            }
+            // The content above is kept as it reads, so a comment added, edited or removed
+            // never moves a byte of what a read reports as the task's content.
+            written.push_str(&framed(content, true));
             written.push_str(&rendered_section(&self.comments));
         }
         fs::write(&self.path, written).map_err(|e| SourceError::Unavailable {
@@ -1727,6 +1837,54 @@ fn unfronted(path: &Path) -> SourceError {
             path.display()
         ),
     }
+}
+
+/// The content a body holds, given the text above its comments section (or the whole body)
+/// and whether a section follows it.
+///
+/// Exactly the bytes a person wrote, less only this format's own framing: at most one line
+/// break straight after the front matter, the one line break that ends the file's content,
+/// and — when a comments section follows — one blank line before it. So content with leading
+/// or trailing whitespace reads back as itself, and a hand-written file with a single blank
+/// line under its front matter or before its comments reads without it. What this no longer
+/// does is trim: a hand-written file with further blank lines, or spaces, at either end of its
+/// content reads with them, because they are the file's content.
+/// [`framed`] is the inverse, and every write of content goes through it.
+fn body_text(above: &str, sectioned: bool) -> &str {
+    let break_off = |text: &str| -> usize {
+        if text.ends_with("\r\n") {
+            2
+        } else if text.ends_with('\n') {
+            1
+        } else {
+            0
+        }
+    };
+    let mut text = above;
+    text = text
+        .strip_prefix("\r\n")
+        .or_else(|| text.strip_prefix('\n'))
+        .unwrap_or(text);
+    for _ in 0..if sectioned { 2 } else { 1 } {
+        text = &text[..text.len() - break_off(text)];
+    }
+    text
+}
+
+/// The text a body holds above its comments section so that [`body_text`] reads `content`
+/// back exactly: a leading line break when the content itself begins with one, the line break
+/// that ends it, and the blank line before a section when one follows.
+fn framed(content: &str, sectioned: bool) -> String {
+    let mut text = String::with_capacity(content.len() + 3);
+    if content.starts_with('\n') || content.starts_with("\r\n") {
+        text.push('\n');
+    }
+    text.push_str(content);
+    text.push('\n');
+    if sectioned {
+        text.push('\n');
+    }
+    text
 }
 
 /// A task body split into its content and its trailing comments section, when it has one.
@@ -1992,6 +2150,7 @@ fn task(d: Entry) -> Task {
         title: d.common.title,
         content: d.common.body,
         status: d.status,
+        priority: d.priority,
         labels: d.common.labels,
         project: d.common.project,
         url: d.common.url,
@@ -2032,6 +2191,8 @@ enum Outgoing<'a> {
     Work {
         kind: WorkKind,
         status: &'a Status,
+        /// [`Priority::None`] for a project, which has no priority.
+        priority: Priority,
         depends_on: &'a [DependencyEdge],
         /// Empty for a project.
         delivers: &'a [TaskRef],
@@ -2081,6 +2242,10 @@ struct WrittenFrontMatter {
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    /// Absent for `none`, so a task with no priority is written exactly as it was before
+    /// this source held one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     labels: Vec<WrittenLabel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2372,6 +2537,64 @@ impl LocalMdSource {
         replace_atomically(path, &rewritten)
     }
 
+    /// Replace the content of the task file at `path` with `content`, by the rules
+    /// [`set_task_content`](TaskSource::set_task_content) states.
+    fn replace_content(&self, path: &Path, content: &str) -> Result<(), SourceError> {
+        let text = Self::read_text(path)?;
+        let before = task(self.parse_text(WorkKind::Task, path, &text)?);
+        let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(path))?;
+        let body = &text[body_at..];
+        let section = &body[sectioned(body).0.len()..];
+        let mut edited = String::with_capacity(body_at + content.len() + section.len() + 3);
+        edited.push_str(&text[..body_at]);
+        edited.push_str(&framed(content, !section.is_empty()));
+        let written_to = edited.len();
+        edited.push_str(section);
+        if edited == text {
+            return Ok(());
+        }
+        let refused = |reason: String, next: &str| SourceError::Refused {
+            message: format!(
+                "{}: cannot represent the field `content`: {reason}; next: {next}",
+                path.display()
+            ),
+        };
+        if sectioned(&edited[body_at..]).0.len() != written_to - body_at {
+            return Err(refused(
+                format!(
+                    "it ends in a `{COMMENTS_HEADING}` section of comment blocks, which this \
+                     source reads as the task's comments rather than its content"
+                ),
+                "change that heading in the content",
+            ));
+        }
+        let after = task(self.parse_text(WorkKind::Task, path, &edited)?);
+        // What a read will report is exactly what was asked for, or nothing is written.
+        if after.content.as_deref().unwrap_or_default() != content {
+            return Err(refused(
+                format!(
+                    "it would read back as {:?} rather than as itself",
+                    after.content.as_deref().unwrap_or_default()
+                ),
+                "end the content with something other than a lone carriage return",
+            ));
+        }
+        if after.title != before.title {
+            return Err(refused(
+                format!(
+                    "this task has no `title:` in its front matter, so it is titled {:?} by its \
+                     content, and this content would title it {:?}",
+                    before.title, after.title
+                ),
+                "give the task a `title:` in its front matter, or keep its heading",
+            ));
+        }
+        // Nothing else a read reports can have moved: the front matter and the section are
+        // the very bytes they were, and the title is the one member a read derives from the
+        // content.
+        replace_atomically(path, &edited)
+    }
+
     /// One file's whole text, or a refusal naming the field this source cannot hold.
     fn render(&self, outgoing: &Outgoing<'_>) -> Result<String, SourceError> {
         let is_task = matches!(
@@ -2381,15 +2604,28 @@ impl LocalMdSource {
                 ..
             }
         );
-        let (status, depends_on, delivers, delivered_by) = match outgoing {
+        let (status, priority, depends_on, delivers, delivered_by) = match outgoing {
             Outgoing::Work {
                 status,
+                priority,
                 depends_on,
                 delivers,
                 delivered_by,
                 ..
-            } => (Some(*status), *depends_on, *delivers, *delivered_by),
-            Outgoing::Document { .. } => (None, [].as_slice(), [].as_slice(), [].as_slice()),
+            } => (
+                Some(*status),
+                *priority,
+                *depends_on,
+                *delivers,
+                *delivered_by,
+            ),
+            Outgoing::Document { .. } => (
+                None,
+                Priority::None,
+                [].as_slice(),
+                [].as_slice(),
+                [].as_slice(),
+            ),
         };
         if let Some(status) = status {
             self.representable_status(status)?;
@@ -2398,6 +2634,7 @@ impl LocalMdSource {
         let front = WrittenFrontMatter {
             title: outgoing.title.to_owned(),
             status: status.map(|status| status.name.clone()),
+            priority: (priority != Priority::None).then(|| priority.as_str()),
             labels: outgoing
                 .labels
                 .iter()

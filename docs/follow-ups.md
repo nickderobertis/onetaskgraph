@@ -38,6 +38,28 @@ otherwise fail, naming the row and the field — and deleting this entry and the
 the field line above and fails while it names a capability that plugin no longer calls
 unsupported, so the entry cannot outlive the gap it describes.
 
+## Linear: the priority filter is unimplemented
+
+Unsupported fields: `onetaskgraph-linear` `filter_by_priority`
+
+`onetaskgraph-linear` holds a task's priority natively — `Issue.priority`, read on every
+issue and written through `IssueCreateInput.priority` and `IssueUpdateInput.priority` — and
+declares `filter_by_priority` as `Support::Unsupported`. So it ignores a query's priorities
+and returns the wider page, and the engine narrows it exactly, which capability rule 2 is
+what makes sound.
+
+It is a gap rather than a limit. Linear's published `IssueFilter` carries a `priority`
+comparator over the same `0` to `4` scale the plugin reads, so nothing about the remote
+service stops a native narrowing. What is missing is the plugin sending one, and pinning
+`IssueFilter.priority` and its comparator in
+`crates/onetaskgraph-linear/tests/fixtures/schema.graphql` so the variables check can hold
+it.
+
+Closing it means: sending that predicate from `issue_filter`, pinning it, flipping the field
+to `Support::Native`, updating this plugin's row in `crates/onetaskgraph/tests/e2e/fixtures.rs`
+and the fake Linear server there so it applies the predicate, and deleting this entry and the
+verdict's wording in `onetaskgraph-linear`'s module documentation.
+
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On

@@ -2,7 +2,7 @@
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Document, ItemKind, Label, NativeId, Project, Support, Task, TaskRef, WriteSupport,
+    Document, ItemKind, Label, NativeId, Priority, Project, Support, Task, TaskRef, WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
@@ -200,6 +200,22 @@ impl InMemoryConfig {
             }
         }
 
+        // A priority held where the source says it holds none: the capability is what every
+        // reader believes, so a task carrying one here would be reported with a priority by a
+        // source that says it cannot have one.
+        if !self.capabilities.priority.is_native() {
+            for task in &self.tasks {
+                if task.priority != Priority::None {
+                    problems.push(format!(
+                        "task {} is configured with the priority {} under a source that declares \
+                         it holds none; set `capabilities.priority: native`, or remove the \
+                         priority",
+                        task.id, task.priority
+                    ));
+                }
+            }
+        }
+
         // A task's two task lists, held to what every source holds them to: no entry naming
         // the task itself, and none naming one task twice.
         for task in &self.tasks {
@@ -335,6 +351,17 @@ pub struct CapabilityConfig {
     /// and the refusal against the same plugin. Whether they can be added to, edited and
     /// removed is [`Self::writes`], the one write declaration every write here reads.
     pub comments: Support,
+    /// Whether this source's tasks hold a priority at all.
+    ///
+    /// Not a predicate, for the reason [`Self::documents`] is not: it says what this source
+    /// *holds*. Defaults to `Native` — a task held in memory carries whatever priority it was
+    /// given — and is configurable so the engine's refusal of a priority written to a source
+    /// that holds none can be driven end to end.
+    /// [`InMemoryConfig::validate`](crate::InMemoryConfig::validate) refuses the one
+    /// incoherent pairing: a task configured with a priority under a source declaring none.
+    pub priority: Support,
+    /// Whether this source keeps only the tasks whose priority a query lists, itself.
+    pub filter_by_priority: Support,
     /// Whether this source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether this source filters by label itself.
@@ -431,6 +458,8 @@ impl Default for CapabilityConfig {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Native,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -454,6 +483,8 @@ impl From<&CapabilityConfig> for Capabilities {
             projects: value.projects,
             documents: value.documents,
             comments: value.comments,
+            priority: value.priority,
+            filter_by_priority: value.filter_by_priority,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

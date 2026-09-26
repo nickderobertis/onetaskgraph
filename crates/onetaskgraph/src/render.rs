@@ -13,12 +13,13 @@
 
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
-    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskStatusSet,
+    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskContentSet,
+    TaskPrioritySet, TaskStatusSet,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, Document, Label, Location, Project, Support, Task, TaskRef,
+    Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
 };
-use onetaskgraph_status_options::StatusOptionsReport;
+use onetaskgraph_status_options::{FieldOutcome, FieldsReport, StatusOptionsReport};
 use serde::Serialize;
 
 /// One value as the wire spells it — `in-progress`, `search-title`, `blocks`.
@@ -52,6 +53,34 @@ pub fn status_options(report: &StatusOptionsReport) -> String {
             report.source
         ),
     }
+}
+
+/// A concise read-only plan or verified apply result for every field a board setup names:
+/// one line per field.
+pub fn fields(report: &FieldsReport) -> String {
+    let mut rendered = String::new();
+    for field in &report.fields {
+        let missing = if field.missing.is_empty() {
+            "none".to_owned()
+        } else {
+            field.missing.join(", ")
+        };
+        let name = field.field.name();
+        let line = match (field.outcome, field.exists) {
+            (FieldOutcome::Created, _) => {
+                format!("created the {name} field with: {missing}")
+            }
+            (FieldOutcome::Applied, _) => format!("added and verified {name} options: {missing}"),
+            (FieldOutcome::Planned, false) => {
+                format!("no {name} field; would create it with: {missing}")
+            }
+            (FieldOutcome::Planned | FieldOutcome::Unchanged, _) => {
+                format!("missing configured {name} options: {missing}")
+            }
+        };
+        rendered.push_str(&format!("{}: {line}\n", report.source));
+    }
+    rendered
 }
 
 /// Lay `rows` out as aligned columns, one line each.
@@ -151,6 +180,19 @@ pub fn status_set(set: &TaskStatusSet) -> String {
         rendered.push_str(&delivered(&set.delivered));
     }
     rendered
+}
+
+/// What `task priority set` did: the task, and the priority its source now reads it as.
+pub fn priority_set(set: &TaskPrioritySet) -> String {
+    columns(&[
+        vec!["id:".to_owned(), set.id.to_string()],
+        vec!["priority:".to_owned(), wire(&set.priority)],
+    ])
+}
+
+/// What `task content set` did: the task whose content was replaced.
+pub fn content_set(set: &TaskContentSet) -> String {
+    columns(&[vec!["id:".to_owned(), set.id.to_string()]])
 }
 
 /// What a `metadata set` verb did: the record, the key, the value its source now holds there
@@ -404,6 +446,11 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
             format!("{} ({})", wire(&item.status.category), item.status.name),
         ),
     ]);
+    // Only when one is set: `none` is what every task of a source without priorities reads
+    // as, and a line saying so on each of them would say nothing.
+    if item.priority != Priority::None {
+        fields.push(("priority", wire(&item.priority)));
+    }
     fields.push((
         "project",
         match &item.project {

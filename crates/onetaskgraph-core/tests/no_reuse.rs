@@ -19,8 +19,8 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId, Page,
-    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Support,
-    Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 
 /// A source that answers everything and counts every call it receives.
@@ -74,6 +74,7 @@ fn task() -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -118,6 +119,8 @@ impl TaskSource for Counting {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -207,6 +210,7 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
         sources: Vec::new(),
         filters: Filters::default(),
         project: ProjectSelector::Any,
+        priorities: Vec::new(),
         paging: one_page(),
     };
     let projects = ProjectRequest {
@@ -307,6 +311,7 @@ async fn paging_re_asks_rather_than_serving_a_page_it_kept() {
         sources: Vec::new(),
         filters: Filters::default(),
         project: ProjectSelector::Any,
+        priorities: Vec::new(),
         paging: Paging {
             limit: NonZeroU32::new(1).expect("1 is not zero"),
             token: None,

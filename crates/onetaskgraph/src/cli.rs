@@ -10,7 +10,7 @@ use std::num::NonZeroU32;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
-use onetaskgraph_plugin_api::{Direction, NativeId, StatusCategory, TextFields};
+use onetaskgraph_plugin_api::{Direction, NativeId, Priority, StatusCategory, TextFields};
 use serde_json::Value;
 
 /// One interface over the ticketing systems your work lives in.
@@ -104,14 +104,22 @@ pub enum SourcesCommand {
     List,
     /// Safely report or add configured GitHub Projects board Status options.
     ///
-    /// The default is a read-only plan. `--apply` preserves every existing option id and
-    /// verifies every existing item assignment after GitHub replaces the option list.
-    StatusOptions(StatusOptionsArgs),
+    /// The Status-only form of `sources fields`, which supersedes it. The default is a
+    /// read-only plan. `--apply` preserves every existing option id and verifies every
+    /// existing item assignment after GitHub replaces the option list.
+    StatusOptions(SetupArgs),
+    /// Safely report or set up every board field a GitHub Projects source's configuration
+    /// names: its Status options, and its Priority field when `priority_mapping` is set.
+    ///
+    /// The default is a read-only plan. `--apply` adds missing options, creates a missing
+    /// Priority field holding the mapped options, preserves every existing option's id,
+    /// name, color and description, and verifies every item's values afterwards.
+    Fields(SetupArgs),
 }
 
-/// Which configured source to inspect, and whether to apply its plan.
+/// Which configured source a guarded board setup inspects, and whether to apply its plan.
 #[derive(Debug, Args)]
-pub struct StatusOptionsArgs {
+pub struct SetupArgs {
     /// The configured `github-projects` source name.
     // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text;
     // the command converts it to `SourceName` before the configuration lookup or I/O.
@@ -119,7 +127,7 @@ pub struct StatusOptionsArgs {
     /// Add missing configured options and verify existing ids and assignments afterwards.
     #[arg(long)]
     // llmlint: ignore[invalid_states_unrepresentable] A presence-only CLI flag is
-    // intrinsically boolean; the command immediately maps it to `StatusOptionsMode`.
+    // intrinsically boolean; the command immediately maps it to `SetupMode`.
     pub apply: bool,
 }
 
@@ -149,6 +157,20 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: StatusCommand,
     },
+    /// Set one task's priority, and nothing else about it.
+    ///
+    /// Priority is not status: no task it delivers is re-evaluated.
+    Priority {
+        #[command(subcommand)]
+        command: PriorityCommand,
+    },
+    /// Replace one task's content, and nothing else about it.
+    ///
+    /// Content is not status: no task it delivers is re-evaluated.
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
     /// Set one key of one task's metadata, and nothing else about it.
     ///
     /// Metadata is not status: no task it delivers is re-evaluated.
@@ -156,6 +178,53 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+}
+
+/// What `onetaskgraph task priority` can do.
+#[derive(Debug, Subcommand)]
+pub enum PriorityCommand {
+    /// Set one task's priority, and nothing else about it; `none` clears it.
+    Set(PrioritySetArgs),
+}
+
+/// `onetaskgraph task priority set`.
+#[derive(Debug, Args)]
+pub struct PrioritySetArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`: a `GlobalId`
+    /// here would refuse an unqualified id as a bad invocation under clap's wording, and
+    /// `qualified` in `main` converts it immediately with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The priority to set.
+    #[arg(value_name = "PRIORITY")]
+    pub priority: PriorityArg,
+}
+
+/// What `onetaskgraph task content` can do.
+#[derive(Debug, Subcommand)]
+pub enum ContentCommand {
+    /// Replace one task's content with a file's bytes, and nothing else about it.
+    ///
+    /// Status, priority, metadata, labels, repositories and dependencies are left as they
+    /// were. There is no compare-and-set: the file's bytes replace whatever the task holds.
+    Set(ContentSetArgs),
+}
+
+/// `onetaskgraph task content set`.
+#[derive(Debug, Args)]
+pub struct ContentSetArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Read the new content from this file, byte for byte.
+    #[arg(long, value_name = "PATH")]
+    pub file: std::path::PathBuf,
 }
 
 /// What `onetaskgraph task metadata`, `project metadata` and `document metadata` can do.
@@ -471,6 +540,10 @@ pub struct TaskListArgs {
     #[arg(long = "no-project")]
     pub no_project: bool,
 
+    /// Keep tasks with this priority. Repeat for several; a task matching any one is kept.
+    #[arg(long = "priority", value_name = "PRIORITY")]
+    pub priority: Vec<PriorityArg>,
+
     #[command(flatten)]
     pub paging: PageArgs,
 }
@@ -711,6 +784,38 @@ impl StatusArg {
             Self::Done => StatusCategory::Done,
             Self::Cancelled => StatusCategory::Cancelled,
             Self::Unknown => StatusCategory::Unknown,
+        }
+    }
+}
+
+/// A priority, as the command line spells it.
+///
+/// A command-line mirror of [`Priority`] rather than that type itself, for the reason
+/// [`StatusArg`] is one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PriorityArg {
+    /// No priority is set.
+    None,
+    /// Drop everything for it.
+    Urgent,
+    /// Next, before the rest.
+    High,
+    /// In its turn.
+    Medium,
+    /// When there is nothing more pressing.
+    Low,
+}
+
+impl PriorityArg {
+    /// The contract's own priority.
+    #[must_use]
+    pub fn priority(self) -> Priority {
+        match self {
+            Self::None => Priority::None,
+            Self::Urgent => Priority::Urgent,
+            Self::High => Priority::High,
+            Self::Medium => Priority::Medium,
+            Self::Low => Priority::Low,
         }
     }
 }

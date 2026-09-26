@@ -27,6 +27,8 @@ RESPONSE_ROOTS = {
     "task_comment_edit": "Comment",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
+    "task_priority_set": "TaskPrioritySet",
+    "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
@@ -41,6 +43,7 @@ RESPONSE_ROOTS = {
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
     "sources_status_options": "StatusOptionsReport",
+    "sources_fields": "FieldsReport",
     "config_show": "EffectiveConfig",
 }
 # Roots no command returns directly, which the package generates and exports anyway.
@@ -61,6 +64,7 @@ CONTRACT_ROOTS = {
     "QueryPlan",
     "GlobalId",
     "StatusCategory",
+    "Priority",
     "SourceName",
     "Document",
     "DocumentQuery",
@@ -80,6 +84,7 @@ OPTION_TYPES = {
     "default_sources": "list[str] | tuple[str, ...]",
     "direction": "choices",
     "explain": "bool",
+    "file": "str",
     "in_": "choices",
     "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
@@ -91,6 +96,7 @@ OPTION_TYPES = {
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
     "page_size": "int",
+    "priority": "choice_list",
     "project": "str",
     "recreate": "bool",
     "search": "str",
@@ -108,6 +114,7 @@ OPTION_PLACEHOLDERS = {
     "default_sources": "NAMES",
     "direction": "DIRECTION",
     "explain": None,
+    "file": "PATH",
     "in_": "FIELDS",
     "kind": "KIND",
     "label": "L",
@@ -119,6 +126,7 @@ OPTION_PLACEHOLDERS = {
     "not_label": "L",
     "page": "TOKEN",
     "page_size": "N",
+    "priority": "PRIORITY",
     "project": "P",
     "recreate": None,
     "search": "TEXT",
@@ -491,7 +499,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options"):
+        case ("sources", "status-options" | "fields"):
             return ("source",)
         case ("task" | "document", "copy"):
             return ("ids",)
@@ -501,6 +509,10 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "comment_id")
         case ("task", "status", "set"):
             return ("id", "category")
+        case ("task", "priority", "set"):
+            return ("id", "priority")
+        case ("task", "content", "set"):
+            return ("id",)
         case ("task" | "project" | "document", "metadata", "set"):
             return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
@@ -508,6 +520,12 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
         case _:
             return ()
 
+
+# Options a command cannot run without, which its generated method takes as required
+# parameters beside its operands rather than as optional keywords: `task content set` has
+# nothing to write without `--file`. Each is still passed to the binary as the flag it is, so
+# it is not an operand and is not in the table `operands` answers.
+REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {("task", "content", "set"): ("file",)}
 
 # The commands that read a body from standard input when `--body-file` is absent, which
 # generated methods expose as a `body` the client writes there — a body is never a word of
@@ -535,7 +553,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[
             f"    {root},"
             for root in sorted(
-                set(RESPONSE_ROOTS.values()) | {"GlobalId", "SourceName", "StatusCategory"}
+                set(RESPONSE_ROOTS.values())
+                | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
         ")",
@@ -576,6 +595,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
         "category": "StatusCategory | str",
+        # `task priority set` takes the priority it sets as its second operand, spelled as the
+        # binary spells it — which is exactly the generated enum's values.
+        "priority": "Priority | str",
+        # `task content set` reads the task's new content from this file, byte for byte.
+        "file": "str",
         "source": "SourceName | str",
         # `metadata set` takes its key as a string, and its value as the JSON text the binary
         # parses strictly — exactly the word the command line takes, so what a caller writes
@@ -587,17 +611,23 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         root = RESPONSE_ROOTS[name]
         return_type = RETURN_TYPES.get(name, root)
         taken = positionals.get(command, ())
-        keywords = [item for item in option_names(command) if item not in taken]
+        required = REQUIRED_OPTIONS.get(command, ())
+        keywords = [
+            item for item in option_names(command) if item not in taken and item not in required
+        ]
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         parameters = (
-            [f"{positional}: {positional_types.get(positional, 'str')}" for positional in taken]
+            [
+                f"{positional}: {positional_types.get(positional, 'str')}"
+                for positional in (*taken, *required)
+            ]
             + ["*"]
             + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]
             + body
         )
         if parameters[-1] == "*":
             parameters.pop()
-        passed = [f"{item}={item}" for item in [*taken, *keywords]]
+        passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
         if body:
             passed.append("stdin=body")
         lines.extend(
@@ -659,8 +689,52 @@ def enum_defaults(lines: list[str]) -> list[str]:
     return rewritten
 
 
-def format_generated(destination: Path) -> None:
-    """Apply the package's locked formatter to deterministic generated output."""
+# Defaulted contract members that are never nullable: an omitted one takes its default — which
+# is how a document written before the member existed is read — and an explicit `null` is
+# refused, because the binary always writes the member and never writes `null` for it. The code
+# generator types every defaulted member `T | None`, so each of these is narrowed by name, and
+# only these: the rule is scoped to the members the priority contract added, keyed by the name
+# and the type it is declared with.
+NON_NULLABLE_DEFAULTED: dict[str, set[str]] = {
+    # `Task.priority`, defaulted to `none`.
+    "priority": {"Priority", "Support"},
+    # `Capabilities.priority` above and `Capabilities.filter_by_priority`, defaulted to
+    # `unsupported`.
+    "filter_by_priority": {"Support"},
+}
+
+
+def non_nullable_defaults(lines: list[str]) -> tuple[list[str], set[tuple[str, str]]]:
+    """Narrow each member [`NON_NULLABLE_DEFAULTED`] names from `T | None` to `T`.
+
+    Answers the rewritten lines and every (member, type) it narrowed, so the caller can refuse a
+    bundle in which one of them no longer appears rather than silently stop narrowing it. A
+    member whose default is `None` is left alone: narrowing it would make the default invalid.
+    """
+    rewritten = list(lines)
+    narrowed: set[tuple[str, str]] = set()
+    for index, line in enumerate(lines):
+        member = re.fullmatch(r"    (\w+): Annotated\[", line)
+        if member is None or member.group(1) not in NON_NULLABLE_DEFAULTED:
+            continue
+        name = member.group(1)
+        typed = re.fullmatch(r"        (\w+) \| None,", lines[index + 1])
+        if typed is None or typed.group(1) not in NON_NULLABLE_DEFAULTED[name]:
+            continue
+        closing = next((later for later in lines[index + 2 :] if later.startswith("    ]")), "")
+        if closing.endswith("= None"):
+            continue
+        rewritten[index + 1] = f"        {typed.group(1)},"
+        narrowed.add((name, typed.group(1)))
+    return rewritten, narrowed
+
+
+def format_generated(destination: Path) -> set[tuple[str, str]]:
+    """Apply the package's locked formatter to deterministic generated output.
+
+    Answers every (member, type) [`non_nullable_defaults`] narrowed, for [`generate`] to hold
+    against [`NON_NULLABLE_DEFAULTED`] over the whole package.
+    """
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
     subprocess.run(
         # `I001` alongside `F401` because the package's own lint enforces import order and
@@ -674,12 +748,15 @@ def format_generated(destination: Path) -> None:
     # After formatting rather than before it: the shape a field is written in is the
     # formatter's, and reading it back is what lets this be one rule rather than a guess
     # at what the code generator happened to emit on one line or several.
+    narrowed: set[tuple[str, str]] = set()
     for module in sorted(destination.glob("*.py")):
         lines = module.read_text(encoding="utf-8").splitlines()
-        rewritten = enum_defaults(lines)
+        rewritten, found = non_nullable_defaults(enum_defaults(lines))
+        narrowed |= found
         if rewritten != lines:
             module.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
+    return narrowed
 
 
 def check_generated(expected_dir: Path, actual_dir: Path) -> None:
@@ -732,7 +809,19 @@ def generate(bundle: SchemaBundle, *, check: bool, destination: Path = GENERATED
         target = Path(temporary) if check else destination
         generate_models(bundle, target)
         generate_client(commands, target)
-        format_generated(target)
+        narrowed = format_generated(target)
+        # Over the whole package: every member the table names has to have been found, so a
+        # contract member renamed or retyped fails generation rather than quietly going
+        # nullable again.
+        expected = {
+            (name, kind) for name, kinds in NON_NULLABLE_DEFAULTED.items() for kind in kinds
+        }
+        if narrowed != expected:
+            raise SystemExit(
+                "generate.py narrows the non-nullable defaulted members "
+                f"{sorted(expected)}, and the bundle yielded {sorted(narrowed)}; next: update "
+                "NON_NULLABLE_DEFAULTED to the members the contract really declares"
+            )
         if check:
             check_generated(target, destination)
 

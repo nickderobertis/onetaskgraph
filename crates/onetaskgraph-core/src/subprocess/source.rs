@@ -17,21 +17,22 @@ use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
     ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
-    PageRequest, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskQuery, TaskRef, TaskSource, WriteSupport, unwritable_metadata,
+    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
+    Task, TaskQuery, TaskRef, TaskSource, WriteSupport, unwritable_field, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    AddCommentParams, CommentResult, CommentsParams, CommentsResult, DeleteCommentParams,
-    DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
-    DocumentDir, DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams,
-    EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
-    MeteringResult, PROTOCOL_VERSION, ProjectQueryParams, ProjectResult, ProjectWriteParams,
-    Request, StatusParams, StatusResult, TaskQueryParams, TaskResult, TaskWriteParams, WriteResult,
-    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
+    AddCommentParams, CommentResult, CommentsParams, CommentsResult, ContentParams, ContentResult,
+    DeleteCommentParams, DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult,
+    DependencyParams, DocumentDir, DocumentQueryParams, DocumentResult, DocumentWriteParams,
+    EditCommentParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
+    MetadataParams, MeteringResult, PROTOCOL_VERSION, PriorityParams, PriorityResult,
+    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams, StatusResult,
+    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult, after_the_first_vocabulary,
+    knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -109,6 +110,9 @@ pub struct SubprocessSource {
     /// Whether the plugin said it answers the three narrow metadata writes (§3.7), read at the
     /// same handshake.
     metadata_updates: bool,
+    /// Whether the plugin said it answers the narrow content write (§3.9), read at the same
+    /// handshake.
+    content_updates: bool,
     /// The live process.
     connection: Connection,
 }
@@ -344,6 +348,7 @@ impl SubprocessSource {
             statuses,
             task_updates,
             metadata_updates,
+            content_updates,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -373,6 +378,7 @@ impl SubprocessSource {
             knows_every_category: knows_every_category(statuses.as_deref()),
             task_updates,
             metadata_updates,
+            content_updates,
             connection: Connection::adopt(peer),
         })
     }
@@ -499,6 +505,12 @@ impl SubprocessSource {
     /// Refuse a task write this plugin could only drop part of in silence.
     fn writable_task(&self, task: &Task) -> Result<(), SourceError> {
         self.knows(task.status.category)?;
+        // A plugin whose handshake declares no priority is one written before there were
+        // any, and it would drop one in silence (§6). The engine refuses such a write before
+        // it reaches here; this keeps the seam itself from ever sending one.
+        if task.priority != Priority::None && !self.capabilities.priority.is_native() {
+            return Err(unwritable_field(self.kind, "priority"));
+        }
         if !task.delivers.is_empty() || !task.delivered_by.is_empty() {
             self.updates("a task carrying delivers or delivered_by")?;
         }
@@ -704,6 +716,57 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.status)
+    }
+
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        // §4.19: sent only to a plugin whose handshake declares it holds a priority.
+        if !self.capabilities.priority.is_native() {
+            return Err(unwritable_field(self.kind, "priority"));
+        }
+        let result: PriorityResult = self
+            .ask(
+                "set_task_priority",
+                params(&PriorityParams {
+                    id: id.clone(),
+                    priority,
+                }),
+            )
+            .await?;
+        Ok(result.priority)
+    }
+
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        // §3.9: sent only to a plugin whose handshake sets content_updates.
+        if !self.content_updates {
+            return Err(unwritable_field(self.kind, "content"));
+        }
+        let result: ContentResult = self
+            .ask(
+                "set_task_content",
+                params(&ContentParams {
+                    id: id.clone(),
+                    content: content.to_owned(),
+                }),
+            )
+            .await?;
+        match result.id {
+            None => Ok(None),
+            Some(written) if &written == id => Ok(Some(())),
+            Some(written) => Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered set_task_content for {id} with the id {written}, which \
+                     is not the task it was asked to write"
+                ),
+            }),
+        }
     }
 
     async fn set_delivered_by(

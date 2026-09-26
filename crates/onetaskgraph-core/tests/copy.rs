@@ -21,8 +21,9 @@ use onetaskgraph_core::{
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
     Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page,
-    PageRequest, Project, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport, documentless,
+    PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
+    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
+    documentless,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -104,6 +105,7 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             sources: vec![name(source)],
             filters: onetaskgraph_core::Filters::default(),
             project: onetaskgraph_core::ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1056,6 +1058,7 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             sources: vec![name(source)],
             filters: onetaskgraph_core::Filters::default(),
             project: onetaskgraph_core::ProjectSelector::Any,
+            priorities: Vec::new(),
             paging: paging(),
         })
         .await
@@ -2235,6 +2238,7 @@ fn reported(id: &NativeId) -> Task {
             category: StatusCategory::Todo,
             name: "Todo".to_owned(),
         },
+        priority: Priority::None,
         labels: Vec::new(),
         project: None,
         url: None,
@@ -2323,6 +2327,8 @@ impl TaskSource for Misbehaving {
                 Support::Unsupported
             },
             comments: Support::Unsupported,
+            priority: Support::Unsupported,
+            filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
