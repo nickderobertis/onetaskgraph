@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.44](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.43...v0.2.44) - 2026-09-26
+
+### Added
+
+- *(task)* report the backend's short handle as a task's key ([#2585](https://github.com/nickderobertis/onetaskgraph/pull/2585))
+
+### Fixed
+
+- *(github-projects)* read one known item by its id, never the whole board ([#2477](https://github.com/nickderobertis/onetaskgraph/pull/2477))
+
 ## [0.2.41](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.40...v0.2.41) - 2026-09-20
 
 ### Fixed

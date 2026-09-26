@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.44](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.2.43...onetaskgraph-local-md-v0.2.44) - 2026-09-26
+
+### Added
+
+- *(task)* report the backend's short handle as a task's key ([#2585](https://github.com/nickderobertis/onetaskgraph/pull/2585))
+
+### Fixed
+
+- *(local-md)* skip a task file pending deletion on Windows as vanished, not malformed ([#2387](https://github.com/nickderobertis/onetaskgraph/pull/2387))
+
 ## [0.2.41](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.2.40...onetaskgraph-local-md-v0.2.41) - 2026-09-20
 
 ### Fixed

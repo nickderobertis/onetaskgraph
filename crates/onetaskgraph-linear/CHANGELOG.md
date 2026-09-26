@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.44](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.43...onetaskgraph-linear-v0.2.44) - 2026-09-26
+
+### Added
+
+- *(task)* report the backend's short handle as a task's key ([#2585](https://github.com/nickderobertis/onetaskgraph/pull/2585))
+
 ## [0.2.35](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.34...onetaskgraph-linear-v0.2.35) - 2026-09-17
 
 ### Fixed
