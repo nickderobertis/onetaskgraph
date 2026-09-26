@@ -111,6 +111,15 @@ fn every_member_required(schema: &mut schemars::Schema) {
     schema.insert("required".to_owned(), serde_json::Value::Array(members));
 }
 
+// These doc comments are the Rust surface alone: the type's own doc comment is the schema's
+// description, so what a linking caller reads is said here rather than there.
+/// What a linking caller reads.
+///
+/// The same members the failure document writes, through [`Failure::class`],
+/// [`Failure::kind`], [`Failure::source`], [`Failure::message`] and
+/// [`Failure::retry_after_seconds`], so a Rust caller never serialises a failure to branch on
+/// it. They read and nothing more: no caller can build or alter a failure whose class
+/// disagrees with [`classify`].
 impl Failure {
     /// A failure this product decided on its own, with no source behind it.
     #[must_use]
@@ -118,10 +127,37 @@ impl Failure {
         Self::caused(kind.to_owned(), None, None, message.into())
     }
 
+    /// Whether repeating the request unchanged could change the answer — the one closed
+    /// value a caller branches on, as [`classify`] decided it for this failure's cause.
+    #[must_use]
+    pub fn class(&self) -> FailureClass {
+        self.class
+    }
+
+    /// What failed: the causing source error's own `kind` when a source caused it, and
+    /// otherwise this product's kebab-case name for the failure, such as `no-such-item`.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The configured source the failure came from, or `None` when none did.
+    #[must_use]
+    pub fn source(&self) -> Option<&SourceName> {
+        self.source.as_ref()
+    }
+
     /// What a person reads: the stderr line without its prefix.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// How many seconds a rate limit asked the caller to wait, or `None` when it named no
+    /// wait.
+    #[must_use]
+    pub fn retry_after_seconds(&self) -> Option<u64> {
+        self.retry_after_seconds
     }
 
     /// One failure, classed by what caused it.
