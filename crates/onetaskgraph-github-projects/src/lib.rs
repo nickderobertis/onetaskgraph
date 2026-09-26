@@ -809,8 +809,14 @@ pub mod graphql {
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
     pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
-    /// Replaces a single-select field's options. Only the guarded status-options operation
-    /// may use this document, because GitHub treats the input as the complete option list.
+    /// Clears one project item's value of one field, which is what a `none` priority is.
+    pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
+    /// Creates one single-select field with its options. Only the guarded field setup may use
+    /// this document, and only for a field the board lacks.
+    pub const CREATE_FIELD: &str = r#"mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id name options{id name color description}}}}}"#;
+    /// Replaces a single-select field's options. Only the guarded field setup — the
+    /// `status-options` and `fields` operations — may use this document, because GitHub
+    /// treats the input as the complete option list.
     pub const STATUS_OPTIONS_UPDATE: &str = r#"mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id options{id name color description}}}}}"#;
     /// A fresh snapshot of the Status field and every board item's assignment.
     pub const STATUS_OPTIONS_SNAPSHOT: &str = r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!){owner:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id fields(first:$nestedFirst){nodes{... on ProjectV2SingleSelectField{id name options{id name color description}}}pageInfo{hasNextPage}} items(first:$first,after:$after){nodes{id fieldValues(first:$nestedFirst){nodes{... on ProjectV2ItemFieldSingleSelectValue{name optionId field{... on ProjectV2SingleSelectField{id name}}}}pageInfo{hasNextPage}}}pageInfo{hasNextPage endCursor}}}}}}"#;
@@ -886,7 +892,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 26] = [
+    pub const DOCUMENTS: [(&str, &str); 28] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -904,6 +910,11 @@ pub mod graphql {
         (UPDATE_ISSUE, "updating an issue"),
         (UPDATE_DRAFT, "updating a draft item"),
         (UPDATE_FIELD, "writing a board field"),
+        (CLEAR_FIELD, "clearing a board field"),
+        (
+            CREATE_FIELD,
+            "creating a board single-select field with its options",
+        ),
         (
             STATUS_OPTIONS_SNAPSHOT,
             "snapshotting board Status options and assignments",
@@ -1334,12 +1345,152 @@ pub struct GitHubProjectsConfig {
     /// word because it never creates board options.
     #[serde(default)]
     pub status_mapping: BTreeMap<String, Option<StatusTargetConfig>>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` parses each key into a `StatusCategory` and reports an unknown one against this instance.
+    /// Per-instance mapping from a task's priority to an option of this board's
+    /// single-select field named `Priority`.
+    ///
+    /// Absent, this source holds no priority: every task reads as `none`, and a write of any
+    /// other priority is refused before it reaches this board. Present, each of `urgent`,
+    /// `high`, `medium` and `low` it does not mention keeps its shipped default — `Urgent`,
+    /// `High`, `Medium` and `Low` — and an item with no value in the `Priority` field reads
+    /// as `none`, so writing `none` clears the value. Option names match case-insensitively;
+    /// no two levels may name one option. Reads and writes never create the field or an
+    /// option: `onetaskgraph sources fields <source> --apply` does, and a write naming one
+    /// the board lacks is refused pointing there.
+    #[serde(default)]
+    pub priority_mapping: Option<PriorityMappingConfig>,
     /// How fast this source writes, and how long it waits out a rate-limit refusal.
     ///
     /// Every field keeps its shipped default when it is absent, and the defaults are
     /// GitHub's own published limits rather than taste. See [`Pacing`].
     #[serde(default)]
     pub pacing: PacingConfig,
+}
+
+/// Which option of the board's `Priority` field each priority lands on.
+///
+/// One member per level rather than a map, so a key that is not a level is refused where
+/// the configuration is read, naming the levels there are. `none` is not a member: it is no
+/// value in the field, not an option of it.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PriorityMappingConfig {
+    /// The option `urgent` lands on; `Urgent` when absent.
+    pub urgent: Option<PriorityOptionName>,
+    /// The option `high` lands on; `High` when absent.
+    pub high: Option<PriorityOptionName>,
+    /// The option `medium` lands on; `Medium` when absent.
+    pub medium: Option<PriorityOptionName>,
+    /// The option `low` lands on; `Low` when absent.
+    pub low: Option<PriorityOptionName>,
+}
+
+/// The name of an option of the board's `Priority` single-select field.
+///
+/// Validated on the way in, for the reason [`ColumnName`] is: nothing on a board can have a
+/// blank name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(try_from = "String")]
+#[schemars(extend("minLength" = 1))]
+pub struct PriorityOptionName(String);
+
+impl PriorityOptionName {
+    /// The option name, as the board spells it.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for PriorityOptionName {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        if name.trim().is_empty() {
+            return Err("a priority_mapping option name cannot be blank".to_owned());
+        }
+        Ok(Self(name))
+    }
+}
+
+/// The name of the board field a priority is held in.
+pub const PRIORITY_FIELD: &str = "Priority";
+
+/// The four priorities a board option can hold, in the order a new `Priority` field lists
+/// them. `none` is not among them: it is the field holding no value.
+const PRIORITY_LEVELS: [Priority; 4] = [
+    Priority::Urgent,
+    Priority::High,
+    Priority::Medium,
+    Priority::Low,
+];
+
+/// This instance's complete priority-to-option mapping, read in both directions.
+///
+/// One option per level, held in [`PRIORITY_LEVELS`] order, once it is established that no
+/// two levels name one option.
+#[derive(Debug, Clone)]
+struct PriorityMapping {
+    options: [PriorityOptionName; 4],
+}
+
+impl PriorityMapping {
+    fn resolve(config: PriorityMappingConfig, instance: &SourceName) -> Result<Self, SourceError> {
+        let shipped = |name: &str| PriorityOptionName(name.to_owned());
+        let mapping = Self {
+            options: [
+                config.urgent.unwrap_or_else(|| shipped("Urgent")),
+                config.high.unwrap_or_else(|| shipped("High")),
+                config.medium.unwrap_or_else(|| shipped("Medium")),
+                config.low.unwrap_or_else(|| shipped("Low")),
+            ],
+        };
+        for (index, option) in mapping.options.iter().enumerate() {
+            if let Some(earlier) = mapping.options[..index]
+                .iter()
+                .position(|other| other.as_str().eq_ignore_ascii_case(option.as_str()))
+            {
+                return Err(SourceError::Config {
+                    message: format!(
+                        "priority_mapping of source {instance} sends both {} and {} to the board \
+                         option {:?}; one option cannot read back as two priorities",
+                        PRIORITY_LEVELS[earlier],
+                        PRIORITY_LEVELS[index],
+                        option.as_str()
+                    ),
+                });
+            }
+        }
+        Ok(mapping)
+    }
+
+    /// The option `priority` lands on, or `None` for `none`, which is no option at all.
+    fn option(&self, priority: Priority) -> Option<&str> {
+        PRIORITY_LEVELS
+            .iter()
+            .position(|level| *level == priority)
+            .map(|index| self.options[index].as_str())
+    }
+
+    /// The priority a board option name reports, or `None` when nothing maps to it.
+    fn priority_of(&self, option: &str) -> Option<Priority> {
+        self.options
+            .iter()
+            .position(|name| name.as_str().eq_ignore_ascii_case(option))
+            .map(|index| PRIORITY_LEVELS[index])
+    }
+
+    /// Every mapped option name, in the order a new `Priority` field lists them.
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.options.iter().map(PriorityOptionName::as_str)
+    }
+}
+
+/// What one item's `Priority` field says, read through this instance's mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HeldPriority {
+    /// A priority this source reports: an option the mapping names, or no value (`none`).
+    Read(Priority),
+    /// An option the mapping does not name, which is never read as a level or as `none`.
+    Unmapped(String),
 }
 
 /// How fast this source writes, and how long it waits out a rate-limit refusal.
@@ -1775,6 +1926,8 @@ pub struct GitHubProjectsSource {
     token: SecretString,
     credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
     statuses: StatusMapping,
+    /// Where each priority lands on this board, or `None` when this instance holds none.
+    priorities: Option<PriorityMapping>,
     client: Client,
     /// Every item this source has created since it was built, in the order it created
     /// them.
@@ -1973,6 +2126,114 @@ struct StatusSnapshot {
     assignments: Vec<StatusAssignment>,
 }
 
+/// The name of the board field a status is held in.
+const STATUS_FIELD: &str = "Status";
+
+/// One board field the guarded setup reads and writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub enum BoardField {
+    /// The single-select `Status` field every instance's `status_mapping` resolves into.
+    Status,
+    /// The single-select `Priority` field an instance's `priority_mapping` resolves into.
+    Priority,
+}
+
+impl BoardField {
+    /// The field's name on the board.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Status => STATUS_FIELD,
+            Self::Priority => PRIORITY_FIELD,
+        }
+    }
+}
+
+/// What the guarded setup did to one field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum FieldOutcome {
+    /// A read-only plan.
+    Planned,
+    /// Apply found the field there with every configured option.
+    Unchanged,
+    /// Missing options were added to the field that was there, and verified.
+    Applied,
+    /// The field was not there; it was created holding the configured options, and verified.
+    Created,
+}
+
+/// One field's plan, or its verified outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct FieldReport {
+    /// Which field.
+    pub field: BoardField,
+    /// Whether the board had the field before the operation.
+    pub exists: bool,
+    /// Configured option names the field lacked before the operation — every one of them,
+    /// in the order a new field lists them, when the field was not there at all.
+    // llmlint: ignore[invalid_states_unrepresentable] Each value originates from a validated
+    // mapping name and has therefore already passed its nonblank validation; the serialized
+    // string is the report's intentionally simple public contract, as `StatusOptionsReport`'s is.
+    pub missing: Vec<String>,
+    /// What the requested operation did.
+    pub outcome: FieldOutcome,
+    /// The field's complete option list observed before any mutation; empty when the field
+    /// was not there.
+    pub existing: Vec<StatusOption>,
+}
+
+/// The plan and verified outcome of setting up every field a source's configuration names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct FieldsReport {
+    /// The configured source name.
+    pub source: SourceName,
+    /// `Status`, always, and `Priority` when the source sets `priority_mapping`.
+    pub fields: Vec<FieldReport>,
+}
+
+/// Which options one field is configured with, in the order a new field would list them.
+struct FieldPlan {
+    field: BoardField,
+    wanted: Vec<String>,
+}
+
+/// One single-select field as the guarded setup snapshots it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnapshotField {
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's field identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
+    field_id: String,
+    options: Vec<StatusOption>,
+}
+
+/// Every single-select field of a board and every item's value of each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoardSnapshot {
+    // llmlint: ignore[invalid_states_unrepresentable] This private opaque GraphQL ID is
+    // passed back as the mutation's project identity; a newtype could enforce no stronger
+    // invariant because GitHub publishes no grammar for it.
+    board_id: String,
+    fields: BTreeMap<String, SnapshotField>,
+    /// Each board item's id, and its value of each single-select field it holds one of.
+    items: Vec<(String, BTreeMap<String, AssignedStatusOption>)>,
+}
+
+impl BoardSnapshot {
+    /// Every item's value of the field called `name`, in board order — the recovery data a
+    /// drift refusal carries.
+    fn assignments(&self, name: &str) -> Vec<StatusAssignment> {
+        self.items
+            .iter()
+            .map(|(item_id, values)| StatusAssignment {
+                item_id: item_id.clone(),
+                option: values.get(name).cloned(),
+            })
+            .collect()
+    }
+}
+
 impl GitHubProjectsSource {
     /// Report missing configured Status options and, when `apply` is true, add them with
     /// a whole-list mutation that preserves every existing id and verifies the result.
@@ -2074,13 +2335,41 @@ impl GitHubProjectsSource {
         Ok(report)
     }
 
+    /// A fresh snapshot of the Status field and every board item's assignment of it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a board without a single-select `Status` field, and one the token cannot see.
+    async fn status_snapshot(&self) -> Result<StatusSnapshot, SourceError> {
+        let mut board = self.board_snapshot().await?;
+        let field = board
+            .fields
+            .remove(STATUS_FIELD)
+            .ok_or_else(|| self.no_status_field())?;
+        Ok(StatusSnapshot {
+            assignments: board.assignments(STATUS_FIELD),
+            board_id: board.board_id,
+            field_id: field.field_id,
+            options: field.options,
+        })
+    }
+
+    /// The refusal a board with no `Status` field is answered with by the guarded setup.
+    fn no_status_field(&self) -> SourceError {
+        SourceError::Refused {
+            message: format!("source {} board has no Status field", self.name),
+        }
+    }
+
     // llmlint: ignore-block[changed_behavior_has_e2e] Valid snapshot shapes are exercised through
     // the real CLI loopback journey, including pagination. The individual malformed guards
     // are defensive validation of a schema-pinned third-party response, not separate user
     // journeys; drift and missing-field failures cover the operation's recovery behavior.
-    async fn status_snapshot(&self) -> Result<StatusSnapshot, SourceError> {
+    /// A fresh snapshot of every single-select field on the board, with its options, and of
+    /// every board item's value of each, walked to the end of the board's items.
+    async fn board_snapshot(&self) -> Result<BoardSnapshot, SourceError> {
         let mut after: Option<String> = None;
-        let mut snapshot: Option<StatusSnapshot> = None;
+        let mut snapshot: Option<BoardSnapshot> = None;
         loop {
             let data = self
                 .graphql(
@@ -2111,51 +2400,64 @@ impl GitHubProjectsSource {
                             .into(),
                 });
             }
-            let field = board
+            let mut fields = BTreeMap::new();
+            // A node the single-select fragment did not match — a text field, an iteration —
+            // carries no name, and is no field this setup reads or writes.
+            for field in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
-                .and_then(|fields| {
-                    fields
-                        .iter()
-                        .find(|field| field.get("name").and_then(Value::as_str) == Some("Status"))
-                })
-                .ok_or_else(|| SourceError::Refused {
-                    message: format!("source {} board has no Status field", self.name),
-                })?;
-            let options = field
-                .get("options")
-                .and_then(Value::as_array)
                 .ok_or_else(|| SourceError::Malformed {
-                    message: "GitHub Status field options is not an array".into(),
+                    message: "GitHub project fields.nodes is not an array".into(),
                 })?
                 .iter()
-                .map(|option| {
-                    Ok(StatusOption {
-                        id: StatusOptionId::try_from(required_str(option, "id")?.to_owned())
-                            .map_err(|message| SourceError::Malformed { message })?,
-                        name: ColumnName::try_from(required_str(option, "name")?.to_owned())
-                            .map_err(|message| SourceError::Malformed {
-                                message: format!("GitHub Status option name is invalid: {message}"),
+                .filter(|field| field.get("name").and_then(Value::as_str).is_some())
+            {
+                let options = field
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub single-select field options is not an array".into(),
+                    })?
+                    .iter()
+                    .map(|option| {
+                        Ok(StatusOption {
+                            id: StatusOptionId::try_from(required_str(option, "id")?.to_owned())
+                                .map_err(|message| SourceError::Malformed { message })?,
+                            name: ColumnName::try_from(required_str(option, "name")?.to_owned())
+                                .map_err(|message| SourceError::Malformed {
+                                    message: format!(
+                                        "GitHub single-select option name is invalid: {message}"
+                                    ),
+                                })?,
+                            color: serde_json::from_value(
+                                option.get("color").cloned().unwrap_or(Value::Null),
+                            )
+                            .map_err(|error| {
+                                SourceError::Malformed {
+                                    message: format!(
+                                        "GitHub single-select option color is invalid: {error}"
+                                    ),
+                                }
                             })?,
-                        color: serde_json::from_value(
-                            option.get("color").cloned().unwrap_or(Value::Null),
-                        )
-                        .map_err(|error| SourceError::Malformed {
-                            message: format!("GitHub Status option color is invalid: {error}"),
-                        })?,
-                        description: optional_str(option, "description")?
-                            .unwrap_or_default()
-                            .to_owned(),
+                            description: optional_str(option, "description")?
+                                .unwrap_or_default()
+                                .to_owned(),
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, SourceError>>()?;
+                    .collect::<Result<Vec<_>, SourceError>>()?;
+                fields.insert(
+                    required_str(field, "name")?.to_owned(),
+                    SnapshotField {
+                        field_id: required_nonblank_str(field, "id")?.to_owned(),
+                        options,
+                    },
+                );
+            }
             let board_id = required_nonblank_str(board, "id")?.to_owned();
-            let field_id = required_nonblank_str(field, "id")?.to_owned();
-            let current = snapshot.get_or_insert_with(|| StatusSnapshot {
+            let current = snapshot.get_or_insert_with(|| BoardSnapshot {
                 board_id,
-                field_id,
-                options,
-                assignments: Vec::new(),
+                fields,
+                items: Vec::new(),
             });
             let items = board
                 .pointer("/items/nodes")
@@ -2184,28 +2486,30 @@ impl GitHubProjectsSource {
                     .ok_or_else(|| SourceError::Malformed {
                         message: "GitHub project item fieldValues.nodes is not an array".into(),
                     })?;
-                let status = values.iter().find(|value| {
-                    value.pointer("/field/name").and_then(Value::as_str) == Some("Status")
-                });
-                current.assignments.push(StatusAssignment {
-                    item_id: required_nonblank_str(item, "id")?.to_owned(),
-                    option: status
-                        .map(|value| {
-                            Ok(AssignedStatusOption {
-                                id: StatusOptionId::try_from(
-                                    required_str(value, "optionId")?.to_owned(),
-                                )
-                                .map_err(|message| SourceError::Malformed { message })?,
-                                name: ColumnName::try_from(required_str(value, "name")?.to_owned())
-                                    .map_err(|message| SourceError::Malformed {
-                                        message: format!(
-                                            "GitHub assigned Status name is invalid: {message}"
-                                        ),
-                                    })?,
-                            })
-                        })
-                        .transpose()?,
-                });
+                let mut assigned = BTreeMap::new();
+                for value in values {
+                    let Some(field) = value.pointer("/field/name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    assigned.insert(
+                        field.to_owned(),
+                        AssignedStatusOption {
+                            id: StatusOptionId::try_from(
+                                required_str(value, "optionId")?.to_owned(),
+                            )
+                            .map_err(|message| SourceError::Malformed { message })?,
+                            name: ColumnName::try_from(required_str(value, "name")?.to_owned())
+                                .map_err(|message| SourceError::Malformed {
+                                    message: format!(
+                                        "GitHub assigned {field} name is invalid: {message}"
+                                    ),
+                                })?,
+                        },
+                    );
+                }
+                current
+                    .items
+                    .push((required_nonblank_str(item, "id")?.to_owned(), assigned));
             }
             let page = board.get("items").ok_or_else(|| SourceError::Malformed {
                 message: "GitHub project is missing items".into(),
@@ -2225,10 +2529,183 @@ impl GitHubProjectsSource {
             after = Some(next.to_owned());
         }
         snapshot.ok_or_else(|| SourceError::Malformed {
-            message: "GitHub returned no Status snapshot".into(),
+            message: "GitHub returned no board field snapshot".into(),
         })
     }
     // llmlint: ignore-end[changed_behavior_has_e2e]
+
+    /// Report every board field this source's configuration names and, with
+    /// [`StatusOptionsMode::Apply`], set each up: add the options a field lacks, and create
+    /// the `Priority` field when the board has none.
+    ///
+    /// The fields are `Status`, always, with the options `status_mapping` resolves to; and
+    /// `Priority`, when `priority_mapping` is set, with its four mapped options — created in
+    /// the order urgent, high, medium, low. An option a field already has keeps its id, name,
+    /// color and description: the whole option list goes back with every existing id, because
+    /// a re-minted id clears every item's value.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a board without a single-select `Status` field. After an apply the board is
+    /// read again, and a pre-existing option or any item's value of either field that moved is
+    /// refused with the complete pre-write assignments in the diagnostic, for recovery.
+    // llmlint: ignore[changed_behavior_has_e2e] The `sources fields` journeys drive plan,
+    // unchanged apply, a created field, an added option to each field, drift refusal, a board
+    // with no Status field and a non-github-projects source through the compiled CLI against
+    // the loopback board. Transport errors are the shared `graphql` boundary's behavior.
+    pub async fn fields(&self, mode: StatusOptionsMode) -> Result<FieldsReport, SourceError> {
+        let before = self.board_snapshot().await?;
+        let mut plans = vec![FieldPlan {
+            field: BoardField::Status,
+            wanted: self
+                .statuses
+                .targets
+                .iter()
+                .filter_map(|target| match target {
+                    StatusTarget::Column(name) | StatusTarget::Terminal(name, _) => {
+                        Some(name.as_str().to_owned())
+                    }
+                    StatusTarget::Disabled => None,
+                })
+                .collect(),
+        }];
+        if !before.fields.contains_key(STATUS_FIELD) {
+            return Err(self.no_status_field());
+        }
+        if let Some(mapping) = &self.priorities {
+            plans.push(FieldPlan {
+                field: BoardField::Priority,
+                wanted: mapping.names().map(str::to_owned).collect(),
+            });
+        }
+        let mut reports = Vec::new();
+        for plan in &plans {
+            let held = before.fields.get(plan.field.name());
+            let existing = held.map(|field| field.options.clone()).unwrap_or_default();
+            let mut missing: Vec<String> = Vec::new();
+            for wanted in &plan.wanted {
+                let present = existing
+                    .iter()
+                    .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
+                    || missing
+                        .iter()
+                        .any(|named| named.eq_ignore_ascii_case(wanted));
+                if !present {
+                    missing.push(wanted.clone());
+                }
+            }
+            reports.push(FieldReport {
+                field: plan.field,
+                exists: held.is_some(),
+                outcome: match (mode, held.is_some(), missing.is_empty()) {
+                    (StatusOptionsMode::Plan, _, _) => FieldOutcome::Planned,
+                    (StatusOptionsMode::Apply, true, true) => FieldOutcome::Unchanged,
+                    (StatusOptionsMode::Apply, true, false) => FieldOutcome::Applied,
+                    (StatusOptionsMode::Apply, false, _) => FieldOutcome::Created,
+                },
+                missing,
+                existing,
+            });
+        }
+        let report = FieldsReport {
+            source: self.name.clone(),
+            fields: reports,
+        };
+        let writes: Vec<&FieldReport> = report
+            .fields
+            .iter()
+            .filter(|field| !field.missing.is_empty() || !field.exists)
+            .collect();
+        if mode == StatusOptionsMode::Plan || writes.is_empty() {
+            return Ok(report);
+        }
+        for field in &writes {
+            let added = field
+                .missing
+                .iter()
+                .map(|name| json!({"name": name, "color": "GRAY", "description": ""}));
+            match before.fields.get(field.field.name()) {
+                Some(held) => {
+                    let mut options = held
+                        .options
+                        .iter()
+                        .map(|option| {
+                            json!({
+                                "id": option.id, "name": option.name, "color": option.color,
+                                "description": option.description,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    options.extend(added);
+                    self.graphql(
+                        graphql::STATUS_OPTIONS_UPDATE,
+                        json!({"input": {
+                            "projectId": before.board_id, "fieldId": held.field_id,
+                            "singleSelectOptions": options,
+                        }}),
+                    )
+                    .await?;
+                }
+                None => {
+                    self.graphql(
+                        graphql::CREATE_FIELD,
+                        json!({"input": {
+                            "projectId": before.board_id, "dataType": "SINGLE_SELECT",
+                            "name": field.field.name(),
+                            "singleSelectOptions": added.collect::<Vec<_>>(),
+                        }}),
+                    )
+                    .await?;
+                }
+            }
+        }
+        let after = self.board_snapshot().await?;
+        let mut moved = Vec::new();
+        for field in &report.fields {
+            let name = field.field.name();
+            let now = after
+                .fields
+                .get(name)
+                .map(|held| held.options.as_slice())
+                .unwrap_or_default();
+            if !field.existing.iter().all(|old| now.contains(old)) {
+                moved.push(format!(
+                    "a pre-existing {name} option id, name, color or description"
+                ));
+            }
+            if !field.missing.iter().all(|wanted| {
+                now.iter()
+                    .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
+            }) {
+                moved.push(format!("an added {name} option"));
+            }
+            if after.assignments(name) != before.assignments(name) {
+                moved.push(format!("an item's {name} value"));
+            }
+        }
+        if !moved.is_empty() {
+            let recovery: BTreeMap<&str, Vec<StatusAssignment>> = report
+                .fields
+                .iter()
+                .map(|field| (field.field.name(), before.assignments(field.field.name())))
+                .collect();
+            let recovery = serde_json::to_string_pretty(&recovery).map_err(|error| {
+                SourceError::Malformed {
+                    message: format!(
+                        "cannot render the pre-write field recovery snapshot: {error}"
+                    ),
+                }
+            })?;
+            return Err(SourceError::Refused {
+                message: format!(
+                    "GitHub changed {} after the guarded field setup; the pre-write item \
+                     assignments are:\n{recovery}",
+                    moved.join(", ")
+                ),
+            });
+        }
+        Ok(report)
+    }
 
     /// Validate configuration and capture the named credential without exposing it.
     ///
@@ -2308,6 +2785,10 @@ impl GitHubProjectsSource {
             token,
             credential_name: config.token_env,
             statuses: StatusMapping::resolve(config.status_mapping, name)?,
+            priorities: config
+                .priority_mapping
+                .map(|mapping| PriorityMapping::resolve(mapping, name))
+                .transpose()?,
             client: Client::builder()
                 .user_agent("onetaskgraph")
                 .build()
@@ -3138,11 +3619,13 @@ impl GitHubProjectsSource {
         &self,
         item: Option<&Resolved>,
         writes_status: bool,
+        selects_priority: bool,
     ) -> Result<BoardFields, SourceError> {
         if let Some(item) = item
             && let Some(board_id) = item.named_board()
             && item.defines(ORIGIN_FIELD)
             && (!writes_status || item.defines("Status"))
+            && (!selects_priority || item.defines(PRIORITY_FIELD))
         {
             return Ok(BoardFields {
                 id: board_id,
@@ -3506,6 +3989,7 @@ impl GitHubProjectsSource {
             (Vec::new(), Vec::new())
         };
         let (option, closed, reason) = Self::status_parts(nodes, content)?;
+        let priority = self.held_priority(nodes)?;
         Ok(Some(Resolved {
             item_id: required_str(item, "id")?.to_owned(),
             id,
@@ -3516,6 +4000,7 @@ impl GitHubProjectsSource {
             raw_body,
             status: self.statuses.status(option, closed, reason),
             option: option.map(str::to_owned),
+            priority,
             closed,
             delivers,
             delivered_by,
@@ -3546,6 +4031,33 @@ impl GitHubProjectsSource {
                 .map(str::to_owned),
             fields: field_definitions(nodes),
         }))
+    }
+
+    /// What one board item's `Priority` field says, through this instance's mapping.
+    ///
+    /// An instance with no mapping holds no priority, so every item reads as `none` whatever
+    /// its board holds. With one, no value is `none`, a mapped option is its level, and an
+    /// option the mapping does not name is kept as itself — never read as a level or as
+    /// `none` — for a read of the task to report by name.
+    fn held_priority(&self, field_values: &[Value]) -> Result<HeldPriority, SourceError> {
+        let Some(mapping) = &self.priorities else {
+            return Ok(HeldPriority::Read(Priority::None));
+        };
+        let Some(option) = field_values
+            .iter()
+            .find(|value| {
+                value.pointer("/field/name").and_then(Value::as_str) == Some(PRIORITY_FIELD)
+                    && value.get("name").is_some()
+            })
+            .map(|value| required_str(value, "name"))
+            .transpose()?
+        else {
+            return Ok(HeldPriority::Read(Priority::None));
+        };
+        Ok(mapping.priority_of(option).map_or_else(
+            || HeldPriority::Unmapped(option.to_owned()),
+            HeldPriority::Read,
+        ))
     }
 
     /// What one board item's status is read from: its `Status` option, whether its issue
@@ -3858,6 +4370,199 @@ impl GitHubProjectsSource {
                 )
             },
         })
+    }
+
+    /// What writing `priority` does to one item's `Priority` field on this board, or the
+    /// refusal naming what the board lacks.
+    ///
+    /// `none` is no value, so it clears the field — and asks nothing of an item that holds
+    /// none already, or of an item not created yet. Every other priority selects the option
+    /// the mapping names, matched case-insensitively; a board with no `Priority` field, or
+    /// without that option, is refused rather than given one: reads and writes never create
+    /// a field or an option.
+    fn priority_write(
+        &self,
+        fields: &Value,
+        existing: Option<&Resolved>,
+        priority: Priority,
+    ) -> Result<Option<PriorityWrite>, SourceError> {
+        let Some(mapping) = &self.priorities else {
+            return Err(self.holds_no_priority());
+        };
+        let Some(wanted) = mapping.option(priority) else {
+            if !existing.is_some_and(Resolved::holds_priority) {
+                return Ok(None);
+            }
+            let field =
+                Board::field(fields, PRIORITY_FIELD)?.ok_or_else(|| SourceError::Malformed {
+                    message: format!(
+                        "an item holding a {PRIORITY_FIELD} value was read without that field"
+                    ),
+                })?;
+            return Ok(Some(PriorityWrite::Clear {
+                field: required_str(field, "id")?.to_owned(),
+            }));
+        };
+        let missing = |detail: &str| SourceError::Refused {
+            message: format!(
+                "priority {priority} of source {} needs the board {PRIORITY_FIELD} option \
+                 {wanted:?}, and {detail}; run `onetaskgraph sources fields {} --apply` to add \
+                 it, or point priority_mapping.{priority} of this source at an option the board \
+                 has",
+                self.name, self.name
+            ),
+        };
+        let Some(field) = Board::field(fields, PRIORITY_FIELD)? else {
+            return Err(missing(&format!(
+                "this board has no {PRIORITY_FIELD} field"
+            )));
+        };
+        if required_str(field, "__typename")? != "ProjectV2SingleSelectField" {
+            return Err(missing(&format!(
+                "this board's {PRIORITY_FIELD} field is not a single-select field"
+            )));
+        }
+        let option = field
+            .get("options")
+            .and_then(Value::as_array)
+            .and_then(|options| {
+                options.iter().find(|option| {
+                    option
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
+                })
+            })
+            .ok_or_else(|| missing("this board does not have it"))?;
+        Ok(Some(PriorityWrite::Select {
+            field: required_str(field, "id")?.to_owned(),
+            option: required_str(option, "id")?.to_owned(),
+        }))
+    }
+
+    /// Apply one priority write to one board item.
+    async fn write_priority(
+        &self,
+        board_id: &str,
+        item_id: &str,
+        write: &PriorityWrite,
+    ) -> Result<(), SourceError> {
+        match write {
+            PriorityWrite::Select { field, option } => {
+                self.set_item_field(
+                    board_id,
+                    item_id,
+                    field,
+                    json!({"singleSelectOptionId": option}),
+                )
+                .await
+            }
+            PriorityWrite::Clear { field } => {
+                let data = self
+                    .graphql(
+                        graphql::CLEAR_FIELD,
+                        json!({"input":{"projectId":board_id,"itemId":item_id,"fieldId":field}}),
+                    )
+                    .await?;
+                let returned = data
+                    .pointer("/clearProjectV2ItemFieldValue/projectV2Item")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "GitHub field clear returned no project item".into(),
+                    })?;
+                if required_str(returned, "id")? != item_id {
+                    return Err(SourceError::Malformed {
+                        message: "GitHub field clear returned the wrong project item".into(),
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The refusal a priority is answered with by an instance configured with no
+    /// `priority_mapping`, which holds none.
+    fn holds_no_priority(&self) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "source {} holds no task priority: its configuration sets no priority_mapping; \
+                 next: set priority_mapping on this source, then run `onetaskgraph sources \
+                 fields {} --apply` to set its board up",
+                self.name, self.name
+            ),
+        }
+    }
+
+    /// Set one task's priority and nothing else; see [`TaskSource::set_task_priority`].
+    ///
+    /// One field write — a select, or a clear for `none` — and no title, body, label, state
+    /// or `Status` request. Clearing a priority an item does not hold sends nothing.
+    async fn set_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        if self.priorities.is_none() {
+            return Err(self.holds_no_priority());
+        }
+        let Some(mut item) = self
+            .item_by_id(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        if priority == Priority::None && !item.holds_priority() {
+            return Ok(Some(priority));
+        }
+        // The item's own read carries the field's definition whenever it holds a value of
+        // it, which a clear always does; a select onto an item holding none reads the board.
+        let board = match item.named_board() {
+            Some(id) if item.defines(PRIORITY_FIELD) => BoardFields {
+                id,
+                fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+            },
+            _ => self.board_fields().await?,
+        };
+        if let Some(write) = self.priority_write(&board.fields, Some(&item), priority)? {
+            self.write_priority(board.id.as_str(), &item.item_id, &write)
+                .await?;
+        }
+        item.priority = HeldPriority::Read(priority);
+        self.remember_written(item, false)?;
+        Ok(Some(priority))
+    }
+
+    /// Replace one task's visible body and nothing else; see
+    /// [`TaskSource::set_task_content`].
+    ///
+    /// One update of the body, which differs from the body GitHub holds only outside the
+    /// metadata slot — the slot is kept byte for byte, so every caller key and every list
+    /// this source keeps there reads back as it was. A body that would not change is not
+    /// sent at all.
+    async fn replace_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        let Some(mut item) = self
+            .item_by_id(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        let held = item.raw_body.clone().unwrap_or_default();
+        let body = with_content(&held, content)?;
+        if body != held {
+            self.update_content(item.content_kind, &item.id, json!({"body": body}))
+                .await?;
+        }
+        let (visible, slot) = metadata_body(Some(body.clone()))?;
+        item.body = visible.filter(|value| !value.is_empty());
+        item.raw_body = Some(body);
+        item.slot = slot;
+        self.remember_written(item, false)?;
+        Ok(Some(()))
     }
 
     async fn set_item_field(
@@ -4297,7 +5002,13 @@ impl GitHubProjectsSource {
         };
         let existing = existing.as_ref();
         let board = self
-            .fields_for(existing, incoming.written.status().is_some())
+            .fields_for(
+                existing,
+                incoming.written.status().is_some(),
+                incoming
+                    .priority
+                    .is_some_and(|priority| priority != Priority::None),
+            )
             .await?;
         let status_target = incoming
             .written
@@ -4307,6 +5018,12 @@ impl GitHubProjectsSource {
         let column = match (incoming.written.status(), status_target.as_ref()) {
             (Some(status), Some(target)) => self.column_for(&board.fields, status, target)?,
             _ => None,
+        };
+        // Resolved before anything is created, for the reason the column above is: a
+        // priority this board has no option for is refused while nothing has been written.
+        let priority_write = match incoming.priority {
+            Some(priority) => self.priority_write(&board.fields, existing, priority)?,
+            None => None,
         };
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
@@ -4449,6 +5166,7 @@ impl GitHubProjectsSource {
                 origin,
                 column,
                 status_target.as_ref(),
+                priority_write.as_ref(),
                 &native,
             )
             .await;
@@ -4494,6 +5212,12 @@ impl GitHubProjectsSource {
             // the issue's own state says, which is what a re-read reports.
             status: written_status,
             option: written_option.or_else(|| existing.and_then(|item| item.option.clone())),
+            priority: match incoming.priority {
+                Some(priority) => HeldPriority::Read(priority),
+                None => existing.map_or(HeldPriority::Read(Priority::None), |item| {
+                    item.priority.clone()
+                }),
+            },
             // What `state_input` asked for: closed for a terminal target, open for any other
             // status, and the issue's own state left as it was by a document write.
             closed: content_kind == ContentKind::Issue
@@ -4551,6 +5275,7 @@ impl GitHubProjectsSource {
         origin: &str,
         column: Option<(String, String)>,
         status_target: Option<&StatusTarget>,
+        priority: Option<&PriorityWrite>,
         native: &[String],
     ) -> Result<(), SourceError> {
         if let Some(field_id) = origin_field {
@@ -4566,6 +5291,10 @@ impl GitHubProjectsSource {
                 json!({"singleSelectOptionId":option_id}),
             )
             .await?;
+        }
+
+        if let Some(priority) = priority {
+            self.write_priority(board_id, item_id, priority).await?;
         }
 
         if content_kind == ContentKind::Issue
@@ -5155,6 +5884,8 @@ struct Resolved {
     status: Status,
     /// The name of the board `Status` option this item sits in, as the board spells it.
     option: Option<String>,
+    /// What its `Priority` field says, read through this instance's mapping.
+    priority: HeldPriority,
     /// Whether this item's issue is closed. A draft has no such state and is never closed.
     closed: bool,
     /// The tasks this one delivers, read out of its slot. Empty for anything not a task.
@@ -5255,14 +5986,41 @@ impl Resolved {
         self.number.map(|number| number.to_string())
     }
 
-    fn task(&self) -> Task {
-        Task {
+    /// Whether its `Priority` field holds a value at all, mapped or not.
+    fn holds_priority(&self) -> bool {
+        self.priority != HeldPriority::Read(Priority::None)
+    }
+
+    /// The task this item is.
+    ///
+    /// Fails for an item whose `Priority` field holds an option the mapping does not name:
+    /// reading that as a level would be a guess, and reading it as `none` would let the next
+    /// copy clear a priority a person set.
+    fn task(&self) -> Result<Task, SourceError> {
+        let priority = match &self.priority {
+            HeldPriority::Read(priority) => *priority,
+            HeldPriority::Unmapped(option) => {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "task {}{} sits in the board {PRIORITY_FIELD} option {option:?}, which \
+                         this source's priority_mapping does not name, so its priority cannot be \
+                         read; next: name {option:?} under priority_mapping, or move the item to \
+                         a mapped option",
+                        self.id,
+                        self.number
+                            .map(|number| format!(" (#{number})"))
+                            .unwrap_or_default()
+                    ),
+                });
+            }
+        };
+        Ok(Task {
             id: self.id.clone(),
             key: self.key(),
             title: self.title.clone(),
             content: self.body.clone(),
             status: self.status.clone(),
-            priority: Priority::None,
+            priority,
             labels: self.labels.clone(),
             project: self.parent.clone(),
             url: self.url.clone(),
@@ -5273,7 +6031,7 @@ impl Resolved {
             repositories: self.repositories.clone(),
             delivers: self.delivers.clone(),
             delivered_by: self.delivered_by.clone(),
-        }
+        })
     }
 
     fn project(&self) -> Project {
@@ -5360,6 +6118,26 @@ struct Incoming<'a> {
     delivers: &'a [TaskRef],
     /// [`Task::delivered_by`], already checked. Empty for a project or a document.
     delivered_by: &'a [TaskRef],
+    /// [`Task::priority`], for a task written to an instance that holds one; `None` for a
+    /// project, a document, and every write to an instance with no `priority_mapping` —
+    /// which is what keeps such a write's requests exactly what they were before.
+    priority: Option<Priority>,
+}
+
+/// What one write does to an item's `Priority` field.
+enum PriorityWrite {
+    /// Select this option of this field.
+    Select {
+        /// The `Priority` field's id.
+        field: String,
+        /// The mapped option's id.
+        option: String,
+    },
+    /// Clear the field's value, which is what `none` is.
+    Clear {
+        /// The `Priority` field's id.
+        field: String,
+    },
 }
 
 impl Incoming<'_> {
@@ -5502,7 +6280,13 @@ impl TaskSource for GitHubProjectsSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            priority: Support::Unsupported,
+            priority: if self.priorities.is_some() {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
+            // The engine narrows: every read here is of the whole board or a whole project,
+            // and a priority is one more comparison over rows the engine already holds.
             filter_by_priority: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
@@ -5527,11 +6311,11 @@ impl TaskSource for GitHubProjectsSource {
         })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self
-            .item_by_id(id)
+        self.item_by_id(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
-            .map(|item| item.task()))
+            .map(|item| item.task())
+            .transpose()
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self
@@ -5561,12 +6345,16 @@ impl TaskSource for GitHubProjectsSource {
         };
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
-        let tasks = held
+        let mut tasks = Vec::new();
+        for item in held
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
-            .map(Resolved::task)
-            .filter(|task| task_matches(task, query, membership))
-            .collect();
+        {
+            let task = item.task()?;
+            if task_matches(&task, query, membership) {
+                tasks.push(task);
+            }
+        }
         Ok(offset_page(
             tasks,
             numeric_cursor(page.cursor.as_ref())?,
@@ -5695,6 +6483,9 @@ impl TaskSource for GitHubProjectsSource {
             TaskRef::listed(key, near, Some(&self.name), entries.clone())
                 .map_err(|message| SourceError::Refused { message })?;
         }
+        if self.priorities.is_none() && write.item.priority != Priority::None {
+            return Err(self.holds_no_priority());
+        }
         self.write_item(
             &Incoming {
                 written: Written::Work(ItemKind::Task, &write.item.status),
@@ -5706,6 +6497,7 @@ impl TaskSource for GitHubProjectsSource {
                 parent: write.item.project.as_ref(),
                 delivers: &write.item.delivers,
                 delivered_by: &write.item.delivered_by,
+                priority: self.priorities.as_ref().map(|_| write.item.priority),
             },
             write.target.as_ref(),
             &write.depends_on,
@@ -5725,6 +6517,7 @@ impl TaskSource for GitHubProjectsSource {
                 parent: None,
                 delivers: &[],
                 delivered_by: &[],
+                priority: None,
             },
             write.target.as_ref(),
             &write.depends_on,
@@ -5766,6 +6559,7 @@ impl TaskSource for GitHubProjectsSource {
                 parent: write.item.project.as_ref(),
                 delivers: &[],
                 delivered_by: &[],
+                priority: None,
             },
             write.target.as_ref(),
             &[],
@@ -5787,6 +6581,27 @@ impl TaskSource for GitHubProjectsSource {
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         self.set_status(id, category).await
+    }
+
+    /// Set one task's priority alone: one `updateProjectV2ItemFieldValue` selecting the
+    /// mapped option of the board's `Priority` field, or one `clearProjectV2ItemFieldValue`
+    /// for `none`. Refused by an instance with no `priority_mapping`.
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: Priority,
+    ) -> Result<Option<Priority>, SourceError> {
+        self.set_priority(id, priority).await
+    }
+
+    /// Replace one task's content with a single body update that keeps the metadata slot
+    /// byte for byte.
+    async fn set_task_content(
+        &self,
+        id: &NativeId,
+        content: &str,
+    ) -> Result<Option<()>, SourceError> {
+        self.replace_content(id, content).await
     }
 
     /// Replace one task's `delivered_by` with a single body update that changes the
@@ -5811,7 +6626,8 @@ impl TaskSource for GitHubProjectsSource {
         Ok(self
             .set_slot_key(id, BoardKind::Work(ItemKind::Task), key, value)
             .await?
-            .map(|item| item.task()))
+            .map(|item| item.task())
+            .transpose()?)
     }
 
     /// Set one key of one project issue's metadata, on exactly the terms of
@@ -6498,6 +7314,25 @@ fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, S
         (None, Some(encoded)) => {
             format!("{body}{METADATA_SEPARATOR}{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
         }
+    })
+}
+
+/// `body` with everything before its metadata slot replaced by `content`, and the slot
+/// itself kept byte for byte.
+///
+/// The inverse of how [`metadata_body`] splits a body: the slot, when there is one, follows
+/// `content` after the one [`METADATA_SEPARATOR`] the composer puts there — or alone, when
+/// `content` is empty — so a read of the result reports `content` as the visible body and
+/// the slot's metadata exactly as it was.
+fn with_content(body: &str, content: &str) -> Result<String, SourceError> {
+    let Some(slot) = slot_span(body)? else {
+        return Ok(content.to_owned());
+    };
+    let kept = &body[slot.start..];
+    Ok(if content.is_empty() {
+        kept.to_owned()
+    } else {
+        format!("{content}{METADATA_SEPARATOR}{kept}")
     })
 }
 

@@ -19,7 +19,7 @@ use onetaskgraph_core::{
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
 };
-use onetaskgraph_status_options::StatusOptionsReport;
+use onetaskgraph_status_options::{FieldOutcome, FieldsReport, StatusOptionsReport};
 use serde::Serialize;
 
 /// One value as the wire spells it — `in-progress`, `search-title`, `blocks`.
@@ -53,6 +53,34 @@ pub fn status_options(report: &StatusOptionsReport) -> String {
             report.source
         ),
     }
+}
+
+/// A concise read-only plan or verified apply result for every field a board setup names:
+/// one line per field.
+pub fn fields(report: &FieldsReport) -> String {
+    let mut rendered = String::new();
+    for field in &report.fields {
+        let missing = if field.missing.is_empty() {
+            "none".to_owned()
+        } else {
+            field.missing.join(", ")
+        };
+        let name = field.field.name();
+        let line = match (field.outcome, field.exists) {
+            (FieldOutcome::Created, _) => {
+                format!("created the {name} field with: {missing}")
+            }
+            (FieldOutcome::Applied, _) => format!("added and verified {name} options: {missing}"),
+            (FieldOutcome::Planned, false) => {
+                format!("no {name} field; would create it with: {missing}")
+            }
+            (FieldOutcome::Planned | FieldOutcome::Unchanged, _) => {
+                format!("missing configured {name} options: {missing}")
+            }
+        };
+        rendered.push_str(&format!("{}: {line}\n", report.source));
+    }
+    rendered
 }
 
 /// Lay `rows` out as aligned columns, one line each.

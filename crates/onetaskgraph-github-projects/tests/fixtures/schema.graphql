@@ -7,6 +7,14 @@
 # this source does writes the board's own fields. `updateProjectV2Field` is present only
 # for the guarded status-options document, whose caller sends all existing option ids and
 # verifies every id and item assignment after GitHub replaces the complete option set.
+#
+# `createProjectV2Field` (with `CreateProjectV2FieldInput`, `ProjectV2CustomFieldType` and
+# `CreateProjectV2FieldPayload`) and `clearProjectV2ItemFieldValue` (with
+# `ClearProjectV2ItemFieldValueInput` and `ClearProjectV2ItemFieldValuePayload`) were copied from
+# GitHub's published GraphQL schema reference (docs.github.com/en/graphql/reference/mutations,
+# /input-objects, /enums and /objects), retrieved 2026-09-26, reduced to the members this plugin
+# sends and selects. The first is sent only by the guarded field setup, for a `Priority` field a
+# board lacks; the second clears one item's `Priority` value, which is what a `none` priority is.
 schema {
   query: Query
   mutation: Mutation
@@ -45,6 +53,10 @@ type Mutation {
     input: UpdateProjectV2ItemFieldValueInput!
   ): UpdateProjectV2ItemFieldValuePayload
   updateProjectV2Field(input: UpdateProjectV2FieldInput!): UpdateProjectV2FieldPayload
+  createProjectV2Field(input: CreateProjectV2FieldInput!): CreateProjectV2FieldPayload
+  clearProjectV2ItemFieldValue(
+    input: ClearProjectV2ItemFieldValueInput!
+  ): ClearProjectV2ItemFieldValuePayload
   addSubIssue(input: AddSubIssueInput!): AddSubIssuePayload
   removeSubIssue(input: RemoveSubIssueInput!): RemoveSubIssuePayload
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
@@ -126,6 +138,24 @@ input UpdateProjectV2FieldInput {
   fieldId: ID!
   singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
 }
+input CreateProjectV2FieldInput {
+  projectId: ID!
+  dataType: ProjectV2CustomFieldType!
+  name: String!
+  singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
+}
+enum ProjectV2CustomFieldType {
+  DATE
+  ITERATION
+  NUMBER
+  SINGLE_SELECT
+  TEXT
+}
+input ClearProjectV2ItemFieldValueInput {
+  projectId: ID!
+  itemId: ID!
+  fieldId: ID!
+}
 input ProjectV2SingleSelectFieldOptionInput {
   id: ID
   name: String!
@@ -176,6 +206,12 @@ type UpdateProjectV2ItemFieldValuePayload {
 }
 type UpdateProjectV2FieldPayload {
   projectV2Field: ProjectV2FieldConfiguration
+}
+type CreateProjectV2FieldPayload {
+  projectV2Field: ProjectV2FieldConfiguration
+}
+type ClearProjectV2ItemFieldValuePayload {
+  projectV2Item: ProjectV2Item
 }
 type AddSubIssuePayload {
   issue: Issue

@@ -104,9 +104,17 @@ pub enum SourcesCommand {
     List,
     /// Safely report or add configured GitHub Projects board Status options.
     ///
-    /// The default is a read-only plan. `--apply` preserves every existing option id and
-    /// verifies every existing item assignment after GitHub replaces the option list.
+    /// The Status-only form of `sources fields`, which supersedes it. The default is a
+    /// read-only plan. `--apply` preserves every existing option id and verifies every
+    /// existing item assignment after GitHub replaces the option list.
     StatusOptions(StatusOptionsArgs),
+    /// Safely report or set up every board field a GitHub Projects source's configuration
+    /// names: its Status options, and its Priority field when `priority_mapping` is set.
+    ///
+    /// The default is a read-only plan. `--apply` adds missing options, creates a missing
+    /// Priority field holding the mapped options, preserves every existing option's id,
+    /// name, color and description, and verifies every item's values afterwards.
+    Fields(StatusOptionsArgs),
 }
 
 /// Which configured source to inspect, and whether to apply its plan.

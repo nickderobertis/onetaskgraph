@@ -24,7 +24,9 @@ use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
     TextQuery,
 };
-use onetaskgraph_status_options::{GitHubProjectsConfig, StatusOptionsMode, StatusOptionsReport};
+use onetaskgraph_status_options::{
+    FieldsReport, GitHubProjectsConfig, StatusOptionsMode, StatusOptionsReport,
+};
 use serde::Serialize;
 
 use crate::cli::{
@@ -171,49 +173,42 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Sources {
             command: SourcesCommand::StatusOptions(args),
         } => {
-            // llmlint: ignore-block[changed_behavior_has_e2e] The status-options journeys drive
-            // this boundary through unknown and wrong-plugin sources. Invalid source tokens
-            // and malformed plugin configuration are the shared configuration boundary's
-            // existing validation, while construction errors are exercised by this plugin's
-            // configuration tests rather than duplicated for each CLI verb.
-            let name = SourceName::try_from(args.source.clone())
-                .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
-            let source = loaded.config.sources().get(&name).ok_or_else(|| {
-                Failure::decided(
-                    "status-options",
-                    format!("no configured source is named {name}"),
-                )
+            let (name, config) = github_projects_source(loaded, &args.source, "status-options")?;
+            let report = onetaskgraph_status_options::reconcile(
+                &name,
+                config,
+                &loaded.secrets,
+                setup_mode(args.apply),
+            )
+            .await
+            .map_err(|error| {
+                Failure::decided("status-options", format!("source {name}: {error}"))
             })?;
-            if source.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
-                return Err(Failure::decided(
-                    "status-options",
-                    format!(
-                        "source {name} uses plugin {}, not github-projects; status-options is only available for github-projects sources",
-                        source.plugin()
-                    ),
-                ));
-            }
-            let config: GitHubProjectsConfig = serde_json::from_value(source.config().clone())
-                .map_err(|error| {
-                    Failure::decided("status-options", format!("source {name}: {error}"))
-                })?;
-            // llmlint: ignore-end[changed_behavior_has_e2e]
-            let mode = if args.apply {
-                StatusOptionsMode::Apply
-            } else {
-                StatusOptionsMode::Plan
-            };
-            let report =
-                onetaskgraph_status_options::reconcile(&name, config, &loaded.secrets, mode)
-                    .await
-                    .map_err(|error| {
-                        Failure::decided("status-options", format!("source {name}: {error}"))
-                    })?;
             let rendered = match loaded.config.output() {
                 OutputFormat::Json => json(&report, "the status-options report")?,
                 OutputFormat::Text => render::status_options(&report),
             };
             emit(out, rendered.trim_end(), "the status-options report")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Sources {
+            command: SourcesCommand::Fields(args),
+        } => {
+            let (name, config) = github_projects_source(loaded, &args.source, "fields")?;
+            let report = onetaskgraph_status_options::reconcile_fields(
+                &name,
+                config,
+                &loaded.secrets,
+                setup_mode(args.apply),
+            )
+            .await
+            .map_err(|error| Failure::decided("fields", format!("source {name}: {error}")))?;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Json => json(&report, "the fields report")?,
+                OutputFormat::Text => render::fields(&report),
+            };
+            emit(out, rendered.trim_end(), "the fields report")?;
             Ok(EXIT_OK)
         }
 
@@ -626,6 +621,49 @@ fn show_rendered<T>(
             emit(out, rendered.trim_end(), what)?;
             Ok(report(&response.errors, args.allow_partial))
         }
+    }
+}
+
+/// The configured `github-projects` source a guarded board setup verb names, and its
+/// configuration, refused with `verb` as the failure's kind when there is no such source or it
+/// is not a `github-projects` one.
+fn github_projects_source(
+    loaded: &Loaded,
+    source: &str,
+    verb: &str,
+) -> Result<(SourceName, GitHubProjectsConfig), Failure> {
+    // llmlint: ignore-block[changed_behavior_has_e2e] The status-options and fields journeys
+    // drive this boundary through unknown and wrong-plugin sources. Invalid source tokens and
+    // malformed plugin configuration are the shared configuration boundary's existing
+    // validation, while construction errors are exercised by this plugin's configuration tests
+    // rather than duplicated for each CLI verb.
+    let name = SourceName::try_from(source.to_owned())
+        .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+    let configured =
+        loaded.config.sources().get(&name).ok_or_else(|| {
+            Failure::decided(verb, format!("no configured source is named {name}"))
+        })?;
+    if configured.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
+        return Err(Failure::decided(
+            verb,
+            format!(
+                "source {name} uses plugin {}, not github-projects; {verb} is only available for github-projects sources",
+                configured.plugin()
+            ),
+        ));
+    }
+    let config: GitHubProjectsConfig = serde_json::from_value(configured.config().clone())
+        .map_err(|error| Failure::decided(verb, format!("source {name}: {error}")))?;
+    // llmlint: ignore-end[changed_behavior_has_e2e]
+    Ok((name, config))
+}
+
+/// Whether a guarded board setup verb plans or applies, from its `--apply` flag.
+fn setup_mode(apply: bool) -> StatusOptionsMode {
+    if apply {
+        StatusOptionsMode::Apply
+    } else {
+        StatusOptionsMode::Plan
     }
 }
 
@@ -1071,6 +1109,8 @@ fn schema_bundle() -> Result<String, Failure> {
         schemars::schema_for!(StatusOptionsReport),
         "the status-options schema",
     )?;
+    bundle["roots"]["FieldsReport"] =
+        json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }
@@ -1205,6 +1245,7 @@ mod tests {
             serde_json::from_slice(&out).expect("the bundle is valid JSON");
         assert!(bundle["roots"]["Task"].is_object());
         assert!(bundle["roots"]["StatusOptionsReport"].is_object());
+        assert!(bundle["roots"]["FieldsReport"].is_object());
         assert!(bundle["plugin_config"]["in-memory"].is_object());
         assert_eq!(
             bundle["commands"],
@@ -1213,6 +1254,7 @@ mod tests {
                 "config show",
                 "sources list",
                 "sources status-options",
+                "sources fields",
                 "task list",
                 "task show",
                 "task deps",
