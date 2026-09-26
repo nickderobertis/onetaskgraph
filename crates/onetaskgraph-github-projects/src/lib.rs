@@ -2151,24 +2151,22 @@ struct StatusSnapshot {
 /// The name of the board field a status is held in.
 const STATUS_FIELD: &str = "Status";
 
-/// Every board field the guarded setup reads, and the only ones it writes.
-const SET_UP_FIELDS: [&str; 2] = [STATUS_FIELD, PRIORITY_FIELD];
-
 /// Every item's value of each field `report` names, as it stood before the setup wrote
 /// anything — what a person puts back when the setup is refused part way.
 fn recovery(report: &FieldsReport, before: &BoardSnapshot) -> Result<String, SourceError> {
     let assignments: BTreeMap<&str, Vec<StatusAssignment>> = report
         .fields
         .iter()
-        .map(|field| (field.field.name(), before.assignments(field.field.name())))
+        .map(|field| (field.field.name(), before.assignments(field.field)))
         .collect();
     serde_json::to_string_pretty(&assignments).map_err(|error| SourceError::Malformed {
         message: format!("cannot render the pre-write field recovery snapshot: {error}"),
     })
 }
 
-/// One board field the guarded setup reads and writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+/// One board field the guarded setup reads and writes — every one it reads, and the only
+/// ones it writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, schemars::JsonSchema)]
 pub enum BoardField {
     /// The single-select `Status` field every instance's `status_mapping` resolves into.
     Status,
@@ -2184,6 +2182,13 @@ impl BoardField {
             Self::Status => STATUS_FIELD,
             Self::Priority => PRIORITY_FIELD,
         }
+    }
+
+    /// The field a board calls `name`, or `None` for one this setup does not own.
+    fn named(name: &str) -> Option<Self> {
+        [Self::Status, Self::Priority]
+            .into_iter()
+            .find(|field| field.name() == name)
     }
 }
 
@@ -2263,20 +2268,20 @@ struct BoardSnapshot {
     // passed back as the mutation's project identity; a newtype could enforce no stronger
     // invariant because GitHub publishes no grammar for it.
     board_id: String,
-    fields: BTreeMap<String, SnapshotField>,
-    /// Each board item's id, and its value of each single-select field it holds one of.
-    items: Vec<(String, BTreeMap<String, AssignedStatusOption>)>,
+    fields: BTreeMap<BoardField, SnapshotField>,
+    /// Each board item's id, and its value of each field this setup owns that it holds one of.
+    items: Vec<(String, BTreeMap<BoardField, AssignedStatusOption>)>,
 }
 
 impl BoardSnapshot {
-    /// Every item's value of the field called `name`, in board order — the recovery data a
-    /// drift refusal carries.
-    fn assignments(&self, name: &str) -> Vec<StatusAssignment> {
+    /// Every item's value of `field`, in board order — the recovery data a drift refusal
+    /// carries.
+    fn assignments(&self, field: BoardField) -> Vec<StatusAssignment> {
         self.items
             .iter()
             .map(|(item_id, values)| StatusAssignment {
                 item_id: item_id.clone(),
-                option: values.get(name).cloned(),
+                option: values.get(&field).cloned(),
             })
             .collect()
     }
@@ -2392,10 +2397,10 @@ impl GitHubProjectsSource {
         let mut board = self.board_snapshot().await?;
         let field = board
             .fields
-            .remove(STATUS_FIELD)
+            .remove(&BoardField::Status)
             .ok_or_else(|| self.no_status_field())?;
         Ok(StatusSnapshot {
-            assignments: board.assignments(STATUS_FIELD),
+            assignments: board.assignments(BoardField::Status),
             board_id: board.board_id,
             field_id: field.field_id,
             options: field.options,
@@ -2453,18 +2458,16 @@ impl GitHubProjectsSource {
             // match carries no name, and a person's own single-select field — a `Size`, a
             // `Team` — is none of this setup's business, so nothing about it can refuse one. A
             // `Status` or `Priority` field without its options is malformed, not absent.
-            for field in board
+            for (owned, field) in board
                 .pointer("/fields/nodes")
                 .and_then(Value::as_array)
                 .ok_or_else(|| SourceError::Malformed {
                     message: "GitHub project fields.nodes is not an array".into(),
                 })?
                 .iter()
-                .filter(|field| {
-                    field
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|name| SET_UP_FIELDS.contains(&name))
+                .filter_map(|field| {
+                    let owned = BoardField::named(field.get("name")?.as_str()?)?;
+                    Some((owned, field))
                 })
             {
                 let options = field
@@ -2501,7 +2504,7 @@ impl GitHubProjectsSource {
                     })
                     .collect::<Result<Vec<_>, SourceError>>()?;
                 fields.insert(
-                    required_str(field, "name")?.to_owned(),
+                    owned,
                     SnapshotField {
                         field_id: required_nonblank_str(field, "id")?.to_owned(),
                         options,
@@ -2546,12 +2549,12 @@ impl GitHubProjectsSource {
                     let Some(field) = value
                         .pointer("/field/name")
                         .and_then(Value::as_str)
-                        .filter(|name| SET_UP_FIELDS.contains(name))
+                        .and_then(BoardField::named)
                     else {
                         continue;
                     };
                     assigned.insert(
-                        field.to_owned(),
+                        field,
                         AssignedStatusOption {
                             id: StatusOptionId::try_from(
                                 required_str(value, "optionId")?.to_owned(),
@@ -2560,7 +2563,8 @@ impl GitHubProjectsSource {
                             name: ColumnName::try_from(required_str(value, "name")?.to_owned())
                                 .map_err(|message| SourceError::Malformed {
                                     message: format!(
-                                        "GitHub assigned {field} name is invalid: {message}"
+                                        "GitHub assigned {} name is invalid: {message}",
+                                        field.name()
                                     ),
                                 })?,
                         },
@@ -2628,7 +2632,7 @@ impl GitHubProjectsSource {
                 })
                 .collect(),
         }];
-        if !before.fields.contains_key(STATUS_FIELD) {
+        if !before.fields.contains_key(&BoardField::Status) {
             return Err(self.no_status_field());
         }
         if let Some(mapping) = &self.priorities {
@@ -2639,7 +2643,7 @@ impl GitHubProjectsSource {
         }
         let mut reports = Vec::new();
         for plan in &plans {
-            let held = before.fields.get(plan.field.name());
+            let held = before.fields.get(&plan.field);
             let existing = held.map(|field| field.options.clone()).unwrap_or_default();
             let mut missing: Vec<String> = Vec::new();
             for wanted in &plan.wanted {
@@ -2684,7 +2688,7 @@ impl GitHubProjectsSource {
                 .missing
                 .iter()
                 .map(|name| json!({"name": name, "color": "GRAY", "description": ""}));
-            let sent = match before.fields.get(field.field.name()) {
+            let sent = match before.fields.get(&field.field) {
                 Some(held) => {
                     let mut options = held
                         .options
@@ -2760,7 +2764,7 @@ impl GitHubProjectsSource {
             let name = field.field.name();
             let now = after
                 .fields
-                .get(name)
+                .get(&field.field)
                 .map(|held| held.options.as_slice())
                 .unwrap_or_default();
             if !field.existing.iter().all(|old| now.contains(old)) {
@@ -2774,7 +2778,7 @@ impl GitHubProjectsSource {
             }) {
                 moved.push(format!("an added {name} option"));
             }
-            if after.assignments(name) != before.assignments(name) {
+            if after.assignments(field.field) != before.assignments(field.field) {
                 moved.push(format!("an item's {name} value"));
             }
         }
