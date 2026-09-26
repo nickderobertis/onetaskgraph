@@ -594,7 +594,6 @@ fn reads_as_written(failure: &Failure) {
     );
 }
 
-/// The failure one entry of a report came to — which must be a failure.
 fn failure_of(entry: &Delivered) -> &Failure {
     match &entry.outcome {
         DeliveryOutcome::Failed { failure, .. } => failure,
@@ -605,9 +604,8 @@ fn failure_of(entry: &Delivered) -> &Failure {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_linking_caller_reads_a_delivered_tickets_failure_through_its_getters() {
-    // `limited` is a real child that rate-limits its handshake with a named wait, so its
-    // ticket fails transiently; `frozen` holds its ticket but has no write side, so that one
-    // is refused; `nowhere` is configured by nothing, which no source caused.
+    // A real child refusing its handshake, because a transient failure a stand-in fakes is
+    // not the one a linking caller is handed.
     let rate_limited = r#"read -r _request
 printf '%s\n' '{"id":"0","error":{"kind":"rate-limited","retry_after_seconds":45}}'"#;
     let engine = engine_over(json!({
