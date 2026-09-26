@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from onetaskgraph_sdk import Client
 from onetaskgraph_sdk._generated import (
@@ -32,7 +31,7 @@ TASK_MODELS: list[type[BaseModel]] = [
 ]
 
 # A task exactly as an engine or plugin wrote one before `priority` existed.
-PRE_CHANGE_TASK: dict[str, Any] = {
+PRE_CHANGE_TASK: dict[str, JsonValue] = {
     "id": "tasks/migrate.md",
     "key": None,
     "title": "Migrate the store",
@@ -49,7 +48,7 @@ PRE_CHANGE_TASK: dict[str, Any] = {
 }
 
 # A capability declaration exactly as a plugin's handshake carried one before priorities.
-PRE_CHANGE_CAPABILITIES: dict[str, Any] = {
+PRE_CHANGE_CAPABILITIES: dict[str, JsonValue] = {
     "projects": "native",
     "documents": "unsupported",
     "comments": "unsupported",
