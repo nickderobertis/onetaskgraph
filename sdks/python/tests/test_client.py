@@ -28,6 +28,7 @@ from onetaskgraph_sdk import (
 )
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
+from onetaskgraph_sdk._generated.query_response_of_search_hit import SearchHitTask
 from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
 
 WORKSPACE = Path(__file__).parents[3]
@@ -927,6 +928,45 @@ def test_metadata_and_repositories_survive_the_generated_models(
     hit = run(client.search(text="Memory", kind="task")).items[0].root
     assert (hit.item.metadata or {})["onepipeline.turn_budget"] == 12
     assert [repository.root for repository in hit.item.repositories or []] == origins
+
+
+def test_a_tasks_key_reaches_every_read_model_beside_its_id(binary: Path, tmp_path: Path) -> None:
+    """Read a backend's short handle back through list, show and search, and its absence."""
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "tracker": {
+                        "plugin": "subprocess",
+                        "config": {
+                            # Absolute, because the engine spawns a plugin with a cleared
+                            # environment and so no PATH to resolve a bare name against.
+                            "command": sys.executable,
+                            "args": [str(Path(__file__).with_name("keyed_source.py"))],
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=tmp_path)
+
+    listed = {item.id.root: item.item.key for item in run(client.task_list()).items}
+    assert listed == {"tracker:iss_8f2c": "ENG-7", "tracker:iss_91d0": None}
+
+    shown = run(client.task_show(id="tracker:iss_8f2c")).items[0]
+    assert (shown.id.root, shown.item.id.root, shown.item.key) == (
+        "tracker:iss_8f2c",
+        "iss_8f2c",
+        "ENG-7",
+    )
+    # A plugin that sends no `key` member reads as a task with no handle, not as its id.
+    assert run(client.task_show(id="tracker:iss_91d0")).items[0].item.key is None
+
+    hit = run(client.search(text="Engine handle", kind="task")).items[0].root
+    assert isinstance(hit, SearchHitTask)
+    assert (hit.item.id.root, hit.item.key) == ("iss_8f2c", "ENG-7")
 
 
 def test_a_dependency_endpoint_carries_its_kind_and_may_leave_the_source(
