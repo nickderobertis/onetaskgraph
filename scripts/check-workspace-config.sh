@@ -136,6 +136,7 @@ SPAWNERS = {
     "sdks/typescript/scripts/generate.ts": [("sdk-typescript", "generate-check")],
     "sdks/typescript/tests/client.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/generator.test.ts": SDK_TYPESCRIPT_TESTS,
+    "sdks/typescript/tests/templates.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/scripts/test-packed.sh": [("sdk-typescript", "pack")],
     # Two targets, because scripts:test drives this journey as well:
     # check-relative-interpreter.sh runs the real script under a PATH of its own making.
