@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Literal
+
+from pydantic import JsonValue
 
 from .models import (
     Comment,
@@ -20,6 +24,7 @@ from .models import (
     QueryResponseOfQualifiedProject,
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
+    RenderedTemplate,
     SourceListing,
     SourceName,
     StatusCategory,
@@ -28,6 +33,7 @@ from .models import (
     TaskDetail,
     TaskPrioritySet,
     TaskStatusSet,
+    TemplateVariables,
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -52,6 +58,8 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "priority", "set"): ("id", "priority"),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
+    ("template", "render"): ("file",),
+    ("template", "variables"): ("file",),
 }
 """The operands each command takes ahead of its options, in order, by command.
 
@@ -758,5 +766,50 @@ class GeneratedClient:
             category=category,
             default_sources=default_sources,
             page_size=page_size,
+            set=set,
+        )
+
+    async def template_render(
+        self,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> RenderedTemplate:
+        """Run ``onetaskgraph template render``."""
+        return await self._invoke(
+            ["template", "render"],
+            RenderedTemplate,
+            file=file,
+            default_sources=default_sources,
+            page_size=page_size,
+            search_path=search_path,
+            set=set,
+            var=var,
+            answers=None if answers is None else "-",
+            stdin=None if answers is None else json.dumps(dict(answers)),
+        )
+
+    async def template_variables(
+        self,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateVariables:
+        """Run ``onetaskgraph template variables``."""
+        return await self._invoke(
+            ["template", "variables"],
+            TemplateVariables,
+            file=file,
+            default_sources=default_sources,
+            page_size=page_size,
+            search_path=search_path,
             set=set,
         )

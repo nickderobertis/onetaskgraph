@@ -45,6 +45,8 @@ RESPONSE_ROOTS = {
     "sources_status_options": "StatusOptionsReport",
     "sources_fields": "FieldsReport",
     "config_show": "EffectiveConfig",
+    "template_variables": "TemplateVariables",
+    "template_render": "RenderedTemplate",
 }
 # Roots no command returns directly, which the package generates and exports anyway.
 #
@@ -57,7 +59,8 @@ RESPONSE_ROOTS = {
 # `--json`, which no verb's response root describes. `Delivered` and `DeliveryOutcome` are
 # what a write reports about each task it kept in step with its deliverers, inside both a
 # `CopyReport` and a `TaskStatusSet`; `TaskRef` is the entry of a task's `delivers` and
-# `delivered_by`.
+# `delivered_by`. `TemplateVariable`, `VariableType` and `ItemType` are one entry of what
+# `template variables` answers and the two vocabularies it types a variable with.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -73,11 +76,15 @@ CONTRACT_ROOTS = {
     "Delivered",
     "DeliveryOutcome",
     "TaskRef",
+    "TemplateVariable",
+    "VariableType",
+    "ItemType",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
+    "answers": "answers",
     "author": "str",
     "body_file": "str",
     "dry_run": "bool",
@@ -100,14 +107,17 @@ OPTION_TYPES = {
     "project": "str",
     "recreate": "bool",
     "search": "str",
+    "search_path": "list[str] | tuple[str, ...]",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
     "to": "str",
+    "var": "list[str] | tuple[str, ...]",
 }
 OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
+    "answers": "FILE",
     "author": "NAME",
     "body_file": "PATH",
     "dry_run": None,
@@ -130,11 +140,19 @@ OPTION_PLACEHOLDERS = {
     "project": "P",
     "recreate": None,
     "search": "TEXT",
+    "search_path": "DIR",
     "set": "PATH=VALUE",
     "source": "S",
     "status": "S",
     "to": "SOURCE",
+    "var": "NAME=VALUE",
 }
+
+
+# Global flags no generated method takes: `--json` and `--output`, because the client always
+# asks for machine output, and `--interactive` / `--no-interactive`, because the client always
+# passes `--no-interactive` — a library call must never wait on a prompt nobody can answer.
+UNEXPOSED_OPTIONS = {"help", "json", "output", "interactive", "no_interactive"}
 
 
 class SchemaBundle(TypedDict):
@@ -232,7 +250,7 @@ def option_names(command: tuple[str, ...]) -> list[str]:
         re.MULTILINE,
     )
     names = [name for name, _ in discovered]
-    normalized = {name.replace("-", "_") for name in names} - {"help", "json", "output"}
+    normalized = {name.replace("-", "_") for name in names} - UNEXPOSED_OPTIONS
     result = sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
     placeholders = {
         (
@@ -241,7 +259,7 @@ def option_names(command: tuple[str, ...]) -> list[str]:
             else name.replace("-", "_")
         ): (placeholder or None)
         for name, placeholder in discovered
-        if name not in {"help", "json", "output"}
+        if name.replace("-", "_") not in UNEXPOSED_OPTIONS
     }
     validate_option_placeholders(placeholders, result)
     return result
@@ -517,6 +535,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
+        case ("template", "variables" | "render"):
+            return ("file",)
         case _:
             return ()
 
@@ -531,6 +551,11 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {("task", "content", 
 # generated methods expose as a `body` the client writes there — a body is never a word of
 # the command line, so a caller holding text needs no file to pass it.
 BODY_COMMANDS = {("task", "comment", "add"), ("task", "comment", "edit")}
+
+# The commands whose `--answers` generated methods take as a mapping rather than a path: the
+# client writes it to the binary's standard input as JSON — which is YAML — and passes
+# `--answers -`, so a caller holding answers needs no file to hand them over.
+ANSWERS_COMMANDS = {("template", "render")}
 
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
@@ -547,7 +572,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '"""Generated typed client methods. Do not edit."""',
         "from __future__ import annotations",
         "",
+        "import json",
+        "from collections.abc import Mapping",
         "from typing import Literal",
+        "",
+        "from pydantic import JsonValue",
         "",
         "from .models import (",
         *[
@@ -613,9 +642,15 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         taken = positionals.get(command, ())
         required = REQUIRED_OPTIONS.get(command, ())
         keywords = [
-            item for item in option_names(command) if item not in taken and item not in required
+            item
+            for item in option_names(command)
+            if item not in taken
+            and item not in required
+            and not (command in ANSWERS_COMMANDS and item == "answers")
         ]
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
+        if command in ANSWERS_COMMANDS:
+            body = ["answers: Mapping[str, JsonValue] | None = None"]
         parameters = (
             [
                 f"{positional}: {positional_types.get(positional, 'str')}"
@@ -628,7 +663,10 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         if parameters[-1] == "*":
             parameters.pop()
         passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
-        if body:
+        if command in ANSWERS_COMMANDS:
+            passed.append('answers=None if answers is None else "-"')
+            passed.append("stdin=None if answers is None else json.dumps(dict(answers))")
+        elif body:
             passed.append("stdin=body")
         lines.extend(
             [

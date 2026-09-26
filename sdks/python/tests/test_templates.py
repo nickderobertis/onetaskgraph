@@ -1,0 +1,165 @@
+"""Task templates through the SDK, driving the real binary."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from collections.abc import Coroutine
+from pathlib import Path
+
+import pytest
+
+from onetaskgraph_sdk import (
+    Client,
+    ItemType,
+    OnetaskgraphError,
+    RenderedTemplate,
+    TemplateVariables,
+    VariableType,
+)
+
+TASK = """---
+onetaskgraph_template: 1
+variables:
+  title:
+    description: What the task is called
+  steps:
+    description: What to do
+    type: list
+  size:
+    description: How big
+    type: integer
+    default: 1
+---
+{% extends "base.md" %}
+{% block body %}
+{{ title }} ({{ size }})
+{% for step in steps %}
+- {{ step }}
+{% endfor %}
+{% endblock %}
+"""
+
+BASE = """---
+onetaskgraph_template: 1
+variables:
+  owner:
+    description: Who owns it
+    default: nobody
+---
+# Owned by {{ owner }}
+{% block body %}{% endblock %}
+"""
+
+
+def run[T](call: Coroutine[object, object, T]) -> T:
+    """Drive one public async SDK call to completion."""
+    return asyncio.run(call)
+
+
+def template(tmp_path: Path) -> tuple[Path, Path]:
+    """Write the task template and, in a directory of its own, the base it extends."""
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "base.md").write_text(BASE, encoding="utf-8")
+    task = tmp_path / "task.md"
+    task.write_text(TASK, encoding="utf-8")
+    return task, library
+
+
+def interactive_client(binary: Path, tmp_path: Path) -> Client:
+    """A client whose environment turns prompting on, which the SDK must override."""
+    environment = dict(os.environ)
+    environment["ONETASKGRAPH_INTERACTIVE"] = "true"
+    return Client(binary, cwd=tmp_path, environment=environment)
+
+
+def test_template_variables_reads_the_declared_set_down_the_chain(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Every declared variable comes back typed, with the chain's digest."""
+    task, library = template(tmp_path)
+    described = run(
+        Client(binary, cwd=tmp_path).template_variables(str(task), search_path=[str(library)])
+    )
+    assert isinstance(described, TemplateVariables)
+    assert described.template == "task.md"
+    assert described.digest.startswith("sha256:")
+    assert len(described.digest) == len("sha256:") + 64
+    assert [
+        (variable.name, variable.type, variable.declared_in) for variable in described.variables
+    ] == [
+        ("title", VariableType.VariableTypeString, "task.md"),
+        ("steps", VariableType.VariableTypeList, "task.md"),
+        ("size", VariableType.VariableTypeInteger, "task.md"),
+        ("owner", VariableType.VariableTypeString, "base.md"),
+    ]
+    steps = described.variables[1]
+    assert steps.items == ItemType.ItemTypeString
+    assert steps.required
+    assert described.variables[3].default == "nobody"
+
+
+def test_template_render_hands_the_answers_over_on_stdin_and_never_prompts(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A mapping of answers renders, a --var outranks it, and a default fills the rest."""
+    task, library = template(tmp_path)
+    client = interactive_client(binary, tmp_path)
+    rendered = run(
+        client.template_render(
+            str(task),
+            search_path=[str(library)],
+            answers={"title": "Ship it", "steps": ["build", "release"], "size": 3},
+            var=["size=5"],
+        )
+    )
+    assert isinstance(rendered, RenderedTemplate)
+    assert rendered.body == "# Owned by nobody\nShip it (5)\n- build\n- release\n"
+    assert rendered.answers == {
+        "title": "Ship it",
+        "steps": ["build", "release"],
+        "size": 5,
+        "owner": "nobody",
+    }
+
+    # Nothing answers `owner`, and prompting is on in the environment: a call that could
+    # prompt would be refused for having no terminal. The SDK passes --no-interactive, so the
+    # default is taken instead.
+    described = run(client.template_variables(str(task), search_path=[str(library)]))
+    assert rendered.digest == described.digest
+
+
+def test_every_refused_answer_is_exit_two_naming_what_it_refuses(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Missing, mistyped and undeclared answers each raise with the binary's exit 2."""
+    task, library = template(tmp_path)
+    client = interactive_client(binary, tmp_path)
+
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.template_render(str(task), search_path=[str(library)]))
+    assert missing.value.exit_code == 2
+    assert "required variables are unanswered: title, steps" in str(missing.value)
+
+    with pytest.raises(OnetaskgraphError) as mistyped:
+        run(
+            client.template_render(
+                str(task),
+                search_path=[str(library)],
+                answers={"title": "t", "steps": "not a list"},
+            )
+        )
+    assert mistyped.value.exit_code == 2
+    assert '"steps" is not a list' in str(mistyped.value)
+
+    with pytest.raises(OnetaskgraphError) as undeclared:
+        run(
+            client.template_render(
+                str(task),
+                search_path=[str(library)],
+                answers={"title": "t", "steps": [], "colour": "blue"},
+            )
+        )
+    assert undeclared.value.exit_code == 2
+    assert "colour" in str(undeclared.value)
