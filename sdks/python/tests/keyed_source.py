@@ -94,8 +94,7 @@ class Request:
     params: dict[str, object]
 
 
-def unfiled(identifier: NativeId, title: str) -> Task:
-    """A task in no project, with nothing but its id and title to tell it apart."""
+def _unfiled(identifier: NativeId, title: str) -> Task:
     return {
         "id": identifier,
         "title": title,
@@ -111,8 +110,8 @@ def unfiled(identifier: NativeId, title: str) -> Task:
 
 
 TASKS: list[Task] = [
-    {**unfiled(NativeId("iss_8f2c"), "Engine handle"), "key": "ENG-7"},
-    unfiled(NativeId("iss_91d0"), "Engine without a handle"),
+    {**_unfiled(NativeId("iss_8f2c"), "Engine handle"), "key": "ENG-7"},
+    _unfiled(NativeId("iss_91d0"), "Engine without a handle"),
 ]
 
 # Everything a query could narrow by is declared unsupported, so this peer answers every
@@ -131,13 +130,11 @@ CAPABILITIES: Capabilities = {
 }
 
 
-def malformed(message: str) -> Refused:
-    """A request this source cannot read, answered as the contract's `malformed`."""
+def _malformed(message: str) -> Refused:
     return {"error": {"kind": "malformed", "message": message}}
 
 
-def answer(request: Request) -> Answered | Refused:
-    """The result for one method, or a `SourceError` for one this source does not serve."""
+def _answer(request: Request) -> Answered | Refused:
     match request.method:
         case "initialize":
             return {
@@ -153,7 +150,7 @@ def answer(request: Request) -> Answered | Refused:
         case "get_task":
             wanted = request.params.get("id")
             if not isinstance(wanted, str):
-                return malformed("get_task names its task by a string `id`")
+                return _malformed("get_task names its task by a string `id`")
             found = [task for task in TASKS if task["id"] == wanted]
             return {"result": {"task": found[0] if found else None}}
         case "query_tasks":
@@ -161,7 +158,7 @@ def answer(request: Request) -> Answered | Refused:
         case "labels" | "task_dependencies":
             return {"result": {"items": [], "next": None}}
         case method:
-            return malformed(
+            return _malformed(
                 f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
             )
 
@@ -183,8 +180,7 @@ def request_of(line: str) -> Request | None:
             return None
 
 
-def main() -> None:
-    """Serve one connection until the engine closes its input."""
+def _main() -> None:
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -192,9 +188,9 @@ def main() -> None:
         if request is None:
             print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
             continue
-        sys.stdout.write(json.dumps({"id": request.id, **answer(request)}) + "\n")
+        sys.stdout.write(json.dumps({"id": request.id, **_answer(request)}) + "\n")
         sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    main()
+    _main()

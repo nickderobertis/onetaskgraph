@@ -60,7 +60,6 @@ function requestOf(line: string): Request | undefined {
   return { id, method, params };
 }
 
-// A request this source cannot read, answered as the contract's `malformed` (§5).
 function malformed(message: string): object {
   return { error: { kind: "malformed", message } };
 }
