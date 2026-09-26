@@ -2550,7 +2550,7 @@ pub async fn run(nomination: Nomination) {
             documents: Support::Native,
             comments: Support::Native,
             priority: Support::Unsupported,
-            filter_by_priority: Support::Unsupported,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

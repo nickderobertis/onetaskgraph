@@ -7067,7 +7067,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             documents: Support::Native,
             comments: Support::Native,
             priority: Support::Unsupported,
-            filter_by_priority: Support::Unsupported,
+            filter_by_priority: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
