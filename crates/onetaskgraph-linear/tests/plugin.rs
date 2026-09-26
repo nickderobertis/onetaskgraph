@@ -3244,13 +3244,14 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         r#"{"data":{"issues":{"nodes":[{"id":"i","identifier":7,"title":"t","description":null,"url":null,"createdAt":null,"updatedAt":null,"state":{"name":"x","type":"started"},"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#,
     ] {
         let (endpoint, _) = server("200 OK", "", body);
-        assert!(matches!(
-            source(&endpoint)
-                .query_tasks(&TaskQuery::default(), &request)
-                .await
-                .unwrap_err(),
-            SourceError::Malformed { .. }
-        ));
+        // Named per body, so a shape this source stopped refusing says which one it was.
+        let read = source(&endpoint)
+            .query_tasks(&TaskQuery::default(), &request)
+            .await;
+        assert!(
+            matches!(read, Err(SourceError::Malformed { .. })),
+            "{body} was read as {read:?}"
+        );
     }
     for body in [
         r#"{"data":{"projects":{"nodes":[{"id":"p","name":"p","labels":{"nodes":[]}}],"pageInfo":{}}}}"#,
