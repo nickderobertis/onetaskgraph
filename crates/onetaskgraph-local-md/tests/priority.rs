@@ -127,6 +127,9 @@ async fn a_value_that_is_not_a_priority_makes_the_file_malformed_naming_the_key(
         ("critical", "\"critical\""),
         ("3", "3"),
         ("High", "\"High\""),
+        // An explicit null is a value that is not a priority, not the key being absent.
+        ("null", "null"),
+        ("~", "null"),
     ] {
         let (_root, source) = folder(&[(
             "tasks/a.md",
@@ -159,17 +162,22 @@ async fn a_value_that_is_not_a_priority_makes_the_file_malformed_naming_the_key(
 
 #[tokio::test]
 async fn a_project_carrying_a_priority_is_refused_rather_than_read_and_dropped() {
-    let (_root, source) = folder(&[("projects/p.md", "---\ntitle: P\npriority: high\n---\n")]);
-    let message = malformed(
-        source
-            .get_project(&id("p"))
-            .await
-            .expect_err("a project has no priority"),
-    );
-    assert!(
-        message.contains("p.md") && message.contains("`priority` belongs to a task"),
-        "{message}"
-    );
+    for value in ["high", "null"] {
+        let (_root, source) = folder(&[(
+            "projects/p.md",
+            &format!("---\ntitle: P\npriority: {value}\n---\n"),
+        )]);
+        let message = malformed(
+            source
+                .get_project(&id("p"))
+                .await
+                .expect_err("a project has no priority"),
+        );
+        assert!(
+            message.contains("p.md") && message.contains("`priority` belongs to a task"),
+            "{value}: {message}"
+        );
+    }
 }
 
 #[tokio::test]

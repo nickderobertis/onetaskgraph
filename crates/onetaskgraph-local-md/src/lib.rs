@@ -214,7 +214,9 @@ struct FrontMatter {
     status: String,
     /// A task's priority, read as YAML's own value rather than as [`Priority`] so a value
     /// that is not one is refused naming the key and the five it may be, rather than in
-    /// serde's words.
+    /// serde's words. `None` is the key being absent and nothing else: an explicit
+    /// `priority: null` is a value, and one that is not a priority.
+    #[serde(default, deserialize_with = "present_value")]
     priority: Option<serde_json::Value>,
     #[serde(default)]
     labels: Vec<LabelInput>,
@@ -1000,6 +1002,14 @@ impl LocalMdSource {
             next: (end < total).then(|| Cursor(end.to_string())),
         })
     }
+}
+
+/// A key that is there, whatever it holds — `null` included, which serde would otherwise read
+/// as the key being absent.
+fn present_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// The priority one task file's `priority:` key holds, or why the file is malformed.
