@@ -24,7 +24,11 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "sources", "task", "project", "label", "search", "schema", "config",
         ],
     ),
-    (&["help", "sources"], &["list"]),
+    (&["help", "sources"], &["list", "fields"]),
+    (
+        &["help", "sources", "fields"],
+        &["<SOURCE>", "--apply", "--json"],
+    ),
     (
         &["help", "task", "list"],
         &[
@@ -32,6 +36,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--label",
             "--not-label",
             "--status",
+            "--priority",
             "--project",
             "--no-project",
             "--search",
@@ -62,6 +67,13 @@ const SURFACE: &[(&[&str], &[&str])] = &[
         &["<ID>", "<COMMENT-ID>", "--json"],
     ),
     (&["help", "task", "deps"], &["--direction", "<ID>"]),
+    (&["help", "task", "priority"], &["set"]),
+    (
+        &["help", "task", "priority", "set"],
+        &["<ID>", "<PRIORITY>"],
+    ),
+    (&["help", "task", "content"], &["set"]),
+    (&["help", "task", "content", "set"], &["<ID>", "--file"]),
     (
         &["help", "project", "list"],
         &[
@@ -539,6 +551,67 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
     }
 }
 
+/// Command lines the README spells in full, each beside the argument — if any — whose values
+/// it spells inline as `a|b|c`.
+///
+/// A word of [`SURFACE`] found anywhere in the README says nothing about whether the verb it
+/// belongs to is documented: `set` and `fields` appear in its prose regardless. So each of
+/// these is held to the README carrying `onetaskgraph <verb>` itself, and its values to the
+/// exact list, in order, that the binary's help reports — a value added to the enum and not
+/// the README, or dropped from one and not the other, fails here.
+const README_COMMAND_LINES: &[(&[&str], Option<&str>)] = &[
+    (&["sources", "fields"], None),
+    (&["task", "list"], Some("--priority")),
+    (&["task", "priority", "set"], Some("<PRIORITY>")),
+    (&["task", "content", "set"], None),
+];
+
+#[test]
+fn the_readme_spells_each_command_line_and_its_values_as_the_help_does() {
+    let readme = readme();
+    let mut drift = Vec::new();
+    for (verb, values) in README_COMMAND_LINES {
+        let help = String::from_utf8_lossy(
+            &onetaskgraph()
+                .arg("help")
+                .args(*verb)
+                .assert()
+                .success()
+                .get_output()
+                .stdout,
+        )
+        .into_owned();
+        let command = format!("onetaskgraph {}", verb.join(" "));
+        let Some(line) = readme
+            .lines()
+            .map(str::trim_start)
+            .find(|line| line.starts_with(&command))
+        else {
+            drift.push(format!("no `{command}` command line"));
+            continue;
+        };
+        let Some(argument) = values else { continue };
+        let spelled = possible_values(&help, argument).join("|");
+        // A flag's values sit on whichever continuation line holds the flag; a positional
+        // argument's sit on the command line itself.
+        let documented = if argument.starts_with("--") {
+            readme.contains(&format!("{argument} {spelled}"))
+        } else {
+            line.contains(&spelled)
+        };
+        if !documented {
+            drift.push(format!(
+                "`{command}` does not spell {argument} as {spelled}"
+            ));
+        }
+    }
+    assert!(
+        drift.is_empty(),
+        "the README's command lines disagree with `--help`:\n  {}",
+        drift.join("\n  ")
+    );
+}
+
 /// Each command-line vocabulary, the contract root it mirrors, and whether the two spell
 /// their values the same way.
 ///
@@ -555,6 +628,7 @@ const VOCABULARIES: &[(&[&str], &str, &str, bool)] = &[
         true,
     ),
     (&["help", "task", "deps"], "--direction", "Direction", true),
+    (&["help", "task", "list"], "--priority", "Priority", true),
     (&["help", "search"], "--in", "TextFields", false),
     (&["help", "search"], "--kind", "SearchKind", false),
 ];
@@ -592,9 +666,9 @@ fn possible_values(help: &str, flag: &str) -> Vec<String> {
 
 #[test]
 fn the_command_line_accepts_exactly_the_vocabularies_the_contract_declares() {
-    // `StatusArg`, `FieldsArg`, `DirectionArg` and `KindArg` each mirror an enum of the
-    // contract or the engine, and they exist so that deriving clap's `ValueEnum` does not
-    // put clap into the plugin contract's dependencies for the sake of four flags. A
+    // `StatusArg`, `PriorityArg`, `FieldsArg`, `DirectionArg` and `KindArg` each mirror an
+    // enum of the contract or the engine, and they exist so that deriving clap's `ValueEnum`
+    // does not put clap into the plugin contract's dependencies for the sake of five flags. A
     // mirror drifts: add a status category upstream and nothing here stops compiling,
     // nothing fails, and the command line simply cannot name it any more.
     //
@@ -683,7 +757,7 @@ fn every_value_the_help_advertises_is_one_the_command_line_actually_takes() {
         .into_owned();
         for value in possible_values(&help, flag) {
             let verb: Vec<&str> = match *flag {
-                "--status" => vec!["task", "list"],
+                "--status" | "--priority" => vec!["task", "list"],
                 "--direction" => vec!["task", "deps", "work:T-1"],
                 _ => vec!["search", "alpha"],
             };
