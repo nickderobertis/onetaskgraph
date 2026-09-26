@@ -4655,11 +4655,23 @@ impl GitHubProjectsSource {
         };
         let held = item.raw_body.clone().unwrap_or_default();
         let body = with_content(&held, content)?;
+        // Checked before anything is sent: content ending in what this source reads as its own
+        // metadata slot would read back as metadata rather than as the content it was.
+        let (visible, slot) = metadata_body(Some(body.clone()))?;
+        if visible.as_deref().unwrap_or_default() != content || slot != item.slot {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this content ends in what source {} reads as its own metadata slot \
+                     ({METADATA_OPEN:?}), so part of it would read back as metadata rather than \
+                     as content; next: remove that trailing block from the content",
+                    self.name
+                ),
+            });
+        }
         if body != held {
             self.update_content(item.content_kind, &item.id, json!({"body": body}))
                 .await?;
         }
-        let (visible, slot) = metadata_body(Some(body.clone()))?;
         item.body = visible.filter(|value| !value.is_empty());
         item.raw_body = Some(body);
         item.slot = slot;

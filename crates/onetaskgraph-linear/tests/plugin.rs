@@ -5907,3 +5907,38 @@ async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
         );
     }
 }
+
+/// Content ending in what this source reads as its own metadata slot is refused before
+/// anything is sent — written, it would read back as metadata rather than as the content it
+/// was — and one naming such a block anywhere but the end, beside the issue's real slot, reads
+/// back as the content it is.
+#[tokio::test]
+async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent() {
+    let lookalike = "Notes.\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":1}\n-->";
+    let (endpoint, wire) = response_server(vec![prioritised_issue("I-1", Some("Old."), 0.into())]);
+    let refused = writable_source(&endpoint)
+        .set_task_content(&"I-1".into(), lookalike)
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&refused, SourceError::Refused { message }
+            if message.contains("reads as its own metadata slot") && message.contains("next:")),
+        "{refused:?}"
+    );
+    assert_eq!(wire.iter().count(), 1, "no issueUpdate was sent");
+
+    let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->";
+    let (endpoint, wire) = response_server(vec![
+        prioritised_issue("I-1", Some(&format!("Old.\n\n{slot}")), 0.into()),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+    ]);
+    writable_source(&endpoint)
+        .set_task_content(&"I-1".into(), lookalike)
+        .await
+        .expect("the issue's own slot stays the slot");
+    let requests: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
+    assert_eq!(
+        requests[1]["variables"]["input"]["description"],
+        format!("{lookalike}\n\n{slot}")
+    );
+}

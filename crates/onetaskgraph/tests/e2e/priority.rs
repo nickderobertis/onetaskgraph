@@ -1034,6 +1034,61 @@ fn metadata_then_content_and_content_then_metadata_both_read_back_on_one_board_i
 }
 
 #[test]
+fn content_that_would_read_back_as_a_boards_metadata_is_refused_and_the_body_left_alone() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "github-projects", "config": config}
+    })));
+    let file = sandbox.subdirectory("content").join("body.md");
+    let path = file.to_str().expect("a UTF-8 path").to_owned();
+    let lookalike = "Notes.\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":1}\n-->";
+    std::fs::write(&file, lookalike).expect("the content file");
+
+    // T-3 has no metadata slot, so the block would become one.
+    let before = board.body("T-3");
+    let refused = exits(
+        "board",
+        &sandbox,
+        &[
+            "task",
+            "content",
+            "set",
+            &qualified(SOURCE, "T-3"),
+            "--file",
+            &path,
+        ],
+        1,
+    );
+    assert!(
+        stderr(&refused).contains("reads as its own metadata slot")
+            && stderr(&refused).contains("next:"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(board.body("T-3"), before, "nothing was sent");
+
+    // T-1 has one, which stays the slot: the block is content there, and reads back as it.
+    answered(
+        "board",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "content",
+            "set",
+            &qualified(SOURCE, "T-1"),
+            "--file",
+            &path,
+        ],
+    );
+    let task = shown("board", &sandbox, &qualified(SOURCE, "T-1"));
+    assert_eq!(task["content"], lookalike);
+    assert_eq!(task["metadata"]["onepipeline.turn_budget"], 12);
+    assert!(task["metadata"].get("caller.number").is_none());
+}
+
+#[test]
 fn a_stdio_plugin_written_before_priorities_is_never_handed_one_or_a_content_write() {
     let sandbox = Sandbox::new();
     let store = sandbox.subdirectory("store").join("documents.json");

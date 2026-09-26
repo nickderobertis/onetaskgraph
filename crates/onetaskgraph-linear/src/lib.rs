@@ -1914,12 +1914,24 @@ impl TaskSource for LinearSource {
         else {
             return Ok(None);
         };
-        let description = match slot {
+        let description = match &slot {
             None => content.to_owned(),
-            Some(slot) if content.is_empty() => slot,
+            Some(slot) if content.is_empty() => slot.clone(),
             // The separator `long_form` writes, so a content write and a copy leave one shape.
             Some(slot) => format!("{content}\n\n{slot}"),
         };
+        // Checked before anything is sent: content ending in what this source reads as its own
+        // metadata slot would read back as metadata rather than as the content it was.
+        if metadata_slot(&description)? != slot.as_deref() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this content ends in what source {} reads as its own metadata slot, so part \
+                     of it would read back as metadata rather than as content; next: remove that \
+                     trailing block from the content",
+                    self.name
+                ),
+            });
+        }
         // `description` alone, for the reason `set_task_priority` sends `priority` alone.
         let data = self
             .send(
