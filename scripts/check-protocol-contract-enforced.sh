@@ -66,7 +66,7 @@ run_case() {
   fi
   if [ "$expected" = refuse ] && [ "$status" -eq 0 ]; then
     fatal "case '$name': the guard passed a drifted list" \
-      "restore the reconciliation of TEMPLATE_OPERATIONS against §4's list in $GUARD"
+      "restore the reconciliation of NOT_CARRIED_REASON against §4's list in $GUARD"
   fi
 }
 

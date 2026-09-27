@@ -157,6 +157,25 @@ async fn regenerated(
         )
         .await
         .map_err(refusal)?;
+    // An unset of a name the template does not declare would drop nothing and say nothing.
+    let declared: Vec<&str> = regeneration
+        .template()
+        .variables()
+        .iter()
+        .map(|variable| variable.name())
+        .collect();
+    if let Some(undeclared) = args
+        .unset
+        .iter()
+        .find(|name| !declared.contains(&name.as_str()))
+    {
+        return Err(Refusal::Answers(format!(
+            "--unset {undeclared}: the template declares no variable of that name, so there is \
+             no answer to drop\n\
+             next: unset one of {}, or leave the flag out.",
+            declared.join(", ")
+        )));
+    }
     let mut given = answers_given(args.answers.as_deref(), &args.var)?;
     for name in &args.unset {
         given.unset(name.clone());

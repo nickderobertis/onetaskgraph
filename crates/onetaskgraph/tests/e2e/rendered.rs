@@ -1234,6 +1234,21 @@ fn a_regenerate_overlays_answers_keeps_every_other_field_and_writes_nothing_when
         "a refused regenerate writes nothing"
     );
 
+    // Unsetting a name the template does not declare is refused naming it, writing nothing.
+    let refused = plan.render(&id, &["--unset", "gaol"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(
+        message.contains("--unset gaol: the template declares no variable of that name")
+            && message.contains("goal, steps, owner, notes"),
+        "{message}"
+    );
+    assert_eq!(
+        std::fs::read(plan.task_file(&id)).unwrap(),
+        file,
+        "a refused unset writes nothing"
+    );
+
     let file = std::fs::read(plan.task_file(&id)).unwrap();
     let unchanged = plan.rendered(&id, &[]);
     assert_eq!(unchanged["changed"], false);

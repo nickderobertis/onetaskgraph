@@ -291,12 +291,14 @@ function searchPathFlags(options: TemplateOptions): string[] {
 }
 
 // Refuse anything but a list of strings for one repeated flag, by index so a sparse array's
-// hole is refused rather than skipped.
+// hole is refused rather than skipped, and with no key but its entries, which is all that is
+// sent.
 function stringList(method: string, name: string, values: unknown): string[] {
   const list = values === undefined ? [] : values;
   if (!Array.isArray(list)) {
     throw new TypeError(`${method}: ${name} is not an array; next: pass a list of strings`);
   }
+  refuseUncarriedKey(list, name, "entry", method);
   const checked: string[] = [];
   for (let index = 0; index < list.length; index += 1) {
     const value: unknown = list[index];

@@ -70,10 +70,11 @@ contract_rs = (
     + api("metering.rs")
 )
 
-# The template operations, which the protocol does not carry at all: the engine refuses each
-# for a hosted source before sending anything, and the paragraph after §4's method table says
-# so. Carrying them would add six rows and six sections here, and delete these entries.
-TEMPLATE_OPERATIONS = (
+# Why the template operations are exempt: the protocol does not carry them at all, the engine
+# refuses each for a hosted source before sending anything, and the paragraph after §4's method
+# table says so. Carrying them would add six rows and six sections here, and delete these
+# entries.
+NOT_CARRIED_REASON = (
     "not carried: the paragraph after §4's method table says the engine refuses it for a "
     "hosted source before sending anything"
 )
@@ -84,12 +85,12 @@ NOT_METHODS = {
     "kind": "settled by the handshake response's `kind` field",
     "capabilities": "settled by the handshake response's `capabilities` field",
     "writes": "settled by the handshake response's `writes` field, which §3.3 specifies",
-    "task_template_answers": TEMPLATE_OPERATIONS,
-    "document_template_answers": TEMPLATE_OPERATIONS,
-    "write_task_rendered": TEMPLATE_OPERATIONS,
-    "write_document_rendered": TEMPLATE_OPERATIONS,
-    "set_task_rendering": TEMPLATE_OPERATIONS,
-    "set_document_rendering": TEMPLATE_OPERATIONS,
+    "task_template_answers": NOT_CARRIED_REASON,
+    "document_template_answers": NOT_CARRIED_REASON,
+    "write_task_rendered": NOT_CARRIED_REASON,
+    "write_document_rendered": NOT_CARRIED_REASON,
+    "set_task_rendering": NOT_CARRIED_REASON,
+    "set_document_rendering": NOT_CARRIED_REASON,
 }
 
 # The one protocol method with no trait method behind it: it stands for building the
@@ -350,7 +351,7 @@ carried_lead = document.find(NOT_CARRIED_LEAD)
 if carried_lead < 0:
     refuse(
         f"docs/plugin-protocol.md no longer says \"{NOT_CARRIED_LEAD}\", which is where the "
-        "methods TEMPLATE_OPERATIONS exempts are listed.",
+        "methods NOT_CARRIED_REASON exempts are listed.",
         "restore that paragraph and its list after §4's method table, or update this check.",
     )
 listed_lines = []
@@ -360,7 +361,7 @@ for line in document[carried_lead:].split("\n\n", 2)[1].splitlines():
 listed = set(re.findall(r"`([a-z_]+)`", " ".join(listed_lines)))
 compare(
     "template operation not carried",
-    {name for name, why in NOT_METHODS.items() if why is TEMPLATE_OPERATIONS},
+    {name for name, why in NOT_METHODS.items() if why is NOT_CARRIED_REASON},
     listed,
     {},
     "`NOT_METHODS`",

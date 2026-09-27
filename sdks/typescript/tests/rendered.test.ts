@@ -209,6 +209,13 @@ test("a path, a body or metadata the binary could not be handed is refused befor
     // Outside the declared type on purpose, as the `body` above is.
     client.taskRender("notes:design", { unset: ["ok", 3 as unknown as string] }),
   ).rejects.toThrow("taskRender: unset[1] is not a string");
+  await expect(
+    // A list carrying a key besides its entries: iterating by index would drop it unsent.
+    client.taskCreate("notes", "P-1", "Refused", {
+      body: "x",
+      labels: Object.assign(["kept"], { extra: "dropped" }),
+    }),
+  ).rejects.toThrow("taskCreate: labels has the key extra, which is not sent");
   // `as const` keeps each pair a tuple, so `render` is typed as the method it was bound from
   // rather than as a union of a name and a function.
   for (const [method, render] of [
