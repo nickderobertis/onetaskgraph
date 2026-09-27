@@ -710,11 +710,14 @@ impl TemplateLoader {
                     scan::Named::Literal(reference) => vec![reference],
                     // What the render named there resolves or fails in the render itself.
                     scan::Named::Expression { ordinal, .. } => resolutions
-                        .get(&(name.clone(), ordinal))
+                        .get(&NamingTag {
+                            file: name.clone(),
+                            ordinal,
+                        })
                         .into_iter()
                         .flatten()
                         .map(|candidates| scan::Reference {
-                            candidates: candidates.clone(),
+                            candidates: candidates.names().to_vec(),
                             optional: true,
                         })
                         .collect(),
@@ -755,29 +758,44 @@ impl TemplateLoader {
     }
 }
 
-/// What each tag naming a template by an expression was found to name, keyed by the file it
-/// is written in and its ordinal there: the candidates of each value it was reached with, in
-/// the order renders first reached them.
-type Resolutions = BTreeMap<(String, usize), Vec<Vec<String>>>;
-
-/// What one render's tags naming a template by an expression named: each tag, as a
-/// [`Resolutions`] key, and the candidates of the value it was reached with, in the order
-/// reached.
-type Recorded = Vec<((String, usize), Vec<String>)>;
-
-/// Add each `(tag, candidates)` a render recorded to `resolutions`, answering whether any was
-/// new.
-fn absorb(resolutions: &mut Resolutions, recorded: &Recorded) -> bool {
-    let mut grew = false;
-    for (tag, candidates) in recorded {
-        let known = resolutions.entry(tag.clone()).or_default();
-        if !known.contains(candidates) {
-            known.push(candidates.clone());
-            grew = true;
-        }
-    }
-    grew
+/// A tag naming a template by an expression: the chain file it is written in, and which of
+/// that file's such tags it is, counting from zero.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct NamingTag {
+    file: String,
+    ordinal: usize,
 }
+
+/// What one evaluation of a naming expression gave: a name, or a list of them of which the
+/// first that resolves is loaded. Never empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Candidates(Vec<String>);
+
+impl Candidates {
+    /// The names `value` gives, or `None` when it gives none — it is neither a string nor a
+    /// sequence holding one.
+    fn of(value: &minijinja::Value) -> Option<Self> {
+        let names: Vec<String> = match value.as_str() {
+            Some(name) => vec![name.to_owned()],
+            None if value.kind() == minijinja::value::ValueKind::Seq => value
+                .try_iter()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect(),
+            None => Vec::new(),
+        };
+        (!names.is_empty()).then_some(Self(names))
+    }
+
+    fn names(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// What each naming tag was found to name in one render: every distinct value it gave, in the
+/// order the render first reached it.
+type Resolutions = BTreeMap<NamingTag, Vec<Candidates>>;
 
 /// The body of each of `files` as [`discover`] renders it: with every expression that names a
 /// template wrapped in [`scan::HOOK`], so the render reports what it named.
@@ -789,34 +807,31 @@ fn hooked_bodies(files: &[ChainFile]) -> HashMap<String, String> {
         .collect()
 }
 
-/// Give `environment` the function [`hooked_bodies`] calls, and answer where what it records
-/// collects: each call's file, tag ordinal and the candidates its value names.
+/// Give `environment` the function [`hooked_bodies`] calls, and answer where what it
+/// records collects.
 fn record_names(
     environment: &mut minijinja::Environment<'static>,
     files: &[ChainFile],
-) -> Arc<Mutex<Recorded>> {
+) -> Arc<Mutex<Resolutions>> {
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let recorded: Arc<Mutex<Recorded>> = Arc::default();
+    let recorded: Arc<Mutex<Resolutions>> = Arc::default();
     let sink = Arc::clone(&recorded);
     environment.add_function(
         scan::HOOK,
         move |file: usize, ordinal: usize, value: minijinja::Value| {
-            let candidates = match value.as_str() {
-                Some(name) => vec![name.to_owned()],
-                None if value.kind() == minijinja::value::ValueKind::Seq => value
-                    .try_iter()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| item.as_str().map(str::to_owned))
-                    .collect(),
-                None => Vec::new(),
-            };
             if let Some(name) = names.get(file)
-                && !candidates.is_empty()
+                && let Some(candidates) = Candidates::of(&value)
             {
-                sink.lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(((name.clone(), ordinal), candidates));
+                let mut recorded = sink.lock().unwrap_or_else(PoisonError::into_inner);
+                let found = recorded
+                    .entry(NamingTag {
+                        file: name.clone(),
+                        ordinal,
+                    })
+                    .or_default();
+                if !found.contains(&candidates) {
+                    found.push(candidates);
+                }
             }
             value
         },
@@ -1060,8 +1075,9 @@ impl Template {
     /// Which file an expression names can depend on the answers, so it is found by rendering:
     /// leniently, from the answers that fit their declarations and the defaults of the rest,
     /// every tag naming a template by an expression reporting what it named. A file found that
-    /// way may declare a variable that decides the next one, so it repeats until a render
-    /// names nothing new. Each file so found takes its place in the chain at the tag that
+    /// way may declare a variable, or a nearer default, that decides what an expression
+    /// names, so it repeats until a render names what the one before it did; a file only an
+    /// earlier render named is not part of the chain. Each file so found takes its place in the chain at the tag that
     /// names it, exactly as a file a literal names would: its nearness is its own distance
     /// from the rendered template, and it is in first-load order where that tag is. A template
     /// named by no expression expands to itself.
@@ -1077,18 +1093,21 @@ impl Template {
     /// `type` or `items` another chain file's contradicts.
     pub fn expand(&self, answers: &Answers) -> Result<Self, TemplateError> {
         let mut expanded = self.clone();
+        // A render naming what an earlier one did, other than the last, is going round a
+        // cycle of defaults; it stops at the chain it has.
+        let mut named = vec![expanded.resolutions.clone()];
         loop {
-            let recorded = discover(
+            let resolutions = discover(
                 &expanded.name,
                 &expanded.files,
                 &expanded.variables,
                 &expanded.loader,
                 answers,
             )?;
-            let mut resolutions = expanded.resolutions.clone();
-            if !absorb(&mut resolutions, &recorded) {
+            if named.contains(&resolutions) {
                 return Ok(expanded);
             }
+            named.push(resolutions.clone());
             let files = expanded.rebuild(&resolutions)?;
             let variables = merge(&files)?;
             expanded = Self::assemble(
@@ -1101,7 +1120,6 @@ impl Template {
         }
     }
 
-    /// This template's chain, read again from its root with `resolutions`.
     fn rebuild(&self, resolutions: &Resolutions) -> Result<Vec<ChainFile>, TemplateError> {
         let root = self
             .files
@@ -1294,7 +1312,7 @@ fn discover(
     variables: &[TemplateVariable],
     loader: &TemplateLoader,
     answers: &Answers,
-) -> Result<Recorded, TemplateError> {
+) -> Result<Resolutions, TemplateError> {
     let mut context = BTreeMap::new();
     for variable in variables {
         let answered = match answers.given(&variable.name) {

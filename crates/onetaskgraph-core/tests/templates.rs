@@ -1455,11 +1455,11 @@ fn every_tag_that_names_a_template_by_an_expression_places_it_where_the_tag_is()
     let root = "---\nonetaskgraph_template: 1\nvariables:\n  layout: {description: which layout, default: base}\n---\n\
                 {% extends layout ~ \".md\" %}\
                 {% block body %}\
-                {% import \"mac\" ~ \"ros.md\" as m %}\
+                {% import \"mac\" ~ \"ros.md\" as m with context %}\
                 {% from \"hel\" ~ \"pers.md\" import shout %}\
                 {{ m.bullet(shout(\"x\")) }}\
                 {% include [\"missing.md\", \"pick\" ~ \".md\", \"other.md\"] %}\
-                {% include \"gone\" ~ \".md\" ignore missing %}\
+                {% include \"gone\" ~ \".md\" with context ignore missing %}\
                 {% endblock %}";
     let base = "<{% block body %}{% endblock %}>";
     let macros = "{% macro bullet(text) %}- {{ text }}{% endmacro %}";
@@ -1493,4 +1493,48 @@ fn every_tag_that_names_a_template_by_an_expression_places_it_where_the_tag_is()
         ])
     );
     assert_eq!(rendered.digest, expanded.digest());
+}
+
+#[test]
+fn a_file_only_an_earlier_discovery_named_leaves_the_chain() {
+    let declaring = |default: &str| {
+        format!(
+            "---\nonetaskgraph_template: 1\nvariables:\n  second: {{description: s, default: {default}}}\n---\n"
+        )
+    };
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  first: {description: f, default: a}\n---\n{% include first ~ \".md\" %}{% include \"lit.md\" %}";
+    let a = format!("{}A", declaring("c"));
+    let lit = format!("{}{{% include second ~ \".md\" %}}", declaring("b"));
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("a.md", a.as_str())
+        .with_template("lit.md", lit.as_str())
+        .with_template(
+            "b.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  never: {description: n}\n---\nB",
+        )
+        .with_template("c.md", "C")
+        .load_name("root.md")
+        .expect("it loads");
+
+    // `lit.md`'s default names `b.md` until `a.md`, nearer and found by the expression before
+    // it, gives `second` its own default.
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "a.md", "lit.md", "c.md"]
+    );
+    let rendered = template
+        .render(&Answers::new())
+        .expect("`never` is declared only by a file nothing renders");
+    assert_eq!(rendered.body, "AC");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[
+            ("root.md", root),
+            ("a.md", a.as_str()),
+            ("lit.md", lit.as_str()),
+            ("c.md", "C"),
+        ])
+    );
 }

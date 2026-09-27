@@ -148,7 +148,6 @@ fn strip_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
     (!before.ends_with(is_identifier_char)).then_some(before.trim_end())
 }
 
-/// `text` split before its last whitespace-separated word.
 fn last_word(text: &str) -> (&str, &str) {
     let text = text.trim_end();
     text.rfind(char::is_whitespace)
@@ -347,7 +346,6 @@ mod tests {
             .collect()
     }
 
-    /// Each expression tag's ordinal and the expression it names its template by.
     fn expressions(source: &str) -> Vec<(usize, &str)> {
         named(source)
             .into_iter()
