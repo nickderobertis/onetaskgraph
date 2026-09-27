@@ -12114,6 +12114,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
     "description": "What a task or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
     "properties": {
       "answers_digest": {

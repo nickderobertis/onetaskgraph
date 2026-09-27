@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
 class Sha256Digest(RootModel[str]):
@@ -20,6 +20,9 @@ class Sha256Digest(RootModel[str]):
 
 
 class TemplateProvenance(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
     answers_digest: Annotated[
         Sha256Digest,
         Field(

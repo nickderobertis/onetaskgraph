@@ -764,7 +764,7 @@ const TWENTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 84] = [
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xbe06dc239bf5eeb0),
     ("TemplateAnswers", 0x8d5218262afd517a),
-    ("TemplateProvenance", 0x242bce7cd9a2bac0),
+    ("TemplateProvenance", 0x105a534bcfa00251),
     ("TemplateVariable", 0x482dac5032a65dec),
     ("TemplateVariables", 0x25e538f450bbf057),
     ("TextFields", 0x7240bd05f9beff93),

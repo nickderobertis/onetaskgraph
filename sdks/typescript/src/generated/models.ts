@@ -6472,7 +6472,6 @@ digest: string
  * document's `reference` verbatim. Recorded whole, whatever its length.
  */
 template: string
-[k: string]: any
 }
 
 }
