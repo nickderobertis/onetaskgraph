@@ -248,14 +248,17 @@ function templateFile(method: string, file: unknown): string {
 }
 
 // Refuse a key of `value` that what is sent would not carry: for an array anything but its
-// indices and `length`, such as its own `toJSON`; for a mapping a symbol or a non-enumerable
-// key, which `Object.entries` skips. Either would otherwise be dropped in silence, and the
-// binary sent less than was handed over.
+// indices below `length` and `length` itself, such as its own `toJSON` or a key spelled like
+// an index past the largest an array has; for a mapping a symbol or a non-enumerable key,
+// which `Object.entries` skips. Either would otherwise be dropped in silence, and the binary
+// sent less than was handed over.
 function refuseUncarriedKey(value: object, path: string, entry: string): void {
-  const array = Array.isArray(value);
+  const array = Array.isArray(value) ? value : undefined;
   const uncarried = Reflect.ownKeys(value).find((key) => {
     if (typeof key === "symbol") return true;
-    if (array) return key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key);
+    if (array !== undefined) {
+      return key !== "length" && !(/^(0|[1-9][0-9]*)$/.test(key) && Number(key) < array.length);
+    }
     return !Object.prototype.propertyIsEnumerable.call(value, key);
   });
   if (uncarried !== undefined) {

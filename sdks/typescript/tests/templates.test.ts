@@ -151,12 +151,17 @@ test("an answer key JSON cannot carry is refused rather than dropped", async () 
   const swapping = ["checked"];
   Object.defineProperty(swapping, "toJSON", { value: () => ["swapped"] });
   const labelled = Object.assign(["a"], { note: "b" });
+  // A key spelled like an index but past the largest one an array has: an ordinary property,
+  // so `length` does not reach it and copying by index would leave it behind.
+  const beyond: unknown[] = ["a"];
+  (beyond as unknown as Record<string, unknown>)["4294967295"] = "b";
   const refusals: [Record<string, unknown>, string][] = [
     [{ title: "t", [Symbol("steps")]: ["a"] }, "answers has the key Symbol(steps)"],
     [{ title: "t", nested: { [Symbol("x")]: 1 } }, "answers.nested has the key Symbol(x)"],
     [hidden, "answers has the key steps"],
     [{ title: "t", steps: swapping }, "answers.steps has the key toJSON"],
     [{ title: "t", steps: labelled }, "answers.steps has the key note"],
+    [{ title: "t", steps: beyond }, "answers.steps has the key 4294967295"],
   ];
   for (const [answers, message] of refusals) {
     const refused = client.templateRender(task, {
