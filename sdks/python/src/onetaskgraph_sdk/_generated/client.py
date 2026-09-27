@@ -80,6 +80,10 @@ def _answers_document(answers: Mapping[str, JsonValue]) -> str:
     serialised with `allow_nan=False`, because `json.dumps` would otherwise write a
     non-finite float as a bare `NaN` that the binary reads as text.
     """
+    if not isinstance(answers, Mapping):
+        kind = type(answers).__name__
+        message = f"template_render: answers are a {kind}, not a mapping"
+        raise TypeError(message)
     try:
         checked = _ANSWERS.validate_python(dict(answers), strict=True)
         return json.dumps(checked, allow_nan=False)

@@ -186,3 +186,13 @@ def test_answers_json_cannot_carry_are_refused_before_the_binary_is_started(
                     answers=answers,  # ty: ignore[invalid-argument-type]
                 )
             )
+
+    # An iterable of pairs is not a mapping, though `dict` would make one of it.
+    with pytest.raises(TypeError, match="answers are a list, not a mapping"):
+        run(
+            client.template_render(
+                str(task),
+                search_path=[str(library)],
+                answers=[("title", "t"), ("steps", [])],  # ty: ignore[invalid-argument-type]
+            )
+        )

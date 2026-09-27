@@ -1,3 +1,4 @@
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] One part of the `template` module, which sits in this crate for the reason its `mod.rs` states at the head of the file: the task that introduced templates fixes their API at `onetaskgraph-core`'s crate root, and a crate of their own would be a new published sibling that is not this change's to add.
 //! The answers a template is rendered from, before they are checked against its variables.
 
 use std::collections::BTreeMap;

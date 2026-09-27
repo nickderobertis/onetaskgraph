@@ -947,3 +947,45 @@ fn a_file_an_expression_names_that_cannot_be_read_as_a_template_fails_the_render
         assert!(error.to_string().contains(expected), "{kind}: {error}");
     }
 }
+
+#[test]
+fn a_name_that_only_opens_an_expression_is_rendered_as_the_expression_it_is() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  short: {description: which, type: boolean}\n---\n{% include \"short.md\" if short else \"long.md\" %}";
+    // Only `long.md` exists: a scan that took `short.md` for the whole name would refuse to load.
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("long.md", "the long one\n")
+        .load_name("root.md")
+        .expect("the conditional names no template before rendering");
+    assert_eq!(template.chain().collect::<Vec<_>>(), ["root.md"]);
+    let mut answers = Answers::new();
+    answers.set("short", json!(false));
+    let rendered = template.render(&answers).expect("renders");
+    assert_eq!(rendered.body, "the long one\n");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[("root.md", root), ("long.md", "the long one\n")])
+    );
+}
+
+#[test]
+fn ignore_missing_inside_a_file_name_does_not_make_the_include_optional() {
+    let error = TemplateLoader::new()
+        .with_template("root.md", "{% include \"ignore missing.md\" %}")
+        .load_name("root.md")
+        .expect_err("a required include of a file that is not there");
+    assert!(
+        error
+            .to_string()
+            .contains("\"ignore missing.md\" was not found (named by root.md)"),
+        "{error}"
+    );
+    let template = TemplateLoader::new()
+        .with_template("root.md", "[{% include \"absent.md\" ignore missing %}]")
+        .load_name("root.md")
+        .expect("the trailer makes it optional");
+    assert_eq!(
+        template.render(&Answers::new()).expect("renders").body,
+        "[]"
+    );
+}

@@ -172,3 +172,14 @@ test("a search path entry that is not a path string is refused before the binary
   );
   await expect(client.templateRender(task, { searchPath })).rejects.toThrow(TypeError);
 });
+
+test("answers that are not a mapping are refused before the binary is started", async () => {
+  for (const answers of [["title", "t"], null, new Map([["title", "t"]])]) {
+    const refused = client.templateRender(task, {
+      searchPath: [library],
+      // Deliberately outside the declared type, as a caller whose values reached it untyped.
+      answers: answers as unknown as Record<string, JsonValue>,
+    });
+    await expect(refused).rejects.toThrow("answers is not a plain object");
+  }
+});

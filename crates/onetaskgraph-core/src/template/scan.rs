@@ -1,3 +1,4 @@
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] One part of the `template` module, which sits in this crate for the reason its `mod.rs` states at the head of the file: the task that introduced templates fixes their API at `onetaskgraph-core`'s crate root, and a crate of their own would be a new published sibling that is not this change's to add.
 //! The templates one template names, read off its source before anything renders.
 //!
 //! minijinja resolves `extends`, `include` and `import` lazily, as the render reaches them,
@@ -37,11 +38,12 @@ pub(super) fn references(source: &str) -> Vec<Reference> {
             match word {
                 "raw" => rest = skip_raw(rest),
                 "extends" | "import" | "from" | "include" => {
-                    let candidates = literal_names(arguments);
-                    if !candidates.is_empty() {
+                    if let Some((candidates, after)) = literal_names(arguments)
+                        && let Some(optional) = trailer(word, after)
+                    {
                         found.push(Reference {
                             candidates,
-                            optional: word == "include" && arguments.contains("ignore missing"),
+                            optional,
                         });
                     }
                 }
@@ -122,38 +124,50 @@ fn split_word(tag: &str) -> (&str, &str) {
     }
 }
 
-/// The names an argument spells as a string literal or a list of them, and none when it
-/// is any other expression.
-fn literal_names(arguments: &str) -> Vec<String> {
+/// The names an argument opens with, as a string literal or a list of them, and what follows
+/// them — or `None` when it opens with anything else.
+fn literal_names(arguments: &str) -> Option<(Vec<String>, &str)> {
     let arguments = arguments.trim_start();
-    if let Some(list) = arguments.strip_prefix('[') {
-        let mut names = Vec::new();
-        let mut rest = list;
-        loop {
-            rest = rest.trim_start();
-            if rest.starts_with(']') {
-                return names;
-            }
-            let Some((name, after)) = string_literal(rest) else {
-                return Vec::new();
-            };
-            names.push(name);
-            rest = after.trim_start();
-            if let Some(after) = rest.strip_prefix(',') {
-                rest = after;
-            } else if rest.starts_with(']') {
-                return names;
-            } else {
-                return Vec::new();
-            }
+    let Some(list) = arguments.strip_prefix('[') else {
+        return string_literal(arguments).map(|(name, after)| (vec![name], after));
+    };
+    let mut names = Vec::new();
+    let mut rest = list;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix(']') {
+            return Some((names, after));
+        }
+        let (name, after) = string_literal(rest)?;
+        names.push(name);
+        rest = after.trim_start();
+        if let Some(after) = rest.strip_prefix(',') {
+            rest = after;
+        } else if !rest.starts_with(']') {
+            return None;
         }
     }
-    match string_literal(arguments) {
-        // A literal followed by `~` or `+` is the start of an expression, not a name.
-        Some((name, after)) if !after.trim_start().starts_with(['~', '+', '|', '.', '[']) => {
-            vec![name]
+}
+
+/// Whether what follows a tag's names is exactly what that tag may carry after a name — and
+/// so the names are the whole of it — answering whether it made the reference optional.
+///
+/// Anything else means the names were only the start of an expression — `"a.md" if x else
+/// "b.md"`, `"part-" ~ kind` — which names no template before rendering.
+fn trailer(tag: &str, after: &str) -> Option<bool> {
+    let words: Vec<&str> = after.split_whitespace().collect();
+    match (tag, words.as_slice()) {
+        ("extends", []) => Some(false),
+        ("import", ["as", _alias]) => Some(false),
+        ("from", ["import", ..]) => Some(false),
+        ("include", rest) => {
+            let (optional, rest) = match rest {
+                ["ignore", "missing", rest @ ..] => (true, rest),
+                rest => (false, rest),
+            };
+            matches!(rest, [] | ["with" | "without", "context"]).then_some(optional)
         }
-        _ => Vec::new(),
+        _ => None,
     }
 }
 
@@ -220,13 +234,30 @@ mod tests {
     }
 
     #[test]
+    fn only_a_trailer_outside_the_name_makes_an_include_optional() {
+        let source = "{% include 'ignore missing.md' %}\n\
+                      {% include 'p.md' ignore missing with context %}\n\
+                      {% include 'q.md' without context %}";
+        assert_eq!(
+            names(source),
+            [
+                one("ignore missing.md"),
+                (vec!["p.md".to_owned()], true),
+                one("q.md"),
+            ]
+        );
+    }
+
+    #[test]
     fn comments_raw_blocks_expressions_and_strings_name_nothing() {
         let source = "{# {% include 'commented.md' %} #}\n\
                       {% raw %}{% include 'raw.md' %}{% endraw %}\n\
                       {{ '{% include \"quoted.md\" %}' }}\n\
                       {% include kind ~ '.md' %}\n\
                       {% include 'prefix-' ~ kind %}\n\
-                      {% if x %}{% include 'branch.md' %}{% endif %}";
+                      {% if x %}{% include 'branch.md' %}{% endif %}\n\
+                      {% include 'a.md' if x else 'b.md' %}\n\
+                      {% extends 'base-' ~ kind ~ '.md' %}";
         assert_eq!(names(source), [one("branch.md")]);
     }
 }

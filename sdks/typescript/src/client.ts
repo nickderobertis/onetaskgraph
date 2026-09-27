@@ -259,6 +259,15 @@ function answersDocument(answers: Record<string, JsonValue>): string {
         "numbers, booleans, null, arrays and plain objects, with no cycle",
     );
   };
+  // An answers document is a mapping: an array would pass the element checks below and reach
+  // the binary as a document it refuses for its shape rather than for what is in it.
+  const prototype =
+    answers !== null && typeof answers === "object" ? Object.getPrototypeOf(answers) : undefined;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      "templateRender: answers is not a plain object; next: pass a mapping of variable name to value",
+    );
+  }
   return JSON.stringify(copy(answers, ""));
 }
 
