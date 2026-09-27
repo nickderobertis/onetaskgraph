@@ -2155,3 +2155,228 @@ fn a_regenerate_writes_back_an_answers_block_deleted_by_hand() {
     assert_eq!(plan.json(&["task", "answers", &id])["goal"], "Ship it");
     assert_eq!(plan.task(&id)["content"], "# The task\nGoal: Ship it\n");
 }
+
+/// A template whose rendering ends in no newline; [`ENDINGS`] names what each journey appends.
+const EXACT: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  goal:\n    \
+    description: What the task is for\n\
+---\n\
+# {{ goal }}\n\n- two\n  lines";
+
+/// How a rendering may end: in no newline, in one and in two.
+const ENDINGS: [&str; 3] = ["", "\n", "\n\n"];
+
+impl Plan {
+    /// The [`EXACT`] template with `ending` after it, written under the templates directory.
+    fn exact_template(&self, ending: &str) -> String {
+        let file = self.templates.join(format!("exact-{}.md", ending.len()));
+        std::fs::write(&file, format!("{EXACT}{ending}")).expect("the template");
+        path(&file)
+    }
+
+    /// Create a task in `source` from `template`, answering `goal`.
+    fn create_exact(&self, source: &str, template: &str, goal: &str) -> String {
+        let search_path = self.search_path();
+        let answer = format!("goal={goal}");
+        stdout(&self.exits(
+            &[
+                "task",
+                "create",
+                source,
+                "--project",
+                "P-1",
+                "--title",
+                "Exact",
+                "--template",
+                template,
+                "--search-path",
+                &search_path,
+                "--var",
+                &answer,
+                "--no-interactive",
+            ],
+            0,
+        ))
+        .trim()
+        .to_owned()
+    }
+
+    /// The two comparisons a drift check makes of the task `id`, rendered from `template` with
+    /// `goal`: whether the SHA-256 of the content `task show` returns is the `body_digest` its
+    /// provenance records, and whether it is the `body_digest` a dry-run `task render` with the
+    /// original answer reports.
+    fn drift(&self, id: &str, template: &str, goal: &str) -> (bool, bool, String) {
+        let task = self.task(id);
+        let content = task["content"].as_str().unwrap_or_default().to_owned();
+        let recorded = &task["metadata"]["onetaskgraph.template"]["body_digest"];
+        let search_path = self.search_path();
+        let answer = format!("goal={goal}");
+        let dry = self.json(&[
+            "task",
+            "render",
+            id,
+            "--template",
+            template,
+            "--search-path",
+            &search_path,
+            "--var",
+            &answer,
+            "--no-interactive",
+            "--dry-run",
+        ]);
+        let hash = json!(sha256(&content));
+        (*recorded == hash, dry["body_digest"] == hash, content)
+    }
+
+    /// Assert both drift comparisons report the task `id` as matching its rendering, which is
+    /// `expected`.
+    fn matches_rendering(&self, id: &str, template: &str, goal: &str, expected: &str, how: &str) {
+        let (recorded, rendered, content) = self.drift(id, template, goal);
+        assert_eq!(content, expected, "{how}: the content, byte for byte");
+        assert!(
+            recorded,
+            "{how}: `task show` content hashes to the recorded body_digest"
+        );
+        assert!(
+            rendered,
+            "{how}: a dry-run render reports the content's hash"
+        );
+    }
+
+    /// Replace one interior line of the task `id`'s content by hand, and assert both drift
+    /// comparisons report it as edited.
+    fn edited_by_hand(&self, id: &str, template: &str, goal: &str, how: &str) {
+        let content = self.task(id)["content"].as_str().unwrap().to_owned();
+        let edited = content.replacen("- two\n", "- three\n", 1);
+        assert_ne!(edited, content, "{how}: the interior line is there to edit");
+        let hand = self.file("hand-edit.md", &edited);
+        self.exits(&["task", "content", "set", id, "--file", &hand], 0);
+        let (recorded, rendered, now) = self.drift(id, template, goal);
+        assert_eq!(now, edited, "{how}: the edit is stored as written");
+        assert!(!recorded, "{how}: the edit no longer hashes to body_digest");
+        assert!(!rendered, "{how}: nor to what a render gives");
+    }
+}
+
+#[test]
+fn a_rendering_copied_between_folders_matches_it_and_an_interior_edit_does_not() {
+    for ending in ENDINGS {
+        for verb in ["task", "project"] {
+            let how = format!("{verb} copy of a rendering ending {ending:?}");
+            let plan = Plan::new();
+            std::fs::create_dir_all(plan.notes.join("projects")).unwrap();
+            std::fs::write(
+                plan.notes.join("projects/P-1.md"),
+                "---\ntitle: Plan\nstatus: todo\n---\nWhy.\n",
+            )
+            .unwrap();
+            let template = plan.exact_template(ending);
+            let expected = format!("# Ship\n\n- two\n  lines{ending}");
+            let id = plan.create_exact("notes", &template, "Ship");
+            plan.matches_rendering(&id, &template, "Ship", &expected, &how);
+
+            match verb {
+                "task" => plan.json(&["task", "copy", &id, "--to", "back"]),
+                _ => plan.json(&["project", "copy", "notes:P-1", "--to", "back"]),
+            };
+            let copied = plan.json(&["task", "list", "--source", "back"])["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["item"]["title"] == "Exact")
+                .unwrap_or_else(|| panic!("{how}: the copy is in `back`"))["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            plan.matches_rendering(&copied, &template, "Ship", &expected, &how);
+            plan.edited_by_hand(&copied, &template, "Ship", &how);
+        }
+    }
+}
+
+#[test]
+fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_does_not() {
+    for ending in ENDINGS {
+        let plan = Plan::with_board(true);
+        let template = plan.exact_template(ending);
+        let expected = |goal: &str| format!("# {goal}\n\n- two\n  lines{ending}");
+
+        // A plain create, from a body file holding the rendering's bytes.
+        let body = plan.file("plain.md", &expected("Plain"));
+        let plain = stdout(&plan.exits(
+            &[
+                "task",
+                "create",
+                "board",
+                "--project",
+                "P-1",
+                "--title",
+                "Plain",
+                "--body-file",
+                &body,
+            ],
+            0,
+        ))
+        .trim()
+        .to_owned();
+        assert_eq!(
+            plan.task(&plain)["content"],
+            json!(expected("Plain")),
+            "plain create ending {ending:?}"
+        );
+
+        // A rendered create, then a rendering write over it.
+        let rendered = plan.create_exact("board", &template, "Ship");
+        let how = format!("rendered create ending {ending:?}");
+        plan.matches_rendering(&rendered, &template, "Ship", &expected("Ship"), &how);
+        plan.rendered(
+            &rendered,
+            &["--template", &template, "--var", "goal=Ship again"],
+        );
+        let how = format!("rendering write ending {ending:?}");
+        plan.matches_rendering(
+            &rendered,
+            &template,
+            "Ship again",
+            &expected("Ship again"),
+            &how,
+        );
+
+        // A copy from a folder onto the board, then a copy of a new rendering over it.
+        let authored = plan.create_exact("notes", &template, "Copied");
+        let copied =
+            plan.json(&["task", "copy", &authored, "--to", "board"])["items"][0]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+        let how = format!("copy onto the board ending {ending:?}");
+        plan.matches_rendering(&copied, &template, "Copied", &expected("Copied"), &how);
+        plan.rendered(&authored, &["--var", "goal=Copied again"]);
+        let again = plan.json(&["task", "copy", &authored, "--to", "board"]);
+        assert_eq!(again["items"][0]["action"], "updated");
+        let how = format!("copy over the board's copy ending {ending:?}");
+        plan.matches_rendering(
+            &copied,
+            &template,
+            "Copied again",
+            &expected("Copied again"),
+            &how,
+        );
+
+        // A hand edit of an interior line, through a content write, is an edit; the rendering's
+        // own bytes written back the same way match again.
+        plan.edited_by_hand(&copied, &template, "Copied again", &how);
+        let restored = plan.file("restored.md", &expected("Copied again"));
+        plan.exits(&["task", "content", "set", &copied, "--file", &restored], 0);
+        let how = format!("content set ending {ending:?}");
+        plan.matches_rendering(
+            &copied,
+            &template,
+            "Copied again",
+            &expected("Copied again"),
+            &how,
+        );
+    }
+}
