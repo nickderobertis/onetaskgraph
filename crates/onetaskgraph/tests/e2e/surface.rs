@@ -596,6 +596,86 @@ fn readme() -> String {
     std::fs::read_to_string(path).expect("the README is readable")
 }
 
+/// The README's synopsis entry for `command`: its `onetaskgraph <command>` line and every
+/// indented line continuing it, or `None` when it has no such entry.
+fn synopsis(readme: &str, command: &str) -> Option<String> {
+    let head = format!("onetaskgraph {command} ");
+    let mut lines = readme.lines().skip_while(|line| !line.starts_with(&head));
+    let first = lines.next()?;
+    let continued = lines.take_while(|line| line.starts_with(' '));
+    Some(
+        std::iter::once(first)
+            .chain(continued)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+#[test]
+fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
+    // The check above finds a flag anywhere in the README, so a flag moved to the wrong verb's
+    // entry passes it. For the verbs a template drives, each flag `<verb> --help` reports is
+    // held to that verb's own entry — or, for a `document` verb whose entry says it takes the
+    // flags of a `task` verb, to that entry too. Global flags belong to no one verb.
+    let global = [
+        "set",
+        "page-size",
+        "default-sources",
+        "output",
+        "json",
+        "interactive",
+        "no-interactive",
+        "help",
+    ];
+    let readme = readme();
+    let mut missing = Vec::new();
+    for command in [
+        "task create",
+        "task render",
+        "task answers",
+        "document create",
+        "document render",
+        "document answers",
+        "template variables",
+        "template render",
+    ] {
+        let own = synopsis(&readme, command)
+            .unwrap_or_else(|| panic!("the README has no synopsis entry for `{command}`"));
+        let mut entry = own.clone();
+        for borrowed in ["task create", "task render"] {
+            if own.contains(&format!("of `{borrowed}`")) {
+                entry.push_str(&synopsis(&readme, borrowed).unwrap_or_default());
+            }
+        }
+        let help = String::from_utf8(
+            onetaskgraph()
+                .args(command.split(' '))
+                .arg("--help")
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone(),
+        )
+        .expect("help is UTF-8");
+        let flags = help.lines().filter_map(|line| {
+            let flag = line.trim_start().trim_start_matches("-h, ");
+            let name = flag.strip_prefix("--")?;
+            Some(name.split([' ', '<']).next().unwrap_or(name).to_owned())
+        });
+        for flag in flags.filter(|flag| !global.contains(&flag.as_str())) {
+            if !entry.contains(&format!("--{flag}")) {
+                missing.push(format!("{command} --{flag}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "the README's synopsis entry for each of these verbs does not name the flag:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
 /// The object of every ```json block of `text` that parses as one.
 fn json_objects(text: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
     text.split("```json\n")

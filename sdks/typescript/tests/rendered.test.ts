@@ -291,12 +291,14 @@ test("every option of the create and render methods reaches the real binary as a
   ).rejects.toThrow("taskRender: dryRun is not a boolean");
 });
 
-test("every flag the create, render, answers and template verbs take is spelled in the client", () => {
-  // The other half of the test above, checked coarsely: a flag the binary adds to one of these
-  // verbs fails here unless `client.ts` spells it somewhere, which is where a caller's option
-  // would have to become it. Which method spells it is the test above's to prove, by driving
-  // each option to the real binary. Global flags are the client's own business — it always
-  // passes `--json` and `--no-interactive` — and are not options of any one call.
+test("every flag the create, render, answers and template verbs take is spelled where that verb's arguments are built", () => {
+  // The other half of the test above: a flag the binary adds to one of these verbs fails here
+  // unless the client code that builds THAT verb's arguments spells it, which is where a
+  // caller's option would have to become it — so a flag spelled only for another verb does not
+  // count. The code searched per verb is its method and the helpers it reaches, each checked to
+  // be called from one before it, so the list cannot name code the verb never runs. Global flags
+  // are the client's own business — it always passes `--json` and `--no-interactive` — and are
+  // not options of any one call.
   const global = new Set([
     "set",
     "page-size",
@@ -308,23 +310,53 @@ test("every flag the create, render, answers and template verbs take is spelled 
     "help",
   ]);
   const client = readFileSync(resolve(import.meta.dir, "../src/client.ts"), "utf8");
-  for (const command of [
-    "task create",
-    "task render",
-    "task answers",
-    "document create",
-    "document render",
-    "document answers",
-    "template variables",
-    "template render",
-  ]) {
+  // A top-level function, or a method of the client class, as its text up to its closing brace.
+  const source = (name: string): string => {
+    const top = client.indexOf(`\nfunction ${name}(`);
+    if (top >= 0) return client.slice(top, client.indexOf("\n}\n", top));
+    const method = client.search(new RegExp(`\\n  (?:async )?${name}\\(`));
+    expect(method, `client.ts defines no ${name}`).toBeGreaterThanOrEqual(0);
+    return client.slice(method, client.indexOf("\n  }\n", method));
+  };
+  const template = ["templateSourceArguments", "varFlags"];
+  const builders: Record<string, string[]> = {
+    "task create": ["taskCreate", "createArguments", ...template],
+    "task render": ["taskRender", "renderInvocation", ...template],
+    "task answers": ["taskAnswers"],
+    "document create": ["documentCreate", "createArguments", ...template],
+    "document render": ["documentRender", "renderInvocation", ...template],
+    "document answers": ["documentAnswers"],
+    "template variables": [
+      "templateVariables",
+      "templateOperand",
+      "searchPathFlags",
+      "loaderFlags",
+    ],
+    "template render": [
+      "templateRender",
+      "templateOperand",
+      "searchPathFlags",
+      "loaderFlags",
+      "varFlags",
+    ],
+  };
+  for (const [command, names] of Object.entries(builders)) {
+    const sources = names.map(source);
+    for (const [index, name] of names.entries()) {
+      if (index === 0) continue;
+      expect(
+        sources.slice(0, index).some((caller) => caller.includes(`${name}(`)),
+        `${command}: ${name} is not called from ${names.slice(0, index).join(" or ")}`,
+      ).toBe(true);
+    }
+    const built = sources.join("\n");
     const help = spawnSync(binary, [...command.split(" "), "--help"], { encoding: "utf8" }).stdout;
     const flags = [...help.matchAll(/^\s+--([a-z][a-z-]*)/gm)].map(([, flag]) => flag ?? "");
     expect(flags.length).toBeGreaterThan(0);
     for (const flag of flags.filter((flag) => !global.has(flag))) {
       expect(
-        client.includes(`"--${flag}"`),
-        `${command} --${flag} is not spelled by the client`,
+        built.includes(`"--${flag}"`),
+        `${command} --${flag} is not spelled by ${names.join(", ")}`,
       ).toBe(true);
     }
   }
