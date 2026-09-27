@@ -974,10 +974,15 @@ pub const SECONDARY_WORDINGS: [&str; 5] = [
 /// The wordings GitHub answers an exhausted primary budget with.
 ///
 /// `rate_limited` is the `type` its GraphQL error carries, which is read as a field rather
-/// than looked for in the response text. Pinned and gated exactly as
-/// [`SECONDARY_WORDINGS`] is, and public for the same one reason.
-pub const PRIMARY_WORDINGS: [&str; 3] = [
+/// than looked for in the response text. `api rate limit already exceeded` is what GraphQL
+/// answers a request made once the hour's budget is spent — "API rate limit already exceeded
+/// for user ID …" in the `errors` of an HTTP 200, with no `type` — and neither of the other
+/// two phrases is a substring of it, so without it that answer read as a refusal that will
+/// never lift. Pinned and gated exactly as [`SECONDARY_WORDINGS`] is, and public for the same
+/// one reason.
+pub const PRIMARY_WORDINGS: [&str; 4] = [
     "api rate limit exceeded",
+    "api rate limit already exceeded",
     "rate limit exceeded",
     "rate_limited",
 ];

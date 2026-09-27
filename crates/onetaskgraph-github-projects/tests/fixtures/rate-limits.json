@@ -3,8 +3,10 @@
     "Authoritative pin of GitHub's rate-limit vocabulary, its published limits on",
     "content-creating requests, and the allowance read the live lane's budget",
     "precondition makes. Recorded from GitHub's own documentation on 2026-09-01, and the",
-    "allowance block on 2026-09-03; see README.md for the pages each value came off and",
-    "why this artifact exists.",
+    "allowance block on 2026-09-03; the one primary wording GitHub's documentation does not",
+    "carry was observed from GitHub itself on 2026-09-27 and records where under",
+    "primary.observed. See README.md for the pages each value came off and why this",
+    "artifact exists.",
     "the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact in",
     "tests/schema.rs reconciles the first two against the production constants both ways,",
     "and the_allowance_read_matches_its_pinned_artifact in tests/budget_gate.rs does the",
@@ -27,7 +29,19 @@
     ]
   },
   "primary": {
-    "wordings": ["api rate limit exceeded", "rate limit exceeded", "rate_limited"]
+    "wordings": [
+      "api rate limit exceeded",
+      "api rate limit already exceeded",
+      "rate limit exceeded",
+      "rate_limited"
+    ],
+    "observed": {
+      "api rate limit already exceeded": {
+        "read": "2026-09-27",
+        "where": "GitHub GraphQL API, HTTP 200 whose errors[].message is 'API rate limit already exceeded for user ID <id>.' with no type, answering a request made after the hour's GraphQL budget was spent",
+        "evidence": "the planning spike of graphql-writeback-quota against the onetaskgraph live test board on 2026-09-27, and 20 write-back refusals recorded by the orchestration host on 2026-09-27; see README.md"
+      }
+    }
   },
   "content_creation": {
     "per_minute": 80,

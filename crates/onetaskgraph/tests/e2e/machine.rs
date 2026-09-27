@@ -12,8 +12,9 @@ use serde_json::{Value, json};
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, stderr, stdout};
 use crate::fixtures::{
-    NATIVE, SCANNED, document, empty_document_store, empty_folder, github_projects_rate_limited,
-    github_projects_unreachable, github_projects_with_board, pair_at, qualified,
+    NATIVE, SCANNED, document, empty_document_store, empty_folder, github_projects_budget_spent,
+    github_projects_rate_limited, github_projects_unreachable, github_projects_with_board, pair_at,
+    qualified,
 };
 
 /// The capability pair, plus the two destinations a copy needs.
@@ -685,6 +686,27 @@ fn a_rate_limit_is_transient_and_carries_the_wait_it_named() {
 
         unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy");
     }
+}
+
+#[test]
+fn a_budget_github_reports_already_spent_is_a_transient_rate_limit_carrying_its_reset() {
+    // GitHub answers a request made once the hour's GraphQL budget is spent with an HTTP 200
+    // whose error reads "API rate limit already exceeded for user ID …". That was answered as
+    // a refusal, which a caller never retries; it is a limit that lifts at the reset.
+    let sandbox = Sandbox::new();
+    plans_beside(&sandbox, &github_projects_budget_spent(&sandbox, 300));
+    let bundle = bundle(&sandbox);
+
+    let copy = ["project", "copy", "plans:P-1", "--to", "board"];
+    let machine = run(&sandbox, &[&copy[..], &["--json"]].concat());
+    let failure = failure_document(&bundle, &machine, "project copy --json");
+    assert_eq!(failure["class"], "transient", "{failure}");
+    assert_eq!(failure["kind"], "rate-limited", "{failure}");
+    assert_eq!(failure["source"], "board", "{failure}");
+    let wait = failure["retry_after_seconds"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no wait carried: {failure}"));
+    assert!((280..=300).contains(&wait), "{failure}");
 }
 
 #[test]

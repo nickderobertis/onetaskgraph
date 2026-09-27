@@ -1703,6 +1703,43 @@ pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>)
     block
 }
 
+/// A board whose GraphQL budget for the hour is already spent, answering every request the
+/// way GitHub does then: an HTTP 200 whose one error reads "API rate limit already exceeded
+/// for user ID …", with no `type`, and the spent budget's reset `reset_in` seconds away.
+pub fn github_projects_budget_spent(sandbox: &Sandbox, reset_in: u64) -> Value {
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
+    let endpoint = format!(
+        "http://{}/graphql",
+        listener.local_addr().expect("fixture address")
+    );
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("GitHub fixture connection");
+            read_http_json(&mut stream);
+            let body = json!({"errors": [{
+                "message": "API rate limit already exceeded for user ID 19440155."
+            }]})
+            .to_string();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("a clock past the epoch")
+                .as_secs();
+            let reset = now + reset_in;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: {reset}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("GitHub fixture response");
+        }
+    });
+    let mut block = github_projects_block_at(&endpoint);
+    block["pacing"]["retry_budget_ms"] = json!(0);
+    block
+}
+
 /// A board at an address nothing listens on.
 ///
 /// The port is bound and released again, so it is one this host just handed out and

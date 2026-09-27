@@ -9707,6 +9707,58 @@ async fn the_primary_budget_is_waited_out_and_then_reported_as_the_rate_limit_it
 }
 
 #[tokio::test]
+async fn a_budget_already_spent_is_a_rate_limit_carrying_the_reset_rather_than_a_refusal() {
+    // What GraphQL answers a request made after the hour's budget is spent: an HTTP 200 whose
+    // one error says "API rate limit already exceeded for user ID …" and carries no `type`.
+    // Neither older wording is a substring of it, so it was answered as `Refused` — a limit
+    // that lifts on its own, reported as one that never will.
+    let reset = chrono::Utc::now().timestamp() + 120;
+    let spent = Refusal {
+        status: "200 OK",
+        headers: format!("x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {reset}\r\n"),
+        body:
+            json!({"errors":[{"message":"API rate limit already exceeded for user ID 19440155."}]})
+                .to_string(),
+    };
+    let error = paced(&always(&spent), no_waiting())
+        .get_task(&NativeId("I_1".into()))
+        .await
+        .expect_err("a spent budget");
+    let SourceError::RateLimited {
+        retry_after_seconds: Some(wait),
+        message: Some(said),
+    } = &error
+    else {
+        panic!("a spent budget was reported as {error:?}");
+    };
+    assert!(
+        (100..=120).contains(wait),
+        "the wait is not the one GitHub's reset states: {wait}"
+    );
+    assert!(said.contains("primary API rate limit"), "{said}");
+
+    // With no reset stated there is no wait to carry, and it is still a rate limit.
+    let unstated = Refusal {
+        headers: String::new(),
+        ..spent
+    };
+    let error = paced(&always(&unstated), no_waiting())
+        .get_task(&NativeId("I_1".into()))
+        .await
+        .expect_err("a spent budget");
+    assert!(
+        matches!(
+            error,
+            SourceError::RateLimited {
+                retry_after_seconds: None,
+                ..
+            }
+        ),
+        "a spent budget with no reset was reported as {error:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_wait_hint_of_nothing_is_still_a_wait_and_still_ends() {
     // GitHub really does answer `retry-after: 0`. Honoured literally it is a retry with no
     // wait at all, which spends none of the budget — so the schedule would never end, and
