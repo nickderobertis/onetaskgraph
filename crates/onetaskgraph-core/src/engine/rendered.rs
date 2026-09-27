@@ -35,57 +35,84 @@ use crate::template::{
     body_digest,
 };
 
-/// The content a create writes.
+/// The content a create writes: text given as it is, or a template's rendering.
+///
+/// Built only by [`Body::plain`], [`Body::rendered`] and [`Body::rendered_as`], so a rendered
+/// body always carries the [`TemplateProvenance`] its rendering proves — a rendering whose
+/// digest is not one is refused where the body is built, never later where it is written.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Body {
-    /// Text given as it is: the item records no provenance and no answers are kept.
+pub struct Body(Content);
+
+#[derive(Debug, Clone, PartialEq)]
+enum Content {
+    /// The item records no provenance and no answers are kept.
     Plain(String),
-    /// A template's rendering: the item records [`TemplateProvenance`] naming `template`, and
-    /// a source that keeps answers keeps the rendering's resolved answers beside it.
+    /// The item records `provenance`, and a source that keeps answers keeps the rendering's
+    /// resolved answers beside it.
     Rendered {
-        /// What the template rendered, with the digest and the answers it rendered with.
         rendered: RenderedTemplate,
-        /// The provenance `template`: a file's absolute path, a loader document's
-        /// `reference`, or a string of a library caller's own.
-        template: String,
+        provenance: TemplateProvenance,
     },
 }
 
 impl Body {
-    /// A template's rendering, recorded by the reference `template` answers.
+    /// Text given as it is.
     #[must_use]
-    pub fn rendered(template: &TemplateInput, rendered: RenderedTemplate) -> Self {
-        Self::Rendered {
-            rendered,
-            template: template.reference(),
-        }
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self(Content::Plain(text.into()))
     }
 
-    /// What a create writes of this body beside `metadata`.
+    /// A template's rendering, recorded by the reference `template` answers.
     ///
     /// # Errors
     ///
-    /// [`EngineError::Template`] when a rendering's digest is not one.
-    fn parts(&self, metadata: &BTreeMap<MetadataKey, Value>) -> Result<Parts<'_>, EngineError> {
+    /// As [`Body::rendered_as`].
+    pub fn rendered(
+        template: &TemplateInput,
+        rendered: RenderedTemplate,
+    ) -> Result<Self, TemplateError> {
+        Self::rendered_as(template.reference(), rendered)
+    }
+
+    /// A template's rendering, recorded by `template` — a string of a library caller's own.
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::Malformed`] when the rendering's `digest` is not one: a
+    /// [`RenderedTemplate`] assembled by hand rather than answered by a render.
+    pub fn rendered_as(
+        template: impl Into<String>,
+        rendered: RenderedTemplate,
+    ) -> Result<Self, TemplateError> {
+        let provenance = TemplateProvenance::of(template, &rendered)?;
+        Ok(Self(Content::Rendered {
+            rendered,
+            provenance,
+        }))
+    }
+
+    /// What a create writes of this body beside `metadata`.
+    fn parts(&self, metadata: &BTreeMap<MetadataKey, Value>) -> Parts<'_> {
         let mut carried: BTreeMap<String, Value> = metadata
             .iter()
             .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
             .collect();
-        match self {
-            Self::Plain(content) => Ok(Parts {
+        match &self.0 {
+            Content::Plain(content) => Parts {
                 content: content.clone(),
                 metadata: carried,
                 answers: None,
-            }),
-            Self::Rendered { rendered, template } => {
-                let provenance = TemplateProvenance::of(template.clone(), rendered)
-                    .map_err(|error| EngineError::Template { error })?;
+            },
+            Content::Rendered {
+                rendered,
+                provenance,
+            } => {
                 carried.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
-                Ok(Parts {
+                Parts {
                     content: rendered.body.clone(),
                     metadata: carried,
                     answers: Some(&rendered.answers),
-                })
+                }
             }
         }
     }
@@ -430,7 +457,7 @@ impl Engine {
             content,
             metadata,
             answers,
-        } = request.body.parts(&request.metadata)?;
+        } = request.body.parts(&request.metadata);
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let near = &request.source;
         let id = NativeId::from(slug(&request.title, "task").as_str());
@@ -520,7 +547,7 @@ impl Engine {
             content,
             metadata,
             answers,
-        } = request.body.parts(&request.metadata)?;
+        } = request.body.parts(&request.metadata);
         let write = ItemWrite {
             target,
             item: Document {

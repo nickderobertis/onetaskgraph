@@ -271,7 +271,6 @@ fn slot(body: &str) -> (String, Value) {
     )
 }
 
-/// The native id of a qualified one.
 fn native(id: &str) -> &str {
     id.split_once(':').expect("a qualified id").1
 }
@@ -1157,7 +1156,6 @@ fn a_regenerate_overlays_answers_keeps_every_other_field_and_writes_nothing_when
     );
     assert_eq!(plan.json(&["task", "answers", &id])["owner"], Value::Null);
 
-    // Nothing to change: nothing written.
     let file = std::fs::read(plan.task_file(&id)).unwrap();
     let unchanged = plan.rendered(&id, &[]);
     assert_eq!(unchanged["changed"], false);
@@ -1167,7 +1165,6 @@ fn a_regenerate_overlays_answers_keeps_every_other_field_and_writes_nothing_when
         "byte-identical"
     );
 
-    // A dry run reports a change and writes nothing.
     let dry = plan.rendered(&id, &["--var", "goal=Never written", "--dry-run"]);
     assert_eq!(dry["changed"], true);
     assert!(dry["body"].as_str().unwrap().contains("Never written"));

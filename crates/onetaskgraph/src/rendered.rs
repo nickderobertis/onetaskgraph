@@ -334,9 +334,9 @@ fn body(args: &CreateBodyArgs, loaded: &Loaded) -> Result<Body, Refusal> {
             &HashSet::new(),
         )?;
         let rendered = template.render(&answers)?;
-        return Ok(Body::rendered(&input, rendered));
+        return Ok(Body::rendered(&input, rendered)?);
     }
-    plain(args.body_file.as_deref()).map(Body::Plain)
+    plain(args.body_file.as_deref()).map(Body::plain)
 }
 
 /// A plain body, byte for byte from `path`, or from standard input without one.

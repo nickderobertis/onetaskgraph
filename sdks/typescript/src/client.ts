@@ -560,7 +560,10 @@ function renderInvocation(
 ): [string, string[], string | undefined] {
   const { args, input } = templateSourceArguments(method, options);
   for (const name of stringList(method, "unset", options.unset)) args.push("--unset", name);
-  if (options.dryRun) args.push("--dry-run");
+  if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+    throw new TypeError(`${method}: dryRun is not a boolean; next: pass true or false`);
+  }
+  if (options.dryRun === true) args.push("--dry-run");
   return [command, [id, ...args], input];
 }
 

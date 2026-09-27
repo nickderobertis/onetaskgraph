@@ -255,6 +255,11 @@ test("every option of the create and render methods reaches the real binary as a
     // Deliberately outside the declared type, as a caller whose values reached it untyped.
     client.taskRender(task?.id ?? "", [] as unknown as RenderOptions),
   ).rejects.toThrow("taskRender: options is not a plain object");
+  await expect(
+    // Outside the declared type on purpose, as the options above are: a truthy non-boolean
+    // must not become `--dry-run`.
+    client.taskRender(task?.id ?? "", { dryRun: "no" as unknown as boolean }),
+  ).rejects.toThrow("taskRender: dryRun is not a boolean");
 });
 
 test("every flag the create, render, answers and template verbs take is spelled in the client", () => {

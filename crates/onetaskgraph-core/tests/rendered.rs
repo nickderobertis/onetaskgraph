@@ -90,7 +90,7 @@ impl Fixture {
                 source: name("work"),
                 project: NativeId::from("launch"),
                 title: "Ship the release".to_owned(),
-                body: Body::rendered(template, rendered),
+                body: Body::rendered(template, rendered).unwrap(),
                 status: Some(StatusCategory::Todo),
                 labels: vec!["release".to_owned()],
                 repositories: Vec::new(),
@@ -359,7 +359,7 @@ async fn a_regenerate_needs_a_template_it_can_read_and_never_turns_a_reference_i
             source: name("work"),
             project: NativeId::from("launch"),
             title: "Plain".to_owned(),
-            body: Body::Plain("By hand.".to_owned()),
+            body: Body::plain("By hand."),
             status: None,
             labels: Vec::new(),
             repositories: Vec::new(),
@@ -533,7 +533,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
         project: NativeId::from("launch"),
         title: "Design".to_owned(),
         id: Some(NativeId::from("design")),
-        body: Body::rendered(&template, rendered),
+        body: Body::rendered(&template, rendered).unwrap(),
         labels: Vec::new(),
         repositories: Vec::new(),
         metadata: BTreeMap::new(),
@@ -593,7 +593,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
             project: NativeId::from("launch"),
             title: "Memo".to_owned(),
             id: None,
-            body: Body::Plain("Memo.".to_owned()),
+            body: Body::plain("Memo."),
             labels: Vec::new(),
             repositories: Vec::new(),
             metadata: BTreeMap::new(),
@@ -618,7 +618,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
 async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
     let fixture = Fixture::new();
     let template = TemplateInput::Loader(fixture.loader(BASE));
-    let plain = |title: &str| Body::Plain(format!("{title}, by hand."));
+    let plain = |title: &str| Body::plain(format!("{title}, by hand."));
     let created = fixture
         .engine
         .create_task(&TaskCreate {
@@ -698,43 +698,21 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
     );
 }
 
-#[tokio::test]
-async fn a_rendering_assembled_by_hand_with_no_digest_is_refused_before_anything_is_written() {
-    let fixture = Fixture::new();
-    let refused = fixture
-        .engine
-        .create_task(&TaskCreate {
-            source: name("work"),
-            project: NativeId::from("launch"),
-            title: "Forged".to_owned(),
-            body: Body::Rendered {
-                rendered: RenderedTemplate {
-                    body: "Forged.".to_owned(),
-                    digest: "not a digest".to_owned(),
-                    answers: BTreeMap::new(),
-                },
-                template: "by-hand".to_owned(),
-            },
-            status: None,
-            labels: Vec::new(),
-            repositories: Vec::new(),
-            depends_on: Vec::new(),
-            delivers: Vec::new(),
-            metadata: BTreeMap::new(),
-        })
-        .await
-        .expect_err("a digest that is not one");
+#[test]
+fn a_rendering_assembled_by_hand_with_no_digest_cannot_become_a_body() {
+    let refused = Body::rendered_as(
+        "by-hand",
+        RenderedTemplate {
+            body: "Forged.".to_owned(),
+            digest: "not a digest".to_owned(),
+            answers: BTreeMap::new(),
+        },
+    )
+    .expect_err("a digest that is not one");
     assert!(
         refused
             .to_string()
             .contains("\"not a digest\" is not a digest"),
         "{refused}"
-    );
-    assert_eq!(
-        fs::read_dir(fixture.root.path().join("tasks"))
-            .unwrap()
-            .count(),
-        0,
-        "nothing written"
     );
 }
