@@ -466,8 +466,8 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
-        /// `task` or `document`.
-        record: &'static str,
+        /// A task or a document.
+        record: RenderedRecord,
     },
 
     /// A regenerate left required variables unanswered, because the answers stored beside the
@@ -503,8 +503,8 @@ pub enum EngineError {
          --var NAME=VALUE`), or read its provenance with `onetaskgraph {record} show {id}`."
     )]
     NoStoredAnswers {
-        /// `task` or `document`.
-        record: &'static str,
+        /// A task or a document.
+        record: RenderedRecord,
         /// The item.
         id: String,
         /// Why none are there.
@@ -517,8 +517,8 @@ pub enum EngineError {
          next: name one with --template FILE or --template-loader FILE."
     )]
     NoTemplate {
-        /// `task` or `document`.
-        record: &'static str,
+        /// A task or a document.
+        record: RenderedRecord,
         /// The item.
         id: String,
     },
@@ -531,8 +531,8 @@ pub enum EngineError {
          answer, which records a fresh entry."
     )]
     MalformedProvenance {
-        /// `task` or `document`.
-        record: &'static str,
+        /// A task or a document.
+        record: RenderedRecord,
         /// The item.
         id: String,
         /// What is wrong with the entry.
@@ -547,8 +547,8 @@ pub enum EngineError {
          to render), or name a template file with --template FILE."
     )]
     TemplateNotAFile {
-        /// `task` or `document`.
-        record: &'static str,
+        /// A task or a document.
+        record: RenderedRecord,
         /// The item.
         id: String,
         /// The provenance `template` it records.

@@ -196,6 +196,12 @@ pub enum RenderedRecord {
     Document,
 }
 
+impl fmt::Display for RenderedRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.noun())
+    }
+}
+
 impl RenderedRecord {
     fn noun(self) -> &'static str {
         match self {
@@ -631,7 +637,7 @@ impl Engine {
             .await?
             .map(TemplateAnswers)
             .ok_or_else(|| EngineError::NoStoredAnswers {
-                record: record.noun(),
+                record,
                 id: id.to_string(),
                 reason: UnusedAnswers::NoneStored {
                     source: id.source.to_string(),
@@ -669,7 +675,7 @@ impl Engine {
             // given there is nothing to render, and the refusal says why.
             (RenderTemplate::Recorded { .. }, Err(problem)) => {
                 return Err(EngineError::MalformedProvenance {
-                    record: record.noun(),
+                    record,
                     id: id.to_string(),
                     problem: problem.clone(),
                 });
@@ -684,14 +690,14 @@ impl Engine {
             }
             (RenderTemplate::Recorded { .. }, Ok(Some(recorded))) => {
                 return Err(EngineError::TemplateNotAFile {
-                    record: record.noun(),
+                    record,
                     id: id.to_string(),
                     reference: recorded.template.clone(),
                 });
             }
             (RenderTemplate::Recorded { .. }, Ok(None)) => {
                 return Err(EngineError::NoTemplate {
-                    record: record.noun(),
+                    record,
                     id: id.to_string(),
                 });
             }
@@ -771,7 +777,7 @@ impl Engine {
                 return Err(EngineError::RenderingNotWritable {
                     name: source.name().to_string(),
                     kind: source.kind().to_owned(),
-                    record: regeneration.record.noun(),
+                    record: regeneration.record,
                 });
             }
             let value = provenance.to_value();
