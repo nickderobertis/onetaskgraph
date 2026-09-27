@@ -26,6 +26,10 @@ use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 const RECORD: &str =
     include_str!("../../../onetaskgraph-github-projects/tests/fixtures/copy-cost.txt");
 
+/// What one measured command came to: the requests the board served for it, as a session and
+/// as the documents and variables themselves, and what the command reported.
+type Measured = (Session, Vec<(String, Value)>, Value);
+
 /// One Markdown project and its tasks, beside the fixture board it is copied into.
 struct Plan {
     sandbox: Sandbox,
@@ -98,14 +102,14 @@ impl Plan {
     }
 
     /// One copy command, the requests the board served for it, and what it reported.
-    fn copy(&self, extra: &[&str]) -> (Session, Vec<(String, Value)>, Value) {
+    fn copy(&self, extra: &[&str]) -> Measured {
         let mut arguments = vec!["project", "copy", "plans:P", "--to", "board", "--json"];
         arguments.extend_from_slice(extra);
         self.measure(&arguments)
     }
 
     /// One command, the requests the board served for it, and what it reported.
-    fn measure(&self, arguments: &[&str]) -> (Session, Vec<(String, Value)>, Value) {
+    fn measure(&self, arguments: &[&str]) -> Measured {
         let before = self.board.served().len();
         let output = self
             .sandbox
@@ -223,7 +227,7 @@ fn native(destination: &Value) -> String {
 
 /// A plan of `tasks` tasks the board already holds, each recording its origin, with the
 /// task at `changed` moved to `Doing` — and the one-member copy naming it.
-fn one_member_copy(tasks: usize, changed: usize) -> (Session, Vec<(String, Value)>, Value) {
+fn one_member_copy(tasks: usize, changed: usize) -> Measured {
     let plan = Plan::of(tasks);
     let (_, _, first) = plan.copy(&[]);
     plan.author(&landed(&first), Some(changed));
@@ -243,10 +247,7 @@ fn mutations(served: &[(String, Value)]) -> usize {
 /// of the kind a settlement removes — and the two targeted updates of that one task: a
 /// settlement naming its status and three keys set and one removed, then the same update
 /// again, when the task already holds every value it names.
-fn one_targeted_update(
-    tasks: usize,
-    changed: usize,
-) -> [(Session, Vec<(String, Value)>, Value); 2] {
+fn one_targeted_update(tasks: usize, changed: usize) -> [Measured; 2] {
     let plan = Plan::of(tasks);
     let (_, _, first) = plan.copy(&[]);
     let target = landed(&first)
