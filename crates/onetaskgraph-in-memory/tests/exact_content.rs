@@ -196,3 +196,25 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
         }
     }
 }
+
+/// What a drift check hashes is what a read answers, so a hand edit of an interior line of a
+/// copied rendering has to read back as the edit — neither normalised away nor lost.
+#[tokio::test]
+async fn an_interior_edit_of_a_copied_rendering_reads_back_as_the_edit() {
+    for content in ENDINGS {
+        let source = source();
+        let copied = source
+            .write_task(&write(None, task(content)))
+            .await
+            .unwrap();
+        let edited = content.replacen("- two\n", "- three\n", 1);
+        source
+            .set_task_content(&copied, &edited)
+            .await
+            .unwrap()
+            .expect("the task");
+        let read = task_content(&source, &copied).await;
+        assert_eq!(read, edited);
+        assert_ne!(read, content, "the edit is visible to a drift check");
+    }
+}
