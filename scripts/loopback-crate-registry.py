@@ -36,7 +36,29 @@ class Loopback(http.server.ThreadingHTTPServer):
         self.server_port = self.server_address[1]
 
 
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+class Unconditional(http.server.SimpleHTTPRequestHandler):
+    """Every request answered with the file as it is now, never `304 Not Modified`.
+
+    The stock handler sends `Last-Modified` and answers a matching `If-Modified-Since` with
+    304 whenever the file's mtime, truncated to whole seconds, is not later than it. The
+    check edits an index file cargo has already cached and resolves again, often within the
+    same second as that cache, so cargo revalidated to 304, kept the release the edit
+    removed, and the check's "sibling absent from the registry" case passed or failed by the
+    clock. With no validator sent and none honoured, what cargo resolves against is always
+    the index as the check last wrote it. scripts/check-crate-sibling-resolution-same-second.sh
+    drives that check with every mtime pinned to one second, which is what holds this.
+    """
+
+    def send_head(self):
+        del self.headers["If-Modified-Since"]
+        return super().send_head()
+
+    def send_header(self, keyword, value):
+        if keyword.lower() != "last-modified":
+            super().send_header(keyword, value)
+
+
+handler = functools.partial(Unconditional, directory=root)
 server = Loopback(("127.0.0.1", 0), handler)
 with open(port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
