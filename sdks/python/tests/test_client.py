@@ -644,7 +644,7 @@ def test_task_update_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     cwd = metadata_folder(tmp_path)
     client = Client(binary, cwd=cwd)
     body = tmp_path / "body.md"
-    body.write_text("a new body\n", encoding="utf-8")
+    body.write_bytes(b"a new body\n")
 
     answer = run(
         client.task_update(
