@@ -1,3 +1,4 @@
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This module is where the task that introduced templates fixes their library API: at `onetaskgraph-core`'s crate root, beside the engine every surface shares, so a Rust consumer renders without the binary. A crate of its own would be a new published sibling — a change to the release surface `release-targets.toml` freezes — which is not this change's to make; `crates/onetaskgraph-core/src/lib.rs` carries the same reason where the module is declared.
 //! Task templates: a minijinja document with a declared set of variables, rendered from
 //! answers.
 //!
