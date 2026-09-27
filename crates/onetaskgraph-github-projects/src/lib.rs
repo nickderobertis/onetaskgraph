@@ -4836,7 +4836,7 @@ impl GitHubProjectsSource {
                 .is_none_or(|held| !held.eq_ignore_ascii_case(&name));
             let state_moves = item.content_kind == ContentKind::Issue
                 && (item.closed != terminal || (terminal && item.status != landed));
-            if option_moves || state_moves {
+            if let Some(moves) = Moves::of(option_moves, state_moves) {
                 status_move = Some(StatusMove {
                     board: board.id,
                     field,
@@ -4844,8 +4844,7 @@ impl GitHubProjectsSource {
                     name,
                     target,
                     landed,
-                    option_moves,
-                    state_moves,
+                    moves,
                 });
             }
         }
@@ -4923,7 +4922,7 @@ impl GitHubProjectsSource {
         if body != held {
             fields.insert("body".to_owned(), json!(body));
         }
-        if let Some(moving) = status_move.as_ref().filter(|moving| moving.state_moves) {
+        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.state()) {
             fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
         }
         let terminal = status_move
@@ -4990,7 +4989,7 @@ impl GitHubProjectsSource {
         item: &Resolved,
         moving: Option<&StatusMove>,
     ) -> Result<(), SourceError> {
-        let Some(moving) = moving.filter(|moving| moving.option_moves) else {
+        let Some(moving) = moving.filter(|moving| moving.moves.option()) else {
             return Ok(());
         };
         self.set_item_field(
@@ -6569,10 +6568,43 @@ struct StatusMove {
     target: StatusTarget,
     /// The status the item reads as once it is there.
     landed: Status,
-    /// Whether the option differs from the one the item sits in.
-    option_moves: bool,
-    /// Whether the issue has to open or close, or close with another reason.
-    state_moves: bool,
+    /// Which of the status's two halves differ from what the item holds.
+    moves: Moves,
+}
+
+/// Which halves of an item's status one targeted update moves: its `Status` option, the open or
+/// closed state of its issue, or both. A status neither half of which differs is no move at all,
+/// and is not a value of this type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Moves {
+    /// The option alone.
+    Option,
+    /// The issue's state alone: open, closed, or closed with another reason.
+    State,
+    /// Both.
+    Both,
+}
+
+impl Moves {
+    /// What differs, or `None` when nothing does.
+    const fn of(option: bool, state: bool) -> Option<Self> {
+        match (option, state) {
+            (true, true) => Some(Self::Both),
+            (true, false) => Some(Self::Option),
+            (false, true) => Some(Self::State),
+            (false, false) => None,
+        }
+    }
+
+    /// Whether the option moves.
+    const fn option(self) -> bool {
+        matches!(self, Self::Option | Self::Both)
+    }
+
+    /// Whether the issue's state moves.
+    const fn state(self) -> bool {
+        matches!(self, Self::State | Self::Both)
+    }
 }
 
 /// What one write is, and the status that comes with being it.

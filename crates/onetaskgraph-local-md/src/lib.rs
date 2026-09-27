@@ -3094,8 +3094,9 @@ impl LocalMdSource {
         for key in keys {
             let value = wanted.metadata.get(key);
             if before.metadata.get(key) != value {
-                edited = with_metadata_entry(&edited, key, value)
-                    .map_err(|unnarrow| unnarrow.refusal_for(path, key))?;
+                edited = with_metadata_entry(&edited, key, value).map_err(|unnarrow| {
+                    unnarrow.refusal_to(if value.is_some() { "set" } else { "remove" }, path, key)
+                })?;
             }
         }
         Ok(edited)
@@ -3346,9 +3347,14 @@ impl Unnarrow {
 
     /// The refusal naming `path` and `key`, a key this product reserves included.
     fn refusal_for(self, path: &Path, key: &str) -> SourceError {
+        self.refusal_to("set", path, key)
+    }
+
+    /// The refusal of `verb` — setting or removing — the key `key` at `path`.
+    fn refusal_to(self, verb: &str, path: &Path, key: &str) -> SourceError {
         SourceError::Refused {
             message: format!(
-                "{}: cannot set the metadata key `{key}` without changing anything else: {}; \
+                "{}: cannot {verb} the metadata key `{key}` without changing anything else: {}; \
                  next: {}",
                 path.display(),
                 self.reason,

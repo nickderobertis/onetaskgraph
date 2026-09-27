@@ -240,6 +240,9 @@ fn a_folder_of_markdown_changes_by_exactly_the_entries_an_update_names() {
             &format!("{who} task update"),
         );
         assert_eq!(written(&answer), ["status", "metadata"], "{who}");
+        // A folder of Markdown meters nothing, so the answer says nothing of what it spent
+        // rather than claiming it spent none.
+        assert!(answer.get("spent").is_none(), "{who}: {answer}");
         assert_eq!(
             answer["task"]["status"],
             json!({"category": "cancelled", "name": "failed"}),
@@ -571,6 +574,8 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
         "one read of the item, one body update and one status write — nothing else"
     );
     assert_eq!(written(&answer), ["status", "metadata"]);
+    // The board meters its own requests, and the answer carries what this one spent.
+    assert_eq!(answer["spent"]["requests"], 3, "{answer}");
     let after = shown("board", &sandbox, &id);
     assert_eq!(
         after["status"],
@@ -637,6 +642,38 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
         json!({"category": "cancelled", "name": "Cancelled"})
     );
     assert_eq!(board.priority("T-1").as_deref(), Some("Urgent"));
+
+    // New visible content goes out in the one body update, the metadata block kept after it.
+    let file = sandbox.subdirectory("bodies").join("body.md");
+    std::fs::write(&file, "Rewritten by an update.").expect("a body");
+    let from = board.served().len();
+    let rewritten = answered(
+        "board",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            &id,
+            "--body-file",
+            file.to_str().expect("a UTF-8 path"),
+            "--metadata",
+            r#"onepipeline.landing="reverted""#,
+        ],
+    );
+    assert_eq!(written(&rewritten), ["content", "metadata"]);
+    assert_eq!(requests_since(&board, from), ["read", "updateIssue"]);
+    let body = board.body("T-1");
+    assert!(
+        body.as_str().is_some_and(
+            |body| body.starts_with("Rewritten by an update.\n\n<!-- onetaskgraph.metadata\n")
+        ),
+        "{body}"
+    );
+    let after = shown("board", &sandbox, &id);
+    assert_eq!(after["content"], "Rewritten by an update.");
+    assert_eq!(after["metadata"]["onepipeline.landing"], "reverted");
+    assert_eq!(after["metadata"]["onepipeline.turn_budget"], 12);
 }
 
 #[test]
@@ -675,6 +712,29 @@ fn a_linear_update_sends_one_issue_update_of_what_differs() {
     assert_eq!(after["metadata"]["onepipeline.turn_budget"], 12);
     assert!(after["metadata"].get("caller.flags").is_none(), "{after}");
     assert_eq!(unnamed(&after), unnamed(&before));
+
+    // Named dependencies replace the issue's own, relations and recorded far ends alike, and a
+    // later invocation reads the replacement.
+    let replaced = answered(
+        "linear",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            &id,
+            "--depends-on",
+            &qualified(SOURCE, "T-3"),
+        ],
+    );
+    assert_eq!(written(&replaced), ["depends-on"]);
+    let far: Vec<String> = answered("linear", &sandbox, &["--json", "task", "deps", &id])["items"]
+        .as_array()
+        .expect("a page of edges")
+        .iter()
+        .map(|edge| edge["to"]["id"].as_str().expect("a far end").to_owned())
+        .collect();
+    assert_eq!(far, [qualified(SOURCE, "T-3")]);
 
     // A list Linear cannot carry is refused by name.
     let refused = exits(
@@ -846,4 +906,98 @@ fn a_body_file_that_cannot_be_read_as_text_is_refused_before_anything_is_asked()
         read(&root, "T-1"),
         held().replace("The body.\n", "A new body.\n")
     );
+}
+
+#[test]
+fn an_update_that_lands_with_a_delivered_task_out_of_reach_exits_four_and_says_which() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("work");
+    std::fs::create_dir_all(root.join("tasks")).expect("a folder");
+    std::fs::write(
+        root.join("tasks/P.md"),
+        "---\ntitle: Parent\nstatus: todo\ndelivers: [\"nowhere:T-9\"]\n---\n",
+    )
+    .expect("a task");
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+
+    let output = exits(
+        "partial",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "work:P",
+            "--status",
+            "in-progress",
+        ],
+        4,
+    );
+    let said = stderr(&output);
+    assert!(
+        said.contains("nowhere:T-9 could not be kept in step with work:P")
+            && said.contains("the write itself landed"),
+        "{said}"
+    );
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("the whole answer");
+    assert_eq!(written(&answer), ["status"]);
+    assert_eq!(answer["delivered"][0]["outcome"], "failed");
+    assert_eq!(answer["delivered"][0]["failure"]["kind"], "unknown-source");
+    // The update itself landed.
+    assert_eq!(
+        shown("partial", &sandbox, "work:P")["status"]["category"],
+        "in-progress"
+    );
+}
+
+#[test]
+fn removing_the_only_metadata_key_takes_the_block_with_it_and_a_doubled_key_is_refused() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("work");
+    std::fs::create_dir_all(root.join("tasks")).expect("a folder");
+    let sole = "---\ntitle: Sole\nstatus: todo\nmetadata:\n  onepipeline.claim: r-1\n---\nBody.\n";
+    let doubled =
+        "---\ntitle: Doubled\nstatus: todo\nmetadata:\n  a.b: 1\n  \"a.b\": 2\n---\nBody.\n";
+    std::fs::write(root.join("tasks/S.md"), sole).expect("a task");
+    std::fs::write(root.join("tasks/D.md"), doubled).expect("a task");
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+
+    let answer = answered(
+        "sole",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "work:S",
+            "--remove-metadata",
+            "onepipeline.claim",
+        ],
+    );
+    assert_eq!(written(&answer), ["metadata"]);
+    assert_eq!(
+        read(&root, "S"),
+        "---\ntitle: Sole\nstatus: todo\n---\nBody.\n",
+        "the block went with its only entry, and nothing else moved"
+    );
+    assert_eq!(shown("sole", &sandbox, "work:S")["metadata"], json!({}));
+
+    let refused = exits(
+        "doubled",
+        &sandbox,
+        &["task", "update", "work:D", "--remove-metadata", "a.b"],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(
+        said.contains("cannot remove the metadata key `a.b`")
+            && said.contains("more than once")
+            && said.contains("next:"),
+        "{said}"
+    );
+    assert_eq!(read(&root, "D"), doubled, "a refused removal wrote nothing");
 }

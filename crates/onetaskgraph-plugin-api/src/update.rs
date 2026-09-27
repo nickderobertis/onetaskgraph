@@ -45,6 +45,7 @@ pub struct TaskUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
     /// Keys added or replaced; every other key is kept.
+    // llmlint: ignore[invalid_states_unrepresentable] `metadata_set` and `metadata_remove` are two members because Contract 1 of the `graphql-writeback-quota` project record fixes them by name and type, and onepipeline builds against exactly this shape; the one state they can express that is not an update — one key in both — is refused by `consistent` before any source is read or written, in one wording every source and the engine share. A single map of key to set-or-remove would be the contract's owner's change to make, not this crate's.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub metadata_set: BTreeMap<MetadataKey, Value>,
