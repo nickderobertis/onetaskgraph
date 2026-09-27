@@ -99,13 +99,18 @@ impl Plan {
 
     /// One copy command, the requests the board served for it, and what it reported.
     fn copy(&self, extra: &[&str]) -> (Session, Vec<(String, Value)>, Value) {
-        let before = self.board.served().len();
         let mut arguments = vec!["project", "copy", "plans:P", "--to", "board", "--json"];
         arguments.extend_from_slice(extra);
+        self.measure(&arguments)
+    }
+
+    /// One command, the requests the board served for it, and what it reported.
+    fn measure(&self, arguments: &[&str]) -> (Session, Vec<(String, Value)>, Value) {
+        let before = self.board.served().len();
         let output = self
             .sandbox
             .command()
-            .args(&arguments)
+            .args(arguments)
             .assert()
             .get_output()
             .clone();
@@ -123,7 +128,7 @@ impl Plan {
                 Request::graphql(query, variables, None, None).answered(RateLimit::default()),
             );
         }
-        let report = serde_json::from_str(&stdout(&output)).expect("a copy emits JSON");
+        let report = serde_json::from_str(&stdout(&output)).expect("a command emits JSON");
         (ledger.snapshot(), served, report)
     }
 }
@@ -226,6 +231,62 @@ fn one_member_copy(tasks: usize, changed: usize) -> (Session, Vec<(String, Value
     plan.copy(&["--member", &member])
 }
 
+/// How many mutations one measured command sent.
+fn mutations(served: &[(String, Value)]) -> usize {
+    served
+        .iter()
+        .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+        .count()
+}
+
+/// A plan of `tasks` tasks the board already holds, the task at `changed` holding a claim key
+/// of the kind a settlement removes — and the two targeted updates of that one task: a
+/// settlement naming its status and three keys set and one removed, then the same update
+/// again, when the task already holds every value it names.
+fn one_targeted_update(
+    tasks: usize,
+    changed: usize,
+) -> [(Session, Vec<(String, Value)>, Value); 2] {
+    let plan = Plan::of(tasks);
+    let (_, _, first) = plan.copy(&[]);
+    let target = landed(&first)
+        .into_iter()
+        .find(|(source, _)| source == &format!("plans:T-{changed}"))
+        .map(|(_, destination)| destination)
+        .expect("the copy landed the task");
+    let target = target
+        .as_str()
+        .expect("a qualified destination id")
+        .to_owned();
+    // Setup, not measured: the key a settlement removes, held as a claim would hold it.
+    plan.measure(&[
+        "task",
+        "metadata",
+        "set",
+        &target,
+        "onepipeline.claim",
+        r#"{"run":"r-1"}"#,
+        "--json",
+    ]);
+    let settlement = [
+        "task",
+        "update",
+        &target,
+        "--status",
+        "in-progress",
+        "--metadata",
+        r#"onepipeline.settlement={"outcome":"landed","turns":3}"#,
+        "--metadata",
+        r#"onepipeline.landing="merged""#,
+        "--metadata",
+        r#"onepipeline.change_url="https://example.invalid/pull/7""#,
+        "--remove-metadata",
+        "onepipeline.claim",
+        "--json",
+    ];
+    [plan.measure(&settlement), plan.measure(&settlement)]
+}
+
 #[test]
 fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says() {
     let ten = Plan::of(10);
@@ -304,6 +365,53 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         }
     }
 
+    // (e) and (f): the targeted update of one existing task of the same ten, as a settlement
+    // writes it — its status, three keys set and one removed — and the same update when the
+    // task already holds every value it names. (e) sends fewer requests than the member copy
+    // (c) of one changed task and no more mutations; (f) sends no mutation at all. Neither
+    // reads anything but the one issue, and neither writes its origin.
+    let [
+        (settled, settled_served, settled_report),
+        (repeat_update, repeat_update_served, again),
+    ] = one_targeted_update(10, 3);
+    assert!(
+        settled.total_requests() < of_ten.total_requests()
+            && mutations(&settled_served) <= mutations(&of_ten_served),
+        "the targeted update sent {} requests and {} mutations; the one-member copy (c) sent {} \
+         and {}",
+        settled.total_requests(),
+        mutations(&settled_served),
+        of_ten.total_requests(),
+        mutations(&of_ten_served)
+    );
+    assert_eq!(
+        settled_report["written"],
+        json!(["status", "metadata"]),
+        "{settled_report:#}"
+    );
+    assert_eq!(
+        mutations(&repeat_update_served),
+        0,
+        "{repeat_update_served:#?}"
+    );
+    assert_eq!(again["written"], json!([]), "{again:#}");
+    for (what, served) in [("(e)", &settled_served), ("(f)", &repeat_update_served)] {
+        let issue_reads = served
+            .iter()
+            .filter(|(document, _)| reads_one_issue(document))
+            .count();
+        assert_eq!(
+            issue_reads, 1,
+            "{what} read the issue other than once: {served:#?}"
+        );
+        assert!(
+            served.iter().all(|(document, variables)| per_node(document)
+                && variables.pointer("/input/value/text").is_none()),
+            "{what} sent a request that is not a read or a write of the one issue, or wrote \
+             its origin: {served:#?}"
+        );
+    }
+
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
         rendered(
@@ -317,6 +425,14 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         rendered(
             "(d) the same one-member copy of a project of 3 tasks",
             &of_three,
+        ),
+        rendered(
+            "(e) a targeted update of 1 of those 10 tasks, naming its status, three metadata keys set and one removed",
+            &settled,
+        ),
+        rendered(
+            "(f) the same targeted update again, every value it names already held",
+            &repeat_update,
         ),
     ]
     .join("\n");

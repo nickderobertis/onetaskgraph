@@ -41,3 +41,19 @@ requests per call
     3     609  reading one issue
     1       0  updating an issue
     2       0  writing a board field
+
+(e) a targeted update of 1 of those 10 tasks, naming its status, three metadata keys set and one removed
+requests 3
+node count 203
+
+requests per call
+    1     203  reading one issue
+    1       0  updating an issue
+    1       0  writing a board field
+
+(f) the same targeted update again, every value it names already held
+requests 1
+node count 203
+
+requests per call
+    1     203  reading one issue

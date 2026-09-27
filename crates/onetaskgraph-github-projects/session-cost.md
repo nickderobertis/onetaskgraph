@@ -619,3 +619,40 @@ is no longer asked whether an item is there: every item the copy names is read b
 
 The estimate in `tests/journey/budget.rs` moves with the record, as it is built to, and is
 not restated here.
+
+## The targeted update of one task, and what it costs beside a member copy
+
+A projection's every settlement was a member copy, (c) above: the project item and the
+member, each read for its target and its edges, then the member rewritten whole — title,
+body and state, the origin field, the status field and a `blockedBy` reconciliation —
+whichever field had changed. `task update` (`TaskSource::update_task`) writes one existing
+task's named fields and nothing else, and `tests/fixtures/copy-cost.txt` now records two
+more rows of it, taken by the same test on the same loopback board and in the same two
+quantities — requests and worst-case node count, **not points**:
+
+- **(e)** a targeted update of one of the 10 tasks (a) landed, naming what a settlement
+  names: its status, three metadata keys set and one removed;
+- **(f)** that same update again, when the task already holds every value it names.
+
+|                    | (c) member copy, before | (e) targeted update, after | (f) nothing differs |
+| ------------------ | ----------------------: | -------------------------: | ------------------: |
+| **requests**       |                       9 |                          3 |                   1 |
+| **mutations**      |                       3 |                          2 |                   0 |
+| **node count**     |                    1209 |                        203 |                 203 |
+
+(e) is one read of the issue, one `updateIssue` carrying the body — its visible content and
+its metadata slot together — and one write of the `Status` field. It reads no project item,
+no dependency connection and no board, and it never writes the origin field, because an
+update is of an item whose origin already is what it is. (f) is the read alone: nothing
+differs, so nothing is sent. The test holds both to the record, and asserts on its own that
+(e) sends fewer requests than (c) and no more mutations, that (f) sends no mutation, and that
+each reads the one issue exactly once.
+
+That is the whole engine call, not only the source's half: `Engine::update_task` reads
+nothing of its own — the source answers with the task as its writes left it, the fields it
+wrote and the `delivers` it held before, which is everything the engine reports — so the
+three requests are all the command sends for a task that delivers nothing. A task that does
+deliver something adds the reads and writes of keeping each delivered task in step, exactly
+as `task status set` does. A terminal status adds its close to the same `updateIssue`, and an
+open status crossing from closed reopens in it; a priority that changes is one field write
+more; edges that differ cost the `blockedBy` difference and the reads that find it.
