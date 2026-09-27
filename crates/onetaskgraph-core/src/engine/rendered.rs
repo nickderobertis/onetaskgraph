@@ -444,11 +444,11 @@ impl Regeneration {
                         names,
                         reason: self.unused().map_or_else(
                             || {
-                                "the answers stored beside it were used, and leave these \
-                                 unanswered"
+                                "the stored answers were used and do not answer them: an \
+                                 answer unset falls back to its default, and these have none"
                                     .to_owned()
                             },
-                            ToString::to_string,
+                            |unused| format!("the stored answers were not used because {unused}"),
                         ),
                     });
                 }

@@ -828,6 +828,7 @@ fn a_board_task_from_a_template_holds_its_content_and_provenance_and_no_answer()
 
     let task = plan.task(&id);
     let content = task["content"].as_str().unwrap().to_owned();
+    // llmlint: ignore-block[tests_mirror_real_usage] The criterion is a property of the bytes the board stores for the issue — its body is the rendered content plus a metadata slot holding only the caller's keys and the provenance, and no answer is written anywhere else in it. The binary deliberately never shows that body: `task show` reads the slot back merged with keys the board derives, so no user-facing read can tell what the slot holds or whether an answer landed outside the content. The loopback board is the stand-in for GitHub's own store, read here as a person would read the issue on GitHub.
     let body = plan.board().body(native(&id));
     let body = body.as_str().expect("an issue body");
     let (visible, slot) = slot(body);
@@ -850,12 +851,10 @@ fn a_board_task_from_a_template_holds_its_content_and_provenance_and_no_answer()
         json!(sha256(&content))
     );
     assert!(!body.contains("BACKGROUND-"), "no answer reaches the issue");
-    assert!(
-        !plan
-            .board()
-            .documents()
-            .iter()
-            .any(|sent| sent.contains("addComment")),
+    // llmlint: ignore-end[tests_mirror_real_usage]
+    assert_eq!(
+        plan.json(&["task", "comment", "list", &id])["comments"],
+        json!([]),
         "and no comment carries one"
     );
     let refused = plan.exits(&["task", "answers", &id], 1);
@@ -894,6 +893,7 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
         .as_str()
         .unwrap()
         .to_owned();
+    // llmlint: ignore-block[tests_mirror_real_usage] The criterion is a property of the bytes the board stores for the issue — its body is the rendered content plus a metadata slot holding only the caller's keys and the provenance, and no answer is written anywhere else in it. The binary deliberately never shows that body: `task show` reads the slot back merged with keys the board derives, so no user-facing read can tell what the slot holds or whether an answer landed outside the content. The loopback board is the stand-in for GitHub's own store, read here as a person would read the issue on GitHub.
     let body = plan.board().body(native(&issue));
     let (visible, slot) = slot(body.as_str().unwrap());
     assert_eq!(visible, authored["content"].as_str().unwrap());
@@ -918,12 +918,11 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
         !body.as_str().unwrap().contains("BACKGROUND-"),
         "no answer in the issue"
     );
-    assert!(
-        !plan
-            .board()
-            .documents()
-            .iter()
-            .any(|sent| sent.contains("addComment"))
+    // llmlint: ignore-end[tests_mirror_real_usage]
+    assert_eq!(
+        plan.json(&["task", "comment", "list", &issue])["comments"],
+        json!([]),
+        "no comment carries one"
     );
 
     // Regenerated locally, then copied again: the same issue, updated.
@@ -1121,14 +1120,13 @@ fn documents_are_created_on_both_kinds_of_source_and_their_answers_read_where_ke
         stdout(&plan.exits(&arguments, 0)).trim().to_owned()
     };
     let first = create("Board memo", None);
-    let sent = plan.board().documents().len();
+    let held = |plan: &Plan| plan.json(&["document", "list", "--source", "board"])["items"].clone();
+    let before = held(&plan);
     assert_eq!(create("Board memo, replaced", Some(native(&first))), first);
-    assert!(
-        !plan.board().documents()[sent..]
-            .iter()
-            .any(|document| document.contains("createIssue")
-                || document.contains("addProjectV2ItemById")),
-        "a replacement created an issue"
+    assert_eq!(
+        held(&plan).as_array().map(Vec::len),
+        before.as_array().map(Vec::len),
+        "a replacement created a document"
     );
     assert_eq!(
         plan.json(&["document", "show", &first])["items"][0]["item"]["title"],
@@ -1216,6 +1214,25 @@ fn a_regenerate_overlays_answers_keeps_every_other_field_and_writes_nothing_when
         "{unset}"
     );
     assert_eq!(plan.json(&["task", "answers", &id])["owner"], Value::Null);
+
+    // Unsetting a required answer with no default leaves it unanswered: refused, writing nothing.
+    let file = std::fs::read(plan.task_file(&id)).unwrap();
+    let refused = plan.render(&id, &["--unset", "goal"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let message = stderr(&refused);
+    assert!(
+        message.contains("supply every required answer to regenerate")
+            && message.contains(
+                ": goal unanswered, and the stored answers were used and do not \
+                                answer them"
+            ),
+        "{message}"
+    );
+    assert_eq!(
+        std::fs::read(plan.task_file(&id)).unwrap(),
+        file,
+        "a refused regenerate writes nothing"
+    );
 
     let file = std::fs::read(plan.task_file(&id)).unwrap();
     let unchanged = plan.rendered(&id, &[]);
@@ -1327,7 +1344,12 @@ fn a_board_item_regenerates_from_every_required_answer_and_keeps_its_issue() {
             r#"myapp.keep={"n": 1}"#,
         ],
     );
-    let sent = plan.board().documents().len();
+    let listed = |plan: &Plan| {
+        plan.json(&["task", "list", "--source", "board"])["items"]
+            .as_array()
+            .map(Vec::len)
+    };
+    let before = listed(&plan);
 
     // A board keeps no answers, so none can be the base.
     let refused = plan.exits(
@@ -1365,22 +1387,15 @@ fn a_board_item_regenerates_from_every_required_answer_and_keeps_its_issue() {
         "--no-interactive",
     ]);
     assert_eq!(regenerated["id"], json!(id), "the same issue");
-    assert!(
-        !plan.board().documents()[sent..]
-            .iter()
-            .any(|document| document.contains("createIssue")
-                || document.contains("addProjectV2ItemById")),
-        "no new issue and no new board item"
-    );
-    let (visible, slot) = slot(plan.board().body(native(&id)).as_str().unwrap());
-    assert_eq!(visible, regenerated["body"].as_str().unwrap());
+    assert_eq!(listed(&plan), before, "no new board item");
+    let task = plan.task(&id);
+    assert_eq!(task["content"], regenerated["body"]);
     assert_eq!(
-        slot["onetaskgraph.template"]["body_digest"],
+        task["metadata"]["onetaskgraph.template"]["body_digest"],
         regenerated["body_digest"]
     );
-    // The provenance entry is the one slot entry a regenerate moves: the caller's own stays.
-    assert_eq!(slot["myapp.keep"], json!({"n": 1}), "{slot:#}");
-    assert_eq!(plan.task(&id)["metadata"]["myapp.keep"], json!({"n": 1}));
+    // The provenance entry is the one metadata entry a regenerate moves: the caller's own stays.
+    assert_eq!(task["metadata"]["myapp.keep"], json!({"n": 1}), "{task:#}");
 }
 
 #[test]

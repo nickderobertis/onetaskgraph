@@ -473,8 +473,7 @@ pub enum EngineError {
     /// A regenerate left required variables unanswered, because the answers stored beside the
     /// item could not be used or did not cover them.
     #[error(
-        "supply every required answer to regenerate {id}: {} unanswered, and the stored \
-         answers were not used because {reason}\n\
+        "supply every required answer to regenerate {id}: {} unanswered, and {reason}\n\
          next: answer {} with --var NAME=VALUE or an answers file (--answers FILE), or run \
          interactively to be asked.",
         names.join(", "),
@@ -485,7 +484,8 @@ pub enum EngineError {
         id: String,
         /// Every required variable left unanswered, in declaration order.
         names: Vec<String>,
-        /// Why the stored answers were not the base, or that they were and fell short.
+        /// What became of the stored answers, as a clause: why they were not the base, or
+        /// that they were and did not answer these.
         reason: String,
     },
 
