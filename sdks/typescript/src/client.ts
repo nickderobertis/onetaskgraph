@@ -18,6 +18,7 @@ import type {
   QueryResponseOfQualifiedProject,
   QueryResponseOfQualifiedTask,
   QueryResponseOfSearchHit,
+  Regenerated,
   RenderedTemplate,
   SourceListings,
   StatusCategory,
@@ -26,6 +27,7 @@ import type {
   TaskDetail,
   TaskPrioritySet,
   TaskStatusSet,
+  TemplateAnswers,
   TemplateVariables,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -68,7 +70,36 @@ export type TemplateOptions = { searchPath?: string[] };
 export type TemplateRenderOptions = TemplateOptions & {
   answers?: Record<string, JsonValue>;
   vars?: Record<string, string>;
+  // A loader document's path, naming the template in place of `file`.
+  templateLoader?: string;
 };
+// Which template a create or a render uses: a file (with its search path), or a loader
+// document's path — the JSON a caller states its own resolved template with.
+export type TemplateSourceOptions = TemplateOptions & {
+  template?: string;
+  templateLoader?: string;
+  answers?: Record<string, JsonValue>;
+  vars?: Record<string, string>;
+};
+// What every create names about the item besides its title and project. `body` is written to
+// the binary's standard input and `bodyFile` read by it; neither beside a template, and never
+// a `body` beside `answers`, which would share that one standard input.
+export type CreateOptions = TemplateSourceOptions & {
+  body?: string;
+  bodyFile?: string;
+  labels?: string[];
+  repositories?: string[];
+  metadata?: Record<string, JsonValue>;
+};
+export type TaskCreateOptions = CreateOptions & {
+  status?: StatusCategory;
+  dependsOn?: string[];
+  delivers?: string[];
+};
+export type DocumentCreateOptions = CreateOptions & { id?: string };
+// A regenerate: the template to use in place of the recorded one, answers laid over the stored
+// base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
+export type RenderOptions = TemplateSourceOptions & { unset?: string[]; dryRun?: boolean };
 // A value JSON can carry, and so a value an answers document can hold.
 export type JsonValue =
   | string
@@ -137,6 +168,13 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   search: "QueryResponseOfSearchHit",
   "template variables": "TemplateVariables",
   "template render": "RenderedTemplate",
+  // A created task as `task show` answers with it, and a created document as `document show`.
+  "task create": "TaskDetail",
+  "task render": "Regenerated",
+  "task answers": "TemplateAnswers",
+  "document create": "QueryResponseOfQualifiedDocument",
+  "document render": "Regenerated",
+  "document answers": "TemplateAnswers",
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
@@ -146,7 +184,8 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails. A template verb reads no source at all.
+// fails. A template verb reads no source at all. Of the verbs that create and regenerate from
+// one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
@@ -157,7 +196,10 @@ const partialResponseCommands = new Set(
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
       !command.endsWith(" content set") &&
-      !command.startsWith("template "),
+      !command.startsWith("template ") &&
+      !command.endsWith(" render") &&
+      !command.endsWith(" answers") &&
+      command !== "document create",
   ),
 );
 
@@ -245,6 +287,99 @@ function searchPathFlags(options: TemplateOptions): string[] {
   return flags;
 }
 
+// Refuse anything but a list of strings for one repeated flag, by index so a sparse array's
+// hole is refused rather than skipped.
+function stringList(method: string, name: string, values: unknown): string[] {
+  const list = values === undefined ? [] : values;
+  if (!Array.isArray(list)) {
+    throw new TypeError(`${method}: ${name} is not an array; next: pass a list of strings`);
+  }
+  const checked: string[] = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const value: unknown = list[index];
+    if (typeof value !== "string") {
+      throw new TypeError(
+        `${method}: ${name}[${index}] is not a string; next: pass each entry as a string`,
+      );
+    }
+    checked.push(value);
+  }
+  return checked;
+}
+
+// `vars` as `--var NAME=VALUE` flags, each value refused unless it is the text a command line
+// would take.
+function varFlags(method: string, given: unknown): string[] {
+  // Absent means none; an explicit `null` is not a mapping and is refused below.
+  const vars = given === undefined ? {} : given;
+  const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      `${method}: vars is not a plain object; next: pass a mapping of variable name to text`,
+    );
+  }
+  refuseUncarriedKey(vars as object, "vars", "var", method);
+  const flags: string[] = [];
+  for (const [name, value] of Object.entries(vars as object)) {
+    // Checked rather than interpolated whatever it is: a number or an object would reach the
+    // binary as its string form, which is not the value the caller passed.
+    if (typeof value !== "string") {
+      throw new TypeError(
+        `${method}: vars.${name} is not a string; next: pass the text the command line ` +
+          "would take, or give a typed value in answers",
+      );
+    }
+    flags.push("--var", `${name}=${value}`);
+  }
+  return flags;
+}
+
+// The flags naming a create's or a render's template and its answers, and what goes to
+// standard input: the answers as JSON, or a create's plain `body` — never both.
+function templateSourceArguments(
+  method: string,
+  options: TemplateSourceOptions & { body?: string },
+): { args: string[]; input: string | undefined } {
+  const args: string[] = [];
+  if (options.template !== undefined) args.push("--template", options.template);
+  if (options.templateLoader !== undefined) args.push("--template-loader", options.templateLoader);
+  for (const directory of stringList(method, "searchPath", options.searchPath)) {
+    args.push("--search-path", directory);
+  }
+  args.push(...varFlags(method, options.vars));
+  if (options.answers !== undefined && options.body !== undefined) {
+    throw new TypeError(
+      `${method}: body and answers both go to standard input; next: pass a body without a ` +
+        "template, or answers with one",
+    );
+  }
+  if (options.answers !== undefined) {
+    args.push("--answers", "-");
+    return { args, input: answersDocument(options.answers, method) };
+  }
+  return { args, input: options.body };
+}
+
+// Every flag a create shares, and what goes to standard input.
+function createArguments(
+  method: string,
+  project: string,
+  title: string,
+  options: CreateOptions,
+): { args: string[]; input: string | undefined } {
+  const { args, input } = templateSourceArguments(method, options);
+  args.push("--project", project, "--title", title);
+  if (options.bodyFile !== undefined) args.push("--body-file", options.bodyFile);
+  for (const label of stringList(method, "labels", options.labels)) args.push("--label", label);
+  for (const repository of stringList(method, "repositories", options.repositories)) {
+    args.push("--repository", repository);
+  }
+  for (const [key, value] of Object.entries(options.metadata ?? {})) {
+    args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+  }
+  return { args, input };
+}
+
 // The template path, refused unless it is one: anything but a string would reach the binary as
 // its string form, an empty one names no file, and one opening with `-` would be read as an
 // option rather than as the file the caller named.
@@ -263,7 +398,12 @@ function templateFile(method: string, file: unknown): string {
 // an index past the largest an array has; for a mapping a symbol or a non-enumerable key,
 // which `Object.entries` skips. Either would otherwise be dropped in silence, and the binary
 // sent less than was handed over.
-function refuseUncarriedKey(value: object, path: string, entry: string): void {
+function refuseUncarriedKey(
+  value: object,
+  path: string,
+  entry: string,
+  method = "templateRender",
+): void {
   const array = Array.isArray(value) ? value : undefined;
   const uncarried = Reflect.ownKeys(value).find((key) => {
     if (typeof key === "symbol") return true;
@@ -274,7 +414,7 @@ function refuseUncarriedKey(value: object, path: string, entry: string): void {
   });
   if (uncarried !== undefined) {
     throw new TypeError(
-      `templateRender: ${path} has the key ${String(uncarried)}, which is not sent; next: ` +
+      `${method}: ${path} has the key ${String(uncarried)}, which is not sent; next: ` +
         `give every ${entry} an enumerable string key, and an array nothing but its entries`,
     );
   }
@@ -287,7 +427,7 @@ function refuseUncarriedKey(value: object, path: string, entry: string): void {
 // passed. What is serialised is a copy built from the values just checked, never the caller's
 // own objects, so nothing the check did not read — a `toJSON` of an array's own, say — can
 // change what is sent.
-function answersDocument(answers: Record<string, JsonValue>): string {
+function answersDocument(answers: Record<string, JsonValue>, method = "templateRender"): string {
   const within = new Set<object>();
   const copy = (value: unknown, path: string): JsonValue => {
     if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -297,7 +437,7 @@ function answersDocument(answers: Record<string, JsonValue>): string {
       const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
       if (plain && !within.has(value)) {
         within.add(value);
-        refuseUncarriedKey(value, `answers${path}`, "answer");
+        refuseUncarriedKey(value, `answers${path}`, "answer", method);
         let copied: JsonValue;
         if (Array.isArray(value)) {
           // By index rather than by entry, so a hole in a sparse array is read as the
@@ -315,7 +455,7 @@ function answersDocument(answers: Record<string, JsonValue>): string {
       }
     }
     throw new TypeError(
-      `templateRender: answers${path} is not a JSON value; next: pass strings, finite ` +
+      `${method}: answers${path} is not a JSON value; next: pass strings, finite ` +
         "numbers, booleans, null, arrays and plain objects, with no cycle",
     );
   };
@@ -325,10 +465,37 @@ function answersDocument(answers: Record<string, JsonValue>): string {
     answers !== null && typeof answers === "object" ? Object.getPrototypeOf(answers) : undefined;
   if (prototype !== Object.prototype && prototype !== null) {
     throw new TypeError(
-      "templateRender: answers is not a plain object; next: pass a mapping of variable name to value",
+      `${method}: answers is not a plain object; next: pass a mapping of variable name to value`,
     );
   }
   return JSON.stringify(copy(answers, ""));
+}
+
+// A `template` verb's file operand, left out when a loader document names the template instead.
+function templateOperand(
+  method: string,
+  file: unknown,
+  options: { templateLoader?: string },
+): string[] {
+  if (file === undefined && options.templateLoader !== undefined) return [];
+  return [templateFile(method, file)];
+}
+
+function loaderFlags(options: { templateLoader?: string }): string[] {
+  return options.templateLoader === undefined ? [] : ["--template-loader", options.templateLoader];
+}
+
+// One regenerate's command, arguments and standard input.
+function renderInvocation(
+  command: string,
+  method: string,
+  id: string,
+  options: RenderOptions,
+): [string, string[], string | undefined] {
+  const { args, input } = templateSourceArguments(method, options);
+  for (const name of stringList(method, "unset", options.unset)) args.push("--unset", name);
+  if (options.dryRun) args.push("--dry-run");
+  return [command, [id, ...args], input];
 }
 
 function copyFlags(options: CopyOptions): string[] {
@@ -499,42 +666,75 @@ export class OnetaskgraphClient {
     return this.run("search", args);
   }
 
-  async templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
+  // `file` may be left out when `templateLoader` names the template in its place.
+  async templateVariables(
+    file?: string,
+    options: TemplateOptions & { templateLoader?: string } = {},
+  ): Promise<TemplateVariables> {
     return this.run("template variables", [
-      templateFile("templateVariables", file),
+      ...templateOperand("templateVariables", file, options),
       ...searchPathFlags(options),
+      ...loaderFlags(options),
     ]);
   }
   // The answers go over standard input as JSON, which is YAML, so no file is written for them.
   async templateRender(
-    file: string,
+    file?: string,
     options: TemplateRenderOptions = {},
   ): Promise<RenderedTemplate> {
-    const args = [templateFile("templateRender", file), ...searchPathFlags(options)];
-    // Absent means none; an explicit `null` is not a mapping and is refused below.
-    const vars = options.vars === undefined ? {} : options.vars;
-    const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(
-        "templateRender: vars is not a plain object; next: pass a mapping of variable name to text",
-      );
-    }
-    refuseUncarriedKey(vars, "vars", "var");
-    for (const [name, value] of Object.entries(vars)) {
-      // Checked rather than interpolated whatever it is: a number or an object would reach the
-      // binary as its string form, which is not the value the caller passed.
-      if (typeof value !== "string") {
-        throw new TypeError(
-          `templateRender: vars.${name} is not a string; next: pass the text the command line ` +
-            "would take, or give a typed value in answers",
-        );
-      }
-      args.push("--var", `${name}=${value}`);
-    }
+    const args = [
+      ...templateOperand("templateRender", file, options),
+      ...searchPathFlags(options),
+      ...loaderFlags(options),
+      ...varFlags("templateRender", options.vars),
+    ];
     if (options.answers === undefined) return this.run("template render", args);
     const document = answersDocument(options.answers);
     args.push("--answers", "-");
     return this.run("template render", args, document);
+  }
+
+  // Create a task from a template, a loader document, `bodyFile` or `body`; it answers as
+  // `taskShow` does, and records `onetaskgraph.template` provenance when rendered.
+  async taskCreate(
+    source: string,
+    project: string,
+    title: string,
+    options: TaskCreateOptions = {},
+  ): Promise<TaskDetail> {
+    const { args, input } = createArguments("taskCreate", project, title, options);
+    if (options.status !== undefined) args.push("--status", options.status);
+    for (const id of stringList("taskCreate", "dependsOn", options.dependsOn)) {
+      args.push("--depends-on", id);
+    }
+    for (const id of stringList("taskCreate", "delivers", options.delivers)) {
+      args.push("--delivers", id);
+    }
+    return this.run("task create", [source, ...args], input);
+  }
+  // Regenerate one task in place from its template, over its stored answers.
+  async taskRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
+    return this.run(...renderInvocation("task render", "taskRender", id, options));
+  }
+  taskAnswers(id: string): Promise<TemplateAnswers> {
+    return this.run("task answers", [id]);
+  }
+  // Create — or, with `id` naming one the source holds, replace — a project document.
+  async documentCreate(
+    source: string,
+    project: string,
+    title: string,
+    options: DocumentCreateOptions = {},
+  ): Promise<QueryResponseOfQualifiedDocument> {
+    const { args, input } = createArguments("documentCreate", project, title, options);
+    if (options.id !== undefined) args.push("--id", options.id);
+    return this.run("document create", [source, ...args], input);
+  }
+  async documentRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
+    return this.run(...renderInvocation("document render", "documentRender", id, options));
+  }
+  documentAnswers(id: string): Promise<TemplateAnswers> {
+    return this.run("document answers", [id]);
   }
 
   private run<T>(command: string, args: string[], input?: string): Promise<T> {

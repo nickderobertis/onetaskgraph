@@ -8495,6 +8495,47 @@ export const runtimeSchemas = {
     "title": "QueryResponse",
     "type": "object"
   },
+  "Regenerated": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task render` and `document render` answer with.",
+    "properties": {
+      "body": {
+        "description": "The rendered content.",
+        "type": "string"
+      },
+      "body_digest": {
+        "description": "The SHA-256 of the rendered content: what its provenance now records.",
+        "type": "string"
+      },
+      "changed": {
+        "description": "Whether its content, its provenance or its stored answers differ from what it held —\nwhat a write changed, or for a dry run what one would change.",
+        "type": "boolean"
+      },
+      "digest": {
+        "description": "The chain digest it rendered with.",
+        "type": "string"
+      },
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The item regenerated."
+      }
+    },
+    "required": [
+      "id",
+      "digest",
+      "body_digest",
+      "changed",
+      "body"
+    ],
+    "title": "Regenerated",
+    "type": "object"
+  },
   "RenderedTemplate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "A rendered template: what `onetaskgraph template render` answers with.",
@@ -12055,6 +12096,43 @@ export const runtimeSchemas = {
       "delivered"
     ],
     "title": "TaskStatusSet",
+    "type": "object"
+  },
+  "TemplateAnswers": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": true,
+    "description": "What `task answers` and `document answers` answer with: the resolved answers an item was\nlast rendered from — defaults applied, `null` for an optional variable given neither — by\nvariable name, exactly as its source keeps them.",
+    "title": "TemplateAnswers",
+    "type": "object"
+  },
+  "TemplateProvenance": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a task or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
+    "properties": {
+      "answers_digest": {
+        "description": "`sha256:` and the lowercase hex SHA-256 of the resolved answers — defaults applied — as\ncanonical JSON: keys sorted, no insignificant whitespace, UTF-8.",
+        "type": "string"
+      },
+      "body_digest": {
+        "description": "`sha256:` and the lowercase hex SHA-256 of the item's content exactly as written.",
+        "type": "string"
+      },
+      "digest": {
+        "description": "The chain digest the content was rendered with: `sha256:` and 64 lowercase hex digits.",
+        "type": "string"
+      },
+      "template": {
+        "description": "The template it was rendered from: the absolute path of a template file, or a loader\ndocument's `reference` verbatim. Recorded whole, whatever its length.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "template",
+      "digest",
+      "body_digest",
+      "answers_digest"
+    ],
+    "title": "TemplateProvenance",
     "type": "object"
   },
   "TemplateVariable": {
