@@ -49,7 +49,9 @@ impl Engine {
     ///
     /// The source is asked once, and nothing else of it is read: a field already holding the
     /// requested value is sent no write, and an update in which nothing differs writes nothing
-    /// at all. `update.depends_on` may name its far ends qualified; one in this task's own
+    /// at all — an update naming no field included, which answers the task as its source reads
+    /// it and re-evaluates nothing; the CLI refuses that one as a usage error before it gets
+    /// here, a library caller is answered. `update.depends_on` may name its far ends qualified; one in this task's own
     /// source reaches the source as its native id, and each edge's `from` is this task.
     ///
     /// # Errors

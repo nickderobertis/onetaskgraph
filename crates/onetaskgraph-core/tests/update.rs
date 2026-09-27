@@ -467,6 +467,32 @@ async fn an_update_the_task_already_holds_writes_nothing_and_says_so() {
 }
 
 #[tokio::test]
+async fn an_update_naming_no_field_answers_the_task_and_writes_and_re_evaluates_nothing() {
+    for kind in KINDS {
+        let store = Store::new(kind);
+        let before = store.task("T-1").await;
+        let file = store.file();
+        let ticket = store.task("T-9").await;
+        let answer = store
+            .update(&TaskUpdate::default())
+            .await
+            .expect("an empty update is answered, not refused");
+        assert!(answer.written.is_empty(), "{kind:?}: {:?}", answer.written);
+        assert!(
+            answer.delivered.is_empty(),
+            "{kind:?}: {:?}",
+            answer.delivered
+        );
+        assert_eq!(answer.task.title, before.title, "{kind:?}");
+        assert_eq!(answer.task.metadata, before.metadata, "{kind:?}");
+        assert_eq!(store.calls(), vec!["update_task"], "{kind:?}");
+        assert_eq!(store.task("T-1").await, before, "{kind:?}");
+        assert_eq!(store.file(), file, "{kind:?}: the file was rewritten");
+        assert_eq!(store.task("T-9").await, ticket, "{kind:?}");
+    }
+}
+
+#[tokio::test]
 async fn one_changed_field_among_several_unchanged_is_the_only_one_reported_written() {
     for kind in KINDS {
         let store = Store::new(kind);
