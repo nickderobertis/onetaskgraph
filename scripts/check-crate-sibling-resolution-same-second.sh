@@ -45,7 +45,6 @@ mkdir -p "$scratch/shim" "$scratch/index" || fatal "could not create $scratch's 
   "check \$TMPDIR permissions, then rerun"
 failures=0
 
-# 1. The registry, asked directly for a file it serves.
 printf 'the index as last written\n' > "$scratch/index/entry" || fatal \
   "could not write the file the registry is asked for" "check \$TMPDIR permissions, then rerun"
 python3 "$ROOT/scripts/loopback-crate-registry.py" "$scratch/port" "$scratch/index" > "$scratch/server.log" 2>&1 &
@@ -59,7 +58,12 @@ done
   "scripts/loopback-crate-registry.py reported no port within 30s. It said:
 $(sed 's/^/    /' "$scratch/server.log")" \
   "run 'bash scripts/check-loopback-registries.sh', which drives that launcher's start-up, and repair what it names"
-if ! answer="$(PORT="$(cat "$scratch/port")" python3 - <<'PY' 2>&1
+port="$(cat "$scratch/port")"
+case $port in
+  '' | *[!0-9]*) fatal "scripts/loopback-crate-registry.py reported '$port' where a port number belongs" \
+    "report this — $scratch/port is written by that launcher and nothing else" ;;
+esac
+if ! answer="$(PORT="$port" python3 - <<'PY' 2>&1
 import os
 import urllib.error
 import urllib.request
@@ -69,13 +73,18 @@ want = b"the index as last written\n"
 with urllib.request.urlopen(url, timeout=10) as plain:
     if plain.headers.get("Last-Modified") is not None:
         raise SystemExit(f"a plain request was answered with Last-Modified: {plain.headers['Last-Modified']}")
-request = urllib.request.Request(url, headers={"If-Modified-Since": "Fri, 31 Dec 9999 23:59:59 GMT"})
-try:
-    with urllib.request.urlopen(request, timeout=10) as conditional:
-        if conditional.status != 200 or conditional.read() != want:
-            raise SystemExit(f"a conditional request was answered {conditional.status} without the file as written")
-except urllib.error.HTTPError as refused:
-    raise SystemExit(f"a request carrying If-Modified-Since was answered {refused.code} rather than with the file")
+for method, body in (("GET", want), ("HEAD", b"")):
+    request = urllib.request.Request(
+        url, method=method, headers={"If-Modified-Since": "Fri, 31 Dec 9999 23:59:59 GMT"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as conditional:
+            if conditional.headers.get("Last-Modified") is not None:
+                raise SystemExit(f"a conditional {method} was answered with Last-Modified")
+            if conditional.status != 200 or conditional.read() != body:
+                raise SystemExit(f"a conditional {method} was answered {conditional.status} without the file as written")
+    except urllib.error.HTTPError as refused:
+        raise SystemExit(f"a {method} carrying If-Modified-Since was answered {refused.code} rather than with the file")
 PY
 )"; then
   echo "check-crate-sibling-resolution-same-second: FAILED (the registry asked directly): $answer" >&2
@@ -112,8 +121,7 @@ if sys.argv and os.path.basename(sys.argv[0]) == "loopback-crate-registry.py":
     http.server.os = _PinnedOs()
 PY
 
-# 2. The real check, with every file its registry serves read as modified in one second.
-#    PYTHONPATH is this shim alone, so nothing the caller's environment names is imported.
+# PYTHONPATH is this shim alone, so nothing the caller's environment names is imported.
 record="$scratch/pinned"
 if output="$(PYTHONPATH="$scratch/shim" \
   ONETASKGRAPH_PINNED_MTIME_RECORD="$record" \
