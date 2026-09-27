@@ -12978,6 +12978,55 @@ async fn a_contradictory_update_or_an_absent_task_writes_nothing() {
 }
 
 #[tokio::test]
+async fn an_update_this_board_cannot_carry_is_refused_by_name_and_writes_nothing() {
+    // A document's title and a priority on a board with no priority_mapping are refused
+    // before the item is read. Closing a draft item, which has no open or closed state, is
+    // refused after the one read that shows it is a draft, and sends no mutation.
+    let fixture = update_board(settled_task());
+    for (update, names) in [
+        (
+            TaskUpdate {
+                title: Some(format!("{DESIGN_TITLE_PREFIX}a plan")),
+                ..TaskUpdate::default()
+            },
+            "retitle it",
+        ),
+        (
+            TaskUpdate {
+                priority: Some(Priority::High),
+                ..TaskUpdate::default()
+            },
+            "priority_mapping",
+        ),
+    ] {
+        let error = source(&fixture)
+            .update_task(&id("I_1"), &update)
+            .await
+            .expect_err("a field this board cannot carry");
+        let SourceError::Refused { message } = &error else {
+            panic!("answered as {error:?}");
+        };
+        assert!(message.contains(names), "{message}");
+    }
+    assert!(
+        fixture.documents().is_empty(),
+        "refused before anything is read"
+    );
+
+    let fixture = update_board(Item::draft("I_1", "a draft").status("Todo"));
+    let error = source(&fixture)
+        .update_task(&id("I_1"), &settlement(StatusCategory::Done, "done"))
+        .await
+        .expect_err("a draft has no closed state");
+    let SourceError::Refused { message } = &error else {
+        panic!("answered as {error:?}");
+    };
+    assert!(message.contains("draft items"), "{message}");
+    assert!(fixture.seen().is_empty(), "{:#?}", fixture.seen());
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("Todo"));
+}
+
+#[tokio::test]
 async fn a_slot_spelled_another_way_is_kept_byte_for_byte_by_an_update_that_changes_nothing() {
     // A person, or another tool, spelled this slot with its own whitespace. It holds exactly
     // what the update names, so nothing is sent — and when the update changes only the

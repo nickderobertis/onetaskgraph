@@ -2356,6 +2356,60 @@ async fn a_plugin_whose_handshake_predates_the_targeted_update_is_updated_throug
 }
 
 #[tokio::test]
+async fn a_targeted_update_naming_what_the_handshake_did_not_declare_is_refused_unsent() {
+    // A plugin that declares `targeted_updates` but lists no status category past the first
+    // vocabulary, holds no priority and does not declare `task_updates` is not sent an
+    // update naming any of those.
+    let (source, heard) = recording(vec![json!({
+        "protocol_version": 2, "kind": "later", "capabilities": capabilities(),
+        "writes": "supported", "targeted_updates": true
+    })]);
+    let source = source.expect("the handshake completes");
+    let id = NativeId::from("T-1");
+    for (update, names) in [
+        (
+            onetaskgraph_plugin_api::TaskUpdate {
+                status: Some(Status {
+                    category: StatusCategory::Queued,
+                    name: "Queued".to_owned(),
+                }),
+                ..onetaskgraph_plugin_api::TaskUpdate::default()
+            },
+            "status category queued",
+        ),
+        (
+            onetaskgraph_plugin_api::TaskUpdate {
+                priority: Some(onetaskgraph_plugin_api::Priority::High),
+                ..onetaskgraph_plugin_api::TaskUpdate::default()
+            },
+            "priority",
+        ),
+        (
+            onetaskgraph_plugin_api::TaskUpdate {
+                delivers: Some(Vec::new()),
+                ..onetaskgraph_plugin_api::TaskUpdate::default()
+            },
+            "an update naming delivers",
+        ),
+    ] {
+        let error = source
+            .update_task(&id, &update)
+            .await
+            .expect_err("never sent the method");
+        let SourceError::Refused { message } = &error else {
+            panic!("answered as {error:?}");
+        };
+        assert!(message.contains(names), "{message}");
+    }
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, ["initialize"], "{heard:?}");
+}
+
+#[tokio::test]
 async fn a_targeted_update_answered_for_another_task_is_malformed() {
     let handshake = json!({"protocol_version": 2, "kind": "later", "capabilities": capabilities(),
                            "writes": "supported", "targeted_updates": true});

@@ -686,8 +686,17 @@ fn a_board_item_in_no_priority_costs_its_update_one_read_of_the_boards_fields() 
     sandbox.project_document(&document(&json!({
         SOURCE: {"plugin": "github-projects", "config": config}
     })));
-    board.assign_priority("T-1", None);
     let id = qualified(SOURCE, "T-1");
+    answered(
+        "board",
+        &sandbox,
+        &["--json", "task", "priority", "set", &id, "none"],
+    );
+    assert_eq!(
+        board.priority("T-1"),
+        None,
+        "the item is in no Priority option"
+    );
     let item_reads = board.board_item_reads().len();
 
     let from = board.served().len();
