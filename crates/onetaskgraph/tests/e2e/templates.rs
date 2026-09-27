@@ -141,14 +141,32 @@ fn variables_lists_the_declared_set_merged_down_the_chain_with_its_digest() {
     );
     assert!(text.status.success(), "{}", stderr(&text));
     let text = stdout(&text);
+    let digest = described["digest"].as_str().expect("a digest");
+    assert_eq!(
+        text,
+        format!(
+            "template:  task.md\n\
+             digest:    {digest}\n\
+             \n\
+             title  string        required          task.md  What the task is called\n\
+             count  integer       required          task.md  How many of it\n\
+             steps  list<string>  required          task.md  What to do, in order\n\
+             notes  text          optional          task.md  Anything else\n\
+             owner  string        default \"nobody\"  base.md  Who owns it\n"
+        )
+    );
+
+    // A template declaring nothing says so rather than printing an empty table.
+    let plain = sandbox.project().join("plain.md");
+    std::fs::write(&plain, "---\nonetaskgraph_template: 1\n---\nplain\n").expect("written");
+    let output = run(&sandbox, &["template", "variables", path(&plain)]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
     assert!(
-        text.contains(described["digest"].as_str().expect("a digest")),
+        text.starts_with("template:  plain.md\ndigest:    sha256:"),
         "{text}"
     );
-    assert!(
-        text.contains("owner") && text.contains("default \"nobody\"") && text.contains("base.md"),
-        "{text}"
-    );
+    assert!(text.ends_with("\n\n(it declares no variables)\n"), "{text}");
 }
 
 #[test]
@@ -510,6 +528,74 @@ fn an_interactive_render_without_a_terminal_is_refused_naming_the_way_out_and_ne
 }
 
 #[test]
+fn answers_on_standard_input_that_are_not_text_are_refused_with_exit_two() {
+    let sandbox = Sandbox::new();
+    let (task, library) = chain(&sandbox);
+    let output = sandbox
+        .command()
+        .args([
+            "template",
+            "render",
+            path(&task),
+            "--search-path",
+            path(&library),
+            "--answers",
+            "-",
+            "--no-interactive",
+        ])
+        .write_stdin(vec![0xff, 0xfe, 0x00])
+        .output()
+        .expect("the binary runs");
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(2), "{problem}");
+    assert!(
+        problem.contains("--answers -: could not read the answers from standard input"),
+        "{problem}"
+    );
+    assert!(output.stdout.is_empty());
+}
+
+/// A reader that is gone, the way `onetaskgraph template render … > /dev/full` ends.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_rendered_body_that_cannot_be_written_exits_one_naming_it() {
+    let sandbox = Sandbox::new();
+    let (task, library) = chain(&sandbox);
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("/dev/full exists on Linux");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .current_dir(sandbox.project())
+        .env("XDG_CONFIG_HOME", sandbox.config_home())
+        .args([
+            "template",
+            "render",
+            path(&task),
+            "--search-path",
+            path(&library),
+            "--var",
+            "title=t",
+            "--var",
+            "count=1",
+            "--var",
+            "steps=[a]",
+            "--no-interactive",
+        ])
+        .stdout(std::process::Stdio::from(full))
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("the binary runs");
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{problem}");
+    assert!(
+        problem.contains("could not write the rendered template"),
+        "{problem}"
+    );
+    assert!(!problem.contains("panicked"), "{problem}");
+}
+
+#[test]
 fn an_undeclared_name_fails_the_render_naming_the_name_and_the_file() {
     let sandbox = Sandbox::new();
     let library = sandbox.subdirectory("library");
@@ -677,9 +763,73 @@ variables:\n  \
         assert!(output.stdout.is_empty());
     }
 
+    /// A terminal that hangs up mid-prompt: the render fails, and nothing is rendered.
+    #[test]
+    fn a_prompt_whose_terminal_hangs_up_fails_rather_than_rendering() {
+        let sandbox = Sandbox::new();
+        let task = sandbox.project().join("prompted.md");
+        std::fs::write(&task, PROMPTED).expect("the template");
+        let (master, terminal) = pseudo_terminal();
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        for (variable, _) in std::env::vars() {
+            if variable.starts_with("ONETASKGRAPH_") {
+                command.env_remove(variable);
+            }
+        }
+        let child = command
+            .current_dir(sandbox.project())
+            .env("XDG_CONFIG_HOME", sandbox.config_home())
+            .env_remove("HOME")
+            .args(["template", "render", path(&task)])
+            .stdin(terminal.try_clone().expect("a second handle"))
+            .stderr(terminal)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the binary starts");
+        drop(command);
+
+        // The one handle on the terminal's own side reads until the first question is on the
+        // screen and is then dropped — a hang-up, as when the window a person typed in closes.
+        let reader = std::thread::spawn(move || {
+            let mut master = master;
+            let mut screen = String::new();
+            let mut buffer = [0u8; 4096];
+            while !screen.contains("title (string, required): The title") {
+                match master.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => screen.push_str(&String::from_utf8_lossy(&buffer[..read])),
+                }
+            }
+            screen
+        });
+
+        let screen = reader.join().expect("the reader ends");
+        assert!(screen.contains("title (string, required)"), "{screen}");
+        let output = child.wait_with_output().expect("the binary exits");
+        // 1, not a panic's 101: the failure is reported, to wherever it can still go.
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a prompt that cannot be answered fails"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "nothing is rendered from half the answers"
+        );
+    }
+
     /// A fresh pseudo-terminal: the side this test holds, and the side a child is handed.
     fn pseudo_terminal() -> (std::fs::File, std::fs::File) {
-        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("a pseudo-terminal");
+        // Close-on-exec, or a child another test spawns meanwhile inherits this side, holds it
+        // open, and a hang-up here never reaches this test's own child.
+        #[cfg(target_os = "linux")]
+        let flags = OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC;
+        #[cfg(not(target_os = "linux"))]
+        let flags = OpenptFlags::RDWR | OpenptFlags::NOCTTY;
+        let master = openpt(flags).expect("a pseudo-terminal");
+        #[cfg(not(target_os = "linux"))]
+        rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("close-on-exec");
         grantpt(&master).expect("granted");
         unlockpt(&master).expect("unlocked");
         let name = ptsname(&master, Vec::new()).expect("its name");

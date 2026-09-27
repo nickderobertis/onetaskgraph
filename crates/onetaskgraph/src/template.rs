@@ -45,7 +45,8 @@ pub(crate) fn run(
         }
         TemplateCommand::Render(args) => match render_template(out, loaded, args) {
             Err(Refusal::Answers(message)) => {
-                eprintln!("onetaskgraph: {message}");
+                // Best effort, as `fail` writes: the exit code carries the refusal regardless.
+                let _ = writeln!(io::stderr(), "onetaskgraph: {message}");
                 Ok(EXIT_USAGE)
             }
             Err(Refusal::Failed(failure)) => Err(failure),

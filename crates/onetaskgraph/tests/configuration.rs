@@ -2133,3 +2133,71 @@ fn interactive_is_set_at_every_layer_in_the_stores_precedence_and_reported_with_
         stderr(&refused)
     );
 }
+
+/// The README's own spelling of the `interactive` setting — its line in the example document
+/// and its row in the environment table — driven through the binary, so the prose cannot name
+/// a key or a variable the configuration layer does not read. The flags are held by the
+/// command-surface reconciliation, which reads `--help`.
+#[test]
+fn the_readme_spells_the_interactive_setting_as_the_binary_reads_it() {
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
+    )
+    .expect("the README is readable");
+    let configure = readme
+        .split_once("## Configure")
+        .expect("a Configure section")
+        .1;
+    let document_line = configure
+        .lines()
+        .find(|line| line.starts_with("interactive:"))
+        .expect("the example document sets `interactive`");
+    let document_value = document_line
+        .trim_start_matches("interactive:")
+        .split('#')
+        .next()
+        .expect("a value")
+        .trim();
+    let row = configure
+        .lines()
+        .find(|line| line.ends_with("| top-level `interactive` |"))
+        .expect("the environment table has a row for `interactive`");
+    let (variable, value) = row
+        .trim_start_matches("| `")
+        .split_once('`')
+        .expect("a variable in backticks")
+        .0
+        .split_once('=')
+        .expect("VARIABLE=value");
+
+    let sandbox = Sandbox::new();
+    let document = sandbox.project_document(&format!(
+        "{}\n",
+        document_line.split('#').next().unwrap_or("").trim_end()
+    ));
+    let output = sandbox
+        .command()
+        .args(["config", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let from_document = setting(&shown(&output), "interactive").clone();
+    assert_eq!(from_document["value"].to_string(), document_value);
+    assert_eq!(
+        from_document["origin"]["path"],
+        document.to_string_lossy().to_string()
+    );
+
+    let output = sandbox
+        .command()
+        .env(variable, value)
+        .args(["config", "show", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let from_environment = setting(&shown(&output), "interactive").clone();
+    assert_eq!(from_environment["value"].to_string(), value);
+    assert_eq!(from_environment["origin"]["variable"], variable);
+}

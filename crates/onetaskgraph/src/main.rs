@@ -103,8 +103,11 @@ async fn main() -> ExitCode {
 }
 
 /// Report `message` on stderr and exit with `code`.
+///
+/// Best effort, never a panic: a standard error that has gone away — the terminal a prompt was
+/// on hung up — cannot be told why, and the exit code still says the run failed.
 fn fail(message: &str, code: u8) -> ExitCode {
-    eprintln!("onetaskgraph: {message}");
+    let _ = writeln!(io::stderr(), "onetaskgraph: {message}");
     ExitCode::from(code)
 }
 
