@@ -44,8 +44,8 @@ pub struct TaskUpdate {
     /// The task's priority; `none` clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
+    // llmlint: ignore-block[invalid_states_unrepresentable] `metadata_set` and `metadata_remove` are two members because Contract 1 of the `graphql-writeback-quota` project record fixes them by name and type, and onepipeline builds against exactly this shape; the one state they can express that is not an update — one key in both — is refused by `consistent` before any source is read or written, in one wording every source and the engine share. A single map of key to set-or-remove would be the contract's owner's change to make, not this crate's.
     /// Keys added or replaced; every other key is kept.
-    // llmlint: ignore[invalid_states_unrepresentable] `metadata_set` and `metadata_remove` are two members because Contract 1 of the `graphql-writeback-quota` project record fixes them by name and type, and onepipeline builds against exactly this shape; the one state they can express that is not an update — one key in both — is refused by `consistent` before any source is read or written, in one wording every source and the engine share. A single map of key to set-or-remove would be the contract's owner's change to make, not this crate's.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub metadata_set: BTreeMap<MetadataKey, Value>,
@@ -54,6 +54,7 @@ pub struct TaskUpdate {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub metadata_remove: BTreeSet<MetadataKey>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Replaces the list; the engine keeps each ticket's `delivered_by` in step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivers: Option<Vec<TaskRef>>,
@@ -303,12 +304,12 @@ pub struct TaskUpdateOutcome {
     /// The task as this source reads it once the update landed.
     pub task: Task,
     /// The fields this source actually wrote — empty when nothing differed, and never a field
-    /// the update did not name.
-    #[serde(default)]
+    /// the update did not name. Required on the wire: an answer that leaves it out has not said
+    /// what it wrote, which is not the same as having written nothing.
     pub written: BTreeSet<UpdatedField>,
     /// The task's [`Task::delivers`] as this source held it before the update, which is the
-    /// list a named `delivers` replaced.
-    #[serde(default)]
+    /// list a named `delivers` replaced. Required on the wire, for the reason `written` is: an
+    /// answer leaving it out would hide every delivered task the update dropped.
     pub delivers_before: Vec<TaskRef>,
 }
 

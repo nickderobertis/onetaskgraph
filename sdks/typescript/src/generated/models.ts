@@ -6636,15 +6636,17 @@ export type UpdatedField = ("title" | "content" | "status" | "priority" | "metad
 export interface TaskUpdateOutcome {
 /**
  * The task's [`Task::delivers`] as this source held it before the update, which is the
- * list a named `delivers` replaced.
+ * list a named `delivers` replaced. Required on the wire, for the reason `written` is: an
+ * answer leaving it out would hide every delivered task the update dropped.
  */
-delivers_before?: TaskRef[]
+delivers_before: TaskRef[]
 task: Task
 /**
  * The fields this source actually wrote — empty when nothing differed, and never a field
- * the update did not name.
+ * the update did not name. Required on the wire: an answer that leaves it out has not said
+ * what it wrote, which is not the same as having written nothing.
  */
-written?: UpdatedField[]
+written: UpdatedField[]
 [k: string]: any
 }
 /**

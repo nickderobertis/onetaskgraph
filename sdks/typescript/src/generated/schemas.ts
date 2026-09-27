@@ -12688,8 +12688,7 @@ export const runtimeSchemas = {
     "description": "What a source answers a [`TaskUpdate`] of a task it holds with.\n\nEverything the engine reports about the call is read off this, so the engine sends no read\nof its own before or after it: `task` is what it answers with, `written` is what it says\nwas written, and `delivers_before` is what tells it which delivered tasks the update\ndropped.",
     "properties": {
       "delivers_before": {
-        "default": [],
-        "description": "The task's [`Task::delivers`] as this source held it before the update, which is the\nlist a named `delivers` replaced.",
+        "description": "The task's [`Task::delivers`] as this source held it before the update, which is the\nlist a named `delivers` replaced. Required on the wire, for the reason `written` is: an\nanswer leaving it out would hide every delivered task the update dropped.",
         "items": {
           "$ref": "#/$defs/TaskRef"
         },
@@ -12700,8 +12699,7 @@ export const runtimeSchemas = {
         "description": "The task as this source reads it once the update landed."
       },
       "written": {
-        "default": [],
-        "description": "The fields this source actually wrote — empty when nothing differed, and never a field\nthe update did not name.",
+        "description": "The fields this source actually wrote — empty when nothing differed, and never a field\nthe update did not name. Required on the wire: an answer that leaves it out has not said\nwhat it wrote, which is not the same as having written nothing.",
         "items": {
           "$ref": "#/$defs/UpdatedField"
         },
@@ -12710,7 +12708,9 @@ export const runtimeSchemas = {
       }
     },
     "required": [
-      "task"
+      "task",
+      "written",
+      "delivers_before"
     ],
     "title": "TaskUpdateOutcome",
     "type": "object"

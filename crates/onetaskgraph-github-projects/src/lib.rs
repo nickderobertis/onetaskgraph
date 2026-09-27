@@ -4895,7 +4895,14 @@ impl GitHubProjectsSource {
             Some(content) => with_content(&held, content)?,
             None => held.clone(),
         };
-        let body = with_slot(&content, &slot)?;
+        // A slot holding what it held is kept byte for byte, compared as JSON rather than as
+        // the body's bytes, as a metadata write compares it: a slot a person spelled with
+        // other whitespace would otherwise be re-encoded, which is a write nobody asked for.
+        let body = if slot == item.slot {
+            content
+        } else {
+            with_slot(&content, &slot)?
+        };
         // Checked before anything is sent, as a content write checks it: content ending in
         // what this source reads as its own slot would read back as metadata.
         let (visible, read) = metadata_body(Some(body.clone()))?;

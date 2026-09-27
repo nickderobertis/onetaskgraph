@@ -12947,3 +12947,46 @@ async fn a_contradictory_update_or_an_absent_task_writes_nothing() {
     assert_eq!(absent, None);
     assert!(fixture.seen().is_empty());
 }
+
+#[tokio::test]
+async fn a_slot_spelled_another_way_is_kept_byte_for_byte_by_an_update_that_changes_nothing() {
+    // A person, or another tool, spelled this slot with its own whitespace. It holds exactly
+    // what the update names, so nothing is sent — and when the update changes only the
+    // status, the body is not touched either.
+    let body = "The prose.\n\n<!-- onetaskgraph.metadata\n{ \"team.kept\" : [1], \
+                \"onetaskgraph.item_kind\": \"task\" }\n-->";
+    let fixture = update_board(Item::issue("I_1", "a task").body(body).status("Todo"));
+    let unchanged = TaskUpdate {
+        metadata_set: BTreeMap::from([(key("team.kept"), json!([1]))]),
+        metadata_remove: BTreeSet::from([key("team.absent")]),
+        content: Some("The prose.".to_owned()),
+        ..TaskUpdate::default()
+    };
+    let outcome = source(&fixture)
+        .update_task(&id("I_1"), &unchanged)
+        .await
+        .expect("an answer")
+        .expect("a task of this board");
+    assert!(outcome.written.is_empty(), "{:?}", outcome.written);
+    assert!(fixture.seen().is_empty(), "{:#?}", fixture.seen());
+
+    let moved = TaskUpdate {
+        status: Some(status(StatusCategory::InProgress, "in-progress")),
+        ..unchanged
+    };
+    source(&fixture)
+        .update_task(&id("I_1"), &moved)
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        fixture
+            .seen()
+            .iter()
+            .map(|entry| entry[0].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>(),
+        ["updateProjectV2ItemFieldValue"],
+        "a status alone moved"
+    );
+    assert_eq!(fixture.item("I_1").body.as_deref(), Some(body));
+}

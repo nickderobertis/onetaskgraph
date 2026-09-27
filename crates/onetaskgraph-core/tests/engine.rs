@@ -854,7 +854,7 @@ const TWENTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 88] = [
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xbe06dc239bf5eeb0),
     ("TaskUpdate", 0xea0b0cb53c32ab8f),
-    ("TaskUpdateOutcome", 0x7ea45e057c4c906e),
+    ("TaskUpdateOutcome", 0x42473d2348d85dca),
     ("TaskUpdated", 0xcd7c56c5fbf2a7b4),
     ("TemplateAnswers", 0x8d5218262afd517a),
     ("TemplateProvenance", 0x105a534bcfa00251),
