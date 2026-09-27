@@ -263,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 22);
+    assert_eq!(bundle["version"], 23);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -288,6 +288,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task priority set",
             "task content set",
             "task metadata set",
+            "task update",
             "task create",
             "task render",
             "task answers",
@@ -355,6 +356,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "Regenerated",
         "TemplateAnswers",
         "TemplateProvenance",
+        // What `task update` is given and answers with, the field vocabulary it reports
+        // in, and the outcome a plugin answers a targeted update with.
+        "TaskUpdate",
+        "TaskUpdated",
+        "UpdatedField",
+        "TaskUpdateOutcome",
     ] {
         let schema = &roots[root];
         assert!(schema.is_object(), "the bundle is missing {root}");

@@ -2775,6 +2775,18 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                             .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
                 })
         }
+        // The status set and the targeted update resolve a workflow state by its type.
+        graphql::ISSUE_STATE_OF_TYPE => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 2
+                        && values.get("type").is_some_and(|kind| {
+                            ["backlog", "unstarted", "started", "completed", "canceled"]
+                                .contains(&kind.as_str())
+                        })
+                        && values.get("team").is_some_and(|team| !team.is_empty())
+                })
+        }
         graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
@@ -2803,18 +2815,29 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     .is_some_and(|id| !id.is_empty())
                 && valid_linear_write_input(variables.get("input"), &["priority"], &[])
         }
+        // A narrow or a targeted issue write: no `labelIds`, which only a whole write sends,
+        // and at least one of the members Linear's `IssueUpdateInput` leaves optional — each
+        // one it is not sent is one Linear leaves as it was.
         graphql::ISSUE_UPDATE
             if variables
                 .pointer("/input")
                 .and_then(Value::as_object)
-                .is_some_and(|input| !input.contains_key("title")) =>
+                .is_some_and(|input| !input.contains_key("labelIds")) =>
         {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
                     .get("id")
                     .and_then(Value::as_str)
                     .is_some_and(|id| !id.is_empty())
-                && valid_linear_write_input(variables.get("input"), &["description"], &[])
+                && variables
+                    .pointer("/input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| !input.is_empty())
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &[],
+                    &["title", "description", "stateId", "priority"],
+                )
         }
         graphql::PROJECT_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
@@ -3027,6 +3050,7 @@ fn linear_response(
         graphql::PROJECT_RELATIONS,
         graphql::TEAM,
         graphql::ISSUE_STATE,
+        graphql::ISSUE_STATE_OF_TYPE,
         graphql::PROJECT_STATUS,
         graphql::ISSUE_LABEL,
         graphql::PROJECT_LABEL,
@@ -3067,6 +3091,12 @@ fn linear_response(
     if operation == graphql::ISSUE_STATE {
         return Ok(json!({"workflowStates":{"nodes":[{"id":vars["name"]}]}}));
     }
+    if operation == graphql::ISSUE_STATE_OF_TYPE {
+        let kind = vars["type"].as_str().unwrap_or_default();
+        return Ok(
+            json!({"workflowStates":{"nodes":[{"id":format!("STATE-{kind}"),"name":linear_state_name(kind)}]}}),
+        );
+    }
     if operation == graphql::PROJECT_STATUS {
         return Ok(json!({"projectStatuses":{"nodes":project_statuses()}}));
     }
@@ -3076,12 +3106,12 @@ fn linear_response(
     if operation == graphql::PROJECT_LABEL {
         return Ok(json!({"projectLabels":{"nodes":[{"id":vars["name"]}]}}));
     }
-    // A narrow write sends an issue's `priority` alone, or its `description` alone, and
-    // Linear leaves every input member it was not sent as it was.
+    // A narrow or a targeted write sends only the members it changes, and Linear leaves every
+    // input member it was not sent as it was.
     if matches!(
         operation,
         graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE
-    ) && vars["input"].get("title").is_none()
+    ) && vars["input"].get("labelIds").is_none()
     {
         return linear_narrow_issue_update(data, &vars, operation);
     }
@@ -3698,6 +3728,16 @@ fn linear_state(v: &Value) -> Value {
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
+/// The name this workspace's one state of a workflow type carries.
+fn linear_state_name(kind: &str) -> &'static str {
+    match kind {
+        "unstarted" => "Todo",
+        "started" => "In Progress",
+        "completed" => "Done",
+        "canceled" => "Canceled",
+        _ => "Backlog",
+    }
+}
 /// A project's status, whose `type` is the `ProjectStatusType` enum and **not** the
 /// workflow-state vocabulary above: `planned` is where an issue says `unstarted`, and
 /// `paused` has no issue counterpart. A fake that answered a project with `unstarted`
@@ -3761,6 +3801,19 @@ fn linear_narrow_issue_update(
     }
     if let Some(description) = vars["input"].get("description") {
         row["_linear_description"] = description.clone();
+    }
+    if let Some(title) = vars["input"].get("title") {
+        row["title"] = title.clone();
+    }
+    if let Some(state) = vars["input"].get("stateId").and_then(Value::as_str) {
+        // A state this stand-in answered by type, `STATE-<type>`, read back as that type's
+        // category and name.
+        let kind = state
+            .strip_prefix("STATE-")
+            .ok_or("stateId names no state of a type")?;
+        row["status"] = json!({"name": linear_state_name(kind), "category": match kind {
+            "unstarted" => "todo", "started" => "in-progress", "completed" => "done",
+            "canceled" => "cancelled", _ => "backlog"}});
     }
     Ok(
         if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {

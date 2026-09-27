@@ -27,6 +27,7 @@ import type {
   TaskDetail,
   TaskPrioritySet,
   TaskStatusSet,
+  TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
 } from "./generated/models.ts";
@@ -97,6 +98,21 @@ export type TaskCreateOptions = CreateOptions & {
   delivers?: string[];
 };
 export type DocumentCreateOptions = CreateOptions & { id?: string };
+// A targeted update: every field named is written, and nothing else. `bodyFile` is read by the
+// binary byte for byte and replaces the content; `statusName` is the status's own word, for a
+// source that keeps one. A list given replaces that list, `[]` included — which is how a list is
+// cleared — and one left out is not named.
+export type TaskUpdateOptions = {
+  title?: string;
+  bodyFile?: string;
+  status?: StatusCategory;
+  statusName?: string;
+  priority?: Priority;
+  metadata?: Record<string, JsonValue>;
+  removeMetadata?: string[];
+  delivers?: string[];
+  dependsOn?: string[];
+};
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
 export type RenderOptions = TemplateSourceOptions & { unset?: string[]; dryRun?: boolean };
@@ -158,6 +174,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task priority set": "TaskPrioritySet",
   "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
+  "task update": "TaskUpdated",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -665,6 +682,40 @@ export class OnetaskgraphClient {
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
   taskMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
     return this.run("task metadata set", [id, key, value]);
+  }
+  // One targeted update of one task: at least one field has to be named.
+  taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated> {
+    const method = "taskUpdate";
+    const args = [id];
+    if (options.title !== undefined) args.push("--title", options.title);
+    if (options.bodyFile !== undefined) {
+      args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
+    }
+    if (options.status !== undefined) args.push("--status", options.status);
+    if (options.statusName !== undefined) args.push("--status-name", options.statusName);
+    if (options.priority !== undefined) args.push("--priority", options.priority);
+    if (options.metadata !== undefined) {
+      // Checked as a whole first, as a create's metadata is.
+      const checked: Record<string, JsonValue> = JSON.parse(
+        jsonDocument(options.metadata, method, "metadata"),
+      );
+      for (const [key, value] of Object.entries(checked)) {
+        args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+      }
+    }
+    for (const key of stringList(method, "removeMetadata", options.removeMetadata)) {
+      args.push("--remove-metadata", key);
+    }
+    for (const [name, flag, values] of [
+      ["delivers", "--delivers", options.delivers],
+      ["dependsOn", "--depends-on", options.dependsOn],
+    ] as const) {
+      if (values === undefined) continue;
+      const ids = stringList(method, name, values);
+      if (ids.length === 0) args.push(flag === "--delivers" ? "--no-delivers" : "--no-depends-on");
+      for (const id of ids) args.push(flag, id);
+    }
+    return this.run("task update", args);
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];

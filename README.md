@@ -77,6 +77,10 @@ onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|can
 onetaskgraph task priority set <ID> none|urgent|high|medium|low
 onetaskgraph task content set <ID> --file PATH
 onetaskgraph task metadata set <ID> <KEY> <VALUE>
+onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
+                         [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
+                         [--metadata KEY=JSON]... [--remove-metadata KEY]...
+                         [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
 onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--template FILE [--search-path DIR]... | --template-loader FILE
                           | --body-file PATH]      # none of the three: the body on stdin
@@ -200,16 +204,35 @@ refuses with `the linear plugin cannot write a task's metadata on its own`. A so
 write side, a record the source does not hold, and a stdio plugin whose handshake does not
 declare the write are each refused by name.
 
+Several fields of one task are **updated** together with `task update <ID>`, which writes
+every field it names and nothing else: `--title`, the content from `--body-file`, `--status`
+(and `--status-name`, the status's own word where the source keeps one), `--priority`, any
+number of `--metadata KEY=JSON` to set and `--remove-metadata KEY` to remove, and
+`--delivers` or `--depends-on` lists that replace the task's own, their `--no-…` forms
+replacing them with none. A field that already holds the value named is not written, and an
+update in which nothing differs writes nothing at all; the answer — `TaskUpdated` under
+`--json` — says which fields were written, carries the task as its source reads it back, and
+under `spent` what the source's own meter says the call cost. Labels, repositories and the
+project a task is filed under are not among the fields: an existing item is never moved. On a
+GitHub Projects board that is at most one read of the issue, one `updateIssue` carrying the
+title, the body — visible content and metadata block together — and any state change, one
+field write each for `Status` and `Priority`, and only the `blockedBy` edges that differ;
+Linear sends one `issueUpdate` of what differs, and a folder of Markdown replaces the file
+once, every byte it was not asked to change kept. Naming a status or a `delivers` list keeps
+every delivered task in step exactly as `task status set` does, and exits `4` when one could
+not be; naming neither re-evaluates nothing. A key both set and removed is refused before
+anything is written, and so is an update naming no field.
+
 A task can name the tasks it **delivers**: finishing it finishes them. In a folder of
 Markdown that is a `delivers:` list in the front matter — a bare id names a task of the same
 folder and `<source>:<id>` a task anywhere — and on a GitHub board it is the
 `onetaskgraph.delivers` key of the issue's metadata block. The delivered task's
 `delivered_by` is onetaskgraph's to keep. Whenever it writes a task that delivers anything,
-or delivered something before — a copy, or `task status set` — each delivered task gains the
-deliverer's qualified id, a task it dropped loses it, and the delivered task's status follows
-its deliverers while it is at `todo`, `queued` or `in-progress`: `in-progress` while any runs,
-`queued` while any is queued, `done` once every one is done or cancelled and at least one is
-done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `unknown`,
+or delivered something before — a copy, `task status set` or `task update` — each delivered
+task gains the deliverer's qualified id, a task it dropped loses it, and the delivered task's
+status follows its deliverers while it is at `todo`, `queued` or `in-progress`:
+`in-progress` while any runs, `queued` while any is queued, `done` once every one is done or
+cancelled and at least one is done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `unknown`,
 `done` or `cancelled` is left alone, a deliverer its source no longer holds is dropped from
 `delivered_by`, and a delivered task that cannot be read or written is reported failed while
 the deliverer's own write stands.
@@ -478,7 +501,7 @@ ignored. `template variables` and `template render` take one in place of their `
 | `0` | Success — every source asked, every source answered. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
-| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, or `task status set` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set` or `task update` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that.

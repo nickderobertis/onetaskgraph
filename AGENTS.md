@@ -752,6 +752,22 @@ them do; this is the inventory of what is owed, not a status board.
 62. A source hosted over the stdio plugin protocol refuses a task or document create from a
     template, a read of stored answers and a regenerate — dry run included — each naming the
     source and the operation and writing nothing, while a plain-body create still crosses.
+63. `task update` writes every field it names and nothing else on every source kind — title,
+    status, priority, metadata keys set and removed, `delivers`, dependencies — reports
+    exactly the fields it wrote, and writes nothing, reporting none, when every field named
+    already holds its value; a folder of Markdown changes by exactly the named entries, over
+    the in-process boundary and the stdio plugin protocol alike, and a status named by a word
+    of its own keeps that word there and lands on the mapped option on a GitHub board.
+64. On a GitHub board an update of an existing issue is one read of it, at most one
+    `updateIssue` carrying title, body and state together, one field write each for
+    `Status` and `Priority`, and the `blockedBy` difference; one naming only what the issue
+    holds is the read alone. Linear sends one `issueUpdate` of what differs.
+65. An update keeps the tasks it delivers in step exactly as `task status set` does when it
+    names a status or a `delivers` list — the dropped ticket released — and re-evaluates
+    nothing when it names neither; an update naming no field, a key both set and removed, a
+    reserved key, an unqualified id and a missing task are each refused writing nothing.
+66. GitHub's "API rate limit already exceeded" answer is a transient rate limit carrying the
+    reset GitHub states, never a refusal.
 
 ## What a copied document's references are pointed at
 

@@ -28,6 +28,8 @@ from onetaskgraph_sdk import (
     TaskContentSet,
     TaskPrioritySet,
     TaskStatusSet,
+    TaskUpdated,
+    UpdatedField,
     __version__,
 )
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
@@ -635,6 +637,56 @@ def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step
     shown = run(client.task_show(id="work:P")).items[0].item
     assert shown.status.category == "queued"
     assert [reference.root for reference in shown.delivers or []] == ["nowhere:T-9"]
+
+
+def test_task_update_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Update several fields of one task in one call, read them back, and be refused by name."""
+    cwd = metadata_folder(tmp_path)
+    client = Client(binary, cwd=cwd)
+    body = tmp_path / "body.md"
+    body.write_text("a new body\n", encoding="utf-8")
+
+    answer = run(
+        client.task_update(
+            "work:T-1",
+            title="One, again",
+            body_file=str(body),
+            status="in-progress",
+            metadata=["myapp.review=true"],
+            remove_metadata=["myapp.kept"],
+        )
+    )
+    assert isinstance(answer, TaskUpdated)
+    assert answer.id.root == "work:T-1"
+    assert set(answer.written) == {
+        UpdatedField.UpdatedFieldTitle,
+        UpdatedField.UpdatedFieldContent,
+        UpdatedField.UpdatedFieldStatus,
+        UpdatedField.UpdatedFieldMetadata,
+    }
+    assert answer.delivered == []
+
+    # The folder really holds it: a later invocation reads what this one wrote.
+    shown = run(client.task_show(id="work:T-1")).items[0].item
+    assert (shown.title, shown.content, shown.status.category) == (
+        "One, again",
+        "a new body\n",
+        StatusCategory.StatusCategoryInProgress,
+    )
+    assert shown.metadata == {"myapp.review": True}
+
+    # Naming only what it holds writes nothing, and says so.
+    again = run(client.task_update(id=GlobalId(root="work:T-1"), title="One, again"))
+    assert again.written == []
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_update("work:T-1"))
+    assert refused.value.exit_code == 2
+    assert "names no field" in str(refused.value)
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.task_update("work:T-404", title="x"))
+    assert missing.value.exit_code == 1
+    assert "no task with the id work:T-404" in str(missing.value)
 
 
 def metadata_folder(tmp_path: Path) -> Path:

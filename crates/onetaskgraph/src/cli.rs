@@ -311,6 +311,13 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+    /// Update one task: every field named, and nothing else.
+    ///
+    /// A field already holding the value named is not written, and an update in which nothing
+    /// differs writes nothing at all. Naming a status or a list of tasks it delivers keeps every
+    /// task it delivers in step with it afterwards, and each is reported; naming neither
+    /// re-evaluates nothing.
+    Update(TaskUpdateArgs),
     /// Create a task in one source, its body rendered from a template or given as it is.
     ///
     /// Rendered from a template, it records where it came from under the reserved
@@ -521,6 +528,74 @@ fn variable_name(raw: &str) -> Result<String, String> {
         ))
     }
 }
+
+/// `onetaskgraph task update`.
+///
+/// Every flag names one field of the task, and at least one is required — refused by
+/// `update::update_task` rather than by a required group, which would spell every flag into the
+/// usage line. A list flag given once or more replaces that list whole; its `--no-…` twin
+/// replaces it with none.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for "a list, or explicitly none, or not named", so each replaceable list is a repeated option beside a `--no-…` flag; `conflicts_with` refuses the two together where they are typed (exit 2), and `update::request` folds each pair into the contract's own `Option<Vec<_>>` before anything else reads them.
+#[derive(Debug, Args)]
+pub struct TaskUpdateArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Its title.
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Replace its content with this file's bytes.
+    #[arg(long = "body-file", value_name = "PATH")]
+    pub body_file: Option<std::path::PathBuf>,
+
+    /// Its status category.
+    #[arg(long = "status", value_name = "CATEGORY")]
+    pub status: Option<StatusArg>,
+
+    /// The status's own word, where the source keeps one — a folder of Markdown writes it as
+    /// it is, and a source mapping statuses by category writes the category's option. The
+    /// category's own word when left out.
+    #[arg(long = "status-name", value_name = "NAME", requires = "status")]
+    pub status_name: Option<String>,
+
+    /// Its priority; `none` clears it.
+    #[arg(long = "priority", value_name = "PRIORITY")]
+    pub priority: Option<PriorityArg>,
+
+    /// Set one caller-owned metadata key to one JSON value. Repeat for several; every other
+    /// key is kept.
+    #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
+    pub metadata: Vec<String>,
+
+    /// Remove one caller-owned metadata key. Repeat for several; a key the task does not hold
+    /// is no write.
+    #[arg(long = "remove-metadata", value_name = "KEY")]
+    pub remove_metadata: Vec<String>,
+
+    /// A task it delivers, qualified. Repeat for several; together they replace the list.
+    #[arg(long = "delivers", value_name = "ID", conflicts_with = "no_delivers")]
+    pub delivers: Vec<String>,
+
+    /// Replace the list of tasks it delivers with none.
+    #[arg(long = "no-delivers")]
+    pub no_delivers: bool,
+
+    /// A task it depends on, qualified. Repeat for several; together they replace its
+    /// dependencies.
+    #[arg(
+        long = "depends-on",
+        value_name = "ID",
+        conflicts_with = "no_depends_on"
+    )]
+    pub depends_on: Vec<String>,
+
+    /// Replace its dependencies with none.
+    #[arg(long = "no-depends-on")]
+    pub no_depends_on: bool,
+}
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// What `onetaskgraph task priority` can do.
 #[derive(Debug, Subcommand)]

@@ -312,7 +312,7 @@ fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
 }
 
 /// One `--metadata KEY=JSON`: a caller's own key, and exactly one JSON value.
-fn metadata_entry(entry: &str) -> Result<(MetadataKey, Value), Failure> {
+pub(crate) fn metadata_entry(entry: &str) -> Result<(MetadataKey, Value), Failure> {
     let Some((key, value)) = entry.split_once('=') else {
         return Err(Failure::decided(
             "invalid-metadata-key",

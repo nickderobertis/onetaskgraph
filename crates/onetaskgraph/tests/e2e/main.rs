@@ -87,3 +87,4 @@ mod surface;
 // narrowest project that can own a journey driving it as a subprocess — the library half is
 // proven in `onetaskgraph-core`'s own `tests/templates.rs`, behind that crate's edge.
 mod templates;
+mod update;

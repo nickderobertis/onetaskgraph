@@ -9,6 +9,7 @@ mod cli;
 mod render;
 mod rendered;
 mod template;
+mod update;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -328,6 +329,10 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     command: MetadataCommand::Set(args),
                 },
         } => metadata_set(out, loaded, MetadataRecord::Project, args).await,
+
+        Command::Task {
+            command: TaskCommand::Update(args),
+        } => update::update_task(out, loaded, args).await,
 
         Command::Task {
             command: TaskCommand::Create(args),
@@ -1323,6 +1328,7 @@ mod tests {
                 "task priority set",
                 "task content set",
                 "task metadata set",
+                "task update",
                 "task create",
                 "task render",
                 "task answers",

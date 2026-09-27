@@ -637,6 +637,50 @@ test("one metadata key of a task, a project and a document is set through the re
   }
 });
 
+test("several fields of one task are updated in one call through the real binary", async () => {
+  const updateRoot = metadataFolder();
+  try {
+    const updateClient = new OnetaskgraphClient({ binaryPath: binary, cwd: updateRoot });
+    const body = resolve(updateRoot, "body.md");
+    writeFileSync(body, "a new body\n");
+
+    const answer = await updateClient.taskUpdate("work:T-1", {
+      title: "One, again",
+      bodyFile: body,
+      status: "in-progress",
+      metadata: { "myapp.review": { approved: true } },
+      removeMetadata: ["myapp.kept"],
+      delivers: [],
+    });
+    expect(answer.id).toBe("work:T-1");
+    expect([...answer.written].sort()).toEqual(["content", "metadata", "status", "title"]);
+    expect(answer.delivered).toEqual([]);
+
+    // The folder really holds it: a later invocation reads what this one wrote.
+    const shown = (await updateClient.taskShow("work:T-1")).items[0]?.item;
+    expect([shown?.title, shown?.content, shown?.status.category]).toEqual([
+      "One, again",
+      "a new body\n",
+      "in-progress",
+    ]);
+    expect(shown?.metadata).toEqual({ "myapp.review": { approved: true } });
+
+    // Naming only what it holds writes nothing, and says so.
+    expect((await updateClient.taskUpdate("work:T-1", { title: "One, again" })).written).toEqual(
+      [],
+    );
+    const empty = updateClient.taskUpdate("work:T-1", {});
+    await expect(empty).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(empty).rejects.toMatchObject({ exitCode: 2 });
+    await expect(updateClient.taskUpdate("work:T-404", { title: "x" })).rejects.toThrow(
+      "no task with the id work:T-404",
+    );
+    expect(() => updateClient.taskUpdate("work:T-1", { bodyFile: "-" })).toThrow("bodyFile");
+  } finally {
+    rmSync(updateRoot, { recursive: true, force: true });
+  }
+});
+
 test("a task's key reaches list, show and search beside its id, and is absent where none", async () => {
   const keyedRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-key-"));
   try {

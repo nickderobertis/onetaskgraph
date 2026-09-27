@@ -30,6 +30,7 @@ RESPONSE_ROOTS = {
     "task_priority_set": "TaskPrioritySet",
     "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
+    "task_update": "TaskUpdated",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -69,7 +70,8 @@ RESPONSE_ROOTS = {
 # `delivered_by`. `TemplateVariable`, `VariableType` and `ItemType` are one entry of what
 # `template variables` answers and the two vocabularies it types a variable with.
 # `TemplateProvenance` is the `onetaskgraph.template` entry a rendered item's metadata holds,
-# which a caller checking for a hand edit or a changed template reads by name.
+# which a caller checking for a hand edit or a changed template reads by name. `UpdatedField` is
+# the vocabulary `task update` reports what it wrote in, which a caller branches on by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -89,6 +91,7 @@ CONTRACT_ROOTS = {
     "VariableType",
     "ItemType",
     "TemplateProvenance",
+    "UpdatedField",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
@@ -112,6 +115,8 @@ OPTION_TYPES = {
     "match_by": "str",
     "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "metadata": "list[str] | tuple[str, ...]",
+    "no_delivers": "bool",
+    "no_depends_on": "bool",
     "no_project": "bool",
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
@@ -120,12 +125,14 @@ OPTION_TYPES = {
     "priority": "choice_list",
     "project": "str",
     "recreate": "bool",
+    "remove_metadata": "list[str] | tuple[str, ...]",
     "repository": "list[str] | tuple[str, ...]",
     "search": "str",
     "search_path": "list[str] | tuple[str, ...]",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
+    "status_name": "str",
     "template": "str",
     "template_loader": "str",
     "title": "str",
@@ -154,6 +161,8 @@ OPTION_PLACEHOLDERS = {
     "match_by": "KEY",
     "member": "TASK-ID",
     "metadata": "KEY=JSON",
+    "no_delivers": None,
+    "no_depends_on": None,
     "no_project": None,
     "no_tasks": None,
     "not_label": "L",
@@ -162,12 +171,14 @@ OPTION_PLACEHOLDERS = {
     "priority": "PRIORITY",
     "project": "P",
     "recreate": None,
+    "remove_metadata": "KEY",
     "repository": "R",
     "search": "TEXT",
     "search_path": "DIR",
     "set": "PATH=VALUE",
     "source": "S",
     "status": "S",
+    "status_name": "NAME",
     "template": "FILE",
     "template_loader": "FILE",
     "title": "TITLE",
@@ -189,6 +200,11 @@ class OptionShape(NamedTuple):
 # takes several to filter by.
 COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "create"): {"status": OptionShape(type="choices", placeholder="CATEGORY")},
+    # `task update` names one status and one priority, the ones it writes.
+    ("task", "update"): {
+        "status": OptionShape(type="choices", placeholder="CATEGORY"),
+        "priority": OptionShape(type="choices", placeholder="PRIORITY"),
+    },
 }
 
 
@@ -586,6 +602,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "priority")
         case ("task", "content", "set"):
             return ("id",)
+        case ("task", "update"):
+            return ("id",)
         case ("task" | "project" | "document", "metadata", "set"):
             return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
@@ -641,7 +659,7 @@ TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
 
 # The repeated options generated methods check are strings before the binary is started: see
 # `_strings` below.
-TEMPLATE_STRING_LISTS = {"search_path", "var", "unset", "metadata", "repository"}
+TEMPLATE_STRING_LISTS = {"search_path", "var", "unset", "metadata", "repository", "remove_metadata"}
 
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
