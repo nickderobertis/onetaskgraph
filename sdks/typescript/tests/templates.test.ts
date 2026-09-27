@@ -3,7 +3,13 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { type JsonValue, OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
+import {
+  type JsonValue,
+  OnetaskgraphClient,
+  OnetaskgraphExecutionError,
+  type TemplateOptions,
+  type TemplateRenderOptions,
+} from "../src/index.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 
@@ -259,6 +265,20 @@ test("answers that are not a mapping are refused before the binary is started", 
       answers: answers as unknown as Record<string, JsonValue>,
     });
     await expect(refused).rejects.toThrow("answers is not a plain object");
+  }
+});
+
+test("options that are not an object are refused as options, not as a property read", async () => {
+  // Deliberately outside the declared types, as a caller whose values reached it untyped.
+  for (const options of [null, "searchPath", 7]) {
+    const refused = [
+      client.templateVariables(task, options as unknown as TemplateOptions),
+      client.templateRender(task, options as unknown as TemplateRenderOptions),
+    ];
+    for (const call of refused) {
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow("options is not an object");
+    }
   }
 });
 

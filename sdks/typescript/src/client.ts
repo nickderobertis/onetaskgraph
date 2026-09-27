@@ -208,6 +208,14 @@ function addFilters(args: string[], options: FilterOptions): void {
 }
 
 function searchPathFlags(options: TemplateOptions): string[] {
+  // Absent options are the default `{}`; anything else that is not an object would otherwise
+  // fail on the property read below, naming neither the argument nor what to pass instead.
+  if (options === null || typeof options !== "object") {
+    throw new TypeError(
+      "templateVariables/templateRender: options is not an object; next: pass an options " +
+        "object, or omit it",
+    );
+  }
   // Absent means none; an explicit `null` is not a list and is refused below with the rest.
   const searchPath = options.searchPath === undefined ? [] : options.searchPath;
   if (!Array.isArray(searchPath)) {
