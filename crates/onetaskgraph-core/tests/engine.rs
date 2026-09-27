@@ -652,7 +652,7 @@ const TWENTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 81] = [
     ("QueryResponseOfQualifiedProject", 0x87d4bcb0d27064d9),
     ("QueryResponseOfQualifiedTask", 0x76eca40e4d81ea8e),
     ("QueryResponseOfSearchHit", 0xcf1cff15ac1df275),
-    ("RenderedTemplate", 0x5ce9547fdbd96193),
+    ("RenderedTemplate", 0x82433f83a6157eba),
     ("Repository", 0x98147ade92ced0f0),
     ("ResolvedCredential", 0x14a23b081a4e8d10),
     ("SearchHit", 0xff77c9012e19218a),

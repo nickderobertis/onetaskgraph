@@ -5,8 +5,16 @@
 //! and the declared set has to be known before that: it is what `template variables` reports
 //! and what a prompt asks for. So the chain is read here, statically — every tag naming a
 //! template by a string literal, or by a list of them, whichever branch it sits in. A tag
-//! naming one by an expression cannot be read before rendering; the renderer still loads
-//! what it names, as [`super::Template::render`] says.
+//! naming one by an expression cannot be read before rendering, so it is found here by its
+//! place in the file instead, and [`hooked`] marks its expression so that a render reports
+//! what it named and where — which is how such a file takes its place in the chain at the
+//! tag that names it, as [`super::Template::expand`] says.
+
+use std::ops::Range;
+
+/// The function [`hooked`] wraps each naming expression in. It returns its last argument
+/// unchanged, so a hooked template renders exactly as the one it was made from.
+pub(super) const HOOK: &str = "__onetaskgraph_named";
 
 /// One template a tag names: one name, or a list of candidates of which the first that
 /// resolves is the one loaded — minijinja's own rule for `{% include [a, b] %}`.
@@ -18,9 +26,20 @@ pub(super) struct Reference {
     pub optional: bool,
 }
 
-/// Every template `source` names by a literal, in the order its tags name them.
-pub(super) fn references(source: &str) -> Vec<Reference> {
+/// One tag of a file that names a template.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Named {
+    /// Named by string literals, known before rendering.
+    Literal(Reference),
+    /// Named by an expression: the file's `ordinal`-th such tag, counting from zero, whose
+    /// expression is `span` of the source.
+    Expression { ordinal: usize, span: Range<usize> },
+}
+
+/// Every tag of `source` that names a template, in the order they are written.
+pub(super) fn named(source: &str) -> Vec<Named> {
     let mut found = Vec::new();
+    let mut ordinal = 0;
     let mut rest = source;
     while let Some(start) = rest.find('{') {
         let after = &rest[start..];
@@ -41,10 +60,17 @@ pub(super) fn references(source: &str) -> Vec<Reference> {
                     if let Some((candidates, after)) = literal_names(arguments)
                         && let Some(optional) = trailer(word, after)
                     {
-                        found.push(Reference {
+                        found.push(Named::Literal(Reference {
                             candidates,
                             optional,
+                        }));
+                    } else if let Some(expression) = expression(word, arguments) {
+                        let at = offset(source, expression);
+                        found.push(Named::Expression {
+                            ordinal,
+                            span: at..at + expression.len(),
                         });
+                        ordinal += 1;
                     }
                 }
                 _ => {}
@@ -54,6 +80,108 @@ pub(super) fn references(source: &str) -> Vec<Reference> {
         }
     }
     found
+}
+
+/// `source` with each naming expression wrapped in [`HOOK`], called with `file`, the tag's
+/// ordinal and the expression's value — or `source` itself when it names nothing by an
+/// expression.
+pub(super) fn hooked(source: &str, file: usize) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut copied = 0;
+    for named in named(source) {
+        if let Named::Expression { ordinal, span } = named {
+            out.push_str(&source[copied..span.start]);
+            out.push_str(&format!(
+                "{HOOK}({file}, {ordinal}, ({}))",
+                &source[span.clone()]
+            ));
+            copied = span.end;
+        }
+    }
+    out.push_str(&source[copied..]);
+    out
+}
+
+/// Where `part`, a slice of `whole`, starts in it.
+fn offset(whole: &str, part: &str) -> usize {
+    part.as_ptr().addr() - whole.as_ptr().addr()
+}
+
+/// The expression a tag names its template by: its arguments less what the tag may carry
+/// after one, as minijinja's parser reads them — or `None` when nothing is left.
+fn expression<'a>(tag: &str, arguments: &'a str) -> Option<&'a str> {
+    let mut expression = arguments.trim_end();
+    match tag {
+        "include" => {
+            // `EXPR [with|without context] [ignore missing [with|without context]]`
+            expression = context_marker(expression);
+            if let Some(before) =
+                strip_word(expression, "missing").and_then(|before| strip_word(before, "ignore"))
+            {
+                expression = context_marker(before);
+            }
+        }
+        "import" => {
+            // `EXPR as NAME [with|without context]`
+            let (before, alias) = last_word(context_marker(expression));
+            expression = strip_word(before, "as").filter(|_| is_identifier(alias))?;
+        }
+        "from" => {
+            // `EXPR import NAMES`
+            expression = &expression[..keyword(expression, "import")?];
+        }
+        _ => {}
+    }
+    let expression = expression.trim();
+    (!expression.is_empty()).then_some(expression)
+}
+
+/// `text` less a trailing `with context` or `without context`.
+fn context_marker(text: &str) -> &str {
+    strip_word(text, "context")
+        .and_then(|before| strip_word(before, "with").or_else(|| strip_word(before, "without")))
+        .unwrap_or(text)
+}
+
+/// `text` less a trailing `word` standing on its own, or `None` when it does not end so.
+fn strip_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let before = text.trim_end().strip_suffix(word)?;
+    (!before.ends_with(is_identifier_char)).then_some(before.trim_end())
+}
+
+/// `text` split before its last whitespace-separated word.
+fn last_word(text: &str) -> (&str, &str) {
+    let text = text.trim_end();
+    text.rfind(char::is_whitespace)
+        .map_or(("", text), |at| (&text[..at], &text[at + 1..]))
+}
+
+/// Where the first `word` standing on its own outside a string literal starts in `text`.
+fn keyword(text: &str, word: &str) -> Option<usize> {
+    let mut searched = 0;
+    loop {
+        let (before, after) = until_unquoted(&text[searched..], word);
+        if after.is_empty() && before.len() == text.len() - searched {
+            return None;
+        }
+        let at = searched + before.len();
+        searched = at + word.len();
+        let standalone = !text[..at].ends_with(is_identifier_char)
+            && !text[searched..].starts_with(is_identifier_char);
+        if standalone {
+            return Some(at);
+        }
+    }
+}
+
+fn is_identifier(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(is_identifier_char)
+}
+
+fn is_identifier_char(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
 }
 
 /// What follows the first `end` in `text`, or nothing when there is none.
@@ -158,9 +286,13 @@ fn trailer(tag: &str, after: &str) -> Option<bool> {
     let words: Vec<&str> = after.split_whitespace().collect();
     match (tag, words.as_slice()) {
         ("extends", []) => Some(false),
-        ("import", ["as", _alias]) => Some(false),
+        ("import", ["as", _alias] | ["as", _alias, "with" | "without", "context"]) => Some(false),
         ("from", ["import", ..]) => Some(false),
         ("include", rest) => {
+            let rest = match rest {
+                ["with" | "without", "context", rest @ ..] => rest,
+                rest => rest,
+            };
             let (optional, rest) = match rest {
                 ["ignore", "missing", rest @ ..] => (true, rest),
                 rest => (false, rest),
@@ -207,9 +339,23 @@ mod tests {
     use super::*;
 
     fn names(source: &str) -> Vec<(Vec<String>, bool)> {
-        references(source)
+        named(source)
             .into_iter()
-            .map(|reference| (reference.candidates, reference.optional))
+            .filter_map(|named| match named {
+                Named::Literal(reference) => Some((reference.candidates, reference.optional)),
+                Named::Expression { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Each expression tag's ordinal and the expression it names its template by.
+    fn expressions(source: &str) -> Vec<(usize, &str)> {
+        named(source)
+            .into_iter()
+            .filter_map(|named| match named {
+                Named::Literal(_) => None,
+                Named::Expression { ordinal, span } => Some((ordinal, &source[span])),
+            })
             .collect()
     }
 
@@ -223,7 +369,8 @@ mod tests {
                       {%- include 'part.md' -%}\n\
                       {% import \"macros.md\" as m %}\n\
                       {% from 'helpers.md' import one, two %}\n\
-                      {% include ['a.md', \"b.md\"] ignore missing %}";
+                      {% include ['a.md', \"b.md\"] ignore missing %}\n\
+                      {% import 'ctx.md' as c with context %}";
         assert_eq!(
             names(source),
             [
@@ -232,6 +379,7 @@ mod tests {
                 one("macros.md"),
                 one("helpers.md"),
                 (vec!["a.md".to_owned(), "b.md".to_owned()], true),
+                one("ctx.md"),
             ]
         );
     }
@@ -240,13 +388,15 @@ mod tests {
     fn only_a_trailer_outside_the_name_makes_an_include_optional() {
         let source = "{% include 'ignore missing.md' %}\n\
                       {% include 'p.md' ignore missing with context %}\n\
-                      {% include 'q.md' without context %}";
+                      {% include 'q.md' without context %}\n\
+                      {% include 'r.md' with context ignore missing %}";
         assert_eq!(
             names(source),
             [
                 one("ignore missing.md"),
                 (vec!["p.md".to_owned()], true),
                 one("q.md"),
+                (vec!["r.md".to_owned()], true),
             ]
         );
     }
@@ -262,5 +412,40 @@ mod tests {
                       {% include 'a.md' if x else 'b.md' %}\n\
                       {% extends 'base-' ~ kind ~ '.md' %}";
         assert_eq!(names(source), [one("branch.md")]);
+    }
+
+    #[test]
+    fn an_expression_tag_is_found_by_its_place_less_what_the_tag_carries_after_it() {
+        let source = "{% extends 'base-' ~ kind ~ '.md' %}\n\
+                      {% include 'x' ~ kind %}{% include 'literal.md' %}\n\
+                      {%- include parts ignore missing with context -%}\n\
+                      {% include name_with without context %}\n\
+                      {% import kind ~ '.md' as m with context %}\n\
+                      {% from 'important-' ~ kind import one as two %}\n\
+                      {% include 'a.md' if x else 'b.md' %}";
+        assert_eq!(
+            expressions(source),
+            [
+                (0, "'base-' ~ kind ~ '.md'"),
+                (1, "'x' ~ kind"),
+                (2, "parts"),
+                (3, "name_with"),
+                (4, "kind ~ '.md'"),
+                (5, "'important-' ~ kind"),
+                (6, "'a.md' if x else 'b.md'"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hooked_template_wraps_each_expression_and_nothing_else() {
+        let source = "{% include 'literal.md' %}{% include kind ~ '.md' ignore missing %}";
+        assert_eq!(
+            hooked(source, 3),
+            format!(
+                "{{% include 'literal.md' %}}{{% include {HOOK}(3, 0, (kind ~ '.md')) ignore missing %}}"
+            )
+        );
+        assert_eq!(hooked("{{ x }}", 0), "{{ x }}");
     }
 }

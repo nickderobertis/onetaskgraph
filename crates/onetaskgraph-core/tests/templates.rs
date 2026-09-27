@@ -703,7 +703,7 @@ fn a_template_named_by_an_expression_is_loaded_as_the_render_reaches_it() {
     answers.set("kind", json!("plain"));
     let rendered = template.render(&answers).expect("renders");
     assert_eq!(rendered.body, "a plain part\n");
-    // What the render read is in its digest: the chain, then the file the expression named.
+    // What the render read is in its digest: the root, then the file its expression named.
     assert_eq!(template.digest(), expected_digest(&[("root.md", root)]));
     assert_eq!(
         rendered.digest,
@@ -1068,7 +1068,7 @@ fn a_template_an_expression_names_joins_the_chain_and_its_front_matter_the_decla
     assert_eq!(template.chain().collect::<Vec<_>>(), ["root.md"]);
 
     // With every variable at its default the expression names `detail.md`, which names
-    // `footer.md` by a literal: both join, after the chain, in first-load order.
+    // `footer.md` by a literal: both join the chain, in first-load order.
     let expanded = template.expand(&Answers::new()).expect("it expands");
     assert_eq!(
         expanded.chain().collect::<Vec<_>>(),
@@ -1093,7 +1093,7 @@ fn a_template_an_expression_names_joins_the_chain_and_its_front_matter_the_decla
             ("owner", "detail.md", "who owns it"),
             ("year", "footer.md", "which year"),
         ],
-        "a redeclaration in a file an expression names yields to the chain's literals"
+        "a redeclaration in a file an expression names yields to the nearer root.md"
     );
     assert_eq!(
         expanded.digest(),
@@ -1209,4 +1209,107 @@ fn a_variable_a_named_template_declares_can_name_the_next_one() {
     let mut answers = Answers::new();
     answers.set("word", json!("deep"));
     assert_eq!(template.render(&answers).expect("renders").body, "[deep]");
+}
+
+/// The root names one part by an expression and another by a literal after it; the part the
+/// expression names names a third by a literal of its own.
+const ORDERED_ROOT: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  kind: {description: which part, default: first}\n\
+---\n\
+{% include kind ~ \".md\" %}\n\
+{% include \"literal.md\" %}\n";
+
+const FIRST: &str = "first\n{% include \"nested.md\" %}\n";
+
+#[test]
+fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_literals() {
+    let tree = directory(&[
+        ("first.md", FIRST),
+        ("nested.md", "nested\n"),
+        ("second.md", "second\n"),
+    ]);
+    // Found both ways: `root.md` and `literal.md` registered in-process, the rest through a
+    // search-path directory.
+    let template = TemplateLoader::new()
+        .with_directory(tree.path())
+        .with_template("root.md", ORDERED_ROOT)
+        .with_template("literal.md", "literal\n")
+        .load_name("root.md")
+        .expect("it loads");
+
+    // The expression-named include is read before the literal one below it, and what it names
+    // by a literal before that too: first-load order, which C1 takes the digest in.
+    let in_load_order = expected_digest(&[
+        ("root.md", ORDERED_ROOT),
+        ("first.md", FIRST),
+        ("nested.md", "nested\n"),
+        ("literal.md", "literal\n"),
+    ]);
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "first.md", "nested.md", "literal.md"]
+    );
+    assert_eq!(
+        expanded.describe().digest,
+        in_load_order,
+        "the chain's digest"
+    );
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "first\nnested\nliteral\n");
+    assert_eq!(rendered.digest, in_load_order, "the rendered digest");
+    assert_eq!(
+        template.render(&Answers::new()).expect("renders").digest,
+        in_load_order,
+        "stable across runs"
+    );
+
+    // Other answers name another file, which takes that same place.
+    let mut answers = Answers::new();
+    answers.set("kind", json!("second"));
+    let rendered = template.render(&answers).expect("renders");
+    assert_eq!(rendered.body, "second\nliteral\n");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[
+            ("root.md", ORDERED_ROOT),
+            ("second.md", "second\n"),
+            ("literal.md", "literal\n"),
+        ])
+    );
+
+    // A file the expression names that a later literal names too is read once, where it was
+    // first read.
+    answers.set("kind", json!("literal"));
+    let rendered = template.render(&answers).expect("renders");
+    assert_eq!(rendered.body, "literal\nliteral\n");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[("root.md", ORDERED_ROOT), ("literal.md", "literal\n")])
+    );
+}
+
+#[test]
+fn each_file_a_loop_of_one_expression_names_is_in_the_digest_in_the_order_it_was_reached() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  parts: {description: which, type: list, default: [b, a]}\n---\n{% for part in parts %}{% include part ~ \".md\" %}{% endfor %}{% include \"z.md\" %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("a.md", "A")
+        .with_template("b.md", "B")
+        .with_template("z.md", "Z")
+        .load_name("root.md")
+        .expect("it loads");
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "BAZ");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[
+            ("root.md", root),
+            ("b.md", "B"),
+            ("a.md", "A"),
+            ("z.md", "Z")
+        ])
+    );
 }
