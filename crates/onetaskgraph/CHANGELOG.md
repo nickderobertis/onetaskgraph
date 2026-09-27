@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.47](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.46...v0.2.47) - 2026-09-27
+
+### Added
+
+- *(templates)* create and regenerate items from templates, keeping answers out of the body ([#2716](https://github.com/nickderobertis/onetaskgraph/pull/2716))
+
 ## [0.2.46](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.45...v0.2.46) - 2026-09-27
 
 ### Added
