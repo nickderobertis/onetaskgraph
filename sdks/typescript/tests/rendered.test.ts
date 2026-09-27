@@ -4,7 +4,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
+import {
+  OnetaskgraphClient,
+  OnetaskgraphExecutionError,
+  type RenderOptions,
+} from "../src/index.ts";
 
 // Tasks and documents created from a template, regenerated and read back through the SDK,
 // driving the real binary over a real folder of Markdown — which keeps the answers an item was
@@ -204,4 +208,50 @@ test("a path, a body or metadata the binary could not be handed is refused befor
     // Outside the declared type on purpose, as the `body` above is.
     client.taskRender("notes:design", { unset: ["ok", 3 as unknown as string] }),
   ).rejects.toThrow("taskRender: unset[1] is not a string");
+});
+
+test("every option of the create and render methods reaches the real binary as a flag it takes", async () => {
+  // The binary refuses a flag it does not know, so one call per method with every option set is
+  // what holds these option names to the command line they are spelled for.
+  const blocker = await client.taskCreate("notes", "P-1", "Blocker", { body: "b" });
+  const delivered = await client.taskCreate("notes", "P-1", "Delivered", { body: "d" });
+  const everything = await client.taskCreate("notes", "P-1", "Every option", {
+    template,
+    searchPath: [root],
+    answers: { goal: "All of it" },
+    vars: { steps: "[one]" },
+    status: "queued",
+    labels: ["every"],
+    repositories: ["github.com/acme/every"],
+    metadata: { "myapp.every": [true, null] },
+    dependsOn: [blocker.items[0]?.id ?? ""],
+    delivers: [delivered.items[0]?.id ?? ""],
+  });
+  const task = everything.items[0];
+  expect(task?.item.status.category).toBe("queued");
+  expect(task?.item.repositories).toEqual(["github.com/acme/every"]);
+  expect(task?.item.delivers).toEqual([delivered.items[0]?.id ?? ""]);
+  const rendered = await client.taskRender(task?.id ?? "", {
+    template,
+    searchPath: [root],
+    answers: { goal: "Again" },
+    vars: { steps: "[two]" },
+    unset: ["steps"],
+    dryRun: true,
+  });
+  expect(rendered.body).toBe("Goal: Again\n");
+  const bodyFile = resolve(root, "body.md");
+  writeFileSync(bodyFile, "From a file.");
+  const document = await client.documentCreate("notes", "P-1", "Every document option", {
+    id: "every",
+    bodyFile,
+    labels: ["every"],
+    repositories: ["github.com/acme/every"],
+    metadata: { "myapp.every": 1 },
+  });
+  expect(document.items[0]?.item.content).toBe("From a file.");
+  await expect(
+    // Deliberately outside the declared type, as a caller whose values reached it untyped.
+    client.taskRender(task?.id ?? "", [] as unknown as RenderOptions),
+  ).rejects.toThrow("taskRender: options is not a plain object");
 });

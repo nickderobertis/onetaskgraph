@@ -418,6 +418,38 @@ fn a_task_created_from_a_template_records_its_provenance_and_reads_back_every_fi
 }
 
 #[test]
+fn a_create_whose_delivered_task_cannot_be_kept_in_step_lands_and_exits_four() {
+    let plan = Plan::new();
+    let output = plan.run(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "P-1",
+        "--title",
+        "Delivers elsewhere",
+        "--body-file",
+        &plan.file("body.md", "x"),
+        "--delivers",
+        "elsewhere:T-9",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let id = stdout(&output).trim().to_owned();
+    assert_eq!(
+        id, "notes:delivers-elsewhere",
+        "the create itself landed and says so"
+    );
+    assert_eq!(plan.task(&id)["delivers"], json!(["elsewhere:T-9"]));
+    assert!(
+        stderr(&output).contains(&format!(
+            "task elsewhere:T-9 could not be kept in step with {id}"
+        )) && stderr(&output).contains("the write itself landed"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn a_task_created_from_a_plain_body_records_no_provenance_and_stores_no_answers() {
     let plan = Plan::new();
     let body = plan.file("body.md", "Written by hand.");

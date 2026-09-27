@@ -116,6 +116,7 @@ pub enum TemplateCommand {
 }
 
 /// `onetaskgraph template variables`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
 #[command(group = clap::ArgGroup::new("template_source").required(true).args(["file", "template_loader"]))]
 pub struct TemplateVariablesArgs {
@@ -139,8 +140,10 @@ pub struct TemplateVariablesArgs {
     #[arg(long = "template-loader", value_name = "FILE")]
     pub template_loader: Option<std::path::PathBuf>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// `onetaskgraph template render`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
 #[command(group = clap::ArgGroup::new("template_source").required(true).args(["file", "template_loader"]))]
 pub struct TemplateRenderArgs {
@@ -177,6 +180,7 @@ pub struct TemplateRenderArgs {
     )]
     pub var: Vec<VarAssignment>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// One `--var NAME=VALUE`, split where it was typed.
 ///
@@ -324,6 +328,7 @@ pub enum TaskCommand {
 
 /// Where a created item's body comes from: exactly one of a template file, a loader
 /// document, a body file, or — with none of them — standard input.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
 pub struct CreateBodyArgs {
     /// Render the body from this template file, recorded by its absolute path.
@@ -362,6 +367,7 @@ pub struct CreateBodyArgs {
     #[arg(long = "body-file", value_name = "PATH")]
     pub body_file: Option<std::path::PathBuf>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// What every create names about the item besides its body.
 #[derive(Debug, Args)]
@@ -444,6 +450,7 @@ pub struct DocumentCreateArgs {
 }
 
 /// `onetaskgraph task render` and `onetaskgraph document render`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
 pub struct RenderArgs {
     /// The item's qualified id, `<source>:<native-id>`.
@@ -491,6 +498,7 @@ pub struct RenderArgs {
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// `onetaskgraph task answers` and `onetaskgraph document answers`.
 #[derive(Debug, Args)]

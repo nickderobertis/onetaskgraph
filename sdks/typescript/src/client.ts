@@ -310,20 +310,27 @@ function stringList(method: string, name: string, values: unknown): string[] {
   return checked;
 }
 
+// Whether `value` is a mapping written as a plain object — not an array, a class instance or a
+// primitive, any of which would have its entries read as something they are not.
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 // `vars` as `--var NAME=VALUE` flags, each value refused unless it is the text a command line
 // would take.
 function varFlags(method: string, given: unknown): string[] {
   // Absent means none; an explicit `null` is not a mapping and is refused below.
   const vars = given === undefined ? {} : given;
-  const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
-  if (prototype !== Object.prototype && prototype !== null) {
+  if (!isPlainObject(vars)) {
     throw new TypeError(
       `${method}: vars is not a plain object; next: pass a mapping of variable name to text`,
     );
   }
-  refuseUncarriedKey(vars as object, "vars", "var", method);
+  refuseUncarriedKey(vars, "vars", "var", method);
   const flags: string[] = [];
-  for (const [name, value] of Object.entries(vars as object)) {
+  for (const [name, value] of Object.entries(vars)) {
     // Checked rather than interpolated whatever it is: a number or an object would reach the
     // binary as its string form, which is not the value the caller passed.
     if (typeof value !== "string") {
@@ -355,6 +362,11 @@ function templateSourceArguments(
   method: string,
   options: TemplateSourceOptions & { body?: string },
 ): { args: string[]; input: string | undefined } {
+  // Every create and render reads its options through here first, so this is where one that is
+  // not an options object is refused, rather than having its values silently not read.
+  if (!isPlainObject(options)) {
+    throw new TypeError(`${method}: options is not a plain object; next: pass an options object`);
+  }
   const args: string[] = [];
   if (options.template !== undefined) {
     args.push("--template", pathOption(method, "template", options.template));
