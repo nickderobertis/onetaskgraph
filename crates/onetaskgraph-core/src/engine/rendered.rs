@@ -61,36 +61,42 @@ impl Body {
         }
     }
 
-    /// The content, the metadata the item carries, and the answers kept beside it.
+    /// What a create writes of this body beside `metadata`.
     ///
     /// # Errors
     ///
     /// [`EngineError::Template`] when a rendering's digest is not one.
-    fn parts(
-        &self,
-        metadata: &BTreeMap<MetadataKey, Value>,
-    ) -> Result<
-        (
-            String,
-            BTreeMap<String, Value>,
-            Option<&BTreeMap<String, Value>>,
-        ),
-        EngineError,
-    > {
+    fn parts(&self, metadata: &BTreeMap<MetadataKey, Value>) -> Result<Parts<'_>, EngineError> {
         let mut carried: BTreeMap<String, Value> = metadata
             .iter()
             .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
             .collect();
         match self {
-            Self::Plain(content) => Ok((content.clone(), carried, None)),
+            Self::Plain(content) => Ok(Parts {
+                content: content.clone(),
+                metadata: carried,
+                answers: None,
+            }),
             Self::Rendered { rendered, template } => {
                 let provenance = TemplateProvenance::of(template.clone(), rendered)
                     .map_err(|error| EngineError::Template { error })?;
                 carried.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
-                Ok((rendered.body.clone(), carried, Some(&rendered.answers)))
+                Ok(Parts {
+                    content: rendered.body.clone(),
+                    metadata: carried,
+                    answers: Some(&rendered.answers),
+                })
             }
         }
     }
+}
+
+/// What a create writes: the content, the metadata the item carries — the caller's keys and,
+/// for a rendering, its provenance — and the answers a source that keeps them keeps beside it.
+struct Parts<'a> {
+    content: String,
+    metadata: BTreeMap<String, Value>,
+    answers: Option<&'a BTreeMap<String, Value>>,
 }
 
 /// One task to create in one source.
@@ -420,7 +426,11 @@ impl Engine {
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
         let source = self.creatable(&request.source, MetadataRecord::Task)?;
-        let (content, metadata, answers) = request.body.parts(&request.metadata)?;
+        let Parts {
+            content,
+            metadata,
+            answers,
+        } = request.body.parts(&request.metadata)?;
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let near = &request.source;
         let id = NativeId::from(slug(&request.title, "task").as_str());
@@ -506,7 +516,11 @@ impl Engine {
                 .map(|held| held.id),
             None => None,
         };
-        let (content, metadata, answers) = request.body.parts(&request.metadata)?;
+        let Parts {
+            content,
+            metadata,
+            answers,
+        } = request.body.parts(&request.metadata)?;
         let write = ItemWrite {
             target,
             item: Document {
