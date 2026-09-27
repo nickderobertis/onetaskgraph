@@ -146,10 +146,17 @@ test("answers JSON cannot carry are refused before the binary is started", async
 test("an answer key JSON cannot carry is refused rather than dropped", async () => {
   const hidden = { title: "t" };
   Object.defineProperty(hidden, "steps", { value: ["a"], enumerable: false });
+  // An array carrying its own `toJSON`: serialising the caller's object would send "swapped",
+  // and copying its entries alone would drop what it carries.
+  const swapping = ["checked"];
+  Object.defineProperty(swapping, "toJSON", { value: () => ["swapped"] });
+  const labelled = Object.assign(["a"], { note: "b" });
   const refusals: [Record<string, unknown>, string][] = [
     [{ title: "t", [Symbol("steps")]: ["a"] }, "answers has the key Symbol(steps)"],
     [{ title: "t", nested: { [Symbol("x")]: 1 } }, "answers.nested has the key Symbol(x)"],
     [hidden, "answers has the key steps"],
+    [{ title: "t", steps: swapping }, "answers.steps has the key toJSON"],
+    [{ title: "t", steps: labelled }, "answers.steps has the key note"],
   ];
   for (const [answers, message] of refusals) {
     const refused = client.templateRender(task, {
@@ -159,15 +166,31 @@ test("an answer key JSON cannot carry is refused rather than dropped", async () 
     await expect(refused).rejects.toThrow(TypeError);
     await expect(refused).rejects.toThrow(message);
   }
+
+  const hiddenVar = { title: "t" };
+  Object.defineProperty(hiddenVar, "size", { value: "5", enumerable: false });
+  const varRefusals: [Record<string, string>, string][] = [
+    [
+      { title: "t", [Symbol("size")]: "5" } as Record<string, string>,
+      "vars has the key Symbol(size)",
+    ],
+    [hiddenVar, "vars has the key size"],
+  ];
+  for (const [vars, message] of varRefusals) {
+    const refused = client.templateRender(task, {
+      searchPath: [library],
+      answers: { steps: [] },
+      vars,
+    });
+    await expect(refused).rejects.toThrow(TypeError);
+    await expect(refused).rejects.toThrow(message);
+  }
 });
 
 test("what is sent is the answers checked, and a var is text or refused", async () => {
-  // An array carrying its own `toJSON`: serialising the caller's object would send "swapped".
-  const steps = ["checked"];
-  Object.defineProperty(steps, "toJSON", { value: () => ["swapped"] });
   const rendered = await client.templateRender(task, {
     searchPath: [library],
-    answers: { title: "t", steps },
+    answers: { title: "t", steps: ["checked"] },
   });
   expect(rendered.answers.steps).toEqual(["checked"]);
   expect(rendered.body).toContain("- checked");

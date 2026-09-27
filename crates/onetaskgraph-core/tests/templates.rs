@@ -1728,3 +1728,41 @@ fn a_loaded_template_is_in_first_load_order_before_any_expansion() {
         template.digest()
     );
 }
+
+/// `ALL` is what front matter is parsed against, so a variant left out of it could never be
+/// declared. The derived schema names every variant, so it is the side `ALL` is held to.
+#[test]
+fn every_variant_of_a_declaration_vocabulary_is_in_its_all() {
+    fn spelled(schema: &serde_json::Value, into: &mut Vec<String>) {
+        match schema {
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    match (key.as_str(), value) {
+                        ("const", serde_json::Value::String(word)) => into.push(word.clone()),
+                        ("enum", serde_json::Value::Array(words)) => into.extend(
+                            words
+                                .iter()
+                                .filter_map(|word| word.as_str().map(str::to_owned)),
+                        ),
+                        _ => spelled(value, into),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| spelled(item, into)),
+            _ => {}
+        }
+    }
+    let variants = |schema: schemars::Schema| {
+        let mut words = Vec::new();
+        spelled(&schema.to_value(), &mut words);
+        words
+    };
+    assert_eq!(
+        variants(schemars::schema_for!(VariableType)),
+        VariableType::ALL.map(|kind| kind.as_str().to_owned()),
+    );
+    assert_eq!(
+        variants(schemars::schema_for!(ItemType)),
+        ItemType::ALL.map(|items| items.as_str().to_owned()),
+    );
+}

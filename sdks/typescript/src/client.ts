@@ -247,6 +247,25 @@ function templateFile(method: string, file: unknown): string {
   return file;
 }
 
+// Refuse a key of `value` that what is sent would not carry: for an array anything but its
+// indices and `length`, such as its own `toJSON`; for a mapping a symbol or a non-enumerable
+// key, which `Object.entries` skips. Either would otherwise be dropped in silence, and the
+// binary sent less than was handed over.
+function refuseUncarriedKey(value: object, path: string, entry: string): void {
+  const array = Array.isArray(value);
+  const uncarried = Reflect.ownKeys(value).find((key) => {
+    if (typeof key === "symbol") return true;
+    if (array) return key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key);
+    return !Object.prototype.propertyIsEnumerable.call(value, key);
+  });
+  if (uncarried !== undefined) {
+    throw new TypeError(
+      `templateRender: ${path} has the key ${String(uncarried)}, which is not sent; next: ` +
+        `give every ${entry} an enumerable string key, and an array nothing but its entries`,
+    );
+  }
+}
+
 // The answers as the JSON document the binary reads on standard input, refused here when a
 // value is not one JSON can carry: `JSON.stringify` would otherwise drop an `undefined` or a
 // function without a word, write a non-finite number or an array's hole as `null`, and throw
@@ -264,6 +283,7 @@ function answersDocument(answers: Record<string, JsonValue>): string {
       const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
       if (plain && !within.has(value)) {
         within.add(value);
+        refuseUncarriedKey(value, `answers${path}`, "answer");
         let copied: JsonValue;
         if (Array.isArray(value)) {
           // By index rather than by entry, so a hole in a sparse array is read as the
@@ -272,18 +292,6 @@ function answersDocument(answers: Record<string, JsonValue>): string {
             copy(value[index], `${path}[${index}]`),
           );
         } else {
-          // `Object.entries` reads only enumerable string keys, so a symbol or non-enumerable
-          // key would be dropped in silence and the binary sent less than was handed over.
-          const unread = Reflect.ownKeys(value).find(
-            (key) =>
-              typeof key === "symbol" || !Object.prototype.propertyIsEnumerable.call(value, key),
-          );
-          if (unread !== undefined) {
-            throw new TypeError(
-              `templateRender: answers${path} has the key ${String(unread)}, which JSON cannot ` +
-                "carry; next: give every answer an enumerable string key",
-            );
-          }
           copied = Object.fromEntries(
             Object.entries(value).map(([key, item]) => [key, copy(item, `${path}.${key}`)]),
           );
@@ -497,6 +505,7 @@ export class OnetaskgraphClient {
         "templateRender: vars is not a plain object; next: pass a mapping of variable name to text",
       );
     }
+    refuseUncarriedKey(vars, "vars", "var");
     for (const [name, value] of Object.entries(vars)) {
       // Checked rather than interpolated whatever it is: a number or an object would reach the
       // binary as its string form, which is not the value the caller passed.

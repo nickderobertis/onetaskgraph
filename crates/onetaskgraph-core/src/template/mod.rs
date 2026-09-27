@@ -102,15 +102,7 @@ impl VariableType {
 
     /// The type a front matter `type:` spells, if it spells one.
     fn parse(text: &str) -> Option<Self> {
-        Some(match text {
-            "string" => Self::String,
-            "text" => Self::Text,
-            "integer" => Self::Integer,
-            "boolean" => Self::Boolean,
-            "list" => Self::List,
-            "object" => Self::Object,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 
     /// How front matter spells it.
@@ -149,11 +141,7 @@ impl ItemType {
 
     /// The item type a front matter `items:` spells, if it spells one.
     fn parse(text: &str) -> Option<Self> {
-        match text {
-            "string" => Some(Self::String),
-            "object" => Some(Self::Object),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|items| items.as_str() == text)
     }
 
     /// How front matter spells it.

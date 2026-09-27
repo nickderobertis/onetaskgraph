@@ -116,7 +116,21 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
     let mut version = None;
     let mut variables = None;
     for (key, value) in mapping {
-        match key_name(file, key, "")?.as_str() {
+        let key = key_name(file, key, "")?;
+        // The list alone decides which keys are accepted; the arms below give each its meaning,
+        // and `the_published_keys_are_exactly_the_ones_read` proves every listed key has one.
+        let listed_key = FRONT_MATTER_KEYS.contains(&key.as_str());
+        match key.as_str() {
+            _ if !listed_key => {
+                return Err(TemplateError::malformed(
+                    file,
+                    Some(&key),
+                    format!(
+                        "is not a front matter key; the keys are {}",
+                        listed(&FRONT_MATTER_KEYS)
+                    ),
+                ));
+            }
             VERSION_KEY => version = Some(value),
             "description" => {
                 if !matches!(value, Yaml::String(_)) {
@@ -132,10 +146,7 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
                 return Err(TemplateError::malformed(
                     file,
                     Some(other),
-                    format!(
-                        "is not a front matter key; the keys are {}",
-                        listed(&FRONT_MATTER_KEYS)
-                    ),
+                    "is listed as a front matter key and has no reading",
                 ));
             }
         }
@@ -242,7 +253,19 @@ fn declaration_of(
     for (key, field) in fields {
         let key = key_name(file, key, &format!("{base}."))?;
         let path = format!("{base}.{key}");
+        // As in `read`: the list decides which keys are accepted, the arms what each means.
+        let listed_key = DECLARATION_KEYS.contains(&key.as_str());
         match key.as_str() {
+            _ if !listed_key => {
+                return Err(TemplateError::malformed(
+                    file,
+                    Some(&path),
+                    format!(
+                        "is not a declaration key; the keys are {}",
+                        listed(&DECLARATION_KEYS)
+                    ),
+                ));
+            }
             "description" => match field {
                 Yaml::String(text) if !text.trim().is_empty() => description = Some(text.clone()),
                 _ => {
@@ -300,10 +323,7 @@ fn declaration_of(
                 return Err(TemplateError::malformed(
                     file,
                     Some(&path),
-                    format!(
-                        "is not a declaration key; the keys are {}",
-                        listed(&DECLARATION_KEYS)
-                    ),
+                    "is listed as a declaration key and has no reading",
                 ));
             }
         }
