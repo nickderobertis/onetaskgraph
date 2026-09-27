@@ -270,14 +270,14 @@ test("answers that are not a mapping are refused before the binary is started", 
 
 test("options that are not an object are refused as options, not as a property read", async () => {
   // Deliberately outside the declared types, as a caller whose values reached it untyped.
-  for (const options of [null, "searchPath", 7]) {
+  for (const options of [null, "searchPath", 7, [library], new Map()]) {
     const refused = [
       client.templateVariables(task, options as unknown as TemplateOptions),
       client.templateRender(task, options as unknown as TemplateRenderOptions),
     ];
     for (const call of refused) {
       await expect(call).rejects.toThrow(TypeError);
-      await expect(call).rejects.toThrow("options is not an object");
+      await expect(call).rejects.toThrow("options is not a plain object");
     }
   }
 });

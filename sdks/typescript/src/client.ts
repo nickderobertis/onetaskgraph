@@ -208,12 +208,15 @@ function addFilters(args: string[], options: FilterOptions): void {
 }
 
 function searchPathFlags(options: TemplateOptions): string[] {
-  // Absent options are the default `{}`; anything else that is not an object would otherwise
-  // fail on the property read below, naming neither the argument nor what to pass instead.
-  if (options === null || typeof options !== "object") {
+  // Absent options are the default `{}`. Anything but a plain object is refused: a primitive
+  // or `null` would fail on the property read below naming neither the argument nor what to
+  // pass, and an array or a class instance would be read as no options at all.
+  const prototype =
+    options !== null && typeof options === "object" ? Object.getPrototypeOf(options) : 0;
+  if (prototype !== Object.prototype && prototype !== null) {
     throw new TypeError(
-      "templateVariables/templateRender: options is not an object; next: pass an options " +
-        "object, or omit it",
+      "templateVariables/templateRender: options is not a plain object; next: pass an " +
+        "options object, or omit it",
     );
   }
   // Absent means none; an explicit `null` is not a list and is refused below with the rest.
