@@ -220,7 +220,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         | EngineError::StatusNotWritable { name, .. }
         | EngineError::MetadataNotWritable { name, .. }
         | EngineError::PriorityNotWritable { name, .. }
-        | EngineError::ContentNotWritable { name, .. } => {
+        | EngineError::ContentNotWritable { name, .. }
+        | EngineError::UpdateNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
         EngineError::NoSuchItem { .. }

@@ -81,8 +81,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
-    WriteSupport,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -1384,6 +1384,86 @@ impl TaskSource for LocalMdSource {
         )
     }
 
+    /// Edit every entry of the task file the update names — each front-matter key, each
+    /// `metadata:` entry, the content — in one replacement of the file, and nothing else.
+    ///
+    /// Every edit is the narrow one its own verb makes, so every byte the update did not name
+    /// stays as it was, comments section and stored answers included. A field already holding
+    /// the requested value is not edited, and an update in which nothing differs does not open
+    /// the file for writing. The edited text is read back before anything is written and must
+    /// be the task as it was with exactly the named fields changed; when it is not, the write
+    /// is refused and the file left as it was. The status is written under the name it was
+    /// given, which this folder's `status_mapping` must read as its category.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        update.consistent()?;
+        if let Some(status) = &update.status {
+            self.representable_status(status)?;
+        }
+        if let Some(delivers) = &update.delivers {
+            self.representable_list("delivers", id, delivers)?;
+        }
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        let entry = self.parse_text(WorkKind::Task, &path, &text)?;
+        let edges_before = entry.dependencies.clone();
+        let before = task(entry);
+        let wanted = update.applied_to(&before);
+        let edges = update.depends_on.as_ref().map(|edges| {
+            edges
+                .iter()
+                .map(|edge| DependencyEdge {
+                    from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
+                    to: edge.to.clone(),
+                    kind: edge.kind,
+                })
+                .collect::<Vec<_>>()
+        });
+        let edges_differ = edges.as_ref().is_some_and(|edges| *edges != edges_before);
+        let edited = self.updated_text(
+            &path,
+            &text,
+            &before,
+            &wanted,
+            edges.as_deref().filter(|_| edges_differ),
+        )?;
+        if edited == text {
+            return Ok(Some(TaskUpdateOutcome {
+                delivers_before: before.delivers.clone(),
+                task: before,
+                written: std::collections::BTreeSet::new(),
+            }));
+        }
+        let reread = self.parse_text(WorkKind::Task, &path, &edited)?;
+        let edges_after = reread.dependencies.clone();
+        if task(reread) != wanted || (edges_differ && edges.as_ref() != Some(&edges_after)) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{}: cannot update this task without changing more than the update names: \
+                     the edited file would read back otherwise; next: tidy the file's front \
+                     matter by hand, one `key: value` entry to a line, and update it again",
+                    path.display()
+                ),
+            });
+        }
+        replace_atomically(&path, &edited)?;
+        let after = task(self.parse(WorkKind::Task, &path)?);
+        let mut written = update.changed(&before, &after);
+        if edges_differ {
+            written.insert(UpdatedField::DependsOn);
+        }
+        Ok(Some(TaskUpdateOutcome {
+            task: after,
+            written,
+            delivers_before: before.delivers,
+        }))
+    }
+
     /// As [`set_task_metadata`](TaskSource::set_task_metadata), for a file under `projects/`.
     async fn set_project_metadata(
         &self,
@@ -2408,6 +2488,23 @@ struct WrittenDependency {
     item: &'static str,
 }
 
+impl WrittenDependency {
+    /// The far end of `edge`, as a front matter writes it.
+    fn of(edge: &DependencyEdge) -> Self {
+        Self {
+            id: edge.to.id().to_owned(),
+            kind: match edge.kind {
+                DependencyKind::Blocks => "blocks",
+                DependencyKind::Related => "related",
+            },
+            item: match edge.to.kind {
+                ItemKind::Task => "task",
+                ItemKind::Project => "project",
+            },
+        }
+    }
+}
+
 /// This vocabulary's own spelling of a category, for a message a user has to act on.
 fn category_name(category: StatusCategory) -> &'static str {
     match category {
@@ -2629,8 +2726,9 @@ impl LocalMdSource {
         };
         let text = Self::read_text(&path)?;
         let mut expected = read(&path, &text)?;
-        let keyed = with_metadata_entry(&text, MetadataKey::TEMPLATE_KEY, rendering.provenance)
-            .map_err(|unnarrow| unnarrow.refusal_for(&path, MetadataKey::TEMPLATE_KEY))?;
+        let keyed =
+            with_metadata_entry(&text, MetadataKey::TEMPLATE_KEY, Some(rendering.provenance))
+                .map_err(|unnarrow| unnarrow.refusal_for(&path, MetadataKey::TEMPLATE_KEY))?;
         let (_, body_at) = front_matter(&keyed).ok_or_else(|| unfronted(&path))?;
         let body = &keyed[body_at..];
         let section = match kind {
@@ -2906,12 +3004,98 @@ impl LocalMdSource {
         replace_atomically(path, &rewritten)
     }
 
+    /// `text`, the task file at `path` read as `before`, with every field in which `wanted`
+    /// differs edited narrowly, and the forward edges replaced by `edges` when given.
+    fn updated_text(
+        &self,
+        path: &Path,
+        text: &str,
+        before: &Task,
+        wanted: &Task,
+        edges: Option<&[DependencyEdge]>,
+    ) -> Result<String, SourceError> {
+        // The content first, on the file as it was read: it verifies itself against a read of
+        // that file, and every edit after it is to the front matter alone.
+        let mut edited = match &wanted.content {
+            Some(content) if wanted.content != before.content => {
+                self.content_edited(path, text, content)?
+            }
+            _ => text.to_owned(),
+        };
+        let unfront = || unfronted(path);
+        // A string always renders as a YAML scalar, and a list of strings as JSON, which is a
+        // YAML flow sequence.
+        let scalar = |value: &str| {
+            serde_norway::to_string(value)
+                .expect("a string renders")
+                .trim_end()
+                .to_owned()
+        };
+        let mut front = |key: &str, value: Option<&str>| -> Result<(), SourceError> {
+            edited = with_front_entry(&edited, key, value).ok_or_else(unfront)?;
+            Ok(())
+        };
+        if wanted.title != before.title {
+            front("title", Some(&scalar(&wanted.title)))?;
+        }
+        if wanted.status != before.status {
+            front("status", Some(&scalar(&wanted.status.name)))?;
+        }
+        if wanted.priority != before.priority {
+            front(
+                "priority",
+                (wanted.priority != Priority::None).then(|| wanted.priority.as_str()),
+            )?;
+        }
+        if wanted.delivers != before.delivers {
+            let list = (!wanted.delivers.is_empty()).then(|| {
+                serde_json::to_string(&wanted.delivers).expect("a list of task ids renders")
+            });
+            front("delivers", list.as_deref())?;
+        }
+        if let Some(edges) = edges {
+            let written: Vec<WrittenDependency> = edges.iter().map(WrittenDependency::of).collect();
+            let list = (!written.is_empty())
+                .then(|| serde_json::to_string(&written).expect("a list of endpoints renders"));
+            front("depends_on", list.as_deref())?;
+        }
+        let keys: BTreeSet<&String> = before
+            .metadata
+            .keys()
+            .chain(wanted.metadata.keys())
+            .collect();
+        for key in keys {
+            let value = wanted.metadata.get(key);
+            if before.metadata.get(key) != value {
+                edited = with_metadata_entry(&edited, key, value)
+                    .map_err(|unnarrow| unnarrow.refusal_for(path, key))?;
+            }
+        }
+        Ok(edited)
+    }
+
     /// Replace the content of the task file at `path` with `content`, by the rules
     /// [`set_task_content`](TaskSource::set_task_content) states.
     fn replace_content(&self, path: &Path, content: &str) -> Result<(), SourceError> {
         let text = Self::read_text(path)?;
-        let before = task(self.parse_text(WorkKind::Task, path, &text)?);
-        let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(path))?;
+        let edited = self.content_edited(path, &text, content)?;
+        if edited == text {
+            return Ok(());
+        }
+        replace_atomically(path, &edited)
+    }
+
+    /// `text`, the task file at `path`, with its content replaced by `content` by the rules
+    /// [`set_task_content`](TaskSource::set_task_content) states — `text` itself when the
+    /// content is already that — or the refusal of content that would not read back as itself.
+    fn content_edited(
+        &self,
+        path: &Path,
+        text: &str,
+        content: &str,
+    ) -> Result<String, SourceError> {
+        let before = task(self.parse_text(WorkKind::Task, path, text)?);
+        let (_, body_at) = front_matter(text).ok_or_else(|| unfronted(path))?;
         let body = &text[body_at..];
         let above = sectioned(body).0;
         // The stored answers block and the comments section, each byte for byte: neither is
@@ -2925,7 +3109,7 @@ impl LocalMdSource {
         let written_to = edited.len() + block;
         edited.push_str(kept);
         if edited == text {
-            return Ok(());
+            return Ok(edited);
         }
         let refused = |reason: String, next: &str| SourceError::Refused {
             message: format!(
@@ -2943,8 +3127,7 @@ impl LocalMdSource {
             ));
         }
         let after = task(self.parse_text(WorkKind::Task, path, &edited)?);
-        if Self::answers_in(Kind::Task, path, &edited)?
-            != Self::answers_in(Kind::Task, path, &text)?
+        if Self::answers_in(Kind::Task, path, &edited)? != Self::answers_in(Kind::Task, path, text)?
         {
             return Err(refused(
                 "it ends in what this source reads as its own stored answers block".to_owned(),
@@ -2974,7 +3157,7 @@ impl LocalMdSource {
         // Nothing else a read reports can have moved: the front matter and the section are
         // the very bytes they were, and the title is the one member a read derives from the
         // content.
-        replace_atomically(path, &edited)
+        Ok(edited)
     }
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.
@@ -3034,20 +3217,7 @@ impl LocalMdSource {
                 })
                 .collect(),
             project: outgoing.project.map(|id| id.0.clone()),
-            depends_on: depends_on
-                .iter()
-                .map(|edge| WrittenDependency {
-                    id: edge.to.id().to_owned(),
-                    kind: match edge.kind {
-                        DependencyKind::Blocks => "blocks",
-                        DependencyKind::Related => "related",
-                    },
-                    item: match edge.to.kind {
-                        ItemKind::Task => "task",
-                        ItemKind::Project => "project",
-                    },
-                })
-                .collect(),
+            depends_on: depends_on.iter().map(WrittenDependency::of).collect(),
             metadata: outgoing.metadata.clone(),
             repositories: outgoing
                 .repositories
@@ -3208,7 +3378,7 @@ impl LocalMdSource {
             }
             .refusal(&path, key));
         }
-        let edited = with_metadata_entry(&text, key.as_str(), value)
+        let edited = with_metadata_entry(&text, key.as_str(), Some(value))
             .map_err(|unnarrow| unnarrow.refusal(&path, key))?;
         metadata(&mut record).insert(key.as_str().to_owned(), value.clone());
         let reread = read(&path, &edited).map_err(|error| {
@@ -3317,10 +3487,13 @@ struct Line {
 
 /// `text` with the entry for `key` in its front matter's `metadata:` block set to `value`,
 /// by the rules [`STAGING_SUFFIX`] states, or why that cannot be done narrowly.
+///
+/// A `value` of `None` removes the entry instead — every line of it, and the whole block with
+/// it when it was the block's only entry — and a key the block does not hold is no edit.
 fn with_metadata_entry(
     text: &str,
     key: &str,
-    value: &serde_json::Value,
+    value: Option<&serde_json::Value>,
 ) -> Result<String, Unnarrow> {
     let (open, newline) = if text.starts_with("---\r\n") {
         ("---\r\n", "\r\n")
@@ -3340,7 +3513,20 @@ fn with_metadata_entry(
     }
     let content = |line: Line| text[line.from..line.to].trim_end_matches(['\r', '\n']);
     let written_key = serde_json::to_string(key).expect("a string renders");
-    let entry = |indent: usize| format!("{}{written_key}: {}", " ".repeat(indent), compact(value));
+    let entry = |indent: usize| {
+        let value = value.expect("only a set writes an entry");
+        format!("{}{written_key}: {}", " ".repeat(indent), compact(value))
+    };
+    // The text with the lines from `first` through `last` gone. A last line with no ending of
+    // its own is the front matter's last, whose ending is the closing delimiter's, so the
+    // ending before it goes instead.
+    let without = |first: Line, last: Line| {
+        let (mut from, to) = (first.from, last.to);
+        if !text[..to].ends_with('\n') && from > start {
+            from -= newline.len();
+        }
+        format!("{}{}", &text[..from], &text[to..])
+    };
     // A new line after `line`: that line's own ending ends it, or — for the last line of the
     // front matter, whose ending is the closing delimiter's — a new ending goes before it.
     let after = |line: Line, written: &str| {
@@ -3355,6 +3541,9 @@ fn with_metadata_entry(
         !content(line).starts_with([' ', '\t'])
             && entry_key(content(line)).is_some_and(|(found, _)| found == "metadata")
     }) else {
+        if value.is_none() {
+            return Ok(text.to_owned());
+        }
         let written = format!("metadata:{newline}{}", entry(2));
         let separator = if end > start { newline } else { "" };
         return Ok(format!(
@@ -3435,6 +3624,22 @@ fn with_metadata_entry(
     }
     let matching: Vec<&(String, usize, usize)> =
         entries.iter().filter(|(found, ..)| found == key).collect();
+    if value.is_none() {
+        return match matching.as_slice() {
+            [] => Ok(text.to_owned()),
+            // The block's only entry: the block goes with it, rather than being left as an
+            // empty `metadata:` that reads as no map at all.
+            &[_] if entries.len() == 1 => {
+                let last = body.last().map_or(block, |&(index, _)| index);
+                Ok(without(lines[block], lines[last]))
+            }
+            &[&(_, first, last)] => Ok(without(lines[first], lines[last])),
+            _ => Err(Unnarrow {
+                reason: format!("its `metadata:` block holds `{key}` more than once"),
+                next: "remove all but one of those entries",
+            }),
+        };
+    }
     match (matching.as_slice(), entries.last()) {
         ([], None) => Ok(after(lines[block], &entry(entry_indent))),
         ([], Some(&(_, _, last))) => Ok(after(lines[last], &entry(entry_indent))),

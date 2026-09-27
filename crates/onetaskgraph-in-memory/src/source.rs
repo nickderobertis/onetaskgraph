@@ -9,8 +9,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
     ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery, WriteSupport, commentless,
-    documentless, unwritable, unwritable_field,
+    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UpdatedField, WriteSupport, commentless, documentless, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -719,6 +719,62 @@ impl TaskSource for InMemorySource {
                 set_key(&mut task.metadata, key, value);
                 task.clone()
             }))
+    }
+
+    /// Apply every named field to the held task in place, under the one lock, and nothing
+    /// else: a field already holding the value is left as it is, and so are the task's edges
+    /// when the named set is the one it holds. The status is stored as it was given, name and
+    /// all — this source keeps whatever word a caller spells a status with.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        update.consistent()?;
+        self.writable(
+            &update
+                .metadata_set
+                .iter()
+                .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
+                .collect(),
+        )?;
+        if update
+            .priority
+            .is_some_and(|priority| priority != Priority::None)
+            && !self.declared().priority.is_native()
+        {
+            return Err(unwritable_field(KIND, "priority"));
+        }
+        if let Some(delivers) = &update.delivers {
+            listed("delivers", id, delivers)?;
+        }
+        let mut held = self.held()?;
+        let Some(position) = position_of(held.tasks.iter().map(|task| &task.id), id) else {
+            return Ok(None);
+        };
+        let before = held.tasks[position].clone();
+        let after = update.applied_to(&before);
+        let mut written = update.changed(&before, &after);
+        if let Some(edges) = &update.depends_on {
+            let wanted = rooted(edges, id, ItemKind::Task);
+            let current: Vec<&DependencyEdge> = held
+                .task_dependencies
+                .iter()
+                .filter(|edge| &edge.from == id)
+                .collect();
+            let same =
+                current.len() == wanted.len() && wanted.iter().all(|edge| current.contains(&edge));
+            if !same {
+                replace_edges(&mut held.task_dependencies, id, wanted);
+                written.insert(UpdatedField::DependsOn);
+            }
+        }
+        held.tasks[position] = after.clone();
+        Ok(Some(TaskUpdateOutcome {
+            task: after,
+            written,
+            delivers_before: before.delivers,
+        }))
     }
 
     async fn set_project_metadata(

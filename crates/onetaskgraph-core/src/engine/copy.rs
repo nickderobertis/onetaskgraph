@@ -2342,7 +2342,7 @@ const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect(
 /// spent is a report about the work, and a failed reading must not become a failure of the
 /// work itself. That holds when only one of a source's two readings failed as well, since
 /// a difference needs both ends.
-async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
+pub(super) async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
     let mut read = Vec::with_capacity(sources.len());
     for source in sources {
         read.push(source.source().metering().await.ok().flatten());
@@ -2360,7 +2360,10 @@ async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
 /// A source's two readings are a plugin's word, so they are held to [`Metering`]'s contract
 /// before either is believed, and a pair that breaks it is that source not metering — see
 /// [`difference`].
-fn spent_between(before: &[Option<Metering>], after: &[Option<Metering>]) -> Option<Spent> {
+pub(super) fn spent_between(
+    before: &[Option<Metering>],
+    after: &[Option<Metering>],
+) -> Option<Spent> {
     let mut metered = false;
     let mut requests = 0_u64;
     let mut budgets: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();

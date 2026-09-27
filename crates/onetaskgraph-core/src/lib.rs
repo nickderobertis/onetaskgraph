@@ -51,7 +51,7 @@ pub use engine::{
     LabelRequest, LeftBehind, MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector,
     Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest,
     SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskPrioritySet, TaskRequest,
-    TaskStatusSet, settled,
+    TaskStatusSet, TaskUpdated, settled,
 };
 pub use engine::{
     DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
@@ -60,6 +60,11 @@ pub use engine::{
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;
+/// Named by the answer of [`TaskSource::update_task`], so it lives in the plugin api, and
+/// re-exported here because [`TaskUpdated`] reports it.
+///
+/// [`TaskSource::update_task`]: onetaskgraph_plugin_api::TaskSource::update_task
+pub use onetaskgraph_plugin_api::UpdatedField;
 pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
 pub use resolve::{

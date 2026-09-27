@@ -25,6 +25,7 @@ mod metadata;
 mod narrow;
 mod rendered;
 mod resume;
+mod update;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -63,6 +64,7 @@ pub use rendered::{
     Body, DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
     TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
+pub use update::TaskUpdated;
 
 /// One item, under the qualified id the engine addresses it by.
 ///
@@ -433,6 +435,19 @@ pub enum EngineError {
          can be written — `onetaskgraph sources list` reports each one's plugin."
     )]
     ContentNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// `task update` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot update a task: its plugin is {kind}, which has no write side\n\
+         next: change the task in that source itself, or name a task of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    UpdateNotWritable {
         /// The configured name of the source.
         name: String,
         /// The plugin behind it.

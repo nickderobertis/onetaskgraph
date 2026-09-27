@@ -2253,3 +2253,139 @@ async fn a_narrow_priority_or_content_answer_that_does_not_say_what_it_wrote_is_
                "params": {"id": "T-1", "content": "the body"}})
     );
 }
+
+/// The targeted update this seam's tests put to a hosted task.
+fn settling() -> onetaskgraph_plugin_api::TaskUpdate {
+    onetaskgraph_plugin_api::TaskUpdate {
+        status: Some(Status {
+            category: StatusCategory::Done,
+            name: "Shipped".to_owned(),
+        }),
+        metadata_set: BTreeMap::from([(
+            MetadataKey::new("caller.settled").expect("a caller key"),
+            json!({"at": 3}),
+        )]),
+        ..onetaskgraph_plugin_api::TaskUpdate::default()
+    }
+}
+
+#[tokio::test]
+async fn a_targeted_update_crosses_the_wire_to_a_host_that_declares_it() {
+    use onetaskgraph_plugin_api::UpdatedField;
+
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    let id = NativeId::from("T-1");
+    let outcome = there
+        .update_task(&id, &settling())
+        .await
+        .expect("the plugin takes the update")
+        .expect("the task is there");
+    assert_eq!(
+        outcome.written,
+        std::collections::BTreeSet::from([UpdatedField::Status, UpdatedField::Metadata])
+    );
+    assert_eq!(outcome.task.status.name, "Shipped");
+    assert_eq!(
+        outcome.task.title, "Alpha",
+        "a field the update did not name moved"
+    );
+    let read = there.get_task(&id).await.expect("a read").expect("held");
+    assert_eq!(
+        read, outcome.task,
+        "the outcome is what the plugin now holds"
+    );
+
+    // The same update again is no write at all, and an absent task is `null`.
+    let again = there
+        .update_task(&id, &settling())
+        .await
+        .expect("the plugin takes the update")
+        .expect("the task is there");
+    assert!(again.written.is_empty(), "{:?}", again.written);
+    assert_eq!(
+        there
+            .update_task(&NativeId::from("X-9"), &settling())
+            .await
+            .expect("answered"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_whose_handshake_predates_the_targeted_update_is_updated_through_one_write() {
+    // §3.10: absent means `false`, and such a plugin is never sent `update_task` — it is
+    // updated through the reads and the `write_task` it already answers.
+    let held = json!({"id": "T-1", "title": "Alpha", "content": "body",
+                      "status": {"category": "todo", "name": "Todo"}, "labels": []});
+    let mut landed = held.clone();
+    landed["status"] = json!({"category": "done", "name": "Shipped"});
+    landed["metadata"] = json!({"caller.settled": {"at": 3}});
+    let handshake = json!({"protocol_version": 2, "kind": "earlier", "capabilities": capabilities(),
+                           "writes": "supported"});
+    let (source, heard) = recording(vec![
+        handshake,
+        json!({"task": held}),
+        json!({"items": [], "next": null}),
+        json!({"id": "T-1"}),
+        json!({"task": landed}),
+    ]);
+    let outcome = source
+        .expect("the handshake completes")
+        .update_task(&NativeId::from("T-1"), &settling())
+        .await
+        .expect("the update lands")
+        .expect("the task is there");
+    assert_eq!(outcome.task.status.name, "Shipped");
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods,
+        vec![
+            "initialize",
+            "get_task",
+            "task_dependencies",
+            "write_task",
+            "get_task"
+        ]
+    );
+    assert_eq!(heard[3]["params"]["write"]["target"], json!("T-1"));
+    assert_eq!(heard[3]["params"]["write"]["item"]["title"], json!("Alpha"));
+}
+
+#[tokio::test]
+async fn a_targeted_update_answered_for_another_task_is_malformed() {
+    let handshake = json!({"protocol_version": 2, "kind": "later", "capabilities": capabilities(),
+                           "writes": "supported", "targeted_updates": true});
+    let other = json!({"task": {"id": "T-2", "title": "Beta", "content": null,
+                                 "status": {"category": "done", "name": "Shipped"},
+                                 "labels": []},
+                       "written": ["status"], "delivers_before": []});
+    let (source, heard) = recording(vec![handshake.clone(), json!({"outcome": other})]);
+    let refused = source
+        .expect("the handshake completes")
+        .update_task(&NativeId::from("T-1"), &settling())
+        .await
+        .expect_err("the wrong task");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message }
+            if message.contains("T-2") && message.contains("T-1")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        heard.lock().expect("the record")[1]["method"],
+        "update_task"
+    );
+
+    // An answer leaving the member out says nothing about whether the task is there.
+    let (source, _) = recording(vec![handshake, json!({})]);
+    assert!(matches!(
+        source
+            .expect("the handshake completes")
+            .update_task(&NativeId::from("T-1"), &settling())
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+}

@@ -204,6 +204,7 @@ the source can do natively, and what configuration it is being built with.
 | `task_updates` | boolean | Whether this plugin answers the two narrow task writes and holds a task's `delivers` and `delivered_by`. Optional; see §3.6. |
 | `metadata_updates` | boolean | Whether this plugin answers the three narrow metadata writes. Optional; see §3.7. |
 | `content_updates` | boolean | Whether this plugin answers the narrow content write. Optional; see §3.9. |
+| `targeted_updates` | boolean | Whether this plugin answers the targeted update of one task. Optional; see §3.10. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -351,6 +352,17 @@ method: the call is refused before anything is sent with `{"kind": "refused"}` a
 `the <kind> plugin cannot write a task's content on its own`, which is exactly what a plugin
 that declares the member and cannot make the write answers with.
 
+### 3.10 `targeted_updates`
+
+A boolean: `true` when this plugin answers `update_task` (§4.21), and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is **never sent the
+method, and the update is not refused**: the engine carries it out through what the plugin
+already answers — `get_task`, `task_dependencies` when the update names `depends_on` or has to
+carry the edges through a rewrite, and one `write_task` with its `target` set, sent only when
+something differs — which is the trait's own default. A plugin written before the method is
+therefore correct and merely not minimal, and it was added without a protocol version bump.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -388,6 +400,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `set_task_metadata` | `TaskSource::set_task_metadata` |
 | `set_project_metadata` | `TaskSource::set_project_metadata` |
 | `set_document_metadata` | `TaskSource::set_document_metadata` |
+| `update_task` | `TaskSource::update_task` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -1133,6 +1146,39 @@ backend field as the content — a metadata block in an issue body — that is k
 so is every other member: title, status, priority, labels, metadata, dependencies,
 `delivers`, `delivered_by`, project and comments. There is no compare-and-set: the content is
 replaced whatever it held a moment before.
+
+### 4.21 `update_task`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `targeted_updates: true` to §3.10 is
+ever sent this. It writes every field the update names, and nothing else, in as few writes as
+the plugin's backend allows.
+
+```json
+{ "id": "23", "method": "update_task", "params": { "id": "ENG-1", "update": { "status": { "category": "done", "name": "Done" }, "metadata_set": { "team.review": true }, "metadata_remove": ["team.claim"] } } }
+{ "id": "23", "result": { "outcome": { "task": { "id": "ENG-1", "title": "…" }, "written": ["metadata", "status"], "delivers_before": [] } } }
+```
+
+`id` is the `NativeId` of a task at **this** source, and `update` is a `TaskUpdate`: a member
+left out names nothing, and every member that is present is written. `metadata_set` adds or
+replaces the keys it holds and `metadata_remove` removes the keys it lists, a key the task does
+not hold being no write; `delivers` replaces the whole list; `depends_on` replaces the task's
+forward edges, each far end in this source named by its native id. A field already holding the
+requested value is sent no write, and an update in which nothing differs sends none at all.
+Everything the update leaves out — labels, repositories, project, `delivered_by` and comments
+always among it — is left exactly as it was.
+
+`result.outcome` is a `TaskUpdateOutcome`, or `null` when this plugin holds no such task:
+`task` is the task as the plugin reads it once the update landed (§4.4), `written` is the
+fields it actually wrote, in the `UpdatedField` vocabulary and never one the update did not
+name, and `delivers_before` is the task's `delivers` as it stood before the update. The engine
+reports all three and reads nothing else of the plugin for the call, so they are the plugin's
+word: a `task` whose `id` is not the one asked about is a protocol violation.
+
+The engine sends no update naming a status category this plugin's handshake did not list
+(§3.5), a priority other than `"none"` to a plugin declaring none (§4.13b), or a `delivers` to
+a plugin without `task_updates` (§3.6). An update naming one key in both `metadata_set` and
+`metadata_remove` is refused before it is sent, with `{"kind": "refused"}`, and a plugin
+handed one refuses it the same way.
 
 ## 5. The error envelope
 
