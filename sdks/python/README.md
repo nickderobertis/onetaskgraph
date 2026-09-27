@@ -23,3 +23,15 @@ Every call also passes `--no-interactive`, so no call ever waits on a prompt: a 
 variable nothing answers takes its default, and a required one left unanswered raises with
 exit code 2. `template_render(file, search_path=..., answers={...}, var=[...])` hands the
 `answers` mapping to the binary on standard input, and each `var` (`NAME=VALUE`) outranks it.
+
+`task_create(source, project, title, template=..., answers={...})` and
+`document_create(...)` create an item from a template file — or from
+`template_loader=` (the path of a loader document naming what to render), or from a plain
+`body=` — and answer as `task_show` and `document_show` do; the item records its
+`onetaskgraph.template` provenance, which `TemplateProvenance` reads. `task_render(id, ...)`
+and `document_render(id, ...)` regenerate one in place from its stored answers, with
+`answers`, `var` and `unset` laid over them, and answer with a `Regenerated`;
+`task_answers(id)` and `document_answers(id)` answer with the stored `TemplateAnswers`.
+`template_variables` and `template_render` take `template_loader=` in place of a file. A
+`body` and `answers` are never passed together: both would go to the binary's one standard
+input, so the call raises `TypeError` instead.

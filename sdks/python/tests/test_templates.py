@@ -232,7 +232,7 @@ def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_
     _, library = template(tmp_path)
     client = Client(binary, cwd=tmp_path)
     # Deliberately outside the declared type, as a caller whose values reached it untyped.
-    refused: list[object] = [7, None, tmp_path / "task.md", "", "--json", "-"]
+    refused: list[object] = [7, tmp_path / "task.md", "", "--json", "-"]
     for file in refused:
         with pytest.raises(TypeError, match="template_variables: file is not a template path"):
             run(client.template_variables(file))  # ty: ignore[invalid-argument-type]
@@ -243,6 +243,12 @@ def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_
                     search_path=[str(library)],
                 )
             )
+
+    # No file at all is a template named by `template_loader` instead, so with neither the
+    # binary refuses the invocation.
+    with pytest.raises(OnetaskgraphError) as neither:
+        run(client.template_variables(None))
+    assert neither.value.exit_code == 2
 
     # The remedy the refusal names: the same file spelled from the directory it is in.
     (tmp_path / "-dashed.md").write_text("dashed\n", encoding="utf-8", newline="\n")

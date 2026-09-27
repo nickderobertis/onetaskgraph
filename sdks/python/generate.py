@@ -47,6 +47,13 @@ RESPONSE_ROOTS = {
     "config_show": "EffectiveConfig",
     "template_variables": "TemplateVariables",
     "template_render": "RenderedTemplate",
+    # A created task as `task show` answers with it, and a created document as `document show`.
+    "task_create": "TaskDetail",
+    "task_render": "Regenerated",
+    "task_answers": "TemplateAnswers",
+    "document_create": "QueryResponseOfQualifiedDocument",
+    "document_render": "Regenerated",
+    "document_answers": "TemplateAnswers",
 }
 # Roots no command returns directly, which the package generates and exports anyway.
 #
@@ -61,6 +68,8 @@ RESPONSE_ROOTS = {
 # `CopyReport` and a `TaskStatusSet`; `TaskRef` is the entry of a task's `delivers` and
 # `delivered_by`. `TemplateVariable`, `VariableType` and `ItemType` are one entry of what
 # `template variables` answers and the two vocabularies it types a variable with.
+# `TemplateProvenance` is the `onetaskgraph.template` entry a rendered item's metadata holds,
+# which a caller checking for a hand edit or a changed template reads by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -79,6 +88,7 @@ CONTRACT_ROOTS = {
     "TemplateVariable",
     "VariableType",
     "ItemType",
+    "TemplateProvenance",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
@@ -89,15 +99,19 @@ OPTION_TYPES = {
     "body_file": "str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
+    "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+    "depends_on": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "direction": "choices",
     "explain": "bool",
     "file": "str",
+    "id": "str",
     "in_": "choices",
     "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
     "match_by": "str",
     "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+    "metadata": "list[str] | tuple[str, ...]",
     "no_project": "bool",
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
@@ -106,12 +120,17 @@ OPTION_TYPES = {
     "priority": "choice_list",
     "project": "str",
     "recreate": "bool",
+    "repository": "list[str] | tuple[str, ...]",
     "search": "str",
     "search_path": "list[str] | tuple[str, ...]",
     "set": "list[str] | tuple[str, ...]",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
+    "template": "str",
+    "template_loader": "str",
+    "title": "str",
     "to": "str",
+    "unset": "list[str] | tuple[str, ...]",
     "var": "list[str] | tuple[str, ...]",
 }
 OPTION_PLACEHOLDERS = {
@@ -122,15 +141,19 @@ OPTION_PLACEHOLDERS = {
     "body_file": "PATH",
     "dry_run": None,
     "default_sources": "NAMES",
+    "delivers": "ID",
+    "depends_on": "ID",
     "direction": "DIRECTION",
     "explain": None,
     "file": "PATH",
+    "id": "DOC",
     "in_": "FIELDS",
     "kind": "KIND",
     "label": "L",
     "limit": "N",
     "match_by": "KEY",
     "member": "TASK-ID",
+    "metadata": "KEY=JSON",
     "no_project": None,
     "no_tasks": None,
     "not_label": "L",
@@ -139,13 +162,26 @@ OPTION_PLACEHOLDERS = {
     "priority": "PRIORITY",
     "project": "P",
     "recreate": None,
+    "repository": "R",
     "search": "TEXT",
     "search_path": "DIR",
     "set": "PATH=VALUE",
     "source": "S",
     "status": "S",
+    "template": "FILE",
+    "template_loader": "FILE",
+    "title": "TITLE",
     "to": "SOURCE",
+    "unset": "NAME",
     "var": "NAME=VALUE",
+}
+
+# Options one command spells differently from every other that shares their name, by command:
+# the type and the placeholder that command's help really reports. `task create` takes one
+# `--status`, the category the task is created in, where every list verb takes several to
+# filter by.
+COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, tuple[str, str | None]]] = {
+    ("task", "create"): {"status": ("choices", "CATEGORY")},
 }
 
 
@@ -261,14 +297,18 @@ def option_names(command: tuple[str, ...]) -> list[str]:
         for name, placeholder in discovered
         if name.replace("-", "_") not in UNEXPOSED_OPTIONS
     }
-    validate_option_placeholders(placeholders, result)
+    validate_option_placeholders(placeholders, result, command)
     return result
 
 
-def validate_option_placeholders(placeholders: dict[str, str | None], names: list[str]) -> None:
+def validate_option_placeholders(
+    placeholders: dict[str, str | None], names: list[str], command: tuple[str, ...] = ()
+) -> None:
     """Reject help whose option value shapes drifted from generated typing."""
+    overrides = COMMAND_OPTIONS.get(command, {})
     for name in names:
-        if placeholders[name] != OPTION_PLACEHOLDERS[name]:
+        expected = overrides[name][1] if name in overrides else OPTION_PLACEHOLDERS[name]
+        if placeholders[name] != expected:
             raise SystemExit(
                 f"binary changed the value shape for option --{name.replace('_', '-')}"
             )
@@ -276,7 +316,8 @@ def validate_option_placeholders(placeholders: dict[str, str | None], names: lis
 
 def option_type(command: tuple[str, ...], name: str) -> str:
     """Derive finite option domains from clap help and scalar shapes from placeholders."""
-    configured = OPTION_TYPES[name]
+    overrides = COMMAND_OPTIONS.get(command, {})
+    configured = overrides[name][0] if name in overrides else OPTION_TYPES[name]
     if configured not in {"choices", "choice_list"}:
         return configured
     cli_name = name.removesuffix("_").replace("_", "-")
@@ -544,33 +585,56 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("template", "variables" | "render"):
             return ("file",)
+        case ("task" | "document", "create"):
+            return ("source",)
+        case ("task" | "document", "render" | "answers"):
+            return ("id",)
         case _:
             return ()
 
 
 # Options a command cannot run without, which its generated method takes as required
 # parameters beside its operands rather than as optional keywords: `task content set` has
-# nothing to write without `--file`. Each is still passed to the binary as the flag it is, so
+# nothing to write without `--file`, and a create nothing to file without `--project` and
+# `--title`. Each is still passed to the binary as the flag it is, so
 # it is not an operand and is not in the table `operands` answers.
-REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {("task", "content", "set"): ("file",)}
+REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("task", "content", "set"): ("file",),
+    ("task", "create"): ("project", "title"),
+    ("document", "create"): ("project", "title"),
+}
 
 # The commands that read a body from standard input when `--body-file` is absent, which
 # generated methods expose as a `body` the client writes there — a body is never a word of
 # the command line, so a caller holding text needs no file to pass it.
-BODY_COMMANDS = {("task", "comment", "add"), ("task", "comment", "edit")}
+BODY_COMMANDS = {
+    ("task", "comment", "add"),
+    ("task", "comment", "edit"),
+    ("task", "create"),
+    ("document", "create"),
+}
 
 # The commands whose `--answers` generated methods take as a mapping rather than a path: the
 # client writes it to the binary's standard input as JSON — which is YAML — and passes
-# `--answers -`, so a caller holding answers needs no file to hand them over.
-ANSWERS_COMMANDS = {("template", "render")}
+# `--answers -`, so a caller holding answers needs no file to hand them over. A create is in
+# both tables, and its method refuses a `body` and `answers` together: standard input holds
+# one document.
+ANSWERS_COMMANDS = {
+    ("template", "render"),
+    ("task", "create"),
+    ("task", "render"),
+    ("document", "create"),
+    ("document", "render"),
+}
 
 # The commands whose `file` operand names a template, which generated methods check before the
-# binary is started: see `_template_file` below.
+# binary is started: see `_template_file` below. It is optional, because `--template-loader`
+# names the template in its place.
 TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
 
-# The repeated options of those commands that generated methods check are strings before the
-# binary is started: see `_strings` below.
-TEMPLATE_STRING_LISTS = {"search_path", "var"}
+# The repeated options generated methods check are strings before the binary is started: see
+# `_strings` below.
+TEMPLATE_STRING_LISTS = {"search_path", "var", "unset", "metadata", "repository"}
 
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
@@ -620,7 +684,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "_ANSWERS = TypeAdapter(dict[str, JsonValue])",
         "",
         "",
-        "def _answers_document(answers: Mapping[str, JsonValue]) -> str:",
+        "def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:",
         '    """The answers as the JSON document the binary reads on standard input.',
         "",
         "    Validated strictly first, so a key that is not a string or a value JSON cannot carry",
@@ -630,23 +694,25 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '    """',
         "    if not isinstance(answers, Mapping):",
         "        kind = type(answers).__name__",
-        '        message = f"template_render: answers are a {kind}, not a mapping"',
+        '        message = f"{method}: answers are a {kind}, not a mapping"',
         "        raise TypeError(message)",
         "    try:",
         "        checked = _ANSWERS.validate_python(dict(answers), strict=True)",
         "        return json.dumps(checked, allow_nan=False)",
         "    except ValueError as error:",
-        '        message = f"template_render: answers are not a JSON mapping: {error}"',
+        '        message = f"{method}: answers are not a JSON mapping: {error}"',
         "        raise TypeError(message) from error",
         "",
         "",
-        "def _template_file(method: str, file: object) -> str:",
-        '    """The template path, refused unless it is one.',
+        "def _template_file(method: str, file: object) -> str | None:",
+        '    """The template path, refused unless it is one — or `None`, for a loader document.',
         "",
         "    Anything but a string would reach the binary as its string form, an empty one names",
         "    no file, and one opening with `-` would be read as an option rather than as the file",
         "    the caller named.",
         '    """',
+        "    if file is None:",
+        "        return None",
         '    if not isinstance(file, str) or not file or file.startswith("-"):',
         "        message = (",
         '            f"{method}: file is not a template path; next: pass the template\'s "',
@@ -683,6 +749,25 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "            )",
         "            raise TypeError(message)",
         "    return values",
+        "",
+        "",
+        "def _stdin(",
+        "    method: str, body: str | None, answers: Mapping[str, JsonValue] | None",
+        ") -> str | None:",
+        '    """What a create or a render writes to the binary\'s standard input.',
+        "",
+        "    The answers as JSON, or a create's plain body — never both, because standard input",
+        "    holds one document.",
+        '    """',
+        "    if body is not None and answers is not None:",
+        "        message = (",
+        '            f"{method}: body and answers both go to standard input; next: pass a body "',
+        '            "without a template, or answers with one"',
+        "        )",
+        "        raise TypeError(message)",
+        "    if answers is not None:",
+        "        return _answers_document(method, answers)",
+        "    return body",
         "",
         "",
         "class GeneratedClient:",
@@ -733,10 +818,12 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         ]
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         if command in ANSWERS_COMMANDS:
-            body = ["answers: Mapping[str, JsonValue] | None = None"]
+            body = [*body, "answers: Mapping[str, JsonValue] | None = None"]
+        optional = command in TEMPLATE_FILE_COMMANDS
         parameters = (
             [
                 f"{positional}: {positional_types.get(positional, 'str')}"
+                + (" | None = None" if optional else "")
                 for positional in (*taken, *required)
             ]
             + ["*"]
@@ -748,15 +835,16 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
         if command in TEMPLATE_FILE_COMMANDS:
             passed[0] = f"file=_template_file({name!r}, file)"
-            passed = [
-                f"{item}=_strings({name!r}, {item!r}, {item})"
-                if item in TEMPLATE_STRING_LISTS
-                else entry
-                for item, entry in zip([*taken, *required, *keywords], passed, strict=True)
-            ]
+        passed = [
+            f"{item}=_strings({name!r}, {item!r}, {item})"
+            if item in TEMPLATE_STRING_LISTS
+            else entry
+            for item, entry in zip([*taken, *required, *keywords], passed, strict=True)
+        ]
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
-            passed.append("stdin=None if answers is None else _answers_document(answers)")
+            has_body = "body" if command in BODY_COMMANDS else "None"
+            passed.append(f"stdin=_stdin({name!r}, {has_body}, answers)")
         elif body:
             passed.append("stdin=body")
         lines.extend(
