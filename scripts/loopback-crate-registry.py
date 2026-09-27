@@ -36,7 +36,24 @@ class Loopback(http.server.ThreadingHTTPServer):
         self.server_port = self.server_address[1]
 
 
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
+class Unconditional(http.server.SimpleHTTPRequestHandler):
+    """Every request answered with the file as it is now, never `304 Not Modified`.
+
+    The stock handler's validator is a whole-second mtime, which cannot tell an index file
+    the check rewrote from the copy cargo cached earlier in the same second. So none is sent
+    and none is honoured; scripts/check-crate-sibling-resolution-same-second.sh holds both.
+    """
+
+    def send_head(self):
+        del self.headers["If-Modified-Since"]
+        return super().send_head()
+
+    def send_header(self, keyword, value):
+        if keyword.lower() != "last-modified":
+            super().send_header(keyword, value)
+
+
+handler = functools.partial(Unconditional, directory=root)
 server = Loopback(("127.0.0.1", 0), handler)
 with open(port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
