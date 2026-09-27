@@ -1453,3 +1453,48 @@ fn an_optional_variable_left_unanswered_is_none_when_what_an_expression_names_is
         "given"
     );
 }
+
+#[test]
+fn every_tag_that_names_a_template_by_an_expression_places_it_where_the_tag_is() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  layout: {description: which layout, default: base}\n---\n\
+                {% extends layout ~ \".md\" %}\
+                {% block body %}\
+                {% import \"mac\" ~ \"ros.md\" as m %}\
+                {% from \"hel\" ~ \"pers.md\" import shout %}\
+                {{ m.bullet(shout(\"x\")) }}\
+                {% include [\"missing.md\", \"pick\" ~ \".md\", \"other.md\"] %}\
+                {% include \"gone\" ~ \".md\" ignore missing %}\
+                {% endblock %}";
+    let base = "<{% block body %}{% endblock %}>";
+    let macros = "{% macro bullet(text) %}- {{ text }}{% endmacro %}";
+    let helpers = "{% macro shout(text) %}{{ text | upper }}{% endmacro %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("base.md", base)
+        .with_template("macros.md", macros)
+        .with_template("helpers.md", helpers)
+        .with_template("pick.md", "P")
+        .with_template("other.md", "O")
+        .load_name("root.md")
+        .expect("it loads");
+
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "base.md", "macros.md", "helpers.md", "pick.md"],
+        "the first candidate that resolves, and nothing for a missing file ignored"
+    );
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "<- XP>");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[
+            ("root.md", root),
+            ("base.md", base),
+            ("macros.md", macros),
+            ("helpers.md", helpers),
+            ("pick.md", "P"),
+        ])
+    );
+    assert_eq!(rendered.digest, expanded.digest());
+}
