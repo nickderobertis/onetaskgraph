@@ -355,8 +355,15 @@ if carried_lead < 0:
         "methods NOT_CARRIED_REASON exempts are listed.",
         "restore that paragraph and its list after §4's method table, or update this check.",
     )
+paragraphs = document[carried_lead:].split("\n\n", 2)
+if len(paragraphs) < 2:
+    refuse(
+        f"docs/plugin-protocol.md has no list after \"{NOT_CARRIED_LEAD}\", which is where the "
+        "methods NOT_CARRIED_REASON exempts are listed.",
+        "restore that list, one `- ` item per line, after a blank line following the paragraph.",
+    )
 listed_lines = []
-for line in document[carried_lead:].split("\n\n", 2)[1].splitlines():
+for line in paragraphs[1].splitlines():
     if line.startswith("- ") or (listed_lines and line.startswith("  ")):
         listed_lines.append(line)
 listed = set(re.findall(r"`([a-z_]+)`", " ".join(listed_lines)))
