@@ -427,7 +427,7 @@ use onetaskgraph_plugin_api::{
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
     Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
     SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TextFields, TextQuery, WriteSupport,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -4742,6 +4742,266 @@ impl GitHubProjectsSource {
         Ok(Some(()))
     }
 
+    /// Apply one targeted update to one task; see [`TaskSource::update_task`].
+    ///
+    /// One read of the item, and then only what differs from it: at most one `updateIssue`
+    /// carrying the title, the body — visible content and metadata slot together — and a
+    /// state change, at most one `Status` option write and one `Priority` field write, and the
+    /// `blockedBy` additions and removals the named edges differ by. A terminal status selects
+    /// its option and then closes, as a whole write does; an open one reopens and then selects
+    /// its option, as [`Self::set_status`] does. The origin field is never written: an update
+    /// is of an item that already exists, whose origin is what it is.
+    ///
+    /// The task answered is the item as those writes left it, built from the read and what was
+    /// sent rather than read again — the same record a later read in this run answers from.
+    async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        // Everything this source can refuse without reading the item is refused first, in the
+        // words a whole write of the same fields is refused with.
+        update.consistent()?;
+        if update
+            .title
+            .as_deref()
+            .is_some_and(|title| title.starts_with(DESIGN_TITLE_PREFIX))
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the title of this task begins {DESIGN_TITLE_PREFIX:?}, which is how source {} \
+                     spells a document, so it would read back as one rather than as a task; \
+                     retitle it",
+                    self.name
+                ),
+            });
+        }
+        if let Some(delivers) = &update.delivers {
+            TaskRef::listed(
+                TaskRef::DELIVERS_KEY,
+                id,
+                Some(&self.name),
+                delivers.clone(),
+            )
+            .map_err(|message| SourceError::Refused { message })?;
+        }
+        if self.priorities.is_none()
+            && update
+                .priority
+                .is_some_and(|priority| priority != Priority::None)
+        {
+            return Err(self.holds_no_priority());
+        }
+        let target = update
+            .status
+            .as_ref()
+            .map(|status| self.resolved_target(status.category))
+            .transpose()?;
+        let Some(mut item) = self
+            .item_by_id(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        let before = item.task()?;
+
+        // The status: which option, and whether the issue's state has to move to match it.
+        let mut status_move = None;
+        if let (Some(status), Some(target)) = (&update.status, target) {
+            let board = self.status_board(&item).await?;
+            let (field, option, name) = self
+                .column_for(&board.fields, status, &target)?
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!(
+                        "status {} of source {} names no board Status option",
+                        category_name(status.category),
+                        self.name
+                    ),
+                })?;
+            let terminal = matches!(target, StatusTarget::Terminal(_, _));
+            if terminal && item.content_kind == ContentKind::DraftIssue {
+                return Err(self.closes_a_draft(status.category));
+            }
+            let landed = match &target {
+                StatusTarget::Terminal(_, reason) => {
+                    self.statuses
+                        .status(Some(&name), true, Some(reason.reason()))
+                }
+                _ => self.statuses.status(Some(&name), false, None),
+            };
+            let option_moves = item
+                .option
+                .as_deref()
+                .is_none_or(|held| !held.eq_ignore_ascii_case(&name));
+            let state_moves = item.content_kind == ContentKind::Issue
+                && (item.closed != terminal || (terminal && item.status != landed));
+            if option_moves || state_moves {
+                status_move = Some(StatusMove {
+                    board: board.id,
+                    field,
+                    option,
+                    name,
+                    target,
+                    landed,
+                    option_moves,
+                    state_moves,
+                });
+            }
+        }
+
+        // The priority: a field write only when the item does not already hold it.
+        let mut priority_move = None;
+        if let Some(priority) = update.priority
+            && self.priorities.is_some()
+            && item.priority != HeldPriority::Read(priority)
+        {
+            let board = match item.named_board() {
+                Some(board) if item.defines(PRIORITY_FIELD) => BoardFields {
+                    id: board,
+                    fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+                },
+                _ => self.board_fields().await?,
+            };
+            if let Some(write) = self.priority_write(&board.fields, Some(&item), priority)? {
+                priority_move = Some((board.id, write, priority));
+            }
+        }
+
+        // The edges: which far ends the issue's own `blockedBy` holds, and which the slot does.
+        let edges = match &update.depends_on {
+            Some(edges) => Some(
+                self.partition_edges(BoardKind::Work(ItemKind::Task), item.content_kind, edges)
+                    .await?,
+            ),
+            None => None,
+        };
+
+        // The body: the visible content and the metadata slot, composed once.
+        let mut slot = item.slot.clone();
+        for (key, value) in &update.metadata_set {
+            slot.insert(key.as_str().to_owned(), value.clone());
+        }
+        for key in &update.metadata_remove {
+            slot.remove(key.as_str());
+        }
+        if let Some(delivers) = &update.delivers {
+            set_task_list(&mut slot, TaskRef::DELIVERS_KEY, delivers);
+        }
+        if let Some((_, recorded)) = &edges {
+            record_edges(&mut slot, recorded);
+        }
+        let held = item.raw_body.clone().unwrap_or_default();
+        let content = match &update.content {
+            Some(content) => with_content(&held, content)?,
+            None => held.clone(),
+        };
+        let body = with_slot(&content, &slot)?;
+        // Checked before anything is sent, as a content write checks it: content ending in
+        // what this source reads as its own slot would read back as metadata.
+        let (visible, read) = metadata_body(Some(body.clone()))?;
+        let wanted = update.content.as_deref().or(item.body.as_deref());
+        if visible.as_deref().unwrap_or_default() != wanted.unwrap_or_default() || read != slot {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this content ends in what source {} reads as its own metadata slot \
+                     ({METADATA_OPEN:?}), so part of it would read back as metadata rather than \
+                     as content; next: remove that trailing block from the content",
+                    self.name
+                ),
+            });
+        }
+        let recorded_moves =
+            slot.get(DependencyEdge::RECORDED_KEY) != item.slot.get(DependencyEdge::RECORDED_KEY);
+
+        // One content update: the title and the body when they differ, and the state when the
+        // status moves it.
+        let mut fields = serde_json::Map::new();
+        if let Some(title) = update.title.as_ref().filter(|title| **title != item.title) {
+            fields.insert("title".to_owned(), json!(title));
+        }
+        if body != held {
+            fields.insert("body".to_owned(), json!(body));
+        }
+        if let Some(moving) = status_move.as_ref().filter(|moving| moving.state_moves) {
+            fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
+        }
+        let terminal = status_move
+            .as_ref()
+            .is_some_and(|moving| matches!(moving.target, StatusTarget::Terminal(_, _)));
+        // A terminal option is selected before the issue closes, so a close never lands on an
+        // item whose board cannot show it; an open one after the issue reopens.
+        if terminal {
+            self.select_option(&item, status_move.as_ref()).await?;
+        }
+        if !fields.is_empty() {
+            self.update_content(item.content_kind, &item.id, Value::Object(fields))
+                .await?;
+        }
+        if !terminal {
+            self.select_option(&item, status_move.as_ref()).await?;
+        }
+        if let Some((board, write, _)) = &priority_move {
+            self.write_priority(board.as_str(), &item.item_id, write)
+                .await?;
+        }
+        let mut blocked_by_moved = false;
+        if let Some((native, _)) = &edges
+            && item.content_kind == ContentKind::Issue
+        {
+            blocked_by_moved = self.reconcile_blocked_by(&item.id, native).await?;
+        }
+
+        // The item as those writes left it.
+        if let Some(title) = &update.title {
+            item.title.clone_from(title);
+        }
+        item.body = visible.filter(|value| !value.is_empty());
+        item.raw_body = (!body.is_empty() || item.raw_body.is_some()).then_some(body);
+        item.slot = slot;
+        if let Some(delivers) = &update.delivers {
+            item.delivers.clone_from(delivers);
+        }
+        if let Some(moving) = status_move {
+            item.closed = matches!(moving.target, StatusTarget::Terminal(_, _))
+                && item.content_kind == ContentKind::Issue;
+            item.status = moving.landed;
+            item.option = Some(moving.name);
+        }
+        if let Some((_, _, priority)) = priority_move {
+            item.priority = HeldPriority::Read(priority);
+        }
+        let task = item.task()?;
+        let mut written = update.changed(&before, &task);
+        if blocked_by_moved || recorded_moves {
+            written.insert(UpdatedField::DependsOn);
+        }
+        self.remember_written(item, false)?;
+        Ok(Some(TaskUpdateOutcome {
+            task,
+            written,
+            delivers_before: before.delivers,
+        }))
+    }
+
+    /// Select the `Status` option one targeted update moves an item to, when it moves it.
+    async fn select_option(
+        &self,
+        item: &Resolved,
+        moving: Option<&StatusMove>,
+    ) -> Result<(), SourceError> {
+        let Some(moving) = moving.filter(|moving| moving.option_moves) else {
+            return Ok(());
+        };
+        self.set_item_field(
+            moving.board.as_str(),
+            &item.item_id,
+            &moving.field,
+            json!({"singleSelectOptionId": moving.option}),
+        )
+        .await
+    }
+
     /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
     /// together, and nothing else; see [`TaskSource::set_task_rendering`].
     ///
@@ -5930,12 +6190,15 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
+    /// Bring one issue's `blockedBy` to exactly `native`, sending only the difference, and say
+    /// whether there was one.
     async fn reconcile_blocked_by(
         &self,
         content_id: &NativeId,
         native: &[String],
-    ) -> Result<(), SourceError> {
+    ) -> Result<bool, SourceError> {
         let current = self.native_dependency_ids(content_id).await?;
+        let mut changed = false;
         for (operation, far_id) in current
             .iter()
             .filter(|id| !native.contains(id))
@@ -5974,8 +6237,9 @@ impl GitHubProjectsSource {
                     message: "GitHub dependency update returned the wrong issues".into(),
                 });
             }
+            changed = true;
         }
-        Ok(())
+        Ok(changed)
     }
 }
 
@@ -6289,6 +6553,26 @@ impl Resolved {
             repositories: self.repositories.clone(),
         }
     }
+}
+
+/// Where one targeted update moves an item's status, and which of its two halves move.
+struct StatusMove {
+    /// The board the item's `Status` field is on.
+    board: BoardId,
+    /// The `Status` field's id.
+    field: String,
+    /// The option's id.
+    option: String,
+    /// The option's name, as the board spells it.
+    name: String,
+    /// What the status asks of the issue's state.
+    target: StatusTarget,
+    /// The status the item reads as once it is there.
+    landed: Status,
+    /// Whether the option differs from the one the item sits in.
+    option_moves: bool,
+    /// Whether the issue has to open or close, or close with another reason.
+    state_moves: bool,
 }
 
 /// What one write is, and the status that comes with being it.
@@ -6851,6 +7135,17 @@ impl TaskSource for GitHubProjectsSource {
             .await
     }
 
+    /// Apply a targeted update with one read of the item and a write only for what differs:
+    /// at most one `updateIssue` for title, body and state, one field write each for `Status`
+    /// and `Priority`, and the `blockedBy` difference. See `targeted_update`.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        self.targeted_update(id, update).await
+    }
+
     /// Replace one task's `delivered_by` with a single body update that changes the
     /// metadata slot and nothing outside it.
     async fn set_delivered_by(
@@ -7264,6 +7559,13 @@ fn slot_metadata(
     ] {
         set_task_list(&mut metadata, key, entries);
     }
+    record_edges(&mut metadata, fallback);
+    metadata
+}
+
+/// Hold the far ends no relationship here can name under [`DependencyEdge::RECORDED_KEY`] in
+/// one slot's metadata, or no such key when there are none.
+fn record_edges(metadata: &mut BTreeMap<String, Value>, fallback: &[DependencyEdge]) {
     if fallback.is_empty() {
         metadata.remove(DependencyEdge::RECORDED_KEY);
     } else {
@@ -7277,7 +7579,6 @@ fn slot_metadata(
             ),
         );
     }
-    metadata
 }
 
 /// Every label one item carries, from its content's own connection and nowhere else.

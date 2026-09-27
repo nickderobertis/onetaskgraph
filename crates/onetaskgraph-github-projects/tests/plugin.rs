@@ -18,8 +18,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
     Location, MetadataKey, NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter,
     ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TextFields, TextQuery,
-    WriteSupport,
+    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields,
+    TextQuery, UpdatedField, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -12658,4 +12658,292 @@ async fn comment_calls_are_paced_waited_out_and_named_like_every_other_call() {
     let gaps = fixture.mutation_gaps();
     assert_eq!(gaps.len(), 2, "{gaps:?}");
     assert!(gaps.iter().all(|gap| *gap >= interval), "{gaps:?}");
+}
+
+/// A settlement-shaped update: a status, three keys set and one removed.
+fn settlement(category: StatusCategory, name: &str) -> TaskUpdate {
+    TaskUpdate {
+        status: Some(status(category, name)),
+        metadata_set: BTreeMap::from([
+            (key("team.settlement"), json!({"outcome": "landed"})),
+            (key("team.landing"), json!("merged")),
+            (key("team.change"), json!("https://example.test/pull/1")),
+        ]),
+        metadata_remove: BTreeSet::from([key("team.claim")]),
+        ..TaskUpdate::default()
+    }
+}
+
+/// One task holding a slot of its own, a label and a status, on a board of three.
+fn update_board(item: Item) -> Fixture {
+    board(vec![
+        item,
+        Item::issue("I_2", "a blocker").status("Todo"),
+        Item::issue("I_3", "another blocker").status("Todo"),
+    ])
+}
+
+fn settled_task() -> Item {
+    Item::issue("I_1", "a task")
+        .body(
+            "The prose.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.delivers\":[\"I_9\"],\
+             \"onetaskgraph.item_kind\":\"task\",\"team.claim\":\"r-1\",\"team.kept\":[1]}\n-->",
+        )
+        .labelled(&[("L_1", "bug")])
+        .status("Todo")
+}
+
+/// Every request the board answered, by the name `operation_name` reads off it.
+fn every_request(fixture: &Fixture) -> Vec<String> {
+    fixture
+        .documents()
+        .iter()
+        .map(|document| operation_name(document).to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_targeted_update_is_one_read_one_body_update_and_one_status_write() {
+    let fixture = update_board(settled_task());
+    let before = source_of(&fixture)
+        .get_task(&id("I_1"))
+        .await
+        .unwrap()
+        .unwrap();
+    let requests_before = fixture.documents().len();
+    let source = source(&fixture);
+    let outcome = source
+        .update_task(
+            &id("I_1"),
+            &settlement(StatusCategory::InProgress, "in-progress"),
+        )
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+
+    let body = "The prose.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.delivers\":[\"I_9\"],\
+                \"onetaskgraph.item_kind\":\"task\",\"team.change\":\"https://example.test/pull/1\",\
+                \"team.kept\":[1],\"team.landing\":\"merged\",\
+                \"team.settlement\":{\"outcome\":\"landed\"}}\n-->";
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["updateIssue", {"id":"I_1","body":body}]),
+            json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board","itemId":"PVTI_I_1",
+                   "fieldId":"FIELD_status","value":{"singleSelectOptionId":"OPT_doing"}}]),
+        ],
+        "the slot and the visible body in one update, then the option; no origin, no title, \
+         no state, no dependency request"
+    );
+    assert_eq!(
+        every_request(&fixture)[requests_before..],
+        ["issue", "updateIssue", "updateProjectV2ItemFieldValue"],
+        "one read of the item and nothing else read"
+    );
+    assert_eq!(
+        outcome.written,
+        BTreeSet::from([UpdatedField::Status, UpdatedField::Metadata])
+    );
+    assert_eq!(outcome.delivers_before, refs(&["I_9"]));
+
+    let mut expected = before;
+    expected.status = status(StatusCategory::InProgress, "In Progress");
+    expected.metadata.remove("team.claim");
+    for (key, value) in [
+        ("team.settlement", json!({"outcome": "landed"})),
+        ("team.landing", json!("merged")),
+        ("team.change", json!("https://example.test/pull/1")),
+    ] {
+        expected.metadata.insert(key.to_owned(), value);
+    }
+    assert_eq!(outcome.task, expected, "every field not named is as it was");
+    assert_eq!(
+        source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .unwrap(),
+        expected,
+        "the answer is what a fresh read of the task reports"
+    );
+}
+
+#[tokio::test]
+async fn a_terminal_status_selects_its_option_then_closes_in_the_one_body_update() {
+    let fixture = update_board(settled_task());
+    let source = source(&fixture);
+    let outcome = source
+        .update_task(&id("I_1"), &settlement(StatusCategory::Done, "done"))
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    let seen = fixture.seen();
+    assert_eq!(seen.len(), 2, "{seen:#?}");
+    assert_eq!(
+        seen[0],
+        json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board","itemId":"PVTI_I_1",
+               "fieldId":"FIELD_status","value":{"singleSelectOptionId":"OPT_done"}}])
+    );
+    assert_eq!(seen[1][0], "updateIssue");
+    assert_eq!(
+        seen[1][1]["stateInput"],
+        json!({"value":"CLOSED","stateReason":"COMPLETED"})
+    );
+    assert!(seen[1][1]["body"].is_string(), "{seen:#?}");
+    assert!(seen[1][1].get("title").is_none(), "{seen:#?}");
+    assert_eq!(outcome.task.status, status(StatusCategory::Done, "Done"));
+    assert_eq!(fixture.item("I_1").state, "CLOSED");
+}
+
+#[tokio::test]
+async fn an_open_status_reopens_and_retitles_in_one_update_before_its_option() {
+    let fixture = update_board(settled_task().status("Done").closed(Some("COMPLETED")));
+    let source = source(&fixture);
+    let update = TaskUpdate {
+        title: Some("a task, again".to_owned()),
+        status: Some(status(StatusCategory::Todo, "todo")),
+        ..TaskUpdate::default()
+    };
+    let outcome = source
+        .update_task(&id("I_1"), &update)
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["updateIssue", {"id":"I_1","title":"a task, again",
+                   "stateInput":{"value":"OPEN"}}]),
+            json!(["updateProjectV2ItemFieldValue", {"projectId":"PVT_board","itemId":"PVTI_I_1",
+                   "fieldId":"FIELD_status","value":{"singleSelectOptionId":"OPT_todo"}}]),
+        ]
+    );
+    assert_eq!(
+        outcome.written,
+        BTreeSet::from([UpdatedField::Title, UpdatedField::Status])
+    );
+    assert_eq!(fixture.item("I_1").state, "OPEN");
+}
+
+#[tokio::test]
+async fn an_update_naming_only_what_the_item_holds_sends_one_read_and_no_mutation() {
+    let fixture = update_board(settled_task());
+    let before = source_of(&fixture)
+        .get_task(&id("I_1"))
+        .await
+        .unwrap()
+        .unwrap();
+    let requests_before = fixture.documents().len();
+    let update = TaskUpdate {
+        title: Some("a task".to_owned()),
+        content: Some("The prose.".to_owned()),
+        status: Some(status(StatusCategory::Todo, "todo")),
+        metadata_set: BTreeMap::from([(key("team.kept"), json!([1]))]),
+        metadata_remove: BTreeSet::from([key("team.absent")]),
+        delivers: Some(refs(&["I_9"])),
+        ..TaskUpdate::default()
+    };
+    let outcome = source(&fixture)
+        .update_task(&id("I_1"), &update)
+        .await
+        .expect("an answer")
+        .expect("a task of this board");
+    assert!(fixture.seen().is_empty(), "{:#?}", fixture.seen());
+    assert_eq!(every_request(&fixture)[requests_before..], ["issue"]);
+    assert!(outcome.written.is_empty(), "{:?}", outcome.written);
+    assert_eq!(outcome.task, before);
+}
+
+#[tokio::test]
+async fn a_status_named_by_a_word_of_its_own_lands_on_the_mapped_option() {
+    let fixture = update_board(settled_task());
+    let update = TaskUpdate {
+        status: Some(status(StatusCategory::Cancelled, "failed")),
+        ..TaskUpdate::default()
+    };
+    let outcome = source(&fixture)
+        .update_task(&id("I_1"), &update)
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        outcome.task.status,
+        status(StatusCategory::Cancelled, "Cancelled")
+    );
+    assert_eq!(
+        source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        status(StatusCategory::Cancelled, "Cancelled")
+    );
+}
+
+#[tokio::test]
+async fn named_edges_send_only_the_blocked_by_difference() {
+    let fixture = update_board(settled_task());
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .blocked_by
+        .insert("I_1".to_owned(), vec!["I_2".to_owned()]);
+    let update = TaskUpdate {
+        depends_on: Some(vec![DependencyEdge {
+            from: DependencyEndpoint::from_native(id("I_1"), ItemKind::Task),
+            to: DependencyEndpoint::from_native(id("I_3"), ItemKind::Task),
+            kind: DependencyKind::Blocks,
+        }]),
+        ..TaskUpdate::default()
+    };
+    let outcome = source(&fixture)
+        .update_task(&id("I_1"), &update)
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["removeBlockedBy", {"issueId":"I_1","blockingIssueId":"I_2"}]),
+            json!(["addBlockedBy", {"issueId":"I_1","blockingIssueId":"I_3"}]),
+        ],
+        "no body, title, state or field request for an edge change"
+    );
+    assert_eq!(outcome.written, BTreeSet::from([UpdatedField::DependsOn]));
+
+    // The same set again sends nothing.
+    let again = source(&fixture)
+        .update_task(&id("I_1"), &update)
+        .await
+        .expect("an answer")
+        .expect("a task of this board");
+    assert!(again.written.is_empty());
+    assert_eq!(fixture.seen().len(), 2);
+}
+
+#[tokio::test]
+async fn a_contradictory_update_or_an_absent_task_writes_nothing() {
+    let fixture = update_board(settled_task());
+    let contradiction = TaskUpdate {
+        metadata_set: BTreeMap::from([(key("team.claim"), json!("r-2"))]),
+        metadata_remove: BTreeSet::from([key("team.claim")]),
+        ..TaskUpdate::default()
+    };
+    let error = source(&fixture)
+        .update_task(&id("I_1"), &contradiction)
+        .await
+        .expect_err("a contradiction");
+    assert!(matches!(error, SourceError::Refused { .. }), "{error:?}");
+    assert!(
+        fixture.documents().is_empty(),
+        "refused before anything is read"
+    );
+    let absent = source(&fixture)
+        .update_task(&id("I_404"), &settlement(StatusCategory::Done, "done"))
+        .await
+        .expect("an answer");
+    assert_eq!(absent, None);
+    assert!(fixture.seen().is_empty());
 }
