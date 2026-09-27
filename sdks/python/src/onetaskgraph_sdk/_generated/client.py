@@ -108,6 +108,30 @@ def _template_file(method: str, file: object) -> str:
     return file
 
 
+def _strings(method: str, option: str, values: object) -> list[str] | tuple[str, ...] | None:
+    """The values of a repeated option, refused unless a list or tuple of strings.
+
+    Checked rather than passed on whatever they are: each becomes one process argument,
+    and anything but a string would reach the binary as its string form — a bare string
+    as one argument per character.
+    """
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        kind = type(values).__name__
+        message = f"{method}: {option} is a {kind}, not a list; next: pass a list of strings"
+        raise TypeError(message)
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            kind = type(value).__name__
+            message = (
+                f"{method}: {option}[{index}] is a {kind}, not a string; next: pass "
+                "each entry as a string"
+            )
+            raise TypeError(message)
+    return values
+
+
 class GeneratedClient:
     """Methods generated from the binary command surface."""
 
@@ -825,9 +849,9 @@ class GeneratedClient:
             file=_template_file("template_render", file),
             default_sources=default_sources,
             page_size=page_size,
-            search_path=search_path,
+            search_path=_strings("template_render", "search_path", search_path),
             set=set,
-            var=var,
+            var=_strings("template_render", "var", var),
             answers=None if answers is None else "-",
             stdin=None if answers is None else _answers_document(answers),
         )
@@ -848,6 +872,6 @@ class GeneratedClient:
             file=_template_file("template_variables", file),
             default_sources=default_sources,
             page_size=page_size,
-            search_path=search_path,
+            search_path=_strings("template_variables", "search_path", search_path),
             set=set,
         )

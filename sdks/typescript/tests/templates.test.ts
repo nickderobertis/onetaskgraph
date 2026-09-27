@@ -161,6 +161,8 @@ test("an answer key JSON cannot carry is refused rather than dropped", async () 
   for (const [answers, message] of refusals) {
     const refused = client.templateRender(task, {
       searchPath: [library],
+      // Widened from `unknown` values: a symbol key or an array's own `toJSON` is what the
+      // declared type cannot express, and this is the runtime half of that boundary.
       answers: answers as Record<string, JsonValue>,
     });
     await expect(refused).rejects.toThrow(TypeError);
@@ -171,6 +173,8 @@ test("an answer key JSON cannot carry is refused rather than dropped", async () 
   Object.defineProperty(hiddenVar, "size", { value: "5", enumerable: false });
   const varRefusals: [Record<string, string>, string][] = [
     [
+      // A symbol key is outside what `Record<string, string>` admits: this is the runtime half
+      // of that boundary, for a caller whose mapping reached it untyped.
       { title: "t", [Symbol("size")]: "5" } as Record<string, string>,
       "vars has the key Symbol(size)",
     ],

@@ -568,6 +568,10 @@ ANSWERS_COMMANDS = {("template", "render")}
 # binary is started: see `_template_file` below.
 TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
 
+# The repeated options of those commands that generated methods check are strings before the
+# binary is started: see `_strings` below.
+TEMPLATE_STRING_LISTS = {"search_path", "var"}
+
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     """Generate one typed method per discovered public command."""
@@ -651,6 +655,36 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "        raise TypeError(message)",
         "    return file",
         "",
+        "",
+        "def _strings(",
+        "    method: str, option: str, values: object",
+        ") -> list[str] | tuple[str, ...] | None:",
+        '    """The values of a repeated option, refused unless a list or tuple of strings.',
+        "",
+        "    Checked rather than passed on whatever they are: each becomes one process argument,",
+        "    and anything but a string would reach the binary as its string form — a bare string",
+        "    as one argument per character.",
+        '    """',
+        "    if values is None:",
+        "        return None",
+        "    if not isinstance(values, (list, tuple)):",
+        "        kind = type(values).__name__",
+        "        message = (",
+        '            f"{method}: {option} is a {kind}, not a list; next: pass a list of "',
+        '            "strings"',
+        "        )",
+        "        raise TypeError(message)",
+        "    for index, value in enumerate(values):",
+        "        if not isinstance(value, str):",
+        "            kind = type(value).__name__",
+        "            message = (",
+        '                f"{method}: {option}[{index}] is a {kind}, not a string; next: pass "',
+        '                "each entry as a string"',
+        "            )",
+        "            raise TypeError(message)",
+        "    return values",
+        "",
+        "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
@@ -714,6 +748,12 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
         if command in TEMPLATE_FILE_COMMANDS:
             passed[0] = f"file=_template_file({name!r}, file)"
+            passed = [
+                f"{item}=_strings({name!r}, {item!r}, {item})"
+                if item in TEMPLATE_STRING_LISTS
+                else entry
+                for item, entry in zip([*taken, *required, *keywords], passed, strict=True)
+            ]
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
             passed.append("stdin=None if answers is None else _answers_document(answers)")

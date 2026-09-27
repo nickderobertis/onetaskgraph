@@ -220,3 +220,54 @@ def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_
     # The remedy the refusal names: the same file spelled from the directory it is in.
     (tmp_path / "-dashed.md").write_text("dashed\n", encoding="utf-8")
     assert run(client.template_render("./-dashed.md")).body == "dashed\n"
+
+
+def test_a_search_path_or_var_that_is_not_strings_is_refused_before_the_binary_is_started(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Each entry becomes one process argument, so only a list or tuple of strings is sent."""
+    task, library = template(tmp_path)
+    client = Client(binary, cwd=tmp_path)
+    # Deliberately outside the declared types, as a caller whose values reached it untyped.
+    refusals: list[tuple[object, str]] = [
+        (str(library), "search_path is a str, not a list"),
+        ([str(library), 7], r"search_path\[1\] is a int, not a string"),
+        ([library], r"search_path\[0\] is a \w*Path, not a string"),
+    ]
+    for search_path, message in refusals:
+        with pytest.raises(TypeError, match=f"template_variables: ({message})"):
+            run(
+                client.template_variables(
+                    str(task),
+                    search_path=search_path,  # ty: ignore[invalid-argument-type]
+                )
+            )
+        with pytest.raises(TypeError, match=f"template_render: ({message})"):
+            run(
+                client.template_render(
+                    str(task),
+                    search_path=search_path,  # ty: ignore[invalid-argument-type]
+                )
+            )
+    for var, message in [
+        ("title=t", "var is a str, not a list"),
+        (["title=t", 5], r"var\[1\] is a int, not a string"),
+    ]:
+        with pytest.raises(TypeError, match=f"template_render: {message}"):
+            run(
+                client.template_render(
+                    str(task),
+                    search_path=[str(library)],
+                    var=var,  # ty: ignore[invalid-argument-type]
+                )
+            )
+
+    # A tuple of strings is a sequence the binary is handed as it is.
+    rendered = run(
+        client.template_render(
+            str(task),
+            search_path=(str(library),),
+            var=("title=t", "size=1", "steps=[a]"),
+        )
+    )
+    assert rendered.answers["title"] == "t"
