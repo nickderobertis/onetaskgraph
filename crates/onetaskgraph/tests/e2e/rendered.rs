@@ -1020,6 +1020,34 @@ fn documents_are_created_on_both_kinds_of_source_and_their_answers_read_where_ke
             );
         }
 
+        // A dry run reports the change it would make and writes nothing, on either kind.
+        let before = plan.json(&["document", "show", &id]);
+        let files = snapshot(&plan.notes);
+        let dry = plan.json(&[
+            "document",
+            "render",
+            &id,
+            "--template",
+            &plan.template(),
+            "--search-path",
+            &plan.search_path(),
+            "--var",
+            "goal=Design it again",
+            "--no-interactive",
+            "--dry-run",
+        ]);
+        assert_eq!(dry["changed"], true, "{dry:#}");
+        assert_ne!(
+            dry["body"], before["items"][0]["item"]["content"],
+            "the dry run rendered the new answer"
+        );
+        assert_eq!(
+            plan.json(&["document", "show", &id]),
+            before,
+            "a dry run wrote"
+        );
+        assert_eq!(snapshot(&plan.notes), files, "a dry run changed the folder");
+
         // Regenerated in place, on either kind.
         let regenerated = plan.json(&[
             "document",
@@ -1941,6 +1969,27 @@ fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name()
     .trim()
     .to_owned();
     assert_eq!(plain, "hosted:plain");
+    let memo = stdout(&plan.exits(
+        &[
+            "document",
+            "create",
+            "hosted",
+            "--project",
+            "P-1",
+            "--title",
+            "Memo",
+            "--body-file",
+            &plan.file("memo.md", "Memo."),
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    assert_eq!(memo, "hosted:memo");
+    assert_eq!(
+        plan.json(&["document", "show", "notes:memo"])["items"][0]["item"]["content"],
+        "Memo."
+    );
 
     // An item rendered in-process, with its provenance and its answers in its file, is refused
     // every read of its answers and every regenerate through the host, a dry run included.

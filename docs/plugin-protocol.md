@@ -392,14 +392,18 @@ its `result`; the JSON shape of every contract type in them is what
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
 
-The template operations are not carried: there is no method for a create from a template,
-for a read of an item's stored template answers, or for a regenerate in place
-(`TaskSource::write_task_rendered`, `write_document_rendered`, `task_template_answers`,
-`document_template_answers`, `set_task_rendering`, `set_document_rendering`). The engine
-refuses each for a source hosted over this protocol before sending anything, naming the
-source and the operation — it never stands `write_task` in for a create from a template,
-which would land the content and its provenance without the answers a regenerate needs. A
-plain-body create is `write_task` and crosses as it always has.
+The template operations are not carried. There is no method for any of these, and the
+engine refuses each for a source hosted over this protocol before sending anything, naming
+the source and the operation:
+
+- `task_template_answers` and `document_template_answers`, a read of an item's stored
+  template answers;
+- `write_task_rendered` and `write_document_rendered`, a create from a template;
+- `set_task_rendering` and `set_document_rendering`, a regenerate in place.
+
+The engine never stands `write_task` in for a create from a template, which would land the
+content and its provenance without the answers a regenerate needs. A plain-body create is
+`write_task` or `write_document` and crosses as it always has.
 
 ### 4.1 Common parameter shapes
 

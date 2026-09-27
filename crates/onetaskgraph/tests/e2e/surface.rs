@@ -607,6 +607,7 @@ fn json_objects(text: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
 }
 
 #[test]
+// llmlint: ignore[tests_mirror_real_usage] This is a drift gate between the documents and the one place the loader document's keys are spelled; the CLI reads a loader document and ignores every other key, so no invocation can enumerate the keys it reads, and the provenance half already comes from the binary's own `schema` output.
 fn the_documents_spell_the_provenance_entry_and_the_loader_document_as_the_binary_reads_them() {
     // The README and `docs/metadata.md` each show the two shapes a caller writes against: the
     // `onetaskgraph.template` entry an item records, and the loader document a caller supplies.
@@ -669,6 +670,7 @@ fn the_documents_spell_the_provenance_entry_and_the_loader_document_as_the_binar
 }
 
 #[test]
+// llmlint: ignore[tests_mirror_real_usage] This is a drift gate between `docs/metadata.md` and the constants each reserved key is spelled once as; the CLI refuses the whole `onetaskgraph.` namespace by prefix, so no invocation enumerates the keys, and reading the constants is what makes a key added in code without the document fail.
 fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
     // `docs/metadata.md` lists every key of the reserved `onetaskgraph.` namespace, and counts
     // them in words. Both are held to the constants each key is spelled once as, so a key added

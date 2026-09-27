@@ -341,6 +341,31 @@ compare(
     "`InitializeParams`",
 )
 
+# The trait methods the protocol does not carry, both ways against the list §4 gives of
+# them: a method exempted here and missing from that list is one a plugin author is never
+# told not to expect, and one the list names that is not exempted is prose about a method
+# that is either carried or gone.
+NOT_CARRIED_LEAD = "The template operations are not carried."
+carried_lead = document.find(NOT_CARRIED_LEAD)
+if carried_lead < 0:
+    refuse(
+        f"docs/plugin-protocol.md no longer says \"{NOT_CARRIED_LEAD}\", which is where the "
+        "methods TEMPLATE_OPERATIONS exempts are listed.",
+        "restore that paragraph and its list after §4's method table, or update this check.",
+    )
+listed_lines = []
+for line in document[carried_lead:].split("\n\n", 2)[1].splitlines():
+    if line.startswith("- ") or (listed_lines and line.startswith("  ")):
+        listed_lines.append(line)
+listed = set(re.findall(r"`([a-z_]+)`", " ".join(listed_lines)))
+compare(
+    "template operation not carried",
+    {name for name, why in NOT_METHODS.items() if why is TEMPLATE_OPERATIONS},
+    listed,
+    {},
+    "`NOT_METHODS`",
+)
+
 trait = re.search(r"pub trait TaskSource: Send \+ Sync \{(.*?)\n\}", source_rs, re.DOTALL)
 if trait is None:
     refuse(
