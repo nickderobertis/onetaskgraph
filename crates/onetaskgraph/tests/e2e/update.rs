@@ -1051,3 +1051,116 @@ fn removing_the_only_metadata_key_takes_the_block_with_it_and_a_doubled_key_is_r
     );
     assert_eq!(read(&root, "D"), doubled, "a refused removal wrote nothing");
 }
+
+/// The ticket each `delivered` entry of an answer names, beside its outcome.
+fn tickets(answer: &Value) -> Vec<(&str, &str)> {
+    answer["delivered"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|entry| {
+            (
+                entry["ticket"].as_str().expect("a ticket"),
+                entry["outcome"].as_str().expect("an outcome"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_board_update_moves_delivers_and_records_a_far_edge_in_the_one_body_update() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "github-projects", "config": config}
+    })));
+    let id = qualified(SOURCE, "T-1");
+    let three = qualified(SOURCE, "T-3");
+    let four = qualified(SOURCE, "T-4");
+    let before = shown("board", &sandbox, &id);
+
+    // A changed list is written into the deliverer's slot, and the ticket gains the deliverer.
+    let gained = answered(
+        "delivers",
+        &sandbox,
+        &["--json", "task", "update", &id, "--delivers", &three],
+    );
+    assert_eq!(written(&gained), ["delivers"]);
+    assert_eq!(tickets(&gained), [(three.as_str(), "unchanged")]);
+    assert_eq!(gained["task"]["delivers"], json!([three]));
+    assert_eq!(
+        shown("delivers", &sandbox, &three)["delivered_by"],
+        json!([id])
+    );
+
+    // Swapping it keeps both tickets in step: the new one gains the deliverer and moves to
+    // its status, and the dropped one loses it.
+    let swapped = answered(
+        "delivers",
+        &sandbox,
+        &["--json", "task", "update", &id, "--delivers", &four],
+    );
+    assert_eq!(written(&swapped), ["delivers"]);
+    assert_eq!(
+        tickets(&swapped),
+        [(four.as_str(), "written"), (three.as_str(), "unchanged")]
+    );
+    let dropped = shown("delivers", &sandbox, &three);
+    assert!(dropped.get("delivered_by").is_none(), "{dropped}");
+    let joined = shown("delivers", &sandbox, &four);
+    assert_eq!(joined["delivered_by"], json!([id]));
+    assert_eq!(joined["status"]["category"], "todo");
+
+    // A far end in another source cannot be a `blockedBy` of this board, so it is recorded in
+    // the slot by the one body update; the native edge the issue already holds sends nothing.
+    let from = board.served().len();
+    let far = answered(
+        "far",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            &id,
+            "--depends-on",
+            &qualified(SOURCE, "T-2"),
+            "--depends-on",
+            "elsewhere:T-9",
+        ],
+    );
+    assert_eq!(written(&far), ["depends-on"]);
+    assert_eq!(far["delivered"], json!([]));
+    let mutations: Vec<String> = requests_since(&board, from)
+        .into_iter()
+        .filter(|request| request != "read")
+        .collect();
+    assert_eq!(
+        mutations,
+        ["updateIssue"],
+        "one body update and nothing else"
+    );
+    let body = board.body("T-1");
+    assert!(
+        body.as_str().is_some_and(|body| body
+            .contains(r#""onetaskgraph.depends_on":[{"id":"elsewhere:T-9","kind":"task"}]"#)),
+        "{body}"
+    );
+    assert_eq!(
+        depends_on(&sandbox, &id),
+        [qualified(SOURCE, "T-2"), "elsewhere:T-9".to_owned()]
+    );
+    let after = shown("far", &sandbox, &id);
+    // Everything but the two lists this journey named reads back as it was.
+    let unmoved = |task: &Value| {
+        let mut members = unnamed(task);
+        members.retain(|(member, _)| *member != "delivers");
+        members
+    };
+    assert_eq!(unmoved(&after), unmoved(&before));
+    assert_eq!(after["delivers"], json!([four]));
+    for field in [
+        "title", "content", "status", "priority", "labels", "metadata",
+    ] {
+        assert_eq!(after[field], before[field], "{field}");
+    }
+}

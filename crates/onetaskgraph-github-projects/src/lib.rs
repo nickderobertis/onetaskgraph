@@ -4806,7 +4806,6 @@ impl GitHubProjectsSource {
         };
         let before = item.task()?;
 
-        // The status: which option, and whether the issue's state has to move to match it.
         let mut status_move = None;
         if let (Some(status), Some(target)) = (&update.status, target) {
             let board = self.status_board(&item).await?;
@@ -4849,7 +4848,6 @@ impl GitHubProjectsSource {
             }
         }
 
-        // The priority: a field write only when the item does not already hold it.
         let mut priority_move = None;
         if let Some(priority) = update.priority
             && self.priorities.is_some()
@@ -4867,7 +4865,8 @@ impl GitHubProjectsSource {
             }
         }
 
-        // The edges: which far ends the issue's own `blockedBy` holds, and which the slot does.
+        // Resolved before the body is composed, because a far end `blockedBy` cannot name is
+        // recorded in the slot, and the slot travels in the one body update below.
         let edges = match &update.depends_on {
             Some(edges) => Some(
                 self.partition_edges(BoardKind::Work(ItemKind::Task), item.content_kind, edges)
@@ -4876,7 +4875,6 @@ impl GitHubProjectsSource {
             None => None,
         };
 
-        // The body: the visible content and the metadata slot, composed once.
         let mut slot = item.slot.clone();
         for (key, value) in &update.metadata_set {
             slot.insert(key.as_str().to_owned(), value.clone());
@@ -4920,8 +4918,8 @@ impl GitHubProjectsSource {
         let recorded_moves =
             slot.get(DependencyEdge::RECORDED_KEY) != item.slot.get(DependencyEdge::RECORDED_KEY);
 
-        // One content update: the title and the body when they differ, and the state when the
-        // status moves it.
+        // One `updateIssue` carries all three, because every mutation spends the secondary
+        // limiter and the title, body and state are one mutation's inputs.
         let mut fields = serde_json::Map::new();
         if let Some(title) = update.title.as_ref().filter(|title| **title != item.title) {
             fields.insert("title".to_owned(), json!(title));
@@ -4958,7 +4956,6 @@ impl GitHubProjectsSource {
             blocked_by_moved = self.reconcile_blocked_by(&item.id, native).await?;
         }
 
-        // The item as those writes left it.
         if let Some(title) = &update.title {
             item.title.clone_from(title);
         }

@@ -433,7 +433,8 @@ export function taskUpdateFlags(options: unknown): string[] {
     args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
   }
   if (options.metadata !== undefined) {
-    // Checked as a whole first, as a create's metadata is.
+    // Validated as one document before any flag is pushed, so a value JSON cannot carry
+    // refuses the call here rather than leaving a half-built argument list.
     const checked: Record<string, JsonValue> = JSON.parse(
       jsonDocument(options.metadata, method, "metadata"),
     );
