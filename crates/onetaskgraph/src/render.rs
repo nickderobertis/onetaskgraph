@@ -206,8 +206,11 @@ pub fn regenerated(regenerated: &Regenerated, dry_run: bool) -> String {
     columns(&[
         vec!["id:".to_owned(), regenerated.id.to_string()],
         vec!["changed:".to_owned(), changed.to_owned()],
-        vec!["digest:".to_owned(), regenerated.digest.clone()],
-        vec!["body digest:".to_owned(), regenerated.body_digest.clone()],
+        vec!["digest:".to_owned(), regenerated.digest.to_string()],
+        vec![
+            "body digest:".to_owned(),
+            regenerated.body_digest.to_string(),
+        ],
     ])
 }
 

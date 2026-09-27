@@ -8500,6 +8500,11 @@ export const runtimeSchemas = {
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8510,16 +8515,16 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "body_digest": {
-        "description": "The SHA-256 of the rendered content: what its provenance now records.",
-        "type": "string"
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the rendered content: what its provenance now records."
       },
       "changed": {
         "description": "Whether its content, its provenance or its stored answers differ from what it held —\nwhat a write changed, or for a dry run what one would change.",
         "type": "boolean"
       },
       "digest": {
-        "description": "The chain digest it rendered with.",
-        "type": "string"
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The chain digest it rendered with."
       },
       "id": {
         "$ref": "#/$defs/GlobalId",

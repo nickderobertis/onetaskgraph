@@ -210,7 +210,11 @@ async fn a_regenerate_overlays_new_answers_and_an_unchanged_one_writes_nothing()
         regenerated.body, fresh.body,
         "a fresh render of the overlaid answers"
     );
-    assert_eq!(regenerated.digest, fresh.digest, "the chain did not change");
+    assert_eq!(
+        regenerated.digest.as_str(),
+        fresh.digest,
+        "the chain did not change"
+    );
     assert_eq!(
         task(&fixture.engine, &id).await.content.as_deref(),
         Some(fresh.body.as_str())
@@ -260,7 +264,7 @@ async fn an_edited_loader_document_changes_the_digest_and_the_rendering() {
         .unwrap();
 
     assert_ne!(
-        regenerated.digest,
+        regenerated.digest.as_str(),
         before.digest.as_str(),
         "an inline pair is a chain source"
     );
@@ -268,7 +272,7 @@ async fn an_edited_loader_document_changes_the_digest_and_the_rendering() {
     let after = TemplateProvenance::read(&task(&fixture.engine, &id).await.metadata)
         .unwrap()
         .unwrap();
-    assert_eq!(after.digest.as_str(), regenerated.digest);
+    assert_eq!(after.digest.as_str(), regenerated.digest.as_str());
     assert_eq!(
         after.answers_digest, before.answers_digest,
         "the same answers"
@@ -418,7 +422,7 @@ async fn a_regenerate_needs_a_template_it_can_read_and_never_turns_a_reference_i
         .unwrap();
     assert!(regenerated.body.starts_with("Edited. Goal: From a file"));
     assert_ne!(
-        regenerated.digest,
+        regenerated.digest.as_str(),
         recorded.digest.as_str(),
         "the file changed"
     );
@@ -649,7 +653,10 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
     let read = task(&fixture.engine, &created.id).await;
     assert_eq!(read.content.as_deref(), Some(regenerated.body.as_str()));
     let provenance = TemplateProvenance::read(&read.metadata).unwrap().unwrap();
-    assert_eq!(provenance.body_digest.as_str(), regenerated.body_digest);
+    assert_eq!(
+        provenance.body_digest.as_str(),
+        regenerated.body_digest.as_str()
+    );
     assert_eq!(provenance.template, "caller:task/default");
     assert!(matches!(
         fixture
@@ -693,7 +700,7 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
             .unwrap()
             .body_digest
             .as_str(),
-        regenerated.body_digest
+        regenerated.body_digest.as_str()
     );
 }
 

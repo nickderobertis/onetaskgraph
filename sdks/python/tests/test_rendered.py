@@ -109,7 +109,7 @@ def test_a_task_is_created_regenerated_and_its_answers_read_without_a_prompt(
     assert isinstance(regenerated, Regenerated)
     assert regenerated.changed
     assert regenerated.body == "Goal: Ship it again\n- build\n", "steps came from storage"
-    assert regenerated.digest == recorded.digest.root
+    assert regenerated.digest.root == recorded.digest.root
     again = run(client.task_render(identifier))
     assert not again.changed
 

@@ -31,8 +31,8 @@ use super::{Delivered, Engine, EngineError, Qualified};
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 use crate::template::{
-    Answers, RenderedTemplate, Template, TemplateError, TemplateInput, TemplateProvenance,
-    body_digest,
+    Answers, RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput,
+    TemplateProvenance,
 };
 
 /// The content a create writes: text given as it is, or a template's rendering.
@@ -261,9 +261,9 @@ pub struct Regenerated {
     /// The item regenerated.
     pub id: GlobalId,
     /// The chain digest it rendered with.
-    pub digest: String,
+    pub digest: Sha256Digest,
     /// The SHA-256 of the rendered content: what its provenance now records.
-    pub body_digest: String,
+    pub body_digest: Sha256Digest,
     /// Whether its content, its provenance or its stored answers differ from what it held —
     /// what a write changed, or for a dry run what one would change.
     pub changed: bool,
@@ -813,8 +813,8 @@ impl Engine {
         }
         Ok(Regenerated {
             id: id.clone(),
-            digest: rendered.digest,
-            body_digest: body_digest(&rendered.body),
+            digest: provenance.digest,
+            body_digest: provenance.body_digest,
             changed,
             body: rendered.body,
         })

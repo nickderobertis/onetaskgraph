@@ -18,10 +18,20 @@ class GlobalId(RootModel[str]):
     ]
 
 
+class Sha256Digest(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="`sha256:` and 64 lowercase hex digits.",
+            pattern="^sha256:[0-9a-f]{64}$",
+        ),
+    ]
+
+
 class Regenerated(BaseModel):
     body: Annotated[str, Field(description="The rendered content.")]
     body_digest: Annotated[
-        str,
+        Sha256Digest,
         Field(description="The SHA-256 of the rendered content: what its provenance now records."),
     ]
     changed: Annotated[
@@ -30,5 +40,5 @@ class Regenerated(BaseModel):
             description="Whether its content, its provenance or its stored answers differ from what it held —\nwhat a write changed, or for a dry run what one would change."
         ),
     ]
-    digest: Annotated[str, Field(description="The chain digest it rendered with.")]
+    digest: Annotated[Sha256Digest, Field(description="The chain digest it rendered with.")]
     id: Annotated[GlobalId, Field(description="The item regenerated.")]
