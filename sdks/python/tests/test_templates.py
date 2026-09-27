@@ -61,9 +61,9 @@ def template(tmp_path: Path) -> tuple[Path, Path]:
     """Write the task template and, in a directory of its own, the base it extends."""
     library = tmp_path / "library"
     library.mkdir()
-    (library / "base.md").write_text(BASE, encoding="utf-8")
+    (library / "base.md").write_text(BASE, encoding="utf-8", newline="\n")
     task = tmp_path / "task.md"
-    task.write_text(TASK, encoding="utf-8")
+    task.write_text(TASK, encoding="utf-8", newline="\n")
     return task, library
 
 
@@ -218,7 +218,7 @@ def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_
             )
 
     # The remedy the refusal names: the same file spelled from the directory it is in.
-    (tmp_path / "-dashed.md").write_text("dashed\n", encoding="utf-8")
+    (tmp_path / "-dashed.md").write_text("dashed\n", encoding="utf-8", newline="\n")
     assert run(client.template_render("./-dashed.md")).body == "dashed\n"
 
 
