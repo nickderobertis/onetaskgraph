@@ -50,13 +50,10 @@ fn answers() -> BTreeMap<String, Value> {
     serde_json::from_value(json!({"goal": "Ship it"})).unwrap()
 }
 
+/// The entry a rendering write carries. A plugin stores it as it stores any metadata value and
+/// never reads its shape, which is the engine's, so an opaque value is all a write here needs.
 fn provenance() -> Value {
-    json!({
-        "template": "/templates/task.md",
-        "digest": format!("sha256:{}", "a".repeat(64)),
-        "body_digest": format!("sha256:{}", "b".repeat(64)),
-        "answers_digest": format!("sha256:{}", "c".repeat(64)),
-    })
+    json!({"rendered": "by this test"})
 }
 
 fn task(content: &str) -> Task {
@@ -76,10 +73,7 @@ fn task(content: &str) -> Task {
         location: None,
         created_at: None,
         updated_at: None,
-        metadata: serde_json::from_value(
-            json!({"onetaskgraph.origin": "plans:alpha", MetadataKey::TEMPLATE_KEY: provenance()}),
-        )
-        .unwrap(),
+        metadata: BTreeMap::from([(MetadataKey::TEMPLATE_KEY.to_owned(), provenance())]),
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
@@ -276,6 +270,15 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
                 .unwrap();
             assert_eq!(document_content(&*source, &plain).await, again, "update");
             source
+                .write_document_rendered(&write(Some(&rendered), document(again)), &answers())
+                .await
+                .unwrap();
+            assert_eq!(
+                document_content(&*source, &rendered).await,
+                again,
+                "rendered update"
+            );
+            source
                 .set_document_rendering(&rendered, again, &provenance(), &answers())
                 .await
                 .unwrap()
@@ -304,31 +307,88 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
     }
 }
 
+/// Assert that `result` is a refusal naming the field `content`.
+fn refuses_content<T: std::fmt::Debug>(result: &Result<T, onetaskgraph_plugin_api::SourceError>) {
+    assert!(
+        matches!(
+            result,
+            Err(onetaskgraph_plugin_api::SourceError::Refused { message })
+                if message.contains("`content`")
+        ),
+        "{result:?}"
+    );
+}
+
+/// Every file under `root`, with its bytes.
+fn files(root: &tempfile::TempDir) -> BTreeMap<String, Vec<u8>> {
+    let mut found = BTreeMap::new();
+    let mut folders = vec![root.path().to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                let name = path
+                    .strip_prefix(root.path())
+                    .unwrap()
+                    .display()
+                    .to_string();
+                found.insert(name, fs::read(&path).unwrap());
+            }
+        }
+    }
+    found
+}
+
 #[tokio::test]
 async fn a_plain_write_whose_content_would_read_back_otherwise_is_refused_and_writes_nothing() {
     let (root, source) = folder();
+    let task_id = source
+        .write_task(&write(None, task(ENDINGS[1])))
+        .await
+        .unwrap();
+    let document_id = source
+        .write_document(&write(None, document(ENDINGS[1])))
+        .await
+        .unwrap();
+    let project_id = source
+        .write_project(&write(None, project(ENDINGS[1])))
+        .await
+        .unwrap();
+    let before = files(&root);
+
+    // Content ending in what a task or a document reads as its stored answers would read back
+    // without that block, and content ending in a lone carriage return without it.
     let forged = format!(
         "Text.\n\n{}\nforged: true\n{}\n",
         onetaskgraph_local_md::ANSWERS_OPEN,
         onetaskgraph_local_md::ANSWERS_CLOSE
     );
     for content in [forged.as_str(), "Ends in a lone carriage return\r"] {
-        let refused = source.write_task(&write(None, task(content))).await;
-        assert!(
-            matches!(
-                &refused,
-                Err(onetaskgraph_plugin_api::SourceError::Refused { message })
-                    if message.contains("`content`")
-            ),
-            "{refused:?}"
+        refuses_content(&source.write_task(&write(None, task(content))).await);
+        refuses_content(
+            &source
+                .write_task(&write(Some(&task_id), task(content)))
+                .await,
         );
-        assert!(
-            !root.path().join("tasks").exists()
-                || fs::read_dir(root.path().join("tasks"))
-                    .unwrap()
-                    .next()
-                    .is_none(),
-            "nothing is written"
+        refuses_content(&source.write_document(&write(None, document(content))).await);
+        refuses_content(
+            &source
+                .write_document(&write(Some(&document_id), document(content)))
+                .await,
         );
     }
+    // A project keeps no answers, so only the carriage return cannot be held.
+    let lone = "Ends in a lone carriage return\r";
+    refuses_content(&source.write_project(&write(None, project(lone))).await);
+    refuses_content(
+        &source
+            .write_project(&write(Some(&project_id), project(lone)))
+            .await,
+    );
+
+    assert_eq!(files(&root), before, "no file is created or changed");
+    assert_eq!(task_content(&*source, &task_id).await, ENDINGS[1]);
+    assert_eq!(document_content(&*source, &document_id).await, ENDINGS[1]);
 }

@@ -2165,18 +2165,15 @@ variables:\n  \
 ---\n\
 # {{ goal }}\n\n- two\n  lines";
 
-/// How a rendering may end: in no newline, in one and in two.
 const ENDINGS: [&str; 3] = ["", "\n", "\n\n"];
 
 impl Plan {
-    /// The [`EXACT`] template with `ending` after it, written under the templates directory.
     fn exact_template(&self, ending: &str) -> String {
         let file = self.templates.join(format!("exact-{}.md", ending.len()));
         std::fs::write(&file, format!("{EXACT}{ending}")).expect("the template");
         path(&file)
     }
 
-    /// Create a task in `source` from `template`, answering `goal`.
     fn create_exact(&self, source: &str, template: &str, goal: &str) -> String {
         let search_path = self.search_path();
         let answer = format!("goal={goal}");
@@ -2230,8 +2227,6 @@ impl Plan {
         (*recorded == hash, dry["body_digest"] == hash, content)
     }
 
-    /// Assert both drift comparisons report the task `id` as matching its rendering, which is
-    /// `expected`.
     fn matches_rendering(&self, id: &str, template: &str, goal: &str, expected: &str, how: &str) {
         let (recorded, rendered, content) = self.drift(id, template, goal);
         assert_eq!(content, expected, "{how}: the content, byte for byte");
@@ -2245,8 +2240,6 @@ impl Plan {
         );
     }
 
-    /// Replace one interior line of the task `id`'s content by hand, and assert both drift
-    /// comparisons report it as edited.
     fn edited_by_hand(&self, id: &str, template: &str, goal: &str, how: &str) {
         let content = self.task(id)["content"].as_str().unwrap().to_owned();
         let edited = content.replacen("- two\n", "- three\n", 1);
@@ -2260,6 +2253,11 @@ impl Plan {
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: it drives the binary against folders of Markdown, with no credential and no
+// network, in well under a second. A copy and a regenerate are the engine's, so the binary
+// crate is the narrowest project that can own the journey — AGENTS.md forbids a plugin crate
+// depending on the engine at any depth — which is the reason `mod rendered;` states.
 #[test]
 fn a_rendering_copied_between_folders_matches_it_and_an_interior_edit_does_not() {
     for ending in ENDINGS {
@@ -2296,6 +2294,11 @@ fn a_rendering_copied_between_folders_matches_it_and_an_interior_edit_does_not()
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: it drives the binary against a folder of Markdown and the loopback GitHub board, with no credential and no
+// network, in well under a second. A copy and a regenerate are the engine's, so the binary
+// crate is the narrowest project that can own the journey — AGENTS.md forbids a plugin crate
+// depending on the engine at any depth — which is the reason `mod rendered;` states.
 #[test]
 fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_does_not() {
     for ending in ENDINGS {
@@ -2303,7 +2306,6 @@ fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_
         let template = plan.exact_template(ending);
         let expected = |goal: &str| format!("# {goal}\n\n- two\n  lines{ending}");
 
-        // A plain create, from a body file holding the rendering's bytes.
         let body = plan.file("plain.md", &expected("Plain"));
         let plain = stdout(&plan.exits(
             &[
@@ -2327,7 +2329,6 @@ fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_
             "plain create ending {ending:?}"
         );
 
-        // A rendered create, then a rendering write over it.
         let rendered = plan.create_exact("board", &template, "Ship");
         let how = format!("rendered create ending {ending:?}");
         plan.matches_rendering(&rendered, &template, "Ship", &expected("Ship"), &how);
@@ -2344,7 +2345,6 @@ fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_
             &how,
         );
 
-        // A copy from a folder onto the board, then a copy of a new rendering over it.
         let authored = plan.create_exact("notes", &template, "Copied");
         let copied =
             plan.json(&["task", "copy", &authored, "--to", "board"])["items"][0]["destination"]

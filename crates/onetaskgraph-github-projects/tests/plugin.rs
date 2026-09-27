@@ -12624,14 +12624,10 @@ fn stored_content(fixture: &Fixture, content_id: &str) -> String {
         .map_or(body.clone(), |at| body[..at].to_owned())
 }
 
-/// A rendered item's provenance entry, as a rendering write carries it.
+/// The entry a rendering write carries. A plugin stores it as it stores any metadata value and
+/// never reads its shape, which is the engine's, so an opaque value is all a write here needs.
 fn rendered_provenance() -> Value {
-    json!({
-        "template": "/templates/task.md",
-        "digest": format!("sha256:{}", "a".repeat(64)),
-        "body_digest": format!("sha256:{}", "b".repeat(64)),
-        "answers_digest": format!("sha256:{}", "c".repeat(64)),
-    })
+    json!({"rendered": "by this test"})
 }
 
 #[tokio::test]
@@ -12782,6 +12778,23 @@ async fn every_document_and_project_content_write_stores_the_bytes_exactly() {
                 Some(again)
             );
 
+            rendered.content = Some(again.to_owned());
+            source
+                .write_document_rendered(
+                    &ItemWrite {
+                        target: Some(from_template.clone()),
+                        item: rendered.clone(),
+                        depends_on: vec![],
+                    },
+                    &answers,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                stored_content(&fixture, &from_template.0),
+                again,
+                "rendered update"
+            );
             source
                 .set_document_rendering(&from_template, again, &rendered_provenance(), &answers)
                 .await

@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_in_memory::{InMemoryConfig, InMemorySource};
-use onetaskgraph_plugin_api::{Document, ItemWrite, NativeId, Project, Task, TaskSource};
+use onetaskgraph_plugin_api::{
+    Document, ItemWrite, MetadataKey, NativeId, Project, Task, TaskSource,
+};
 use serde_json::{Value, json};
 
 /// The three endings, on content with interior structure a trim would also leave alone.
@@ -30,20 +32,17 @@ fn answers() -> BTreeMap<String, Value> {
     serde_json::from_value(json!({"goal": "Ship it"})).unwrap()
 }
 
+/// The entry a rendering write carries. A plugin stores it as it stores any metadata value and
+/// never reads its shape, which is the engine's, so an opaque value is all a write here needs.
 fn provenance() -> Value {
-    json!({
-        "template": "/templates/task.md",
-        "digest": format!("sha256:{}", "a".repeat(64)),
-        "body_digest": format!("sha256:{}", "b".repeat(64)),
-        "answers_digest": format!("sha256:{}", "c".repeat(64)),
-    })
+    json!({"rendered": "by this test"})
 }
 
 fn task(content: &str) -> Task {
     serde_json::from_value(json!({
         "id": "T-1", "title": "Alpha", "content": content,
         "status": {"category": "todo", "name": "Todo"}, "labels": [],
-        "metadata": {"onetaskgraph.origin": "plans:alpha", "onetaskgraph.template": provenance()},
+        "metadata": {MetadataKey::TEMPLATE_KEY: provenance()},
     }))
     .expect("a task")
 }
@@ -168,6 +167,15 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
                 .await
                 .unwrap();
             assert_eq!(document_content(&source, &plain).await, again, "update");
+            source
+                .write_document_rendered(&write(Some(&rendered), document(again)), &answers())
+                .await
+                .unwrap();
+            assert_eq!(
+                document_content(&source, &rendered).await,
+                again,
+                "rendered update"
+            );
             source
                 .set_document_rendering(&rendered, again, &provenance(), &answers())
                 .await
