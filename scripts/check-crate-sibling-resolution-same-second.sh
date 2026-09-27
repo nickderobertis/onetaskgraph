@@ -60,9 +60,12 @@ $(sed 's/^/    /' "$scratch/server.log")" \
   "run 'bash scripts/check-loopback-registries.sh', which drives that launcher's start-up, and repair what it names"
 port="$(cat "$scratch/port")"
 case $port in
-  '' | *[!0-9]*) fatal "scripts/loopback-crate-registry.py reported '$port' where a port number belongs" \
-    "report this — $scratch/port is written by that launcher and nothing else" ;;
+  '' | *[!0-9]*) port="" ;;
 esac
+if [ -z "$port" ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+  fatal "scripts/loopback-crate-registry.py reported '$(cat "$scratch/port")' where a port number belongs" \
+    "report this — $scratch/port is written by that launcher and nothing else"
+fi
 if ! answer="$(PORT="$port" python3 - <<'PY' 2>&1
 import os
 import urllib.error
@@ -91,8 +94,6 @@ PY
   echo "check-crate-sibling-resolution-same-second: next: keep scripts/loopback-crate-registry.py sending no Last-Modified and ignoring If-Modified-Since, then rerun" >&2
   failures=$((failures + 1))
 fi
-kill "$server_pid" 2>/dev/null || true
-server_pid=
 
 cat > "$scratch/shim/sitecustomize.py" <<'PY' || fatal \
   "could not write the mtime shim in $scratch, so nothing would be forced" \
