@@ -20,6 +20,6 @@ class RenderedTemplate(BaseModel):
     digest: Annotated[
         str,
         Field(
-            description="The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is\nthe chain's digest, as `template variables` reports it, unless the render loaded a\ntemplate an expression named; then those files are counted after the chain's."
+            description="The digest of every file the render read, in first-load order: `sha256:` and 64\nlowercase hex digits. The files the chain names by a literal come first, then each\ntemplate an expression named for these answers, in the order the render reached it."
         ),
     ]

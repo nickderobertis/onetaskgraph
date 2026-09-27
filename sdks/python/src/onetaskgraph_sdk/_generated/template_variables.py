@@ -54,7 +54,9 @@ class TemplateVariable(BaseModel):
 class TemplateVariables(BaseModel):
     digest: Annotated[
         str,
-        Field(description="The chain's digest: `sha256:` and 64 lowercase hex digits."),
+        Field(
+            description="The chain's digest: `sha256:` and 64 lowercase hex digits, over every file it reads\nin first-load order — each template an expression names counted as it names one when\nevery variable takes its default."
+        ),
     ]
     template: Annotated[str, Field(description="The rendered template's resolved name.")]
     variables: Annotated[

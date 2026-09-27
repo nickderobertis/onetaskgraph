@@ -715,7 +715,10 @@ them do; this is the inventory of what is owed, not a status board.
 54. `template variables` lists a template's declared set, merged down an `extends`,
     `include` and `import` chain found through `--search-path` directories, with a digest
     stable across runs that moves when any chain file does; a `type` or `items`
-    redeclaration is refused naming both files, and malformed front matter by its key.
+    redeclaration is refused naming both files, and malformed front matter by its key. A
+    template an expression names joins the chain for the answers that name it: its front
+    matter is declared, answered and redeclared like any chain file's, and its bytes are in
+    the digest.
 55. `template render` resolves each variable from `--var`, then the answers file on a path or
     standard input, then its default; every refused answer exits `2` naming it — every
     unanswered required variable in one refusal, and an interactive run on a non-terminal

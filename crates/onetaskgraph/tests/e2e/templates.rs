@@ -595,6 +595,99 @@ fn a_rendered_body_that_cannot_be_written_exits_one_naming_it() {
     assert!(!problem.contains("panicked"), "{problem}");
 }
 
+/// A template an expression names — here by a variable's value — is part of the chain: its
+/// front matter joins the declared set, its answers are held to it, and its bytes to the
+/// digest.
+#[test]
+fn a_template_an_expression_names_declares_variables_like_any_chain_file() {
+    let sandbox = Sandbox::new();
+    let library = sandbox.subdirectory("library");
+    std::fs::write(
+        library.join("detail.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  owner: {description: who owns it}\n---\nowned by {{ owner }}\n",
+    )
+    .expect("written");
+    std::fs::write(
+        library.join("retyped.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  title: {description: t, type: integer}\n---\nx\n",
+    )
+    .expect("written");
+    let root = sandbox.project().join("root.md");
+    std::fs::write(
+        &root,
+        "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which part, default: detail}\n  title: {description: the title}\n---\n# {{ title }}\n{% include kind ~ \".md\" %}",
+    )
+    .expect("written");
+
+    let output = run(
+        &sandbox,
+        &[
+            "template",
+            "variables",
+            path(&root),
+            "--search-path",
+            path(&library),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let described: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    validates(
+        &bundle(&sandbox),
+        "TemplateVariables",
+        &described,
+        "template variables",
+    );
+    assert_eq!(
+        described["variables"][2],
+        json!({"name": "owner", "description": "who owns it", "type": "string",
+               "required": true, "declared_in": "detail.md"})
+    );
+
+    let render = |extra: &[&str]| {
+        let mut arguments = vec![
+            "template",
+            "render",
+            path(&root),
+            "--search-path",
+            path(&library),
+            "--var",
+            "title=Ship it",
+            "--no-interactive",
+            "--json",
+        ];
+        arguments.extend(extra);
+        run(&sandbox, &arguments)
+    };
+    let output = render(&["--var", "owner=ada"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let rendered: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    assert_eq!(rendered["body"], "# Ship it\nowned by ada\n");
+    assert_eq!(rendered["answers"]["owner"], "ada");
+    assert_eq!(
+        rendered["digest"], described["digest"],
+        "the file the expression named is in both digests, in first-load order"
+    );
+
+    let output = render(&[]);
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(2), "{problem}");
+    assert!(
+        problem.contains("a required variable is unanswered: owner"),
+        "{problem}"
+    );
+
+    let output = render(&["--var", "kind=retyped"]);
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{problem}");
+    assert!(
+        problem.contains(
+            "\"title\" is declared with type string in root.md and with type integer in retyped.md"
+        ),
+        "{problem}"
+    );
+}
+
 #[test]
 fn an_undeclared_name_fails_the_render_naming_the_name_and_the_file() {
     let sandbox = Sandbox::new();

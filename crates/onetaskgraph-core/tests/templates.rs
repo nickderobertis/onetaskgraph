@@ -710,15 +710,18 @@ fn a_template_named_by_an_expression_is_loaded_as_the_render_reaches_it() {
         expected_digest(&[("root.md", root), ("plain.md", "a plain part\n")])
     );
 
+    // A file an expression names may declare variables: they join the declared set.
     answers.set("kind", json!("declaring"));
-    let error = template
-        .render(&answers)
-        .expect_err("its declarations came too late");
-    assert!(
-        matches!(&error, TemplateError::Render { message, .. }
-            if message.contains("declaring.md is named by an expression and declares variables")),
-        "{error:?}"
+    let error = template.render(&answers).expect_err("`more` is required");
+    assert_eq!(
+        error,
+        TemplateError::MissingRequired {
+            names: vec!["more".to_owned()]
+        }
     );
+    answers.set("more", json!("given"));
+    assert_eq!(template.render(&answers).expect("renders").body, "x\n");
+    answers.unset("more");
 
     answers.set("kind", json!("nowhere"));
     let error = template.render(&answers).expect_err("nothing resolves it");
@@ -917,7 +920,7 @@ fn a_rendered_digest_moves_when_a_file_an_expression_named_changes() {
 }
 
 #[test]
-fn a_file_an_expression_names_that_cannot_be_read_as_a_template_fails_the_render_as_itself() {
+fn a_file_an_expression_names_that_is_not_a_template_is_refused_as_that_chain_file() {
     let tree = tempfile::tempdir().expect("a temporary directory");
     std::fs::write(tree.path().join("binary.md"), [0xff, 0xfe, 0x00]).expect("written");
     std::fs::write(
@@ -940,8 +943,9 @@ fn a_file_an_expression_names_that_cannot_be_read_as_a_template_fails_the_render
         let mut answers = Answers::new();
         answers.set("kind", json!(kind));
         let error = template.render(&answers).expect_err(kind);
+        // Found through the expression, it is a chain file like any other, and refused as one.
         assert!(
-            matches!(error, TemplateError::Render { .. }),
+            matches!(&error, TemplateError::Malformed { file, .. } if file == &format!("{kind}.md")),
             "{kind}: {error:?}"
         );
         assert!(error.to_string().contains(expected), "{kind}: {error}");
@@ -1021,4 +1025,188 @@ fn a_template_that_is_there_and_cannot_be_read_is_unreadable_not_missing() {
     );
     assert_eq!(error.kind(), "template-unreadable");
     assert!(error.to_string().contains("could not be read"), "{error}");
+}
+
+const DYNAMIC_ROOT: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  kind: {description: which part, default: detail}\n  \
+  title: {description: the title}\n\
+---\n\
+# {{ title }}\n\
+{% include kind ~ \".md\" %}";
+
+const DETAIL: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  owner: {description: who owns it}\n  \
+  title: {description: the detail's word for it}\n\
+---\n\
+owned by {{ owner }}\n\
+{% include \"footer.md\" %}";
+
+const FOOTER: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  year: {description: which year, type: integer, default: 2026}\n\
+---\n\
+({{ year }})\n";
+
+const SUMMARY: &str = "in short\n";
+
+fn dynamic() -> TemplateLoader {
+    TemplateLoader::new()
+        .with_template("root.md", DYNAMIC_ROOT)
+        .with_template("detail.md", DETAIL)
+        .with_template("footer.md", FOOTER)
+        .with_template("summary.md", SUMMARY)
+}
+
+#[test]
+fn a_template_an_expression_names_joins_the_chain_and_its_front_matter_the_declared_set() {
+    let template = dynamic().load_name("root.md").expect("it loads");
+    assert_eq!(template.chain().collect::<Vec<_>>(), ["root.md"]);
+
+    // With every variable at its default the expression names `detail.md`, which names
+    // `footer.md` by a literal: both join, after the chain, in first-load order.
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "detail.md", "footer.md"]
+    );
+    let declared: Vec<(&str, &str, &str)> = expanded
+        .variables()
+        .iter()
+        .map(|variable| {
+            (
+                variable.name(),
+                variable.declared_in(),
+                variable.description(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        declared,
+        [
+            ("kind", "root.md", "which part"),
+            ("title", "root.md", "the title"),
+            ("owner", "detail.md", "who owns it"),
+            ("year", "footer.md", "which year"),
+        ],
+        "a redeclaration in a file an expression names yields to the chain's literals"
+    );
+    assert_eq!(
+        expanded.digest(),
+        expected_digest(&[
+            ("root.md", DYNAMIC_ROOT),
+            ("detail.md", DETAIL),
+            ("footer.md", FOOTER),
+        ])
+    );
+
+    let mut answers = Answers::new();
+    answers
+        .set("title", json!("Ship it"))
+        .set("owner", json!("ada"));
+    let rendered = template.render(&answers).expect("renders");
+    assert_eq!(rendered.body, "# Ship it\nowned by ada\n(2026)\n");
+    assert_eq!(
+        rendered.digest,
+        expanded.digest(),
+        "first-load order, every file read"
+    );
+    assert_eq!(
+        serde_json::to_value(&rendered.answers).expect("serialises"),
+        json!({"kind": "detail", "title": "Ship it", "owner": "ada", "year": 2026})
+    );
+
+    // Its declarations are held to exactly what the chain's are.
+    let mut missing = Answers::new();
+    missing.set("title", json!("t"));
+    assert_eq!(
+        template.render(&missing).expect_err("owner is required"),
+        TemplateError::MissingRequired {
+            names: vec!["owner".to_owned()]
+        }
+    );
+    assert_eq!(
+        template
+            .unanswered(&missing)
+            .expect("typed")
+            .iter()
+            .map(|variable| variable.name().to_owned())
+            .collect::<Vec<_>>(),
+        ["kind", "owner", "year"]
+    );
+    let mut mistyped = answers.clone();
+    mistyped.set_text("year", "soon");
+    assert!(matches!(
+        template.render(&mistyped).expect_err("not an integer"),
+        TemplateError::MistypedAnswer { name, .. } if name == "year"
+    ));
+
+    // The answers decide the file, and so the declared set: `summary.md` declares nothing, so
+    // with it an answer to `owner` answers no declared variable.
+    let mut summary = answers.clone();
+    summary.set("kind", json!("summary"));
+    assert_eq!(
+        template
+            .render(&summary)
+            .expect_err("owner is not declared"),
+        TemplateError::UnknownAnswer {
+            names: vec!["owner".to_owned()]
+        }
+    );
+    summary.unset("owner");
+    let rendered = template.render(&summary).expect("renders");
+    assert_eq!(rendered.body, "# Ship it\nin short\n");
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&[("root.md", DYNAMIC_ROOT), ("summary.md", SUMMARY)])
+    );
+}
+
+#[test]
+fn a_redeclaration_in_a_template_an_expression_names_is_held_to_the_chain_type() {
+    let error = dynamic()
+        .with_template(
+            "retyped.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  title: {description: t, type: integer}\n---\nx\n",
+        )
+        .load_name("root.md")
+        .expect("it loads")
+        .render(Answers::new().set("kind", json!("retyped")).set("title", json!("t")))
+        .expect_err("title is a string in root.md");
+    assert!(
+        matches!(&error, TemplateError::ChainConflict { variable, field: ChainField::Type, nearer, farther, .. }
+            if variable == "title" && nearer == "root.md" && farther == "retyped.md"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_variable_a_named_template_declares_can_name_the_next_one() {
+    let template = TemplateLoader::new()
+        .with_template(
+            "root.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  first: {description: f, default: middle}\n---\n{% include first ~ \".md\" %}",
+        )
+        .with_template(
+            "middle.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  second: {description: s, default: last}\n---\n[{% include second ~ \".md\" %}]",
+        )
+        .with_template(
+            "last.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  word: {description: w}\n---\n{{ word }}",
+        )
+        .load_name("root.md")
+        .expect("it loads");
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "middle.md", "last.md"]
+    );
+    let mut answers = Answers::new();
+    answers.set("word", json!("deep"));
+    assert_eq!(template.render(&answers).expect("renders").body, "[deep]");
 }

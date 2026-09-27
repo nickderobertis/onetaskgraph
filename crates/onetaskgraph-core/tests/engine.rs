@@ -652,7 +652,7 @@ const TWENTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 81] = [
     ("QueryResponseOfQualifiedProject", 0x87d4bcb0d27064d9),
     ("QueryResponseOfQualifiedTask", 0x76eca40e4d81ea8e),
     ("QueryResponseOfSearchHit", 0xcf1cff15ac1df275),
-    ("RenderedTemplate", 0x601d0fdb9d7a2caa),
+    ("RenderedTemplate", 0x5ce9547fdbd96193),
     ("Repository", 0x98147ade92ced0f0),
     ("ResolvedCredential", 0x14a23b081a4e8d10),
     ("SearchHit", 0xff77c9012e19218a),
@@ -675,7 +675,7 @@ const TWENTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 81] = [
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xbe06dc239bf5eeb0),
     ("TemplateVariable", 0x482dac5032a65dec),
-    ("TemplateVariables", 0xf807d1130c356983),
+    ("TemplateVariables", 0x25e538f450bbf057),
     ("TextFields", 0x7240bd05f9beff93),
     ("VariableType", 0x4310e29eba96791c),
 ];

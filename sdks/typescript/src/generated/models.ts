@@ -4700,9 +4700,9 @@ answers: {
  */
 body: string
 /**
- * The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is
- * the chain's digest, as `template variables` reports it, unless the render loaded a
- * template an expression named; then those files are counted after the chain's.
+ * The digest of every file the render read, in first-load order: `sha256:` and 64
+ * lowercase hex digits. The files the chain names by a literal come first, then each
+ * template an expression named for these answers, in the order the render reached it.
  */
 digest: string
 [k: string]: any
@@ -6460,7 +6460,9 @@ export type ItemType = ("string" | "object")
  */
 export interface TemplateVariables {
 /**
- * The chain's digest: `sha256:` and 64 lowercase hex digits.
+ * The chain's digest: `sha256:` and 64 lowercase hex digits, over every file it reads
+ * in first-load order — each template an expression names counted as it names one when
+ * every variable takes its default.
  */
 digest: string
 /**

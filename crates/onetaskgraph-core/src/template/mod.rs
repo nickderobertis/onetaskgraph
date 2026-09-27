@@ -670,11 +670,31 @@ impl TemplateLoader {
 
     /// Read the whole chain from its root, depth first, and merge its declarations.
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
-        let mut files: Vec<ChainFile> = Vec::new();
-        let mut edges: Vec<(usize, String)> = Vec::new();
-        let mut pending = vec![(root.clone(), source, None::<usize>)];
-        let mut seen: HashSet<String> = HashSet::new();
-        // Depth first in the order each file names the next: a stack, pushed in reverse.
+        let mut files = Vec::new();
+        let mut edges = Vec::new();
+        self.extend(&mut files, &mut edges, root.clone(), source)?;
+        let variables = merge(&files, &edges)?;
+        Ok(Template::assemble(
+            root,
+            files,
+            edges,
+            variables,
+            self.clone(),
+        ))
+    }
+
+    /// Add the file `name` and every file its literal references reach to `files`, depth
+    /// first in the order each file names the next, skipping any already there.
+    fn extend(
+        &self,
+        files: &mut Vec<ChainFile>,
+        edges: &mut Vec<(usize, String)>,
+        name: String,
+        source: String,
+    ) -> Result<(), TemplateError> {
+        let mut seen: HashSet<String> = files.iter().map(|file| file.name.clone()).collect();
+        let mut pending = vec![(name, source, None::<usize>)];
+        // A stack, pushed in reverse, so the first name a file spells is the next one read.
         while let Some((name, source, parent)) = pending.pop() {
             if let Some(parent) = parent {
                 edges.push((parent, name.clone()));
@@ -715,20 +735,7 @@ impl TemplateLoader {
                 declarations: split.declarations,
             });
         }
-
-        let variables = merge(&files, &edges)?;
-        let digest = digest(
-            files
-                .iter()
-                .map(|file| (file.name.as_str(), file.source.as_str())),
-        );
-        Ok(Template {
-            name: root,
-            files,
-            variables,
-            digest,
-            loader: self.clone(),
-        })
+        Ok(())
     }
 }
 
@@ -904,6 +911,8 @@ fn environment() -> minijinja::Environment<'static> {
 pub struct Template {
     name: String,
     files: Vec<ChainFile>,
+    /// Which file names which, by index into `files`: what nearness is measured over.
+    edges: Vec<(usize, String)>,
     variables: Vec<TemplateVariable>,
     digest: String,
     loader: TemplateLoader,
@@ -914,7 +923,9 @@ pub struct Template {
 pub struct TemplateVariables {
     /// The rendered template's resolved name.
     pub template: String,
-    /// The chain's digest: `sha256:` and 64 lowercase hex digits.
+    /// The chain's digest: `sha256:` and 64 lowercase hex digits, over every file it reads
+    /// in first-load order — each template an expression names counted as it names one when
+    /// every variable takes its default.
     pub digest: String,
     /// Every declared variable, in declaration order along the chain.
     pub variables: Vec<TemplateVariable>,
@@ -925,9 +936,9 @@ pub struct TemplateVariables {
 pub struct RenderedTemplate {
     /// The rendered text.
     pub body: String,
-    /// The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is
-    /// the chain's digest, as `template variables` reports it, unless the render loaded a
-    /// template an expression named; then those files are counted after the chain's.
+    /// The digest of every file the render read, in first-load order: `sha256:` and 64
+    /// lowercase hex digits. The files the chain names by a literal come first, then each
+    /// template an expression named for these answers, in the order the render reached it.
     pub digest: String,
     /// Every declared variable and the value it rendered with — an answer, a default, or
     /// `null` for an optional variable given neither.
@@ -935,6 +946,77 @@ pub struct RenderedTemplate {
 }
 
 impl Template {
+    fn assemble(
+        name: String,
+        files: Vec<ChainFile>,
+        edges: Vec<(usize, String)>,
+        variables: Vec<TemplateVariable>,
+        loader: TemplateLoader,
+    ) -> Self {
+        let digest = digest(
+            files
+                .iter()
+                .map(|file| (file.name.as_str(), file.source.as_str())),
+        );
+        Self {
+            name,
+            files,
+            edges,
+            variables,
+            digest,
+            loader,
+        }
+    }
+
+    /// This template with every template an expression names for `answers` added to its
+    /// chain — each with the files its own literals name — and their front matter merged into
+    /// the declared set under the same rules as the rest of the chain.
+    ///
+    /// Which file an expression names can depend on the answers, so it is found by rendering:
+    /// leniently, from the answers that fit their declarations and the defaults of the rest,
+    /// with every file the render asks for that the chain does not hold read through the
+    /// search path. A file found that way may declare a variable that decides the next one,
+    /// so it repeats until a render asks for nothing new. The files so found are farther from
+    /// the rendered template than any its literals name, so a redeclaration there yields to
+    /// theirs, and they follow them in first-load order, in the order the renders reached
+    /// them. A template named by no expression expands to itself.
+    ///
+    /// [`Template::unanswered`], [`Template::resolve`] and [`Template::render`] each expand
+    /// first, so a caller need not.
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::Malformed`], [`TemplateError::Unreadable`] and
+    /// [`TemplateError::NotFound`] for a file found this way, or one its literals name, as for
+    /// any chain file; and [`TemplateError::ChainConflict`] for a declaration of it whose
+    /// `type` or `items` another chain file's contradicts.
+    pub fn expand(&self, answers: &Answers) -> Result<Self, TemplateError> {
+        let mut files = self.files.clone();
+        let mut edges = self.edges.clone();
+        let mut variables = self.variables.clone();
+        loop {
+            let found: Vec<(String, String)> =
+                discover(&self.name, &files, &variables, &self.loader, answers)?
+                    .into_iter()
+                    .filter(|(name, _)| files.iter().all(|file| file.name != *name))
+                    .collect();
+            if found.is_empty() {
+                break;
+            }
+            for (name, source) in found {
+                self.loader.extend(&mut files, &mut edges, name, source)?;
+            }
+            variables = merge(&files, &edges)?;
+        }
+        Ok(Self::assemble(
+            self.name.clone(),
+            files,
+            edges,
+            variables,
+            self.loader.clone(),
+        ))
+    }
+
     /// The rendered template's resolved name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -953,11 +1035,10 @@ impl Template {
         &self.variables
     }
 
-    /// The resolved name of every file the chain names by a literal — the rendered one, and
-    /// each `extends`, `include` and `import` reaching further — in first-load order: the
-    /// files [`Template::digest`] is taken over. A template named by an expression is not
-    /// among them, because nothing names it until a render does; [`Template::render`] counts
-    /// it into that render's digest instead.
+    /// The resolved name of every file of the chain, in first-load order: the files
+    /// [`Template::digest`] is taken over. For a loaded template these are the rendered one
+    /// and each `extends`, `include` and `import` its literals reach; a template an expression
+    /// names joins them in what [`Template::expand`] answers.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
     }
@@ -973,23 +1054,26 @@ impl Template {
     }
 
     /// The declared variables `answers` leaves unanswered, in declaration order — whether or
-    /// not a default covers them. What a prompting caller asks for.
+    /// not a default covers them — over the chain [`Template::expand`] reaches for `answers`.
+    /// What a prompting caller asks for; answering one can name a further template, so a
+    /// caller asks again until nothing new is left.
     ///
     /// # Errors
     ///
     /// [`TemplateError::UnknownAnswer`] and [`TemplateError::MistypedAnswer`], as
     /// [`Template::render`] refuses them.
-    pub fn unanswered(&self, answers: &Answers) -> Result<Vec<&TemplateVariable>, TemplateError> {
-        let typed = self.typed(answers)?;
-        Ok(self
+    pub fn unanswered(&self, answers: &Answers) -> Result<Vec<TemplateVariable>, TemplateError> {
+        let expanded = self.expand(answers)?;
+        let typed = expanded.typed(answers)?;
+        Ok(expanded
             .variables
-            .iter()
+            .into_iter()
             .filter(|variable| !typed.contains_key(&variable.name))
             .collect())
     }
 
-    /// Every declared variable's value: its answer, else its default, else `null` for an
-    /// optional one.
+    /// Every declared variable's value — over the chain [`Template::expand`] reaches for
+    /// `answers` — its answer, else its default, else `null` for an optional one.
     ///
     /// # Errors
     ///
@@ -997,6 +1081,11 @@ impl Template {
     /// [`TemplateError::MistypedAnswer`] for an answer not of its variable's type, and
     /// [`TemplateError::MissingRequired`] naming every required variable left unanswered.
     pub fn resolve(&self, answers: &Answers) -> Result<BTreeMap<String, Value>, TemplateError> {
+        self.expand(answers)?.resolve_here(answers)
+    }
+
+    /// [`Template::resolve`] over this chain as it stands.
+    fn resolve_here(&self, answers: &Answers) -> Result<BTreeMap<String, Value>, TemplateError> {
         let mut typed = self.typed(answers)?;
         let missing: Vec<String> = self
             .variables
@@ -1019,21 +1108,27 @@ impl Template {
         Ok(typed)
     }
 
-    /// Render the template from `answers`.
-    ///
-    /// A template named by an expression rather than a literal is loaded as the render
-    /// reaches it, through the same search path; it may not declare variables, because its
-    /// declarations could not have been read before the render began. Every such file is
-    /// part of what produced the body, so the rendered digest is taken over the chain and
-    /// then those files in the order the render loaded them — and so differs from
-    /// [`Template::digest`] exactly when the render loaded one.
+    /// Render the template from `answers`, over the chain [`Template::expand`] reaches for
+    /// them: a template an expression names is part of the chain, its declarations part of
+    /// the declared set the answers are held to, and its bytes part of the digest.
     ///
     /// # Errors
     ///
-    /// Every refusal of [`Template::resolve`], and [`TemplateError::Render`] for a render
-    /// that fails — an undefined name among them.
+    /// Every refusal of [`Template::expand`] and [`Template::resolve`], and
+    /// [`TemplateError::Render`] for a render that fails — an undefined name among them.
     pub fn render(&self, answers: &Answers) -> Result<RenderedTemplate, TemplateError> {
-        let resolved = self.resolve(answers)?;
+        self.expand(answers)?.render_here(answers)
+    }
+
+    /// [`Template::render`] over this chain as it stands.
+    ///
+    /// A template the strict render asks for that the chain does not hold — one expansion's
+    /// lenient render could not reach, because it failed before getting there — is read
+    /// through the search path as it is asked for, counted into the digest after the chain,
+    /// and refused if it declares a variable, since answers were already held to a declared
+    /// set without it.
+    fn render_here(&self, answers: &Answers) -> Result<RenderedTemplate, TemplateError> {
+        let resolved = self.resolve_here(answers)?;
 
         let offsets: HashMap<String, usize> = self
             .files
@@ -1068,8 +1163,9 @@ impl Template {
                 return Err(minijinja::Error::new(
                     minijinja::ErrorKind::InvalidOperation,
                     format!(
-                        "{name} is named by an expression and declares variables, which could \
-                         not be read before rendering; name it with a string literal"
+                        "{name} is named by an expression the variables' defaults and answers \
+                         did not reach before rendering, and declares variables; name it with \
+                         a string literal"
                     ),
                 ));
             }
@@ -1139,6 +1235,78 @@ impl Template {
         }
         Ok(typed)
     }
+}
+
+/// Every file a lenient render of `files` asks for that they do not hold, with its source, in
+/// the order it asked.
+///
+/// The render is only a way to learn what an expression names: its output is dropped, and
+/// so is any failure of the render itself — a strict render reports those. A file it asks
+/// for that is there and cannot be read is that file's failure, and is answered as one. Each variable takes the answer given
+/// for it when that is one of its type, else its default; one with neither is left undefined,
+/// which a lenient render reads as empty.
+fn discover(
+    root: &str,
+    files: &[ChainFile],
+    variables: &[TemplateVariable],
+    loader: &TemplateLoader,
+    answers: &Answers,
+) -> Result<Vec<(String, String)>, TemplateError> {
+    let mut context = BTreeMap::new();
+    for variable in variables {
+        let answered = match answers.given(&variable.name) {
+            Some(Given::Value(value)) => variable.check(value).ok().map(|()| value.clone()),
+            Some(Given::Text(text)) => variable.parse(text).ok(),
+            None => None,
+        };
+        if let Some(value) = answered.or_else(|| variable.default.clone()) {
+            context.insert(variable.name.clone(), value);
+        }
+    }
+
+    let bodies: HashMap<String, String> = files
+        .iter()
+        .map(|file| (file.name.clone(), file.body.clone()))
+        .collect();
+    let loader = loader.clone();
+    let found: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let recorded = Arc::clone(&found);
+    let failed: Arc<Mutex<Option<TemplateError>>> = Arc::default();
+    let failure = Arc::clone(&failed);
+    let mut environment = environment();
+    environment.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+    environment.set_loader(move |name| {
+        if let Some(body) = bodies.get(name) {
+            return Ok(Some(body.clone()));
+        }
+        let source = match loader.find(name) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                failure
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_or_insert(error);
+                return Ok(None);
+            }
+        };
+        let body = front_matter::split(name, &source)
+            .map(|split| split.body)
+            .unwrap_or_default();
+        recorded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((name.to_owned(), source));
+        Ok(Some(body))
+    });
+    let _ = environment
+        .get_template(root)
+        .and_then(|template| template.render(&context));
+    if let Some(error) = failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        return Err(error);
+    }
+    let found = found.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(found.clone())
 }
 
 /// A minijinja failure as the template failure it is, located in the file's own lines.

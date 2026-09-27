@@ -8509,7 +8509,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "digest": {
-        "description": "The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is\nthe chain's digest, as `template variables` reports it, unless the render loaded a\ntemplate an expression named; then those files are counted after the chain's.",
+        "description": "The digest of every file the render read, in first-load order: `sha256:` and 64\nlowercase hex digits. The files the chain names by a literal come first, then each\ntemplate an expression named for these answers, in the order the render reached it.",
         "type": "string"
       }
     },
@@ -12262,7 +12262,7 @@ export const runtimeSchemas = {
     "description": "What `onetaskgraph template variables` answers with: a template's declared set.",
     "properties": {
       "digest": {
-        "description": "The chain's digest: `sha256:` and 64 lowercase hex digits.",
+        "description": "The chain's digest: `sha256:` and 64 lowercase hex digits, over every file it reads\nin first-load order — each template an expression names counted as it names one when\nevery variable takes its default.",
         "type": "string"
       },
       "template": {

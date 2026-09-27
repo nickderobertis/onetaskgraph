@@ -368,7 +368,10 @@ filters, loops, conditionals, macros, a variable used many times or not at all.
 `--search-path` directories, in order, and never in the working directory unless you name
 it. The declared set is every chain file's front matter together: a redeclaration may change
 `description`, `default` and `required` — the file nearer the rendered one wins — but never
-`type` or `items`, which is refused naming both files. Rendering is strict — a name that is
+`type` or `items`, which is refused naming both files. A template named by an expression —
+`{% include kind ~ ".md" %}` — is part of the chain too, for the answers that name it: its
+front matter joins the declared set, farther than any file a literal names, and its bytes
+join the digest after theirs. Rendering is strict — a name that is
 neither declared nor set fails, naming it and its file — with no auto-escaping, trailing
 newlines kept, and `trim_blocks` and `lstrip_blocks` on. An optional variable with no
 answer and no default is `none`.

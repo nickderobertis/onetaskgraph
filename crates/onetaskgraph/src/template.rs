@@ -35,7 +35,12 @@ pub(crate) fn run(
     match command {
         TemplateCommand::Variables(args) => {
             let template = load(&args.file, &args.search_path)?;
-            let described = template.describe();
+            // The declared set includes what an expression names when every variable takes
+            // its default, which is the most this verb can know without answers.
+            let described = template
+                .expand(&Answers::new())
+                .map_err(|error| failure(&error))?
+                .describe();
             let rendered = match loaded.config.output() {
                 OutputFormat::Text => render::template_variables(&described),
                 OutputFormat::Json => json(&described, "the template's variables")?,
@@ -109,8 +114,18 @@ fn render_template(
     };
     let mut answers = file.overlay(&flags);
 
-    let unanswered = template.unanswered(&answers)?;
-    if loaded.config.interactive() && !unanswered.is_empty() {
+    // Asked in rounds: an answer can make an expression name a template that declares more,
+    // and each round asks only what no earlier round asked.
+    let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while loaded.config.interactive() {
+        let unanswered: Vec<TemplateVariable> = template
+            .unanswered(&answers)?
+            .into_iter()
+            .filter(|variable| !asked.contains(variable.name()))
+            .collect();
+        if unanswered.is_empty() {
+            break;
+        }
         // The answers are read from standard input and the prompts written to standard
         // error, so both have to be the terminal a person is at.
         let not_a_terminal = if !io::stdin().is_terminal() {
@@ -149,6 +164,7 @@ fn render_template(
                 ),
             ))
         })?;
+        asked.extend(unanswered.iter().map(|variable| variable.name().to_owned()));
         answers = answers.overlay(&prompted);
     }
 
@@ -216,7 +232,7 @@ fn answers_file(path: &Path) -> Result<Answers, Refusal> {
 /// A value that is not one of the variable's type is answered with why and the same
 /// question again — never an exit. An empty answer takes the variable's default, or leaves
 /// an optional one `none`; a required variable with no default is asked again.
-fn prompt(template: &Template, unanswered: &[&TemplateVariable]) -> io::Result<Answers> {
+fn prompt(template: &Template, unanswered: &[TemplateVariable]) -> io::Result<Answers> {
     let term = Term::stderr();
     term.write_line(&format!(
         "{} asks for {} variable{}.",
