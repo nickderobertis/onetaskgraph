@@ -479,10 +479,21 @@ async fn a_loader_document_is_refused_by_name_when_it_is_malformed_or_its_digest
     assert_eq!(named, &stated);
     assert_eq!(computed, fixture.loader(BASE).load().unwrap().digest());
     let missing = LoaderDocument::new("r", "task.md")
+        .unwrap()
         .with_directory(fixture.templates.path().join("missing"))
+        .unwrap()
         .load()
         .expect_err("an unreadable directory");
     assert!(missing.to_string().contains("missing"), "{missing}");
+    // The builders refuse exactly what the JSON boundary refuses.
+    assert!(LoaderDocument::new("", "task.md").is_err());
+    assert!(LoaderDocument::new("r", "").is_err());
+    assert!(
+        LoaderDocument::new("r", "task.md")
+            .unwrap()
+            .with_directory("relative")
+            .is_err()
+    );
 }
 
 #[tokio::test]

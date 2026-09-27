@@ -61,20 +61,38 @@ impl TemplateProvenance {
     /// # Errors
     ///
     /// Why the entry under [`Self::KEY`] is not one this product writes, when it is there and
-    /// is not.
+    /// is not: not the four strings, or a digest that is not `sha256:` and 64 lowercase hex
+    /// digits.
     pub fn read(metadata: &BTreeMap<String, Value>) -> Result<Option<Self>, String> {
-        metadata
-            .get(Self::KEY)
-            .map(|value| {
-                serde_json::from_value(value.clone()).map_err(|error| {
-                    format!(
-                        "its `{}` entry is not the four strings template, digest, body_digest \
-                         and answers_digest: {error}",
-                        Self::KEY
-                    )
-                })
-            })
-            .transpose()
+        let Some(value) = metadata.get(Self::KEY) else {
+            return Ok(None);
+        };
+        let entry: Self = serde_json::from_value(value.clone()).map_err(|error| {
+            format!(
+                "its `{}` entry is not the four strings template, digest, body_digest and \
+                 answers_digest: {error}",
+                Self::KEY
+            )
+        })?;
+        for (field, digest) in [
+            ("digest", &entry.digest),
+            ("body_digest", &entry.body_digest),
+            ("answers_digest", &entry.answers_digest),
+        ] {
+            let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+            if hex.len() != 64
+                || !hex
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                return Err(format!(
+                    "its `{}` entry's {field} is {digest:?}, not `sha256:` and 64 lowercase hex \
+                     digits",
+                    Self::KEY
+                ));
+            }
+        }
+        Ok(Some(entry))
     }
 
     /// The entry as the JSON value a metadata map holds.
@@ -174,18 +192,26 @@ mod tests {
     fn a_provenance_entry_reads_back_and_a_foreign_one_is_refused_by_name() {
         let entry = TemplateProvenance {
             template: "/t.md".to_owned(),
-            digest: "sha256:1".to_owned(),
-            body_digest: "sha256:2".to_owned(),
-            answers_digest: "sha256:3".to_owned(),
+            digest: format!("sha256:{}", "1".repeat(64)),
+            body_digest: body_digest("body"),
+            answers_digest: answers_digest(&BTreeMap::new()),
         };
         let metadata = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), entry.to_value())]);
-        assert_eq!(TemplateProvenance::read(&metadata), Ok(Some(entry)));
+        assert_eq!(TemplateProvenance::read(&metadata), Ok(Some(entry.clone())));
         assert_eq!(TemplateProvenance::read(&BTreeMap::new()), Ok(None));
         let foreign = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), json!("hand"))]);
         assert!(
             TemplateProvenance::read(&foreign)
                 .unwrap_err()
                 .contains("onetaskgraph.template")
+        );
+        let mut short = entry.to_value();
+        short["body_digest"] = json!("sha256:abc");
+        let short = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), short)]);
+        assert!(
+            TemplateProvenance::read(&short)
+                .unwrap_err()
+                .contains("body_digest is \"sha256:abc\"")
         );
     }
 }

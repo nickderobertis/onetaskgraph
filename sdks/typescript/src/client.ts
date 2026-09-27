@@ -138,7 +138,10 @@ export class OnetaskgraphValidationError extends Error {
   }
 }
 
-const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
+// Which schema root each command's machine output is, validated on every call against what the
+// binary really wrote. Exported so the table can be reconciled with the Python generator's own,
+// which is checked against the binary on every generation: see tests/generator.test.ts.
+export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeSchemas>> = {
   "config show": "EffectiveConfig",
   "sources list": "SourceListings",
   "sources status-options": "StatusOptionsReport",
@@ -187,7 +190,7 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // fails. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
-  Object.keys(responseRoots).filter(
+  Object.keys(commandResponseRoots).filter(
     (command) =>
       command !== "config show" &&
       command !== "sources list" &&
@@ -334,6 +337,18 @@ function varFlags(method: string, given: unknown): string[] {
   return flags;
 }
 
+// A path option, refused unless it is one, for `templateFile`'s reasons — and never `-`, which
+// would hand the binary's one standard input to a file the client does not write there.
+function pathOption(method: string, name: string, value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.startsWith("-")) {
+    throw new TypeError(
+      `${method}: ${name} is not a path; next: pass it as a non-empty string, spelling one ` +
+        "that starts with `-` as `./-…`",
+    );
+  }
+  return value;
+}
+
 // The flags naming a create's or a render's template and its answers, and what goes to
 // standard input: the answers as JSON, or a create's plain `body` — never both.
 function templateSourceArguments(
@@ -341,8 +356,15 @@ function templateSourceArguments(
   options: TemplateSourceOptions & { body?: string },
 ): { args: string[]; input: string | undefined } {
   const args: string[] = [];
-  if (options.template !== undefined) args.push("--template", options.template);
-  if (options.templateLoader !== undefined) args.push("--template-loader", options.templateLoader);
+  if (options.template !== undefined) {
+    args.push("--template", pathOption(method, "template", options.template));
+  }
+  if (options.templateLoader !== undefined) {
+    args.push("--template-loader", pathOption(method, "templateLoader", options.templateLoader));
+  }
+  if (options.body !== undefined && typeof options.body !== "string") {
+    throw new TypeError(`${method}: body is not a string; next: pass the body as text`);
+  }
   for (const directory of stringList(method, "searchPath", options.searchPath)) {
     args.push("--search-path", directory);
   }
@@ -355,7 +377,7 @@ function templateSourceArguments(
   }
   if (options.answers !== undefined) {
     args.push("--answers", "-");
-    return { args, input: answersDocument(options.answers, method) };
+    return { args, input: jsonDocument(options.answers, method, "answers") };
   }
   return { args, input: options.body };
 }
@@ -369,13 +391,22 @@ function createArguments(
 ): { args: string[]; input: string | undefined } {
   const { args, input } = templateSourceArguments(method, options);
   args.push("--project", project, "--title", title);
-  if (options.bodyFile !== undefined) args.push("--body-file", options.bodyFile);
+  if (options.bodyFile !== undefined) {
+    args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
+  }
   for (const label of stringList(method, "labels", options.labels)) args.push("--label", label);
   for (const repository of stringList(method, "repositories", options.repositories)) {
     args.push("--repository", repository);
   }
-  for (const [key, value] of Object.entries(options.metadata ?? {})) {
-    args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+  if (options.metadata !== undefined) {
+    // Checked as a whole first, for the reasons an answers document is: a value JSON cannot
+    // carry would otherwise be dropped or changed on its way to the binary.
+    const checked: Record<string, JsonValue> = JSON.parse(
+      jsonDocument(options.metadata, method, "metadata"),
+    );
+    for (const [key, value] of Object.entries(checked)) {
+      args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+    }
   }
   return { args, input };
 }
@@ -427,7 +458,14 @@ function refuseUncarriedKey(
 // passed. What is serialised is a copy built from the values just checked, never the caller's
 // own objects, so nothing the check did not read — a `toJSON` of an array's own, say — can
 // change what is sent.
-function answersDocument(answers: Record<string, JsonValue>, method = "templateRender"): string {
+function answersDocument(answers: Record<string, JsonValue>): string {
+  return jsonDocument(answers, "templateRender", "answers");
+}
+
+// `value` as one JSON document, refused by `method` naming `name` when it is not a mapping of
+// JSON values — for the reasons `answersDocument` states.
+function jsonDocument(document: unknown, method: string, name: string): string {
+  const entry = name === "answers" ? "answer" : "entry";
   const within = new Set<object>();
   const copy = (value: unknown, path: string): JsonValue => {
     if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -437,7 +475,7 @@ function answersDocument(answers: Record<string, JsonValue>, method = "templateR
       const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
       if (plain && !within.has(value)) {
         within.add(value);
-        refuseUncarriedKey(value, `answers${path}`, "answer", method);
+        refuseUncarriedKey(value, `${name}${path}`, entry, method);
         let copied: JsonValue;
         if (Array.isArray(value)) {
           // By index rather than by entry, so a hole in a sparse array is read as the
@@ -455,20 +493,20 @@ function answersDocument(answers: Record<string, JsonValue>, method = "templateR
       }
     }
     throw new TypeError(
-      `${method}: answers${path} is not a JSON value; next: pass strings, finite ` +
+      `${method}: ${name}${path} is not a JSON value; next: pass strings, finite ` +
         "numbers, booleans, null, arrays and plain objects, with no cycle",
     );
   };
   // An answers document is a mapping: an array would pass the element checks below and reach
   // the binary as a document it refuses for its shape rather than for what is in it.
   const prototype =
-    answers !== null && typeof answers === "object" ? Object.getPrototypeOf(answers) : undefined;
+    document !== null && typeof document === "object" ? Object.getPrototypeOf(document) : undefined;
   if (prototype !== Object.prototype && prototype !== null) {
     throw new TypeError(
-      `${method}: answers is not a plain object; next: pass a mapping of variable name to value`,
+      `${method}: ${name} is not a plain object; next: pass a mapping of name to value`,
     );
   }
-  return JSON.stringify(copy(answers, ""));
+  return JSON.stringify(copy(document, ""));
 }
 
 // A `template` verb's file operand, left out when a loader document names the template instead.
@@ -481,8 +519,10 @@ function templateOperand(
   return [templateFile(method, file)];
 }
 
-function loaderFlags(options: { templateLoader?: string }): string[] {
-  return options.templateLoader === undefined ? [] : ["--template-loader", options.templateLoader];
+function loaderFlags(method: string, options: { templateLoader?: string }): string[] {
+  return options.templateLoader === undefined
+    ? []
+    : ["--template-loader", pathOption(method, "templateLoader", options.templateLoader)];
 }
 
 // One regenerate's command, arguments and standard input.
@@ -674,7 +714,7 @@ export class OnetaskgraphClient {
     return this.run("template variables", [
       ...templateOperand("templateVariables", file, options),
       ...searchPathFlags(options),
-      ...loaderFlags(options),
+      ...loaderFlags("templateVariables", options),
     ]);
   }
   // The answers go over standard input as JSON, which is YAML, so no file is written for them.
@@ -685,7 +725,7 @@ export class OnetaskgraphClient {
     const args = [
       ...templateOperand("templateRender", file, options),
       ...searchPathFlags(options),
-      ...loaderFlags(options),
+      ...loaderFlags("templateRender", options),
       ...varFlags("templateRender", options.vars),
     ];
     if (options.answers === undefined) return this.run("template render", args);
@@ -805,7 +845,7 @@ export class OnetaskgraphClient {
             return;
           }
         } else {
-          const root = responseRoots[command];
+          const root = commandResponseRoots[command];
           if (root === undefined) {
             reject(new OnetaskgraphValidationError(command, "command has no response schema"));
             return;

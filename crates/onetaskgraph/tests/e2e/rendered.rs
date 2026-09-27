@@ -1231,6 +1231,135 @@ fn a_write_made_to_fail_leaves_the_previous_file_and_no_staging_file() {
     }
 }
 
+// A document's rendering is written by the same one write; held to the same rule.
+#[cfg(unix)]
+#[test]
+fn a_document_rendering_made_to_fail_leaves_the_previous_file_and_no_staging_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let plan = Plan::new();
+    plan.exits(
+        &[
+            "document",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Guarded",
+            "--id",
+            "guarded",
+            "--template",
+            &plan.template(),
+            "--search-path",
+            &plan.search_path(),
+            "--var",
+            "goal=Design it",
+            "--no-interactive",
+        ],
+        0,
+    );
+    let documents = plan.notes.join("documents");
+    let file = documents.join("guarded.md");
+    let before = std::fs::read(&file).unwrap();
+
+    for (target, mode, restore) in [(&file, 0o444, 0o644), (&documents, 0o555, 0o755)] {
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(mode)).unwrap();
+        let refused = plan.run(&[
+            "document",
+            "render",
+            "notes:guarded",
+            "--search-path",
+            &plan.search_path(),
+            "--var",
+            "goal=Never lands",
+            "--no-interactive",
+        ]);
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(restore)).unwrap();
+
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("cannot write"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), before, "byte-identical");
+        let names: Vec<String> = std::fs::read_dir(&documents)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["guarded.md".to_owned()],
+            "no staging file is left behind"
+        );
+    }
+}
+
+#[test]
+fn a_loader_document_on_standard_input_supplies_the_template() {
+    let plan = Plan::new();
+    let document = json!({
+        "reference": "caller:piped",
+        "entry": "task.md",
+        "search_path": [plan.templates],
+    })
+    .to_string();
+    let created = plan.run_with(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Piped loader",
+            "--template-loader",
+            "-",
+            "--var",
+            "goal=From a pipe",
+            "--no-interactive",
+        ],
+        &document,
+    );
+    assert_eq!(created.status.code(), Some(0), "{}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+    let task = plan.task(&id);
+    assert_eq!(
+        task["metadata"]["onetaskgraph.template"]["template"],
+        "caller:piped"
+    );
+    assert!(
+        task["content"]
+            .as_str()
+            .unwrap()
+            .contains("Goal: From a pipe")
+    );
+
+    let rendered = plan.run_with(
+        &[
+            "task",
+            "render",
+            &id,
+            "--template-loader",
+            "-",
+            "--var",
+            "goal=Piped again",
+            "--no-interactive",
+            "--json",
+        ],
+        &document,
+    );
+    assert_eq!(rendered.status.code(), Some(0), "{}", stderr(&rendered));
+    let regenerated: Value = serde_json::from_str(&stdout(&rendered)).unwrap();
+    assert!(
+        regenerated["body"]
+            .as_str()
+            .unwrap()
+            .contains("Goal: Piped again")
+    );
+}
+
 #[test]
 fn a_loader_document_supplies_the_template_and_its_reference_is_recorded_and_never_resolved() {
     let plan = Plan::new();

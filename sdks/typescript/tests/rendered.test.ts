@@ -57,6 +57,35 @@ function sha256(text: string): string {
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 }
 
+// The `onetaskgraph.template` entry of an item's metadata, checked field by field rather than
+// asserted into shape.
+function provenanceOf(metadata: { [key: string]: unknown } | null | undefined) {
+  const entry: unknown = metadata?.["onetaskgraph.template"];
+  if (typeof entry !== "object" || entry === null) throw new Error("no provenance recorded");
+  const field = (name: string): string => {
+    const value: unknown = Reflect.get(entry, name);
+    if (typeof value !== "string") throw new Error(`provenance ${name} is not a string`);
+    return value;
+  };
+  return {
+    template: field("template"),
+    digest: field("digest"),
+    body_digest: field("body_digest"),
+    answers_digest: field("answers_digest"),
+  };
+}
+
+// The execution error a call was refused with, narrowed by the check rather than asserted.
+async function refusal(call: Promise<unknown>): Promise<OnetaskgraphExecutionError> {
+  try {
+    await call;
+  } catch (error) {
+    if (error instanceof OnetaskgraphExecutionError) return error;
+    throw error;
+  }
+  throw new Error("the call was expected to be refused");
+}
+
 test("taskCreate renders from answers on stdin, records provenance and stores the answers", async () => {
   const created = await client.taskCreate("notes", "P-1", "Ship it", {
     template,
@@ -67,7 +96,7 @@ test("taskCreate renders from answers on stdin, records provenance and stores th
   const task = created.items[0];
   expect(task?.item.content).toBe("Goal: Ship it\n- build\n");
   expect(task?.item.metadata?.["myapp.estimate"]).toBe(3);
-  const provenance = task?.item.metadata?.["onetaskgraph.template"] as Record<string, string>;
+  const provenance = provenanceOf(task?.item.metadata);
   expect(provenance.template).toBe(template);
   expect(provenance.body_digest).toBe(sha256("Goal: Ship it\n- build\n"));
   expect(provenance.answers_digest).toBe(sha256('{"goal":"Ship it","steps":["build"]}'));
@@ -78,7 +107,7 @@ test("taskCreate renders from answers on stdin, records provenance and stores th
   const regenerated = await client.taskRender(id, { vars: { goal: "Ship it again" } });
   expect(regenerated.changed).toBe(true);
   expect(regenerated.body).toBe("Goal: Ship it again\n- build\n");
-  expect(regenerated.digest).toBe(provenance.digest ?? "");
+  expect(regenerated.digest).toBe(provenance.digest);
   expect((await client.taskRender(id)).changed).toBe(false);
   const dry = await client.taskRender(id, { answers: { goal: "Never" }, dryRun: true });
   expect(dry.changed).toBe(true);
@@ -89,9 +118,8 @@ test("a plain body goes over stdin, and a document is created, rendered and answ
   const plain = await client.taskCreate("notes", "P-1", "By hand", { body: "Written by hand." });
   expect(plain.items[0]?.item.content).toBe("Written by hand.");
   expect(plain.items[0]?.item.metadata?.["onetaskgraph.template"]).toBeUndefined();
-  const refused = await client.taskAnswers(plain.items[0]?.id ?? "").catch((error) => error);
-  expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
-  expect((refused as OnetaskgraphExecutionError).exitCode).toBe(1);
+  const refused = await refusal(client.taskAnswers(plain.items[0]?.id ?? ""));
+  expect(refused.exitCode).toBe(1);
 
   const document = await client.documentCreate("notes", "P-1", "Design", {
     id: "design",
@@ -113,10 +141,9 @@ test("answers out of step refuse a partial render with exit 2, and a full one la
   const file = resolve(root, "notes/tasks/edited.md");
   writeFileSync(file, readFileSync(file, "utf8").replace("goal: Ship", "goal: Forged"));
 
-  const refused = await client.taskRender(id, { vars: { steps: "[x]" } }).catch((error) => error);
-  expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
-  expect((refused as OnetaskgraphExecutionError).exitCode).toBe(2);
-  expect((refused as OnetaskgraphExecutionError).stderr).toContain("supply every required answer");
+  const refused = await refusal(client.taskRender(id, { vars: { steps: "[x]" } }));
+  expect(refused.exitCode).toBe(2);
+  expect(refused.stderr).toContain("supply every required answer");
   expect((await client.taskRender(id, { answers: { goal: "Ship" } })).changed).toBe(true);
 });
 
@@ -137,13 +164,38 @@ test("a loader document names the template, and a body never rides beside answer
     templateLoader: loader,
     vars: { goal: "x" },
   });
-  const provenance = created.items[0]?.item.metadata?.["onetaskgraph.template"] as Record<
-    string,
-    string
-  >;
-  expect(provenance.template).toBe("caller:task");
+  expect(provenanceOf(created.items[0]?.item.metadata).template).toBe("caller:task");
 
   await expect(
     client.taskCreate("notes", "P-1", "Both", { template, body: "x", answers: { goal: "x" } }),
   ).rejects.toThrow("body and answers both go to standard input");
+});
+
+test("a path, a body or metadata the binary could not be handed is refused before it starts", async () => {
+  await expect(client.taskCreate("notes", "P-1", "Refused", { template: "" })).rejects.toThrow(
+    "taskCreate: template is not a path",
+  );
+  await expect(client.documentRender("notes:design", { templateLoader: "-" })).rejects.toThrow(
+    "documentRender: templateLoader is not a path",
+  );
+  await expect(client.templateVariables(undefined, { templateLoader: "" })).rejects.toThrow(
+    "templateVariables: templateLoader is not a path",
+  );
+  await expect(
+    client.taskCreate("notes", "P-1", "Refused", { bodyFile: "--json" }),
+  ).rejects.toThrow("taskCreate: bodyFile is not a path");
+  await expect(
+    // Deliberately outside the declared type, as a caller whose values reached it untyped.
+    client.taskCreate("notes", "P-1", "Refused", { body: 7 as unknown as string }),
+  ).rejects.toThrow("taskCreate: body is not a string");
+  await expect(
+    client.taskCreate("notes", "P-1", "Refused", {
+      body: "x",
+      metadata: { "myapp.when": Number.NaN },
+    }),
+  ).rejects.toThrow("taskCreate: metadata.myapp.when is not a JSON value");
+  await expect(
+    // Outside the declared type on purpose, as the `body` above is.
+    client.taskRender("notes:design", { unset: ["ok", 3 as unknown as string] }),
+  ).rejects.toThrow("taskRender: unset[1] is not a string");
 });

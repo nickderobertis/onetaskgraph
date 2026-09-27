@@ -109,22 +109,51 @@ impl LoaderDocument {
     }
 
     /// A loader document naming `entry`, recorded as `reference`, over nothing yet.
-    #[must_use]
-    pub fn new(reference: impl Into<String>, entry: impl Into<String>) -> Self {
-        Self {
-            reference: reference.into(),
-            entry: entry.into(),
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::MalformedLoader`] for an empty `reference` or `entry`, as
+    /// [`LoaderDocument::from_json`] refuses one.
+    pub fn new(
+        reference: impl Into<String>,
+        entry: impl Into<String>,
+    ) -> Result<Self, TemplateError> {
+        let (reference, entry) = (reference.into(), entry.into());
+        for (key, value) in [("reference", &reference), ("entry", &entry)] {
+            if value.is_empty() {
+                return Err(TemplateError::MalformedLoader {
+                    message: format!("`{key}` is missing or empty"),
+                });
+            }
+        }
+        Ok(Self {
+            reference,
+            entry,
             search_path: Vec::new(),
             templates: Vec::new(),
             digest: None,
-        }
+        })
     }
 
     /// Add `directory` to the end of the search path.
-    #[must_use]
-    pub fn with_directory(mut self, directory: impl Into<PathBuf>) -> Self {
-        self.search_path.push(directory.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::MalformedLoader`] for a directory that is not absolute, as
+    /// [`LoaderDocument::from_json`] refuses one: a relative one would resolve against
+    /// whatever directory the render happens to run in.
+    pub fn with_directory(mut self, directory: impl Into<PathBuf>) -> Result<Self, TemplateError> {
+        let directory = directory.into();
+        if !directory.is_absolute() {
+            return Err(TemplateError::MalformedLoader {
+                message: format!(
+                    "the search directory {} is not an absolute directory",
+                    directory.display()
+                ),
+            });
+        }
+        self.search_path.push(directory);
+        Ok(self)
     }
 
     /// Register a template's source under `name`, searched after every directory.
