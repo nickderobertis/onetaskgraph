@@ -121,7 +121,7 @@ fn a_chain_found_through_a_search_path_directory_renders_and_merges_its_declarat
     assert_eq!(
         template.chain().collect::<Vec<_>>(),
         ["task.md", "base.md", "criteria.md", "macros.md"],
-        "first-load order is depth first, in the order each file names the next"
+        "first-load order: the order a render first reads each file"
     );
     let declared: Vec<(&str, VariableType, bool, &str, &str)> = template
         .variables()
@@ -1219,7 +1219,8 @@ variables:\n  \
 const FIRST: &str = "first\n{% include \"nested.md\" %}\n";
 
 #[test]
-fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_literals() {
+fn a_file_an_expression_names_is_in_the_digest_where_the_render_first_reads_it_not_after_the_literals()
+ {
     let tree = directory(&[
         ("first.md", FIRST),
         ("nested.md", "nested\n"),
@@ -1446,7 +1447,7 @@ fn an_optional_variable_left_unanswered_is_none_when_what_an_expression_names_is
 }
 
 #[test]
-fn every_tag_that_names_a_template_by_an_expression_places_it_where_the_tag_is() {
+fn every_tag_that_names_a_template_by_an_expression_places_it_in_first_load_order() {
     let root = "---\nonetaskgraph_template: 1\nvariables:\n  layout: {description: which layout, default: base}\n---\n\
                 {% extends layout ~ \".md\" %}\
                 {% block body %}\
@@ -1610,4 +1611,40 @@ fn the_digest_follows_the_order_a_render_reads_its_files_across_loop_iterations(
         read_first.map(|(name, _)| name)
     );
     assert_eq!(expanded.digest(), rendered.digest);
+}
+
+#[test]
+fn a_loaded_template_is_in_first_load_order_before_any_expansion() {
+    let root = "{% if false %}{% include \"never.md\" %}{% endif %}{% include \"a.md\" %}{% include \"b.md\" %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("never.md", "N")
+        .with_template("a.md", "A")
+        .with_template("b.md", "B")
+        .load_name("root.md")
+        .expect("it loads");
+
+    let read_first = [
+        ("root.md", root),
+        ("a.md", "A"),
+        ("b.md", "B"),
+        ("never.md", "N"),
+    ];
+    assert_eq!(
+        template.chain().collect::<Vec<_>>(),
+        read_first.map(|(name, _)| name),
+        "the file a render never reads follows those it reads, whatever order the tags name them"
+    );
+    assert_eq!(template.digest(), expected_digest(&read_first));
+    assert_eq!(
+        template
+            .expand(&Answers::new())
+            .expect("it expands")
+            .digest(),
+        template.digest()
+    );
+    assert_eq!(
+        template.render(&Answers::new()).expect("renders").digest,
+        template.digest()
+    );
 }

@@ -672,10 +672,18 @@ impl TemplateLoader {
         }
     }
 
-    /// Read the whole chain from its root, depth first, and merge its declarations.
+    /// Read the whole chain from its root, depth first, put it in first-load order and merge
+    /// its declarations.
+    ///
+    /// First-load order is the order a render with every variable at its default reads the
+    /// files. A file that render cannot read, found by an expression, is not this chain's
+    /// yet: the answers that name it reach it through [`Template::expand`], which refuses it.
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
         let resolutions = Resolutions::new();
         let files = self.build(root.clone(), source, &resolutions)?;
+        let variables = merge(&files)?;
+        let Discovered { read, .. } = discover(&root, &files, &variables, self, &Answers::new());
+        let files = in_read_order(files, &read);
         let variables = merge(&files)?;
         Ok(Template::assemble(
             root,
@@ -690,8 +698,8 @@ impl TemplateLoader {
     /// names, depth first in the order its tags name them, skipping any already read. A tag
     /// naming its template by a literal names what it spells; one naming it by an expression
     /// names what `resolutions` records it evaluating to, in the order it was reached. That
-    /// order is what nearness breaks ties by until [`Template::expand`] reads the chain in
-    /// first-load order.
+    /// is only the order the chain is found in: its callers put it in first-load order before
+    /// a digest or a nearness tie is taken over it.
     fn build(
         &self,
         name: String,
@@ -1103,13 +1111,20 @@ impl Template {
         let mut expanded = self.clone();
         let mut named = vec![expanded.resolutions.clone()];
         loop {
-            let Discovered { resolutions, read } = discover(
+            let Discovered {
+                resolutions,
+                read,
+                failure,
+            } = discover(
                 &expanded.name,
                 &expanded.files,
                 &expanded.variables,
                 &expanded.loader,
                 answers,
-            )?;
+            );
+            if let Some(error) = failure {
+                return Err(error);
+            }
             if resolutions == expanded.resolutions {
                 let files = in_read_order(expanded.files, &read);
                 let variables = merge(&files)?;
@@ -1168,11 +1183,10 @@ impl Template {
         &self.variables
     }
 
-    /// The resolved name of every file of the chain: the files [`Template::digest`] is taken
-    /// over, in its order. For a loaded template these are the rendered one and each
-    /// `extends`, `include` and `import` its literals reach, in the order they name them;
-    /// what [`Template::expand`] answers adds each template an expression names, all in
-    /// first-load order.
+    /// The resolved name of every file of the chain, in first-load order: the files
+    /// [`Template::digest`] is taken over, in its order. For a loaded template these are the
+    /// rendered one and each `extends`, `include` and `import` its literals reach; what
+    /// [`Template::expand`] answers adds each template an expression names.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
     }
@@ -1320,12 +1334,14 @@ impl Template {
     }
 }
 
-/// What every tag of `files` naming a template by an expression named in a lenient render,
-/// in the order the render reached them.
+/// What a lenient render of `files` reads: what every tag naming a template by an
+/// expression named, in the order the render reached them, and the order it first read each
+/// chain file.
 ///
 /// The render is only a way to learn what an expression names: its output is dropped, and
 /// so is any failure of the render itself — a strict render reports those. A file it asks
-/// for that is there and cannot be read is that file's failure, and is answered as one.
+/// for that is there and cannot be read is that file's failure, and is answered as one for
+/// the caller to raise.
 /// Each variable takes the answer given for it when that is one of its type, else its
 /// default, else `none` for an optional one — as the strict render has it; a required one
 /// with neither is left undefined, which a lenient render reads as empty.
@@ -1335,7 +1351,7 @@ fn discover(
     variables: &[TemplateVariable],
     loader: &TemplateLoader,
     answers: &Answers,
-) -> Result<Discovered, TemplateError> {
+) -> Discovered {
     let mut context = BTreeMap::new();
     for variable in variables {
         let answered = match answers.given(&variable.name) {
@@ -1387,22 +1403,26 @@ fn discover(
     let _ = environment
         .get_template(root)
         .and_then(|template| template.render(&context));
-    if let Some(error) = failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
-        return Err(error);
-    }
+    let failure = failed.lock().unwrap_or_else(PoisonError::into_inner).take();
     let resolutions = recorded
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     let read = read.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    Ok(Discovered { resolutions, read })
+    Discovered {
+        resolutions,
+        read,
+        failure,
+    }
 }
 
-/// What a lenient render of a chain found: what its naming expressions named, and which of
-/// the chain's files it read, in the order it first read each.
+/// What a lenient render of a chain found: what its naming expressions named, which of the
+/// chain's files it read, in the order it first read each, and the first file it asked for
+/// that is there and could not be read.
 struct Discovered {
     resolutions: Resolutions,
     read: Vec<String>,
+    failure: Option<TemplateError>,
 }
 
 /// `files` in first-load order: the root, then every file a render of them read in the order
