@@ -523,6 +523,22 @@ pub enum EngineError {
         id: String,
     },
 
+    /// A regenerate named no template, and the item's `onetaskgraph.template` entry is not one
+    /// this product writes, so it names nothing to render.
+    #[error(
+        "{record} {id} records a template entry this product did not write — {problem}\n\
+         next: regenerate it with --template FILE or --template-loader FILE and every required \
+         answer, which records a fresh entry."
+    )]
+    MalformedProvenance {
+        /// `task` or `document`.
+        record: &'static str,
+        /// The item.
+        id: String,
+        /// What is wrong with the entry.
+        problem: String,
+    },
+
     /// A regenerate named no template, and the one the item records is not a readable file.
     #[error(
         "{record} {id} was rendered from {reference:?}, which is not a readable file, so it \

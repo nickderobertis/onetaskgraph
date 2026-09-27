@@ -237,6 +237,12 @@ pub enum UnusedAnswers {
     /// The answers stored beside it do not hash to the `answers_digest` its provenance
     /// records.
     OutOfStep,
+    /// Its `onetaskgraph.template` entry is not one this product writes, so nothing trusted says
+    /// which answers are its.
+    MalformedProvenance {
+        /// What is wrong with the entry.
+        problem: String,
+    },
 }
 
 impl fmt::Display for UnusedAnswers {
@@ -253,6 +259,10 @@ impl fmt::Display for UnusedAnswers {
             Self::OutOfStep => formatter.write_str(
                 "the answers stored beside it do not hash to the answers_digest its provenance \
                  records, so they changed after it was rendered and are not trusted",
+            ),
+            Self::MalformedProvenance { problem } => write!(
+                formatter,
+                "{problem}, so nothing trusted says which stored answers are its"
             ),
         }
     }
@@ -272,10 +282,34 @@ pub struct Regeneration {
     template: Template,
     reference: String,
     base: Answers,
-    unused: Option<UnusedAnswers>,
+    stored: Stored,
     content: String,
     provenance: Option<TemplateProvenance>,
-    stored: Option<BTreeMap<String, Value>>,
+}
+
+/// The answers stored beside an item, and whether a render starts from them — one or the
+/// other, never both: answers that are the base are in step with the provenance, and answers
+/// that are not carry why.
+#[derive(Debug, Clone)]
+enum Stored {
+    /// In step with the item's provenance, so a render starts from them.
+    Trusted(BTreeMap<String, Value>),
+    /// Not a base, for `reason`. What is held, if anything, is still what a render's own
+    /// answers are compared with to say whether the item changed.
+    Unused {
+        reason: UnusedAnswers,
+        held: Option<BTreeMap<String, Value>>,
+    },
+}
+
+impl Stored {
+    /// Whatever answers the item holds, trusted or not.
+    fn held(&self) -> Option<&BTreeMap<String, Value>> {
+        match self {
+            Self::Trusted(answers) => Some(answers),
+            Self::Unused { held, .. } => held.as_ref(),
+        }
+    }
 }
 
 impl Regeneration {
@@ -301,9 +335,12 @@ impl Regeneration {
     /// they left `null` included, which a render leaves unanswered again — and none when
     /// they are not.
     pub fn settled(&self) -> impl Iterator<Item = &str> {
-        self.stored
-            .iter()
-            .filter(|_| self.unused.is_none())
+        let trusted = match &self.stored {
+            Stored::Trusted(answers) => Some(answers),
+            Stored::Unused { .. } => None,
+        };
+        trusted
+            .into_iter()
             .flat_map(BTreeMap::keys)
             .map(String::as_str)
     }
@@ -311,7 +348,10 @@ impl Regeneration {
     /// Why the stored answers were not the base, when they were not.
     #[must_use]
     pub fn unused(&self) -> Option<&UnusedAnswers> {
-        self.unused.as_ref()
+        match &self.stored {
+            Stored::Trusted(_) => None,
+            Stored::Unused { reason, .. } => Some(reason),
+        }
     }
 
     /// Render from the base with `answers` laid over it.
@@ -342,7 +382,7 @@ impl Regeneration {
                     return Err(EngineError::MissingAnswers {
                         id: self.id.to_string(),
                         names,
-                        reason: self.unused.as_ref().map_or_else(
+                        reason: self.unused().map_or_else(
                             || {
                                 "the answers stored beside it were used, and leave these \
                                  unanswered"
@@ -538,7 +578,8 @@ impl Engine {
     ///
     /// [`EngineError::NoSuchTask`] or [`EngineError::NoSuchDocument`] when the item is not
     /// there; [`EngineError::NoTemplate`] when no template is given and the item records
-    /// none; [`EngineError::TemplateNotAFile`] when no template is given and the one it
+    /// none; [`EngineError::MalformedProvenance`] when no template is given and the entry it
+    /// records is not one this product writes; [`EngineError::TemplateNotAFile`] when no template is given and the one it
     /// records is not a readable file, which only a loader document can then stand in for;
     /// [`EngineError::Template`] when the template cannot be loaded; and the refusals of a
     /// source that cannot be reached or cannot answer.
@@ -553,25 +594,32 @@ impl Engine {
             documentary(source)?;
         }
         let (content, metadata) = self.read_item(source, record, id).await?;
-        // A provenance entry this product did not write is no provenance of its own: nothing
-        // in it can be trusted to name a template or answers.
-        let provenance = TemplateProvenance::read(&metadata).ok().flatten();
-        let template = match (&request.template, &provenance) {
+        let read = TemplateProvenance::read(&metadata);
+        let template = match (&request.template, &read) {
             (Some(given), _) => given.clone(),
-            (None, Some(recorded)) if Path::new(&recorded.template).is_file() => {
+            // An entry this product did not write names nothing it can trust: with no template
+            // given there is nothing to render, and the refusal says why.
+            (None, Err(problem)) => {
+                return Err(EngineError::MalformedProvenance {
+                    record: record.noun(),
+                    id: id.to_string(),
+                    problem: problem.clone(),
+                });
+            }
+            (None, Ok(Some(recorded))) if Path::new(&recorded.template).is_file() => {
                 TemplateInput::File {
                     path: PathBuf::from(&recorded.template),
                     search_path: request.search_path.clone(),
                 }
             }
-            (None, Some(recorded)) => {
+            (None, Ok(Some(recorded))) => {
                 return Err(EngineError::TemplateNotAFile {
                     record: record.noun(),
                     id: id.to_string(),
                     reference: recorded.template.clone(),
                 });
             }
-            (None, None) => {
+            (None, Ok(None)) => {
                 return Err(EngineError::NoTemplate {
                     record: record.noun(),
                     id: id.to_string(),
@@ -582,23 +630,28 @@ impl Engine {
         let template = template
             .load()
             .map_err(|error| EngineError::Template { error })?;
-        let stored = self.stored(source, record, id).await?;
-        let unused = match (&provenance, &stored) {
-            (None, _) => Some(UnusedAnswers::NoProvenance),
-            (Some(_), None) => Some(UnusedAnswers::NoneStored {
+        let held = self.stored(source, record, id).await?;
+        let unused = |reason| Stored::Unused {
+            reason,
+            held: held.clone(),
+        };
+        let stored = match (&read, &held) {
+            (Err(problem), _) => unused(UnusedAnswers::MalformedProvenance {
+                problem: problem.clone(),
+            }),
+            (Ok(None), _) => unused(UnusedAnswers::NoProvenance),
+            (Ok(Some(_)), None) => unused(UnusedAnswers::NoneStored {
                 source: id.source.to_string(),
             }),
-            (Some(recorded), Some(answers))
+            (Ok(Some(recorded)), Some(answers))
                 if crate::template::answers_digest(answers) != recorded.answers_digest.as_str() =>
             {
-                Some(UnusedAnswers::OutOfStep)
+                unused(UnusedAnswers::OutOfStep)
             }
-            (Some(_), Some(_)) => None,
+            (Ok(Some(_)), Some(answers)) => Stored::Trusted(answers.clone()),
         };
         let mut base = Answers::new();
-        if unused.is_none()
-            && let Some(answers) = &stored
-        {
+        if let Stored::Trusted(answers) = &stored {
             // An optional variable given nothing resolved to `null`; left unanswered, it
             // resolves to that again.
             for (name, value) in answers.iter().filter(|(_, value)| !value.is_null()) {
@@ -611,10 +664,9 @@ impl Engine {
             template,
             reference,
             base,
-            unused,
-            content,
-            provenance,
             stored,
+            content,
+            provenance: read.ok().flatten(),
         })
     }
 
@@ -639,7 +691,7 @@ impl Engine {
             || regeneration.provenance.as_ref() != Some(&provenance)
             || regeneration
                 .stored
-                .as_ref()
+                .held()
                 .is_some_and(|stored| *stored != rendered.answers);
         let id = &regeneration.id;
         if changed && !dry_run {

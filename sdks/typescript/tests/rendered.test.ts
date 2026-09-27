@@ -1,6 +1,7 @@
 import "./ambient.ts";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -254,4 +255,41 @@ test("every option of the create and render methods reaches the real binary as a
     // Deliberately outside the declared type, as a caller whose values reached it untyped.
     client.taskRender(task?.id ?? "", [] as unknown as RenderOptions),
   ).rejects.toThrow("taskRender: options is not a plain object");
+});
+
+test("every flag the create, render, answers and template verbs take is one the client spells", () => {
+  // The other half of the test above: a flag the binary adds to one of these verbs has to reach
+  // the client too, or a caller could never pass it. Global flags are the client's own business
+  // — it always passes `--json` and `--no-interactive` — and are not options of any one call.
+  const global = new Set([
+    "set",
+    "page-size",
+    "default-sources",
+    "output",
+    "json",
+    "interactive",
+    "no-interactive",
+    "help",
+  ]);
+  const client = readFileSync(resolve(import.meta.dir, "../src/client.ts"), "utf8");
+  for (const command of [
+    "task create",
+    "task render",
+    "task answers",
+    "document create",
+    "document render",
+    "document answers",
+    "template variables",
+    "template render",
+  ]) {
+    const help = spawnSync(binary, [...command.split(" "), "--help"], { encoding: "utf8" }).stdout;
+    const flags = [...help.matchAll(/^\s+--([a-z][a-z-]*)/gm)].map(([, flag]) => flag ?? "");
+    expect(flags.length).toBeGreaterThan(0);
+    for (const flag of flags.filter((flag) => !global.has(flag))) {
+      expect(
+        client.includes(`"--${flag}"`),
+        `${command} --${flag} is not spelled by the client`,
+      ).toBe(true);
+    }
+  }
 });

@@ -1387,6 +1387,55 @@ fn a_hand_written_answers_block_round_trips_and_every_other_write_keeps_it() {
 }
 
 #[test]
+fn a_provenance_entry_this_product_did_not_write_names_nothing_until_a_template_is_given() {
+    let plan = Plan::new();
+    let text = "---\ntitle: Forged\nstatus: todo\nmetadata:\n  onetaskgraph.template: by hand\n---\nWritten by hand.\n";
+    std::fs::create_dir_all(plan.notes.join("tasks")).unwrap();
+    let file = plan.notes.join("tasks/forged.md");
+    std::fs::write(&file, text).unwrap();
+
+    let refused = plan.render("notes:forged", &[]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("records a template entry this product did not write")
+            && stderr(&refused).contains("--template-loader"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        text,
+        "nothing written"
+    );
+
+    // Given a template and every required answer, it renders, and records a fresh entry.
+    let regenerated = plan.rendered(
+        "notes:forged",
+        &["--template", &plan.template(), "--var", "goal=Reclaimed"],
+    );
+    assert!(
+        regenerated["body"]
+            .as_str()
+            .unwrap()
+            .contains("Goal: Reclaimed")
+    );
+    assert_eq!(
+        plan.task("notes:forged")["metadata"]["onetaskgraph.template"]["body_digest"],
+        regenerated["body_digest"]
+    );
+    // Without every required answer, the refusal says why no stored answers were used.
+    std::fs::write(&file, text).unwrap();
+    let partial = plan.render("notes:forged", &["--template", &plan.template()]);
+    assert_eq!(partial.status.code(), Some(2), "{}", stderr(&partial));
+    assert!(
+        stderr(&partial).contains("supply every required answer")
+            && stderr(&partial).contains("nothing trusted says which stored answers are its"),
+        "{}",
+        stderr(&partial)
+    );
+}
+
+#[test]
 fn a_malformed_answers_block_is_refused_naming_the_file_and_is_never_rewritten() {
     let plan = Plan::new();
     let text = "---\ntitle: Broken\nstatus: todo\n---\nThe content.\n\n<!-- onetaskgraph:template-answers\ngoal: [unclosed\n-->\n";
