@@ -549,6 +549,17 @@ pub trait TaskSource: Send + Sync {
         Err(commentless(self.kind()))
     }
 
+    /// Whether this source keeps template answers beside its items at all.
+    ///
+    /// What lets a regenerate tell an item whose answers went missing — a block deleted by
+    /// hand, which the regenerate writes back — from an item of a source that never keeps any,
+    /// where a missing answer is no difference. Defaulted to `false`, as
+    /// [`task_template_answers`](Self::task_template_answers) is defaulted to `None`; a source
+    /// that keeps answers answers `true` here.
+    fn keeps_template_answers(&self) -> bool {
+        false
+    }
+
     /// The template answers the task `id` was last rendered from, as this source keeps them
     /// beside the task — or `None` when it keeps none for it, or holds no such task.
     ///

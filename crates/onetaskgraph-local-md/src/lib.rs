@@ -1427,6 +1427,10 @@ impl TaskSource for LocalMdSource {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Document, id)
     }
+    /// Every item this source writes is a file of its own, which holds its answers block.
+    fn keeps_template_answers(&self) -> bool {
+        true
+    }
     /// The answers block of the task's file, read as YAML; see [`ANSWERS_OPEN`].
     async fn task_template_answers(
         &self,

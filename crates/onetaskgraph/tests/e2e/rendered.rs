@@ -2116,3 +2116,42 @@ fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name()
         "a refused answers read or regenerate changed the folder"
     );
 }
+
+#[test]
+fn a_regenerate_writes_back_an_answers_block_deleted_by_hand() {
+    let plan = Plan::new();
+    let id = plan.create("notes", "Restored", &["--var", "goal=Ship it"]);
+    let file = plan.task_file(&id);
+    let authored = std::fs::read_to_string(&file).unwrap();
+    let open = authored
+        .find("<!-- onetaskgraph:template-answers")
+        .expect("the file holds its answers block");
+    let close = open + authored[open..].find("-->\n").expect("the block closes") + "-->\n".len();
+    // The block and the blank lines framing it, so the file is a plain task file and its
+    // content reads back unchanged.
+    let deleted = format!(
+        "{}\n\n{}",
+        authored[..open].trim_end_matches('\n'),
+        &authored[close..]
+    );
+    let content = plan.task(&id)["content"].clone();
+    std::fs::write(&file, &deleted).unwrap();
+    assert_eq!(plan.task(&id)["content"], content, "only the block is gone");
+    plan.exits(&["task", "answers", &id], 1);
+
+    // The same answers give the same content and provenance: only the block differs, and a
+    // dry run says so without writing it.
+    let dry = plan.rendered(&id, &["--var", "goal=Ship it", "--dry-run"]);
+    assert_eq!(dry["changed"], true, "{dry:#}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), deleted);
+
+    let restored = plan.rendered(&id, &["--var", "goal=Ship it"]);
+    assert_eq!(restored["changed"], true, "{restored:#}");
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        written.ends_with(&authored[open..close]),
+        "the block the create wrote is back, byte for byte:\n{written}"
+    );
+    assert_eq!(plan.json(&["task", "answers", &id])["goal"], "Ship it");
+    assert_eq!(plan.task(&id)["content"], "# The task\nGoal: Ship it\n");
+}

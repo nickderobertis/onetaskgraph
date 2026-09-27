@@ -392,10 +392,11 @@ its `result`; the JSON shape of every contract type in them is what
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
 
-The template operations are not carried. There is no method for any of these, and the
-engine refuses each for a source hosted over this protocol before sending anything, naming
-the source and the operation:
+The template operations are not carried. There is no method for any of these; for a source
+hosted over this protocol the engine answers the first itself, and refuses each of the others
+before sending anything, naming the source and the operation:
 
+- `keeps_template_answers`, which the engine answers itself: a hosted source keeps none;
 - `task_template_answers` and `document_template_answers`, a read of an item's stored
   template answers;
 - `write_task_rendered` and `write_document_rendered`, a create from a template;

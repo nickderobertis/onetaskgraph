@@ -349,6 +349,9 @@ pub struct Regeneration {
     reference: String,
     base: Answers,
     stored: Stored,
+    /// Whether its source keeps answers beside it, so that answers it does not hold are a
+    /// difference a write repairs rather than the source's nature.
+    keeps_answers: bool,
     content: String,
     provenance: Option<TemplateProvenance>,
 }
@@ -741,6 +744,7 @@ impl Engine {
             reference,
             base,
             stored,
+            keeps_answers: source.source().keeps_template_answers(),
             content,
             provenance: read.ok().flatten(),
         })
@@ -766,10 +770,14 @@ impl Engine {
             .map_err(|error| EngineError::Template { error })?;
         let changed = regeneration.content != rendered.body
             || regeneration.provenance.as_ref() != Some(&provenance)
+            // Answers a source keeps and this item does not hold — a block deleted by hand —
+            // are a difference the write repairs; a source keeping none holds none by nature.
             || regeneration
                 .stored
                 .held()
-                .is_some_and(|stored| *stored != rendered.answers);
+                .map_or(regeneration.keeps_answers, |stored| {
+                    *stored != rendered.answers
+                });
         let id = &regeneration.id;
         if changed && !dry_run {
             let source = self.built(&id.source)?;
