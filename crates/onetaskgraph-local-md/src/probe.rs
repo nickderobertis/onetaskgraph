@@ -41,15 +41,10 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 /// coming back — and the second is what the interval this runs in can turn the first into:
 /// the handle can close between the read that failed and this call.
 ///
-/// A folder that will not open is put to the same classification as the entry was, because
-/// the interval also lets the folder go: a walk racing a recursive removal meets a file marked
-/// for deletion, and by the time this runs its folder is marked too, or gone. A folder that is
-/// going takes the entry with it, and one refused for any other reason is `false`.
-///
-/// A question this cannot put — a path with no folder to open it relative to, a name whose
-/// length will not fit a `UNICODE_STRING` — is answered `false`, which is the read path
-/// reporting the failure it already had rather than passing a record over on a probe that
-/// never ran.
+/// A question this cannot put — a path with no folder to open it relative to, a folder that
+/// will not open, a name whose length will not fit a `UNICODE_STRING` — is answered `false`,
+/// which is the read path reporting the failure it already had rather than passing a record
+/// over on a probe that never ran.
 pub(crate) fn unlinked(path: &Path) -> bool {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return false;
@@ -57,14 +52,13 @@ pub(crate) fn unlinked(path: &Path) -> bool {
     // The folder handle is what the entry is named relative to, so nothing here spells an NT
     // object path. Backup semantics is what lets a directory be opened at all, and every
     // share mode is granted so this probe never itself blocks the deletion it is asking about.
-    let folder = match OpenOptions::new()
+    let Ok(folder) = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(folder)
-    {
-        Ok(opened) => opened,
-        Err(e) => return crate::gone(folder, &e),
+    else {
+        return false;
     };
     let mut wide: Vec<u16> = name.encode_wide().collect();
     let Ok(bytes) = u16::try_from(wide.len() * size_of::<u16>()) else {
