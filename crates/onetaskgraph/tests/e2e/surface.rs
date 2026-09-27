@@ -683,6 +683,62 @@ fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
     );
 }
 
+#[test]
+fn the_task_update_synopsis_names_exactly_the_flags_that_verb_takes() {
+    // Held both ways, because the entry spells out every flag the verb has: one `--help`
+    // reports that the entry leaves out, and one the entry names that the verb does not take,
+    // each fail here. Global flags belong to no one verb and are left to the check above.
+    let global = [
+        "set",
+        "page-size",
+        "default-sources",
+        "output",
+        "json",
+        "interactive",
+        "no-interactive",
+        "help",
+    ];
+    let entry = synopsis(&readme(), "task update")
+        .expect("the README has a synopsis entry for `task update`");
+    let help = String::from_utf8(
+        onetaskgraph()
+            .args(["task", "update", "--help"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .expect("help is UTF-8");
+    let mut reported: Vec<String> = help
+        .lines()
+        .filter_map(|line| {
+            let flag = line.trim_start().trim_start_matches("-h, ");
+            let name = flag.strip_prefix("--")?;
+            Some(name.split([' ', '<']).next().unwrap_or(name).to_owned())
+        })
+        .filter(|flag| !global.contains(&flag.as_str()))
+        .collect();
+    let mut named: Vec<String> = entry
+        .split("--")
+        .skip(1)
+        .map(|rest| {
+            rest.split(|c: char| !(c.is_ascii_lowercase() || c == '-'))
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    reported.sort();
+    reported.dedup();
+    named.sort();
+    named.dedup();
+    assert_eq!(
+        named, reported,
+        "the README's `task update` entry and `task update --help` name different flags"
+    );
+}
+
 /// The object of every ```json block of `text` that parses as one.
 fn json_objects(text: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
     text.split("```json\n")

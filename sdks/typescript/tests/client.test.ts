@@ -725,6 +725,13 @@ test("taskUpdate refuses options it could not send as the caller wrote them", ()
   expect(() => taskUpdateFlags({ title: 3 })).toThrow("title is not a string");
   expect(() => taskUpdateFlags({ status: ["done"] })).toThrow("status is not a string");
   expect(() => taskUpdateFlags({ labels: ["x"] })).toThrow("labels, which names no field");
+  // A member every object inherits is not one the table declares, and is refused rather than
+  // dropped.
+  for (const inherited of ["toString", "constructor", "hasOwnProperty"]) {
+    expect(() => taskUpdateFlags({ [inherited]: "x" })).toThrow(
+      `${inherited}, which names no field`,
+    );
+  }
   expect(() => taskUpdateFlags({ removeMetadata: "myapp.a" })).toThrow("is not an array");
   expect(() => taskUpdateFlags({ metadata: { "myapp.a": () => 1 } })).toThrow("metadata");
 });

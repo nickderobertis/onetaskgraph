@@ -408,7 +408,9 @@ export function taskUpdateFlags(options: unknown): string[] {
     );
   }
   refuseUncarriedKey(options, "options", "option", method);
-  const unknown = Object.keys(options).find((key) => !(key in taskUpdateOptionFlags));
+  // Its own members only: `in` would also accept `toString` and `constructor`, which the table
+  // inherits, and such an option would then be dropped in silence.
+  const unknown = Object.keys(options).find((key) => !Object.hasOwn(taskUpdateOptionFlags, key));
   if (unknown !== undefined) {
     throw new TypeError(
       `${method}: options has the member ${unknown}, which names no field; next: name only ` +
@@ -416,7 +418,13 @@ export function taskUpdateFlags(options: unknown): string[] {
     );
   }
   const args: string[] = [];
-  for (const name of ["title", "status", "statusName", "priority"] as const) {
+  const scalars: readonly ("title" | "status" | "statusName" | "priority")[] = [
+    "title",
+    "status",
+    "statusName",
+    "priority",
+  ];
+  for (const name of scalars) {
     if (options[name] !== undefined) {
       args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
     }
@@ -436,7 +444,8 @@ export function taskUpdateFlags(options: unknown): string[] {
   for (const key of stringList(method, "removeMetadata", options.removeMetadata)) {
     args.push("--remove-metadata", key);
   }
-  for (const name of ["delivers", "dependsOn"] as const) {
+  const lists: readonly ("delivers" | "dependsOn")[] = ["delivers", "dependsOn"];
+  for (const name of lists) {
     if (options[name] === undefined) continue;
     const flag = taskUpdateOptionFlags[name];
     const ids = stringList(method, name, options[name]);
