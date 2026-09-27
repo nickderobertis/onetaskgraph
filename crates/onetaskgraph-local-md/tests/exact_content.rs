@@ -29,7 +29,6 @@ const ENDINGS: [&str; 3] = [
     "# Goal\n\n- two\n  lines\n\n",
 ];
 
-/// An empty folder named `work`.
 fn folder() -> (tempfile::TempDir, Box<dyn TaskSource>) {
     let root = tempfile::tempdir().expect("temporary notes");
     let source = onetaskgraph_local_md::Plugin
@@ -307,7 +306,6 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
     }
 }
 
-/// Assert that `result` is a refusal naming the field `content`.
 fn refuses_content<T: std::fmt::Debug>(result: &Result<T, onetaskgraph_plugin_api::SourceError>) {
     assert!(
         matches!(
@@ -319,7 +317,6 @@ fn refuses_content<T: std::fmt::Debug>(result: &Result<T, onetaskgraph_plugin_ap
     );
 }
 
-/// Every file under `root`, with its bytes.
 fn files(root: &tempfile::TempDir) -> BTreeMap<String, Vec<u8>> {
     let mut found = BTreeMap::new();
     let mut folders = vec![root.path().to_path_buf()];

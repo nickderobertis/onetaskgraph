@@ -2253,11 +2253,7 @@ impl Plan {
     }
 }
 
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
-// narrower edge for it: it drives the binary against folders of Markdown, with no credential and no
-// network, in well under a second. A copy and a regenerate are the engine's, so the binary
-// crate is the narrowest project that can own the journey — AGENTS.md forbids a plugin crate
-// depending on the engine at any depth — which is the reason `mod rendered;` states.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
 #[test]
 fn a_rendering_copied_between_folders_matches_it_and_an_interior_edit_does_not() {
     for ending in ENDINGS {
@@ -2294,11 +2290,7 @@ fn a_rendering_copied_between_folders_matches_it_and_an_interior_edit_does_not()
     }
 }
 
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
-// narrower edge for it: it drives the binary against a folder of Markdown and the loopback GitHub board, with no credential and no
-// network, in well under a second. A copy and a regenerate are the engine's, so the binary
-// crate is the narrowest project that can own the journey — AGENTS.md forbids a plugin crate
-// depending on the engine at any depth — which is the reason `mod rendered;` states.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
 #[test]
 fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_does_not() {
     for ending in ENDINGS {
