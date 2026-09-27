@@ -118,7 +118,8 @@ pub enum TemplateCommand {
 /// `onetaskgraph template variables`.
 #[derive(Debug, Args)]
 pub struct TemplateVariablesArgs {
-    /// The template file.
+    /// The template to read, at a path. It is known to its chain, and in its digest, by its
+    /// file name; its own directory is not searched unless it is also a --search-path.
     #[arg(value_name = "FILE")]
     pub file: std::path::PathBuf,
 
@@ -131,7 +132,8 @@ pub struct TemplateVariablesArgs {
 /// `onetaskgraph template render`.
 #[derive(Debug, Args)]
 pub struct TemplateRenderArgs {
-    /// The template file.
+    /// The template to read, at a path. It is known to its chain, and in its digest, by its
+    /// file name; its own directory is not searched unless it is also a --search-path.
     #[arg(value_name = "FILE")]
     pub file: std::path::PathBuf,
 

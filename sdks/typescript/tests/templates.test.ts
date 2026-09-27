@@ -190,7 +190,10 @@ test("a search path that is not a list and vars that are not a mapping are refus
   await expect(client.templateVariables(task, { searchPath })).rejects.toThrow(
     "searchPath is not an array",
   );
-  for (const vars of [["title=t"], "title=t", 7]) {
+  await expect(
+    client.templateVariables(task, { searchPath: null as unknown as string[] }),
+  ).rejects.toThrow("searchPath is not an array");
+  for (const vars of [["title=t"], "title=t", 7, null]) {
     await expect(
       client.templateRender(task, {
         searchPath: [library],

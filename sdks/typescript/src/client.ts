@@ -208,7 +208,8 @@ function addFilters(args: string[], options: FilterOptions): void {
 }
 
 function searchPathFlags(options: TemplateOptions): string[] {
-  const searchPath = options.searchPath ?? [];
+  // Absent means none; an explicit `null` is not a list and is refused below with the rest.
+  const searchPath = options.searchPath === undefined ? [] : options.searchPath;
   if (!Array.isArray(searchPath)) {
     throw new TypeError(
       "templateVariables/templateRender: searchPath is not an array; next: pass a list of " +
@@ -455,7 +456,8 @@ export class OnetaskgraphClient {
     options: TemplateRenderOptions = {},
   ): Promise<RenderedTemplate> {
     const args = [file, ...searchPathFlags(options)];
-    const vars = options.vars ?? {};
+    // Absent means none; an explicit `null` is not a mapping and is refused below.
+    const vars = options.vars === undefined ? {} : options.vars;
     const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError(

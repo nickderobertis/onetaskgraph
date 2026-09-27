@@ -6412,7 +6412,7 @@ export type ItemType = ("string" | "object")
  * One variable of a template's declared set, merged down its chain.
  *
  * Built only by loading a template, so `items` is present exactly when `type` is `list`,
- * and a `default` is a value of the variable's type.
+ * a `default` is a value of the variable's type, and `required` is never `true` beside one.
  */
 export interface TemplateVariable {
 /**
@@ -6477,7 +6477,7 @@ variables: TemplateVariable[]
  * One variable of a template's declared set, merged down its chain.
  *
  * Built only by loading a template, so `items` is present exactly when `type` is `list`,
- * and a `default` is a value of the variable's type.
+ * a `default` is a value of the variable's type, and `required` is never `true` beside one.
  */
 export interface TemplateVariable {
 /**

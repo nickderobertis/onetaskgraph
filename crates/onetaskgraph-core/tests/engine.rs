@@ -674,8 +674,8 @@ const TWENTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 81] = [
     ("TaskQuery", 0x3c75fb5c883cb286),
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xbe06dc239bf5eeb0),
-    ("TemplateVariable", 0x998277777f1090a5),
-    ("TemplateVariables", 0x38df4e7260b94b22),
+    ("TemplateVariable", 0x482dac5032a65dec),
+    ("TemplateVariables", 0xf807d1130c356983),
     ("TextFields", 0x7240bd05f9beff93),
     ("VariableType", 0x4310e29eba96791c),
 ];

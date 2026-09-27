@@ -1008,3 +1008,17 @@ fn an_escaped_name_is_the_file_minijinja_loads() {
     // The render loaded nothing the chain did not already name.
     assert_eq!(rendered.digest, template.digest());
 }
+
+#[test]
+fn a_template_that_is_there_and_cannot_be_read_is_unreadable_not_missing() {
+    let tree = tempfile::tempdir().expect("a temporary directory");
+    let error = TemplateLoader::new()
+        .load_path(tree.path())
+        .expect_err("a directory is not a template file");
+    assert!(
+        matches!(&error, TemplateError::Unreadable { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), "template-unreadable");
+    assert!(error.to_string().contains("could not be read"), "{error}");
+}

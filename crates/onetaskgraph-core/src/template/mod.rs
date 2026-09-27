@@ -166,7 +166,11 @@ impl ItemType {
 /// One variable of a template's declared set, merged down its chain.
 ///
 /// Built only by loading a template, so `items` is present exactly when `type` is `list`,
-/// and a `default` is a value of the variable's type.
+/// a `default` is a value of the variable's type, and `required` is never `true` beside one.
+// llmlint: ignore[invalid_states_unrepresentable] Every field is private and the one
+// constructor is the chain merge, which copies a declaration the front matter parser already
+// refused unless those three rules held; the flat shape is the wire contract C1 fixes
+// (`type`, `items`, `required`, `default` side by side), which a nested enum would change.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TemplateVariable {
     /// The variable's name, as the template body uses it.
@@ -375,6 +379,18 @@ pub enum TemplateError {
         /// The search path directories it was looked for in.
         searched: Vec<String>,
     },
+    /// A template that is there and could not be read — a permission, or a directory where a
+    /// file was named.
+    #[error(
+        "template {name} could not be read: {message}\n\
+         next: name a readable file, or give it the permissions this process reads with."
+    )]
+    Unreadable {
+        /// The path it was read at.
+        name: String,
+        /// Why the read failed.
+        message: String,
+    },
     /// A chain file that is not a template this format reads.
     #[error(
         "template {file}: {}{message}\nnext: {}",
@@ -493,6 +509,7 @@ impl TemplateError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::NotFound { .. } => "template-not-found",
+            Self::Unreadable { .. } => "template-unreadable",
             Self::Malformed { .. } => "template-malformed",
             Self::ChainConflict { .. } => "template-chain-conflict",
             Self::MalformedAnswers { .. } => "template-answers-malformed",
@@ -570,10 +587,19 @@ impl TemplateLoader {
     /// a variable two chain files type differently.
     pub fn load_path(&self, path: &Path) -> Result<Template, TemplateError> {
         let shown = path.display().to_string();
-        let bytes = std::fs::read(path).map_err(|_| TemplateError::NotFound {
-            name: shown.clone(),
-            referenced_from: None,
-            searched: Vec::new(),
+        let bytes = std::fs::read(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                TemplateError::NotFound {
+                    name: shown.clone(),
+                    referenced_from: None,
+                    searched: Vec::new(),
+                }
+            } else {
+                TemplateError::Unreadable {
+                    name: shown.clone(),
+                    message: error.to_string(),
+                }
+            }
         })?;
         let source = String::from_utf8(bytes)
             .map_err(|_| TemplateError::malformed(&shown, None, "it is not UTF-8 text"))?;
@@ -612,13 +638,11 @@ impl TemplateLoader {
             for directory in &self.directories {
                 let candidate = directory.join(path);
                 if candidate.is_file() {
-                    let bytes = std::fs::read(&candidate).map_err(|error| {
-                        TemplateError::malformed(
-                            name,
-                            None,
-                            format!("{} could not be read: {error}", candidate.display()),
-                        )
-                    })?;
+                    let bytes =
+                        std::fs::read(&candidate).map_err(|error| TemplateError::Unreadable {
+                            name: candidate.display().to_string(),
+                            message: error.to_string(),
+                        })?;
                     return String::from_utf8(bytes)
                         .map(Some)
                         .map_err(|_| TemplateError::malformed(name, None, "it is not UTF-8 text"));

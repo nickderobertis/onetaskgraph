@@ -12111,7 +12111,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\nand a `default` is a value of the variable's type.",
+    "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\na `default` is a value of the variable's type, and `required` is never `true` beside one.",
     "properties": {
       "declared_in": {
         "description": "The chain file whose declaration this is: the one nearest the rendered template.",
@@ -12176,7 +12176,7 @@ export const runtimeSchemas = {
         ]
       },
       "TemplateVariable": {
-        "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\nand a `default` is a value of the variable's type.",
+        "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\na `default` is a value of the variable's type, and `required` is never `true` beside one.",
         "properties": {
           "declared_in": {
             "description": "The chain file whose declaration this is: the one nearest the rendered template.",
