@@ -5992,7 +5992,7 @@ async fn a_targeted_update_sends_one_issue_update_carrying_only_what_differs() {
     let (endpoint, wire) = response_server(vec![
         slotted_issue("I-1", "Todo", "unstarted"),
         serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE-DONE"}]}}),
+        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE-DONE","name":"Done"}]}}),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
         {
             let mut read = slotted_issue("I-1", "Done", "completed");

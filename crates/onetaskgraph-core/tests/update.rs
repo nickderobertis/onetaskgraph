@@ -719,3 +719,38 @@ async fn a_priority_for_a_source_that_holds_none_is_refused_before_it_is_asked()
         .expect_err("no priority");
     assert!(matches!(error, EngineError::NoPriority { .. }), "{error:?}");
 }
+
+#[tokio::test]
+async fn a_status_named_by_its_category_word_takes_the_sources_own_word_for_it() {
+    // What `task update --status in-progress` sends with no `--status-name`: the category's
+    // own word, which this folder's mapping spells `in progress`. It lands in the folder's
+    // word, as `task status set` would write it, rather than being refused.
+    let store = Store::new(Kind::LocalMd);
+    let answer = store
+        .update(&TaskUpdate {
+            status: Some(status(StatusCategory::InProgress, "in-progress")),
+            ..TaskUpdate::default()
+        })
+        .await
+        .expect("the update lands");
+    assert_eq!(
+        answer.task.status,
+        status(StatusCategory::InProgress, "in progress")
+    );
+    assert!(
+        store
+            .file()
+            .expect("a file")
+            .contains("\nstatus: in progress\n")
+    );
+
+    // A word of its own that the mapping reads as another category is still refused.
+    let error = store
+        .update(&TaskUpdate {
+            status: Some(status(StatusCategory::Done, "failed")),
+            ..TaskUpdate::default()
+        })
+        .await
+        .expect_err("failed reads as cancelled here");
+    assert!(error.to_string().contains("failed"), "{error}");
+}

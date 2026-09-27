@@ -1060,10 +1060,10 @@ impl LinearSource {
     /// from it — `title`, `description` (content and metadata slot together), `stateId`,
     /// `priority` — and, when the named edges differ from the ones the issue holds, its
     /// relations replaced. Nothing is sent for a field already holding the requested value,
-    /// and nothing at all when nothing differs. A Linear issue keeps its workflow state's
-    /// own name, so a status is written by that name, exactly as a copy writes one: a status
-    /// whose name the issue already holds is no write, and one naming no state of the team
-    /// is refused by name. `delivers` is refused as a copy refuses it; see `NO_DELIVERY`.
+    /// and nothing at all when nothing differs. A status is written by its category, exactly
+    /// as `set_task_status` writes one: an issue already in that category keeps the state it
+    /// is in, and one that is not moves to the team's first state of that type. `delivers` is
+    /// refused as a copy refuses it; see `NO_DELIVERY`.
     ///
     /// The task answered is read back after the write, so its status is Linear's.
     async fn targeted_update(
@@ -1078,6 +1078,9 @@ impl LinearSource {
             .is_some_and(|delivers| !delivers.is_empty())
         {
             return Err(self.undeliverable("delivers", "task"));
+        }
+        if let Some(status) = &update.status {
+            self.state_type(status.category)?;
         }
         let data = self.send(ISSUE, json!({"id":id.0})).await?;
         let Some((before, description)) = optional(&data, "issue", |v| {
@@ -1150,15 +1153,9 @@ impl LinearSource {
         if let Some(status) = update
             .status
             .as_ref()
-            .filter(|status| !status.name.eq_ignore_ascii_case(&before.status.name))
+            .filter(|status| status.category != before.status.category)
         {
-            let team = self.team_id().await?;
-            let state = self
-                .one_id(Lookup::IssueState {
-                    name: &status.name,
-                    team: &team,
-                })
-                .await?;
+            let (state, _) = self.state_of(status.category, &before.id).await?;
             input.insert("stateId".into(), json!(state.0));
         }
         if let Some(priority) = update
@@ -1995,20 +1992,8 @@ impl TaskSource for LinearSource {
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         // Before any request: a category no workflow state has is not one Linear could
-        // answer differently for another issue. `workflow_state_types` is the same mapping
-        // the status filter narrows with, so a status this sets is one that filter finds.
-        let Some(state_type) = workflow_state_types(&category).first().copied() else {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} cannot set a task's status to {}: that category is disabled for \
-                     this source, because Linear has no workflow state of that kind — its \
-                     workflow states are triage, backlog, unstarted, started, completed and \
-                     canceled; choose backlog, todo, in-progress, done or cancelled",
-                    self.name,
-                    category_word(category)
-                ),
-            });
-        };
+        // answer differently for another issue.
+        self.state_type(category)?;
         let Some(task) = self.get_task(id).await? else {
             return Ok(None);
         };
@@ -2018,42 +2003,13 @@ impl TaskSource for LinearSource {
         if task.status.category == category {
             return Ok(Some(task.status));
         }
-        let team = self.team_id().await?;
-        let data = self
-            .send(
-                graphql::ISSUE_STATE_OF_TYPE,
-                json!({"type":state_type,"team":team.0}),
-            )
-            .await?;
-        let nodes = data
-            .get("workflowStates")
-            .and_then(|v| v.get("nodes"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "missing workflowStates.nodes".into(),
-            })?;
-        // The first node Linear lists, and deliberately no choice beyond that: every state of
-        // this type reads back as the category asked for, which is the whole of what a status
-        // write owes, and nothing a category carries says which of several the caller meant.
-        let Some(state) = nodes.first() else {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} cannot set task {} to {}: its configured team has no workflow \
-                     state of type {state_type}; add one to the team in Linear",
-                    self.name,
-                    id.0,
-                    category_word(category)
-                ),
-            });
-        };
-        let state_id = backend_id(state, "id")?;
-        let name = str_at(state, "name")?.to_owned();
+        let (state_id, name) = self.state_of(category, id).await?;
         // `stateId` alone, so nothing else about the issue can move: Linear's
         // `IssueUpdateInput` makes every member optional and leaves an absent one as it was.
         let data = self
             .send(
                 graphql::ISSUE_UPDATE,
-                json!({"id":task.id.0,"input":{"stateId":state_id}}),
+                json!({"id":task.id.0,"input":{"stateId":state_id.0}}),
             )
             .await?;
         let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
@@ -2220,6 +2176,66 @@ fn category_word(category: StatusCategory) -> String {
 }
 
 impl LinearSource {
+    /// The workflow state type a category is written as, or the refusal of a category no
+    /// workflow state has. `workflow_state_types` is the same mapping the status filter
+    /// narrows with, so a status this writes is one that filter finds.
+    fn state_type(&self, category: StatusCategory) -> Result<&'static str, SourceError> {
+        workflow_state_types(&category)
+            .first()
+            .copied()
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "source {} cannot set a task's status to {}: that category is disabled for \
+                     this source, because Linear has no workflow state of that kind — its \
+                     workflow states are triage, backlog, unstarted, started, completed and \
+                     canceled; choose backlog, todo, in-progress, done or cancelled",
+                    self.name,
+                    category_word(category)
+                ),
+            })
+    }
+
+    /// The team's workflow state a status of `category` is written as — the first Linear lists
+    /// of that type, and deliberately no choice beyond that: every state of this type reads
+    /// back as the category asked for, which is the whole of what a status write owes, and
+    /// nothing a category carries says which of several the caller meant — and its name.
+    async fn state_of(
+        &self,
+        category: StatusCategory,
+        task: &NativeId,
+    ) -> Result<(NativeId, String), SourceError> {
+        let state_type = self.state_type(category)?;
+        let team = self.team_id().await?;
+        let data = self
+            .send(
+                graphql::ISSUE_STATE_OF_TYPE,
+                json!({"type":state_type,"team":team.0}),
+            )
+            .await?;
+        let nodes = data
+            .get("workflowStates")
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing workflowStates.nodes".into(),
+            })?;
+        let Some(state) = nodes.first() else {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot set task {} to {}: its configured team has no workflow \
+                     state of type {state_type}; add one to the team in Linear",
+                    self.name,
+                    task.0,
+                    category_word(category)
+                ),
+            });
+        };
+        Ok((
+            NativeId(backend_id(state, "id")?.into()),
+            str_at(state, "name")?.to_owned(),
+        ))
+    }
+
     /// The refusal a write naming `named` — a field or a reserved key — on a `what` gets.
     fn undeliverable(&self, named: &str, what: &str) -> SourceError {
         SourceError::Refused {

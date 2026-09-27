@@ -1393,16 +1393,36 @@ impl TaskSource for LocalMdSource {
     /// the file for writing. The edited text is read back before anything is written and must
     /// be the task as it was with exactly the named fields changed; when it is not, the write
     /// is refused and the file left as it was. The status is written under the name it was
-    /// given, which this folder's `status_mapping` must read as its category.
+    /// given, which this folder's `status_mapping` must read as its category — or, for a name
+    /// that is only the category's own word, under this folder's word for that category.
     async fn update_task(
         &self,
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         update.consistent()?;
-        if let Some(status) = &update.status {
+        // A status named by its category's own word, which this folder's mapping does not read
+        // as that category, is the category and nothing more: it is written in this folder's
+        // own word for it, exactly as `set_task_status` writes one. Any other name is written
+        // as it is, or refused when the mapping would read it as something else.
+        let status = update.status.as_ref().map(|status| {
+            let canonical = status.name == category_name(status.category);
+            if canonical && self.representable_status(status).is_err() {
+                Status {
+                    category: status.category,
+                    name: self.word_for(status.category),
+                }
+            } else {
+                status.clone()
+            }
+        });
+        if let Some(status) = &status {
             self.representable_status(status)?;
         }
+        let update = &TaskUpdate {
+            status,
+            ..update.clone()
+        };
         if let Some(delivers) = &update.delivers {
             self.representable_list("delivers", id, delivers)?;
         }
