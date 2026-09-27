@@ -225,8 +225,14 @@ function answersDocument(answers: Record<string, JsonValue>): string {
       const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
       if (plain && !within.has(value)) {
         within.add(value);
-        for (const [key, item] of Object.entries(value)) {
-          check(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`);
+        if (Array.isArray(value)) {
+          // By index rather than by entry, so a hole in a sparse array is read as the
+          // `undefined` it is and refused, rather than skipped and later written as `null`.
+          for (let index = 0; index < value.length; index += 1) {
+            check(value[index], `${path}[${index}]`);
+          }
+        } else {
+          for (const [key, item] of Object.entries(value)) check(item, `${path}.${key}`);
         }
         within.delete(value);
         return;

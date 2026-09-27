@@ -7,7 +7,10 @@
 
 use std::path::Path;
 
-use onetaskgraph_core::{Answers, ChainField, TemplateError, TemplateLoader, VariableType};
+use onetaskgraph_core::{
+    Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, TemplateError,
+    TemplateLoader, VariableType,
+};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
@@ -751,5 +754,133 @@ fn search_path_directories_are_searched_in_the_order_given() {
                 .with_directory(first.path())
         ),
         "from the second\nonly in the second\n"
+    );
+}
+
+#[test]
+fn boolean_and_object_list_answers_are_typed_as_declared() {
+    let template = TemplateLoader::new()
+        .with_template(
+            "t.md",
+            "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  urgent: {description: whether it is urgent, type: boolean}\n  \
+  people: {description: who, type: list, items: object}\n\
+---\n\
+{% if urgent %}URGENT {% endif %}{% for person in people %}{{ person.name }}{% if not loop.last %}, {% endif %}{% endfor %}\n",
+        )
+        .load_name("t.md")
+        .expect("it loads");
+
+    let mut answers = Answers::new();
+    answers
+        .set_text("urgent", "true")
+        .set("people", json!([{"name": "ada"}, {"name": "bo"}]));
+    assert_eq!(
+        template.render(&answers).expect("renders").body,
+        "URGENT ada, bo"
+    );
+    answers.set("urgent", json!(false));
+    assert_eq!(template.render(&answers).expect("renders").body, "ada, bo");
+
+    let mut refused = answers.clone();
+    refused.set_text("urgent", "maybe");
+    let error = template.render(&refused).expect_err("not a boolean");
+    assert!(
+        matches!(&error, TemplateError::MistypedAnswer { name, kind: VariableType::Boolean, .. } if name == "urgent"),
+        "{error:?}"
+    );
+
+    let mut refused = answers.clone();
+    refused.set("people", json!([{"name": "ada"}, "bo"]));
+    let error = template
+        .render(&refused)
+        .expect_err("an entry is not a mapping");
+    assert!(
+        matches!(&error, TemplateError::MistypedAnswer { name, kind: VariableType::List, problem, .. }
+            if name == "people" && problem.contains("entry 1") && problem.contains("objects")),
+        "{error:?}"
+    );
+    assert_eq!(template.variables()[1].items(), Some(ItemType::Object));
+}
+
+/// The README restates the front matter's keys and vocabularies for a reader; this holds that
+/// statement to the parser both ways, so neither can move without the other.
+#[test]
+fn the_readme_front_matter_is_the_one_the_parser_reads() {
+    let readme =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"))
+            .expect("the README is readable");
+    let section = readme
+        .split_once("### Task templates")
+        .expect("the README has a task templates section")
+        .1;
+    let block = section
+        .split_once("```jinja\n")
+        .and_then(|(_, rest)| rest.split_once("```"))
+        .expect("the section opens with a template")
+        .0;
+    let matter = block
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("the template opens with front matter")
+        .0;
+
+    let key = |line: &str| line.trim_start().split(':').next().unwrap_or("").to_owned();
+    let mut top: Vec<String> = matter
+        .lines()
+        .filter(|line| !line.starts_with(' '))
+        .map(key)
+        .collect();
+    let mut declaration: Vec<String> = matter
+        .lines()
+        .filter(|line| line.starts_with("    ") && !line.starts_with("     "))
+        .map(key)
+        .collect();
+    top.sort();
+    declaration.sort();
+    let mut expected_top: Vec<String> = FRONT_MATTER_KEYS
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    let mut expected_declaration: Vec<String> = DECLARATION_KEYS
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    expected_top.sort();
+    expected_declaration.sort();
+    assert_eq!(
+        top, expected_top,
+        "the README's top-level front matter keys"
+    );
+    assert_eq!(
+        declaration, expected_declaration,
+        "the README's declaration keys"
+    );
+
+    let vocabulary = |field: &str, after: &str| -> Vec<String> {
+        let line = matter
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{field}:")))
+            .unwrap_or_else(|| panic!("the README declares `{field}`"));
+        let comment = line.split_once(after).expect("a commented vocabulary").1;
+        comment
+            .split(';')
+            .next()
+            .expect("a vocabulary")
+            .split('|')
+            .map(|word| word.trim().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        vocabulary("type", "# "),
+        VariableType::ALL.map(|kind| kind.as_str().to_owned()),
+        "the README's types"
+    );
+    assert_eq!(
+        vocabulary("items", "list only: "),
+        ItemType::ALL.map(|items| items.as_str().to_owned()),
+        "the README's item types"
     );
 }

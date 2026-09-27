@@ -67,6 +67,6 @@ pub use subprocess::{
     serve, serve_plugin,
 };
 pub use template::{
-    Answers, ChainField, ItemType, RenderedTemplate, Template, TemplateError, TemplateLoader,
-    TemplateVariable, TemplateVariables, VariableType,
+    Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, RenderedTemplate, Template,
+    TemplateError, TemplateLoader, TemplateVariable, TemplateVariables, VariableType,
 };

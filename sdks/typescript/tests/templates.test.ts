@@ -120,11 +120,16 @@ test("a refused answer is an execution error carrying exit 2 and what it refuses
 test("answers JSON cannot carry are refused before the binary is started", async () => {
   const cyclic: Record<string, unknown> = { title: "t" };
   cyclic.self = cyclic;
+  // A hole, which JSON.stringify would otherwise write as `null`: assigned past the end
+  // rather than spelled as a literal, which is how one usually arises.
+  const sparse: unknown[] = ["a"];
+  sparse[2] = "c";
   const refusals: [unknown, string][] = [
     [{ title: "t", steps: [Number.NaN] }, "answers.steps[0]"],
     [{ title: undefined }, "answers.title"],
     [{ title: "t", when: new Date(0) }, "answers.when"],
     [cyclic, "answers.self"],
+    [{ title: "t", steps: sparse }, "answers.steps[1]"],
   ];
   for (const [answers, path] of refusals) {
     const refused = client.templateRender(task, {

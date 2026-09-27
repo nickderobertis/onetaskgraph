@@ -65,6 +65,7 @@ use sha2::{Digest as _, Sha256};
 pub use answers::Answers;
 use answers::Given;
 use front_matter::Declaration;
+pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS};
 
 /// What one variable holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -85,6 +86,16 @@ pub enum VariableType {
 }
 
 impl VariableType {
+    /// Every type, in the order front matter documents them.
+    pub const ALL: [Self; 6] = [
+        Self::String,
+        Self::Text,
+        Self::Integer,
+        Self::Boolean,
+        Self::List,
+        Self::Object,
+    ];
+
     /// The type a front matter `type:` spells, if it spells one.
     fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -129,6 +140,9 @@ pub enum ItemType {
 }
 
 impl ItemType {
+    /// Every item type, in the order front matter documents them.
+    pub const ALL: [Self; 2] = [Self::String, Self::Object];
+
     /// The item type a front matter `items:` spells, if it spells one.
     fn parse(text: &str) -> Option<Self> {
         match text {
@@ -582,16 +596,18 @@ impl TemplateLoader {
 
     /// The source the search path resolves `name` to, or `None`.
     ///
-    /// A name climbing out of the search path (`..`), or an absolute one, is looked for among
-    /// the registered pairs alone: a template never reads a file it was not given the
-    /// directory of.
+    /// A name spelled to climb out of the search path (`..`), or an absolute one, is looked
+    /// for among the registered pairs alone, so a template cannot name its way to a file
+    /// outside the directories it was given. A symbolic link inside one of those directories
+    /// is followed like any other file there: the check is on how the name is spelled, and
+    /// whoever put the link in a search directory chose what it reaches.
     fn find(&self, name: &str) -> Result<Option<String>, TemplateError> {
         let path = Path::new(name);
-        let confined = !name.is_empty()
+        let spelled_within = !name.is_empty()
             && path
                 .components()
                 .all(|component| matches!(component, Component::Normal(_)));
-        if confined {
+        if spelled_within {
             for directory in &self.directories {
                 let candidate = directory.join(path);
                 if candidate.is_file() {

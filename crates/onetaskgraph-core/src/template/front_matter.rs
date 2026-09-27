@@ -16,6 +16,22 @@ const VERSION_KEY: &str = "onetaskgraph_template";
 /// The only front matter version this build reads.
 const VERSION: u64 = 1;
 
+/// Every key front matter may carry, and nothing else: any other is refused by name.
+pub const FRONT_MATTER_KEYS: [&str; 3] = [VERSION_KEY, "description", "variables"];
+
+/// Every key one variable's declaration may carry, and nothing else: any other is refused by
+/// name.
+pub const DECLARATION_KEYS: [&str; 5] = ["description", "type", "items", "required", "default"];
+
+/// `keys` as a message lists them: `` `a`, `b` and `c` ``.
+fn listed(keys: &[&str]) -> String {
+    let quoted: Vec<String> = keys.iter().map(|key| format!("`{key}`")).collect();
+    match quoted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => quoted.concat(),
+    }
+}
+
 /// A file with its front matter taken off.
 pub(super) struct Split {
     /// The declarations the front matter made, in the order it made them.
@@ -126,8 +142,10 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<Declaration>, TemplateError> {
                 return Err(TemplateError::malformed(
                     file,
                     Some(other),
-                    "is not a front matter key; the keys are `onetaskgraph_template`, \
-                     `description` and `variables`",
+                    format!(
+                        "is not a front matter key; the keys are {}",
+                        listed(&FRONT_MATTER_KEYS)
+                    ),
                 ));
             }
         }
@@ -287,8 +305,10 @@ fn declaration_of(file: &str, name: String, value: &Yaml) -> Result<Declaration,
                 return Err(TemplateError::malformed(
                     file,
                     Some(&path),
-                    "is not a declaration key; the keys are `description`, `type`, `items`, \
-                     `required` and `default`",
+                    format!(
+                        "is not a declaration key; the keys are {}",
+                        listed(&DECLARATION_KEYS)
+                    ),
                 ));
             }
         }
@@ -334,4 +354,60 @@ fn declaration_of(file: &str, name: String, value: &Yaml) -> Result<Declaration,
         items,
         default,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The published key lists are the parser's: every listed key is read, and a key beside
+    /// them is refused naming the whole list.
+    #[test]
+    fn the_published_keys_are_exactly_the_ones_read() {
+        let every_key = "---\n\
+onetaskgraph_template: 1\n\
+description: all of it\n\
+variables:\n  \
+  steps:\n    \
+    description: d\n    \
+    type: list\n    \
+    items: string\n    \
+    required: false\n    \
+    default: [a]\n\
+---\n";
+        let read = split("t.md", every_key).expect("every published key is read");
+        assert_eq!(read.declarations.len(), 1);
+        assert_eq!(
+            FRONT_MATTER_KEYS.len(),
+            every_key
+                .lines()
+                .filter(|line| line.contains(':') && !line.starts_with(' '))
+                .count()
+        );
+        assert_eq!(
+            DECLARATION_KEYS.len(),
+            every_key
+                .lines()
+                .filter(|line| line.starts_with("    "))
+                .count()
+        );
+
+        let refused = split("t.md", "---\nonetaskgraph_template: 1\nother: x\n---\n")
+            .err()
+            .expect("an unlisted key");
+        assert!(
+            refused.to_string().contains(&listed(&FRONT_MATTER_KEYS)),
+            "{refused}"
+        );
+        let refused = split(
+            "t.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  x: {description: d, other: y}\n---\n",
+        )
+        .err()
+        .expect("an unlisted declaration key");
+        assert!(
+            refused.to_string().contains(&listed(&DECLARATION_KEYS)),
+            "{refused}"
+        );
+    }
 }
