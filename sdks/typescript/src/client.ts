@@ -538,7 +538,8 @@ function loaderFlags(method: string, options: { templateLoader?: string }): stri
     : ["--template-loader", pathOption(method, "templateLoader", options.templateLoader)];
 }
 
-// One regenerate's command, arguments and standard input.
+// Answered as exactly the three arguments `run` takes, so both regenerate methods pass them
+// through unchanged and cannot assemble the same invocation two ways.
 function renderInvocation(
   command: string,
   method: string,

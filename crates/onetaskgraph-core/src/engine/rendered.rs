@@ -794,7 +794,8 @@ fn endpoint(far: &GlobalId, near: &SourceName) -> DependencyEndpoint {
         .unwrap_or_else(|_| DependencyEndpoint::from_native(far.native.clone(), ItemKind::Task))
 }
 
-/// Labels by name, as a create names them.
+/// A create names each label by name alone, so its id is that name too: the id is what a
+/// folder of Markdown writes, and the name is what a source that matches labels reads.
 fn labels(names: &[String]) -> Vec<Label> {
     names
         .iter()

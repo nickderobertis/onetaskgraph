@@ -457,6 +457,14 @@ async fn a_loader_document_is_refused_by_name_when_it_is_malformed_or_its_digest
     let fixture = Fixture::new();
     for (document, named) in [
         ("[]", "not a JSON object"),
+        (
+            "{\"reference\": \"r\", \"entry\": \"e\", \"digest\": \"sha256:short\"}",
+            "is not a digest",
+        ),
+        (
+            "{\"reference\": \"r\", \"entry\": \"e\", \"templates\": [{\"name\": \"\", \"source\": \"x\"}]}",
+            "no non-empty string `name`",
+        ),
         ("{\"entry\": \"task.md\"}", "`reference`"),
         ("{\"reference\": \"r\"}", "`entry`"),
         (
@@ -474,7 +482,7 @@ async fn a_loader_document_is_refused_by_name_when_it_is_malformed_or_its_digest
     let stated = format!("sha256:{}", "0".repeat(64));
     let refused = fixture
         .loader(BASE)
-        .with_digest(stated.clone())
+        .with_digest(onetaskgraph_core::Sha256Digest::parse(stated.clone()).unwrap())
         .load()
         .expect_err("a digest the chain does not compute");
     let TemplateError::LoaderDigest {
@@ -494,6 +502,12 @@ async fn a_loader_document_is_refused_by_name_when_it_is_malformed_or_its_digest
         .expect_err("an unreadable directory");
     assert!(missing.to_string().contains("missing"), "{missing}");
     // The builders refuse exactly what the JSON boundary refuses.
+    assert!(
+        LoaderDocument::new("r", "task.md")
+            .unwrap()
+            .with_template("", "x")
+            .is_err()
+    );
     assert!(LoaderDocument::new("", "task.md").is_err());
     assert!(LoaderDocument::new("r", "").is_err());
     assert!(

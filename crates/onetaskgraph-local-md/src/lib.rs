@@ -1620,7 +1620,8 @@ fn content_of(above: &str, sectioned: bool) -> &str {
     }
 }
 
-/// The answers block that stores `answers`.
+/// The answers block that stores `answers`, refused only when YAML cannot write them at all:
+/// whether what it writes reads back as the same values is the caller's read-back to check.
 fn answers_block(answers: &BTreeMap<String, serde_json::Value>) -> Result<String, SourceError> {
     let yaml = serde_norway::to_string(answers).map_err(|e| SourceError::Refused {
         message: format!(

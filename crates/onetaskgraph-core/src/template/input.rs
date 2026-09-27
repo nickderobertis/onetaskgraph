@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Template, TemplateError, TemplateLoader};
+use super::{Sha256Digest, Template, TemplateError, TemplateLoader};
 
 /// A template loader document: exactly what to render, stated by a caller.
 ///
@@ -30,7 +30,7 @@ pub struct LoaderDocument {
     entry: String,
     search_path: Vec<PathBuf>,
     templates: Vec<(String, String)>,
-    digest: Option<String>,
+    digest: Option<Sha256Digest>,
 }
 
 impl LoaderDocument {
@@ -75,7 +75,12 @@ impl LoaderDocument {
         let entry = text_at(entry_key)?
             .filter(|entry| !entry.is_empty())
             .ok_or_else(|| malformed(format!("`{entry_key}` is missing or empty")))?;
-        let digest = text_at(digest_key)?;
+        let digest = text_at(digest_key)?
+            .map(|digest| {
+                Sha256Digest::parse(digest)
+                    .map_err(|problem| malformed(format!("`{digest_key}`: {problem}")))
+            })
+            .transpose()?;
         let search_path = match document.get(search_key) {
             None => Vec::new(),
             Some(Value::Array(directories)) => directories
@@ -103,9 +108,12 @@ impl LoaderDocument {
                 .enumerate()
                 .map(|(index, pair)| {
                     let field = |key: &str| match pair.get(key) {
-                        Some(Value::String(text)) => Ok(text.clone()),
+                        // A name resolves nothing when it is empty, and an empty source is no
+                        // template: neither is a pair a chain can use.
+                        Some(Value::String(text)) if !text.is_empty() => Ok(text.clone()),
                         _ => Err(malformed(format!(
-                            "`{templates_key}[{index}]` has no string `{key}`; each entry is \
+                            "`{templates_key}[{index}]` has no non-empty string `{key}`; each \
+                             entry is \
                              {{\"name\": <name>, \"source\": <text>}}"
                         ))),
                     };
@@ -172,16 +180,30 @@ impl LoaderDocument {
     }
 
     /// Register a template's source under `name`, searched after every directory.
-    #[must_use]
-    pub fn with_template(mut self, name: impl Into<String>, source: impl Into<String>) -> Self {
-        self.templates.push((name.into(), source.into()));
-        self
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::MalformedLoader`] for an empty `name` or `source`, as
+    /// [`LoaderDocument::from_json`] refuses one.
+    pub fn with_template(
+        mut self,
+        name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<Self, TemplateError> {
+        let (name, source) = (name.into(), source.into());
+        if name.is_empty() || source.is_empty() {
+            return Err(TemplateError::MalformedLoader {
+                message: "a registered template has an empty name or source".to_owned(),
+            });
+        }
+        self.templates.push((name, source));
+        Ok(self)
     }
 
     /// Expect the chain to compute `digest`.
     #[must_use]
-    pub fn with_digest(mut self, digest: impl Into<String>) -> Self {
-        self.digest = Some(digest.into());
+    pub fn with_digest(mut self, digest: Sha256Digest) -> Self {
+        self.digest = Some(digest);
         self
     }
 
@@ -214,10 +236,10 @@ impl LoaderDocument {
             });
         let template = loader.load_name(&self.entry)?;
         if let Some(stated) = &self.digest
-            && stated != template.digest()
+            && stated.as_str() != template.digest()
         {
             return Err(TemplateError::LoaderDigest {
-                stated: stated.clone(),
+                stated: stated.to_string(),
                 computed: template.digest().to_owned(),
             });
         }

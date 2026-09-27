@@ -105,6 +105,7 @@ impl std::fmt::Display for Sha256Digest {
 ///
 /// An item created from a plain body records none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateProvenance {
     /// The template it was rendered from: the absolute path of a template file, or a loader
     /// document's `reference` verbatim. Recorded whole, whatever its length.
@@ -259,6 +260,14 @@ mod tests {
         let metadata = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), entry.to_value())]);
         assert_eq!(TemplateProvenance::read(&metadata), Ok(Some(entry.clone())));
         assert_eq!(TemplateProvenance::read(&BTreeMap::new()), Ok(None));
+        let mut extra = entry.to_value();
+        extra["signed_by"] = json!("someone");
+        let extra = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), extra)]);
+        assert!(
+            TemplateProvenance::read(&extra)
+                .unwrap_err()
+                .contains("signed_by")
+        );
         let foreign = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), json!("hand"))]);
         assert!(
             TemplateProvenance::read(&foreign)

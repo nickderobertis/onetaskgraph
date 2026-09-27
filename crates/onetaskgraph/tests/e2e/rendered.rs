@@ -538,6 +538,61 @@ fn a_reserved_metadata_key_and_an_unwritable_source_are_refused_and_nothing_is_w
     );
     assert!(!plan.notes.join("tasks").exists(), "nothing written");
 
+    // Each value the binary parses is refused by name before any source is built.
+    for (flags, named) in [
+        (
+            &["--repository", "not a repository"][..],
+            "--repository not a repository",
+        ),
+        (
+            &["--metadata", "myapp.when=tomorrow"][..],
+            "the value is not JSON",
+        ),
+        (&["--metadata", "no-namespace=1"][..], "has no namespace"),
+    ] {
+        let mut arguments = vec![
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Refused",
+            "--body-file",
+        ];
+        let body = plan.file("body.md", "x");
+        arguments.push(&body);
+        arguments.extend_from_slice(flags);
+        let refused = plan.exits(&arguments, 1);
+        assert!(
+            stderr(&refused).contains(named),
+            "{named}: {}",
+            stderr(&refused)
+        );
+    }
+    let binary = plan.sandbox.subdirectory("inputs").join("binary.md");
+    std::fs::write(&binary, [0xff, 0xfe, 0x00]).unwrap();
+    let not_text = plan.exits(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Bytes",
+            "--body-file",
+            &path(&binary),
+        ],
+        1,
+    );
+    assert!(
+        stderr(&not_text).contains("is not UTF-8 text"),
+        "{}",
+        stderr(&not_text)
+    );
+    assert!(!plan.notes.join("tasks").exists(), "nothing written");
+
     let elsewhere = plan.exits(
         &[
             "task",
@@ -1296,6 +1351,35 @@ fn a_hand_written_answers_block_round_trips_and_every_other_write_keeps_it() {
     assert_eq!(
         plan.json(&["task", "answers", "notes:hand"]),
         json!({"goal": "By hand", "steps": ["one"]})
+    );
+}
+
+#[test]
+fn a_malformed_answers_block_is_refused_naming_the_file_and_is_never_rewritten() {
+    let plan = Plan::new();
+    let text = "---\ntitle: Broken\nstatus: todo\n---\nThe content.\n\n<!-- onetaskgraph:template-answers\ngoal: [unclosed\n-->\n";
+    std::fs::create_dir_all(plan.notes.join("tasks")).unwrap();
+    let file = plan.notes.join("tasks/broken.md");
+    std::fs::write(&file, text).unwrap();
+
+    // The task itself reads: the block is not its content either way.
+    assert_eq!(plan.task("notes:broken")["content"], "The content.");
+    let refused = plan.exits(&["task", "answers", "notes:broken"], 1);
+    assert!(
+        stderr(&refused).contains("broken.md: the stored template answers are not a YAML mapping")
+            && stderr(&refused).contains("next: correct the block"),
+        "{}",
+        stderr(&refused)
+    );
+    let render = plan.render(
+        "notes:broken",
+        &["--template", &plan.template(), "--var", "goal=x"],
+    );
+    assert_eq!(render.status.code(), Some(1), "{}", stderr(&render));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        text,
+        "never rewritten"
     );
 }
 

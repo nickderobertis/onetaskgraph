@@ -669,6 +669,50 @@ fn the_documents_spell_the_provenance_entry_and_the_loader_document_as_the_binar
 }
 
 #[test]
+fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
+    // `docs/metadata.md` lists every key of the reserved `onetaskgraph.` namespace, and counts
+    // them in words. Both are held to the constants each key is spelled once as, so a key added
+    // in code and not in the document — or the reverse — fails here.
+    use onetaskgraph_plugin_api::{DependencyEdge, ItemKind, MetadataKey, Repository, TaskRef};
+    let spelled: std::collections::BTreeSet<&str> = [
+        Repository::METADATA_KEY,
+        DependencyEdge::RECORDED_KEY,
+        TaskRef::DELIVERS_KEY,
+        TaskRef::DELIVERED_BY_KEY,
+        ItemKind::METADATA_KEY,
+        MetadataKey::TEMPLATE_KEY,
+        onetaskgraph_core::GlobalId::ORIGIN_KEY,
+    ]
+    .into_iter()
+    .collect();
+    let document = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+    let start = document
+        .find("- `onetaskgraph.` belongs to this product.")
+        .expect("the reserved-namespace bullet");
+    let bullet = &document[start..start + document[start..].find("\n- `").unwrap()];
+    let listed: std::collections::BTreeSet<&str> = bullet
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|quoted| {
+            quoted.starts_with("onetaskgraph.") && quoted.len() > "onetaskgraph.".len()
+        })
+        .collect();
+    assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
+    let words = [
+        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    assert!(
+        bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
+        "docs/metadata.md counts {} keys in words:\n{bullet}",
+        spelled.len()
+    );
+}
+
+#[test]
 fn the_readme_documents_the_command_surface_this_binary_actually_has() {
     // The README spells the verbs, the flags and the exit codes a second time, for the
     // person deciding whether to install this at all. A second spelling drifts, and the

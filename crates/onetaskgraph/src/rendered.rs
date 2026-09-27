@@ -382,7 +382,9 @@ fn plain(path: Option<&Path>) -> Result<String, Refusal> {
     })
 }
 
-/// Every `--depends-on` or `--delivers`, as the qualified ids they are.
+/// Every `--depends-on` or `--delivers`, refused before any source is built unless each is
+/// qualified: a bare id would be read as naming a task of the source being created in, which a
+/// caller copying another source's id did not mean.
 fn ids(given: &[String]) -> Result<Vec<GlobalId>, Failure> {
     given.iter().map(|id| qualified(id)).collect()
 }
