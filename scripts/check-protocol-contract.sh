@@ -70,12 +70,26 @@ contract_rs = (
     + api("metering.rs")
 )
 
+# The template operations, which the protocol does not carry at all: the engine refuses each
+# for a hosted source before sending anything, and the paragraph after §4's method table says
+# so. Carrying them would add six rows and six sections here, and delete these entries.
+TEMPLATE_OPERATIONS = (
+    "not carried: the paragraph after §4's method table says the engine refuses it for a "
+    "hosted source before sending anything"
+)
+
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
 NOT_METHODS = {
     "kind": "settled by the handshake response's `kind` field",
     "capabilities": "settled by the handshake response's `capabilities` field",
     "writes": "settled by the handshake response's `writes` field, which §3.3 specifies",
+    "task_template_answers": TEMPLATE_OPERATIONS,
+    "document_template_answers": TEMPLATE_OPERATIONS,
+    "write_task_rendered": TEMPLATE_OPERATIONS,
+    "write_document_rendered": TEMPLATE_OPERATIONS,
+    "set_task_rendering": TEMPLATE_OPERATIONS,
+    "set_document_rendering": TEMPLATE_OPERATIONS,
 }
 
 # The one protocol method with no trait method behind it: it stands for building the

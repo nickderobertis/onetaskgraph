@@ -748,6 +748,9 @@ them do; this is the inventory of what is owed, not a status board.
     a regenerate whose recorded reference is not a file and names no loader are each refused.
 61. A rendering write made to fail — a file or a folder that cannot be written — leaves the
     item's previous file byte-identical and no staging file behind.
+62. A source hosted over the stdio plugin protocol refuses a task or document create from a
+    template, a read of stored answers and a regenerate — dry run included — each naming the
+    source and the operation and writing nothing, while a plain-body create still crosses.
 
 ## What a copied document's references are pointed at
 

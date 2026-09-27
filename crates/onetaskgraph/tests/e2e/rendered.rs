@@ -14,7 +14,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 use crate::machine::{bundle, validates};
 
@@ -1846,4 +1846,151 @@ fn a_loader_document_that_cannot_be_used_is_refused_by_name_and_writes_nothing()
         stderr(&create)
     );
     assert!(!plan.notes.join("tasks").exists());
+}
+
+/// Every file under `root`, by its path relative to it, with its bytes.
+fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(root: &Path, directory: &Path, into: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(directory).expect("a readable directory") {
+            let entry = entry.expect("a readable entry").path();
+            if entry.is_dir() {
+                walk(root, &entry, into);
+            } else {
+                let relative = entry.strip_prefix(root).expect("under the root").to_owned();
+                into.insert(relative, std::fs::read(&entry).expect("a readable file"));
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    walk(root, root, &mut files);
+    files
+}
+
+#[test]
+fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name() {
+    // `hosted` is the very folder `notes` is, reached through the protocol's reference host:
+    // what `notes` writes in-process is there for `hosted` to be asked about, and a refusal
+    // that wrote anything would show in the one folder both name.
+    let plan = Plan::new();
+    let notes = path(&plan.notes);
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "hosted": SourceBoundary::Subprocess.source("local-md", json!({"root": notes})),
+    })));
+    let template = plan.template();
+    let search_path = plan.search_path();
+    let refused = |arguments: &[&str], operation: &str| {
+        let output = plan.exits(arguments, 1);
+        let said = stderr(&output);
+        assert!(
+            said.contains("source hosted could not do it")
+                && said.contains(&format!("does not carry {operation}"))
+                && said.contains("stdio plugin protocol")
+                && said.contains("nothing was written"),
+            "`onetaskgraph {}` did not name the source and the operation:\n{said}",
+            arguments.join(" ")
+        );
+    };
+
+    // Neither create from a template lands anything, not even the content without its answers.
+    for (kind, operation) in [
+        ("task", "a task create from a template"),
+        ("document", "a document create from a template"),
+    ] {
+        refused(
+            &[
+                kind,
+                "create",
+                "hosted",
+                "--project",
+                "P-1",
+                "--title",
+                "Hosted",
+                "--template",
+                &template,
+                "--search-path",
+                &search_path,
+                "--var",
+                "goal=Hosted",
+                "--no-interactive",
+            ],
+            operation,
+        );
+    }
+    assert!(
+        snapshot(&plan.notes).is_empty(),
+        "a refused create wrote {:?}",
+        snapshot(&plan.notes).keys().collect::<Vec<_>>()
+    );
+
+    // The refusal is about the template operations alone: a plain body still crosses.
+    let plain = stdout(&plan.exits(
+        &[
+            "task",
+            "create",
+            "hosted",
+            "--project",
+            "P-1",
+            "--title",
+            "Plain",
+            "--body-file",
+            &plan.file("plain.md", "Plain."),
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    assert_eq!(plain, "hosted:plain");
+
+    // An item rendered in-process, with its provenance and its answers in its file, is refused
+    // every read of its answers and every regenerate through the host, a dry run included.
+    let task = plan.create("notes", "Rendered", &["--var", "goal=First"]);
+    let task = format!("hosted:{}", native(&task));
+    let document = plan.json(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "P-1",
+        "--title",
+        "Design",
+        "--template",
+        &template,
+        "--search-path",
+        &search_path,
+        "--var",
+        "goal=First",
+        "--no-interactive",
+    ]);
+    let document = format!(
+        "hosted:{}",
+        native(document["items"][0]["id"].as_str().expect("a document id"))
+    );
+    let before = snapshot(&plan.notes);
+    for (kind, id) in [("task", &task), ("document", &document)] {
+        let answers = format!("a {kind}'s stored template answers");
+        refused(&[kind, "answers", id], &answers);
+        refused(&[kind, "answers", id, "--json"], &answers);
+        for dry_run in [&[][..], &["--dry-run"][..]] {
+            let mut render = vec![
+                kind,
+                "render",
+                id.as_str(),
+                "--template",
+                &template,
+                "--search-path",
+                &search_path,
+                "--var",
+                "goal=Second",
+                "--no-interactive",
+            ];
+            render.extend_from_slice(dry_run);
+            refused(&render, &answers);
+        }
+    }
+    assert_eq!(
+        snapshot(&plan.notes),
+        before,
+        "a refused answers read or regenerate changed the folder"
+    );
 }
