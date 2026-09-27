@@ -55,6 +55,8 @@
 
 mod answers;
 mod front_matter;
+mod input;
+mod provenance;
 mod scan;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -70,6 +72,8 @@ use sha2::{Digest as _, Sha256};
 pub use answers::Answers;
 use answers::Given;
 pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
+pub use input::{LoaderDocument, TemplateInput};
+pub use provenance::{TemplateProvenance, answers_digest, body_digest};
 
 /// What one variable holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -502,6 +506,30 @@ pub enum TemplateError {
         /// What failed.
         message: String,
     },
+    /// A template loader document that is not one this product reads.
+    #[error(
+        "the template loader document is refused: {message}\n\
+         next: supply a JSON object with a non-empty string `reference`, a non-empty string \
+         `entry`, an optional `search_path` of absolute directories, optional `templates` of \
+         {{\"name\", \"source\"}} string pairs and an optional string `digest`."
+    )]
+    MalformedLoader {
+        /// What is wrong with it.
+        message: String,
+    },
+    /// A loader document stating a digest its chain does not compute.
+    #[error(
+        "the template loader document states the digest {stated}, and the chain it names \
+         computes {computed}\n\
+         next: state the digest of the chain the document names — `onetaskgraph template \
+         variables --template-loader` reports it — or leave `digest` out."
+    )]
+    LoaderDigest {
+        /// The digest the document states.
+        stated: String,
+        /// The digest its chain computes.
+        computed: String,
+    },
 }
 
 impl TemplateError {
@@ -519,6 +547,8 @@ impl TemplateError {
             Self::MistypedAnswer { .. } => "template-mistyped-answer",
             Self::MissingRequired { .. } => "template-missing-required",
             Self::Render { .. } => "template-render",
+            Self::MalformedLoader { .. } => "template-loader-malformed",
+            Self::LoaderDigest { .. } => "template-loader-digest",
         }
     }
 

@@ -4737,6 +4737,51 @@ impl GitHubProjectsSource {
         Ok(Some(()))
     }
 
+    /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
+    /// together, and nothing else; see [`TaskSource::set_task_rendering`].
+    ///
+    /// One update of the body: the content outside the slot, and inside it that one entry,
+    /// every other entry kept as it was. This source keeps no template answers — an issue has
+    /// no room beside itself that is not its body, and answers written there would duplicate
+    /// what the content already says and count against GitHub's body limit — so `answers`
+    /// reaches nothing here. A body that would not change is not sent at all.
+    async fn replace_rendering(
+        &self,
+        id: &NativeId,
+        kind: BoardKind,
+        content: &str,
+        provenance: &Value,
+    ) -> Result<Option<()>, SourceError> {
+        let Some(mut item) = self.item_by_id(id).await?.filter(|item| item.kind == kind) else {
+            return Ok(None);
+        };
+        let held = item.raw_body.clone().unwrap_or_default();
+        let mut slot = item.slot.clone();
+        slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let body = with_slot(&with_content(&held, content)?, &slot)?;
+        // Checked before anything is sent, as a content write checks it.
+        let (visible, read) = metadata_body(Some(body.clone()))?;
+        if visible.as_deref().unwrap_or_default() != content || read != slot {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this content ends in what source {} reads as its own metadata slot \
+                     ({METADATA_OPEN:?}), so part of it would read back as metadata rather than \
+                     as content; next: remove that trailing block from the template",
+                    self.name
+                ),
+            });
+        }
+        if body != held {
+            self.update_content(item.content_kind, &item.id, json!({"body": body}))
+                .await?;
+        }
+        item.body = visible.filter(|value| !value.is_empty());
+        item.raw_body = Some(body);
+        item.slot = read;
+        self.remember_written(item, false)?;
+        Ok(Some(()))
+    }
+
     async fn set_item_field(
         &self,
         board_id: &str,
@@ -6773,6 +6818,32 @@ impl TaskSource for GitHubProjectsSource {
         content: &str,
     ) -> Result<Option<()>, SourceError> {
         self.replace_content(id, content).await
+    }
+
+    /// Replace one task issue's content and its provenance slot entry with a single body
+    /// update. The answers are not kept: see `replace_rendering`.
+    async fn set_task_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.replace_rendering(id, BoardKind::Work(ItemKind::Task), content, provenance)
+            .await
+    }
+
+    /// Replace one design-document issue's content and its provenance slot entry, on exactly
+    /// the terms of [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_document_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.replace_rendering(id, BoardKind::Document, content, provenance)
+            .await
     }
 
     /// Replace one task's `delivered_by` with a single body update that changes the

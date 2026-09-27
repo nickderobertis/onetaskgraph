@@ -45,12 +45,17 @@ pub mod template;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
-    BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
-    CopyRequest, CopyScope, DeletedComment, Delivered, DeliveryOutcome, DependencyRequest,
-    DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LabelRequest, LeftBehind,
-    MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
-    TaskContentSet, TaskDetail, TaskPrioritySet, TaskRequest, TaskStatusSet, settled,
+    Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyOutcome,
+    CopyReport, CopyRequest, CopyScope, DeletedComment, Delivered, DeliveryOutcome,
+    DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError, Filters,
+    LabelRequest, LeftBehind, MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector,
+    Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest,
+    SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskPrioritySet, TaskRequest,
+    TaskStatusSet, settled,
+};
+pub use engine::{
+    DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderedRecord, TaskCreate,
+    TaskCreated, TemplateAnswers, UnusedAnswers,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};
@@ -67,6 +72,7 @@ pub use subprocess::{
     serve, serve_plugin,
 };
 pub use template::{
-    Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, RenderedTemplate, Template,
-    TemplateError, TemplateLoader, TemplateVariable, TemplateVariables, VariableType,
+    Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, LoaderDocument,
+    RenderedTemplate, Template, TemplateError, TemplateInput, TemplateLoader, TemplateProvenance,
+    TemplateVariable, TemplateVariables, VariableType,
 };

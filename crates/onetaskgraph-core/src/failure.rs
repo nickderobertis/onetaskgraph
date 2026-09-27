@@ -228,6 +228,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         | EngineError::NoSuchProject { .. }
         | EngineError::NoSuchDocument { .. } => ("no-such-item".to_owned(), None, None),
         EngineError::NoSuchComment { .. } => ("no-such-comment".to_owned(), None, None),
+        EngineError::NotCreatable { name, .. } | EngineError::RenderingNotWritable { name, .. } => {
+            ("not-writable".to_owned(), configured(name), None)
+        }
+        EngineError::MissingAnswers { .. } => ("template-missing-required".to_owned(), None, None),
+        EngineError::Template { error } => (error.kind().to_owned(), None, None),
+        EngineError::NoStoredAnswers { .. } => ("no-stored-answers".to_owned(), None, None),
+        EngineError::NoTemplate { .. } => ("no-template".to_owned(), None, None),
+        EngineError::TemplateNotAFile { .. } => ("template-not-a-file".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),

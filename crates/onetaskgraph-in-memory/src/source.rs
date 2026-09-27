@@ -633,6 +633,56 @@ impl TaskSource for InMemorySource {
             .map(|task| task.content = Some(content.to_owned())))
     }
 
+    /// Replace one task's content and its provenance entry together. Answers are not kept:
+    /// what this source holds dies with its process, so there is no later render to read them.
+    async fn set_task_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        Ok(held
+            .tasks
+            .iter_mut()
+            .find(|task| &task.id == id)
+            .map(|task| {
+                task.content = Some(content.to_owned());
+                task.metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            }))
+    }
+
+    /// Replace one document's content and its provenance entry together, on the terms of
+    /// [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_document_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.documentary()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        Ok(held
+            .documents
+            .iter_mut()
+            .find(|document| &document.id == id)
+            .map(|document| {
+                document.content = Some(content.to_owned());
+                document
+                    .metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            }))
+    }
+
     async fn set_delivered_by(
         &self,
         id: &NativeId,
