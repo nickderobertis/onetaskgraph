@@ -150,12 +150,13 @@
           "bash scripts/check-pre-push-provisioning.sh",
           "bash scripts/check-affected-selection.sh",
           "bash scripts/check-plugin-isolation-concurrent.sh",
-          "bash scripts/check-isolation-enforced.sh"
+          "bash scripts/check-isolation-enforced.sh",
+          "bash scripts/check-protocol-contract-enforced.sh"
         ],
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached: three checks clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because those checks each clone into a scratch tree and run cargo or Nx there; racing them would contend for the same registry lock for no gain. The isolation concurrency check creates its own intentional fan-out inside that serial target. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the three later cloning checks depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository. check-pre-push-provisioning drives the real hook in an unprovisioned clone, which is what keeps a fresh worktree's missing toolchain from reading as a rejected push."
+      "//": "Uncached: three checks clone a repository and read git history, which no input glob in this tree describes \u2014 a cached pass would assert about a graph that has since changed. Serial because those checks each clone into a scratch tree and run cargo or Nx there; racing them would contend for the same registry lock for no gain. The isolation concurrency check creates its own intentional fan-out inside that serial target. check-hook-safety runs first and takes milliseconds: it proves the scratch-clone helper the three later cloning checks depend on still survives the environment a git hook gives it, and if that has broken, their results below are about the wrong repository. check-pre-push-provisioning drives the real hook in an unprovisioned clone, which is what keeps a fresh worktree's missing toolchain from reading as a rejected push. check-protocol-contract-enforced watches the lint target's protocol guard refuse a drifted list of the methods the protocol does not carry; it is here rather than under scripts:test because it reads the api crate and the subprocess sources that guard reads, an input from a crate being an edge that project refuses."
     },
     "coverage-clear": {
       "executor": "nx:run-commands",

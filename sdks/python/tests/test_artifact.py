@@ -269,7 +269,21 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 21
+    assert emitted_bundle["version"] == 22
+    # Version 22 published what the create, render and answers verbs answer with, and the
+    # `onetaskgraph.template` provenance entry a rendered item's metadata holds.
+    for verb, root in (
+        ("task_create", "TaskDetail"),
+        ("task_render", "Regenerated"),
+        ("task_answers", "TemplateAnswers"),
+        ("document_create", "QueryResponseOfQualifiedDocument"),
+        ("document_render", "Regenerated"),
+        ("document_answers", "TemplateAnswers"),
+    ):
+        assert generate.RESPONSE_ROOTS[verb] == root, verb
+        assert root in bundle["roots"], root
+    assert "TemplateProvenance" in bundle["roots"]
+    assert "TemplateProvenance" in generate.CONTRACT_ROOTS
     # Version 21 published what `template variables` and `template render` answer with, and
     # the declaration and two vocabularies inside the first.
     for verb, root in (

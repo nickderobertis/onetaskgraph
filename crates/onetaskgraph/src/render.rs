@@ -13,8 +13,8 @@
 
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
-    Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskContentSet,
-    TaskPrioritySet, TaskStatusSet, TemplateVariables,
+    Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing, SourceState,
+    TaskContentSet, TaskPrioritySet, TaskStatusSet, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
@@ -193,6 +193,25 @@ pub fn priority_set(set: &TaskPrioritySet) -> String {
 /// What `task content set` did: the task whose content was replaced.
 pub fn content_set(set: &TaskContentSet) -> String {
     columns(&[vec!["id:".to_owned(), set.id.to_string()]])
+}
+
+/// What a `task render` or `document render` did: the item, whether it changed — or would
+/// have, for a dry run — and the two digests its provenance now records.
+pub fn regenerated(regenerated: &Regenerated, dry_run: bool) -> String {
+    let changed = match (regenerated.changed, dry_run) {
+        (true, false) => "yes",
+        (true, true) => "yes (dry run: nothing written)",
+        (false, _) => "no",
+    };
+    columns(&[
+        vec!["id:".to_owned(), regenerated.id.to_string()],
+        vec!["changed:".to_owned(), changed.to_owned()],
+        vec!["digest:".to_owned(), regenerated.digest.to_string()],
+        vec![
+            "body digest:".to_owned(),
+            regenerated.body_digest.to_string(),
+        ],
+    ])
 }
 
 /// What a `metadata set` verb did: the record, the key, the value its source now holds there

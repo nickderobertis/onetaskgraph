@@ -28,9 +28,21 @@ impl MetadataKey {
     ///
     /// Every key the contract reserves lives under it — `onetaskgraph.origin`,
     /// `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`,
-    /// `onetaskgraph.delivered_by` and `onetaskgraph.item_kind` — and so does any key it
+    /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind` and `onetaskgraph.template`
+    /// ([`Self::TEMPLATE_KEY`]) — and so does any key it
     /// reserves later, which is why the whole namespace is refused rather than a list.
     pub const RESERVED_NAMESPACE: &'static str = "onetaskgraph";
+
+    /// The reserved key a task or a document rendered from a template records where it came
+    /// from under: an object holding the template's reference, the chain digest it was
+    /// rendered with, and the SHA-256 of its content and of its resolved answers.
+    ///
+    /// A key of this product's own, so no [`MetadataKey`] can name it: only a rendering write
+    /// — [`TaskSource::write_task_rendered`](crate::TaskSource::write_task_rendered) and
+    /// [`TaskSource::set_task_rendering`](crate::TaskSource::set_task_rendering) and their
+    /// document siblings — ever sets it, and a copy carries it like any other entry. The
+    /// engine builds and reads the value; a plugin only puts it where its metadata lives.
+    pub const TEMPLATE_KEY: &'static str = "onetaskgraph.template";
 
     /// One key, once it is established it is a caller's own dotted key.
     ///

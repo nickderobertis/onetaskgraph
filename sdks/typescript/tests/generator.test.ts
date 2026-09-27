@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import "./ambient.ts";
+import { commandResponseRoots } from "../src/index.ts";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");
@@ -318,4 +319,27 @@ test("generator reports uncompileable roots and generated-file write failures", 
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }
+});
+
+test("every command's response root is the one the Python generator maps it to", () => {
+  // Both SDKs keep a table of which schema root each command answers with. The Python one is
+  // held to the binary on every generation, and each client validates every real response
+  // against its own; this holds the two tables to each other, so neither can drift alone.
+  const source = readFileSync(resolve(packageRoot, "../python/generate.py"), "utf8");
+  const start = source.indexOf("RESPONSE_ROOTS = {");
+  const block = source.slice(start, source.indexOf("\n}\n", start));
+  const python = Object.fromEntries(
+    [...block.matchAll(/^\s+"(\w+)": "(\w+)",$/gm)].map(([, verb, root]) => [verb, root]),
+  );
+  const typescript = Object.fromEntries(
+    Object.entries(commandResponseRoots).map(([command, root]) => [
+      command.replace(/[ -]/g, "_"),
+      root,
+    ]),
+  );
+  expect(Object.keys(python).length).toBeGreaterThan(30);
+  // Python types `sources list` as a list of `SourceListing`, where this client names the list
+  // root the bundle carries for it.
+  expect({ ...typescript, sources_list: "SourceListing" }).toEqual(python);
+  expect(typescript.sources_list).toBe("SourceListings");
 });

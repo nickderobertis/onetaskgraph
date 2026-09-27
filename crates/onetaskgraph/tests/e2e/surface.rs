@@ -96,19 +96,88 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "template"], &["variables", "render"]),
     (
         &["help", "template", "variables"],
-        &["<FILE>", "--search-path", "--json"],
+        &["<FILE>", "--search-path", "--template-loader", "--json"],
     ),
     (
         &["help", "template", "render"],
         &[
             "<FILE>",
             "--search-path",
+            "--template-loader",
             "--answers",
             "--var",
             "--no-interactive",
             "--json",
         ],
     ),
+    (&["help", "task"], &["create", "render", "answers"]),
+    (
+        &["help", "task", "create"],
+        &[
+            "<SOURCE>",
+            "--project",
+            "--title",
+            "--template",
+            "--search-path",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--body-file",
+            "--status",
+            "--label",
+            "--repository",
+            "--depends-on",
+            "--delivers",
+            "--metadata",
+            "--json",
+        ],
+    ),
+    (
+        &["help", "task", "render"],
+        &[
+            "<ID>",
+            "--template",
+            "--search-path",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--unset",
+            "--dry-run",
+            "--json",
+        ],
+    ),
+    (&["help", "task", "answers"], &["<ID>", "--json"]),
+    (&["help", "document"], &["create", "render", "answers"]),
+    (
+        &["help", "document", "create"],
+        &[
+            "<SOURCE>",
+            "--project",
+            "--title",
+            "--id",
+            "--template",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--body-file",
+            "--label",
+            "--repository",
+            "--metadata",
+            "--json",
+        ],
+    ),
+    (
+        &["help", "document", "render"],
+        &[
+            "<ID>",
+            "--template",
+            "--template-loader",
+            "--var",
+            "--unset",
+            "--dry-run",
+        ],
+    ),
+    (&["help", "document", "answers"], &["<ID>", "--json"]),
 ];
 
 #[test]
@@ -194,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 21);
+    assert_eq!(bundle["version"], 22);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -219,6 +288,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task priority set",
             "task content set",
             "task metadata set",
+            "task create",
+            "task render",
+            "task answers",
             "project list",
             "project show",
             "project deps",
@@ -228,6 +300,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "document show",
             "document copy",
             "document metadata set",
+            "document create",
+            "document render",
+            "document answers",
             "label list",
             "search",
             "template variables",
@@ -275,6 +350,11 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "Setting",
         "Origin",
         "SecretsReport",
+        // What `task render` and `document render`, and `task answers` and `document
+        // answers`, answer with, and the provenance entry a rendered item records.
+        "Regenerated",
+        "TemplateAnswers",
+        "TemplateProvenance",
     ] {
         let schema = &roots[root];
         assert!(schema.is_object(), "the bundle is missing {root}");
@@ -514,6 +594,206 @@ fn readme() -> String {
         .canonicalize()
         .expect("the README sits at the repository root");
     std::fs::read_to_string(path).expect("the README is readable")
+}
+
+/// The README's synopsis entry for `command`: its `onetaskgraph <command>` line and every
+/// indented line continuing it, or `None` when it has no such entry.
+fn synopsis(readme: &str, command: &str) -> Option<String> {
+    let head = format!("onetaskgraph {command} ");
+    let mut lines = readme.lines().skip_while(|line| !line.starts_with(&head));
+    let first = lines.next()?;
+    let continued = lines.take_while(|line| line.starts_with(' '));
+    Some(
+        std::iter::once(first)
+            .chain(continued)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+#[test]
+fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
+    // The check above finds a flag anywhere in the README, so a flag moved to the wrong verb's
+    // entry passes it. For the verbs a template drives, each flag `<verb> --help` reports is
+    // held to that verb's own entry — or, for a `document` verb whose entry says it takes the
+    // flags of a `task` verb, to that entry too. Global flags belong to no one verb.
+    let global = [
+        "set",
+        "page-size",
+        "default-sources",
+        "output",
+        "json",
+        "interactive",
+        "no-interactive",
+        "help",
+    ];
+    let readme = readme();
+    let mut missing = Vec::new();
+    for command in [
+        "task create",
+        "task render",
+        "task answers",
+        "document create",
+        "document render",
+        "document answers",
+        "template variables",
+        "template render",
+    ] {
+        let own = synopsis(&readme, command)
+            .unwrap_or_else(|| panic!("the README has no synopsis entry for `{command}`"));
+        let mut entry = own.clone();
+        for borrowed in ["task create", "task render"] {
+            if own.contains(&format!("of `{borrowed}`")) {
+                entry.push_str(&synopsis(&readme, borrowed).unwrap_or_default());
+            }
+        }
+        let help = String::from_utf8(
+            onetaskgraph()
+                .args(command.split(' '))
+                .arg("--help")
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone(),
+        )
+        .expect("help is UTF-8");
+        let flags = help.lines().filter_map(|line| {
+            let flag = line.trim_start().trim_start_matches("-h, ");
+            let name = flag.strip_prefix("--")?;
+            Some(name.split([' ', '<']).next().unwrap_or(name).to_owned())
+        });
+        for flag in flags.filter(|flag| !global.contains(&flag.as_str())) {
+            if !entry.contains(&format!("--{flag}")) {
+                missing.push(format!("{command} --{flag}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "the README's synopsis entry for each of these verbs does not name the flag:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// The object of every ```json block of `text` that parses as one.
+fn json_objects(text: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    text.split("```json\n")
+        .skip(1)
+        .filter_map(|block| block.split("\n```").next())
+        .filter_map(|block| serde_json::from_str::<serde_json::Value>(block).ok())
+        .filter_map(|value| value.as_object().cloned())
+        .collect()
+}
+
+#[test]
+fn the_documents_spell_the_provenance_entry_and_the_loader_document_as_the_binary_reads_them() {
+    // The README and `docs/metadata.md` each show the two shapes a caller writes against: the
+    // `onetaskgraph.template` entry an item records, and the loader document a caller supplies.
+    // Their keys are held to the emitted `TemplateProvenance` root and to the keys the loader
+    // document is read for, so neither example can drift from what the binary does.
+    let bundle: serde_json::Value = serde_json::from_slice(
+        &onetaskgraph()
+            .arg("schema")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("schema output is valid JSON");
+    let provenance: std::collections::BTreeSet<String> =
+        bundle["roots"]["TemplateProvenance"]["properties"]
+            .as_object()
+            .expect("the provenance root has properties")
+            .keys()
+            .cloned()
+            .collect();
+    // llmlint: ignore-block[tests_mirror_real_usage] This is a drift gate between the documents and the one place the loader document's keys are spelled; the CLI reads a loader document and ignores every other key, so no invocation can enumerate the keys it reads, and the provenance half already comes from the binary's own `schema` output.
+    let loader: std::collections::BTreeSet<String> = onetaskgraph_core::LoaderDocument::KEYS
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    // llmlint: ignore-end[tests_mirror_real_usage]
+    let metadata_doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+
+    for (name, text, owes_provenance) in [
+        ("README.md", readme(), false),
+        ("docs/metadata.md", metadata_doc, true),
+    ] {
+        let objects = json_objects(&text);
+        let keys = |object: &serde_json::Map<String, serde_json::Value>| {
+            object
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<String>>()
+        };
+        let loaders: Vec<_> = objects.iter().filter(|o| o.contains_key("entry")).collect();
+        assert!(!loaders.is_empty(), "{name} shows no loader document");
+        for object in loaders {
+            assert_eq!(keys(object), loader, "{name}'s loader document example");
+        }
+        let entries: Vec<_> = objects
+            .iter()
+            .filter(|o| o.contains_key("answers_digest"))
+            .collect();
+        assert_eq!(
+            !entries.is_empty(),
+            owes_provenance,
+            "{name}'s provenance example"
+        );
+        for object in entries {
+            assert_eq!(keys(object), provenance, "{name}'s provenance example");
+        }
+    }
+}
+
+#[test]
+fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
+    // `docs/metadata.md` lists every key of the reserved `onetaskgraph.` namespace, and counts
+    // them in words. Both are held to the constants each key is spelled once as, so a key added
+    // in code and not in the document — or the reverse — fails here.
+    use onetaskgraph_plugin_api::{DependencyEdge, ItemKind, MetadataKey, Repository, TaskRef};
+    // llmlint: ignore-block[tests_mirror_real_usage] This is a drift gate between `docs/metadata.md` and the constants each reserved key is spelled once as; the CLI refuses the whole `onetaskgraph.` namespace by prefix, so no invocation enumerates the keys, and reading the constants is what makes a key added in code without the document fail.
+    let spelled: std::collections::BTreeSet<&str> = [
+        Repository::METADATA_KEY,
+        DependencyEdge::RECORDED_KEY,
+        TaskRef::DELIVERS_KEY,
+        TaskRef::DELIVERED_BY_KEY,
+        ItemKind::METADATA_KEY,
+        MetadataKey::TEMPLATE_KEY,
+        onetaskgraph_core::GlobalId::ORIGIN_KEY,
+    ]
+    .into_iter()
+    .collect();
+    // llmlint: ignore-end[tests_mirror_real_usage]
+    let document = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+    let start = document
+        .find("- `onetaskgraph.` belongs to this product.")
+        .expect("the reserved-namespace bullet");
+    let bullet = &document[start..start + document[start..].find("\n- `").unwrap()];
+    let listed: std::collections::BTreeSet<&str> = bullet
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|quoted| {
+            quoted.starts_with("onetaskgraph.") && quoted.len() > "onetaskgraph.".len()
+        })
+        .collect();
+    assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
+    let words = [
+        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    assert!(
+        bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
+        "docs/metadata.md counts {} keys in words:\n{bullet}",
+        spelled.len()
+    );
 }
 
 #[test]

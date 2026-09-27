@@ -502,6 +502,25 @@ impl SubprocessSource {
         Err(unwritable_metadata(self.kind, record))
     }
 
+    /// Refuse one of the template operations — a write from a rendering, a read of stored
+    /// answers, a regenerate in place — before anything is sent.
+    ///
+    /// §4 carries none of them: a plugin answering the protocol has no method to keep answers
+    /// beside an item or replace a rendering with, so a `write_task` standing in for a create
+    /// from a template would land the content and the provenance without the answers a
+    /// regenerate needs. Refusing is what keeps an item from being half of what it claims.
+    fn unrendered(&self, operation: &str) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "the {:?} plugin is hosted over the stdio plugin protocol, which does not carry \
+                 {operation} (docs/plugin-protocol.md §4), so this engine does not send it; \
+                 nothing was written; next: configure the source in-process under its own \
+                 plugin name rather than through a command",
+                self.kind
+            ),
+        }
+    }
+
     /// Refuse a task write this plugin could only drop part of in silence.
     fn writable_task(&self, task: &Task) -> Result<(), SourceError> {
         self.knows(task.status.category)?;
@@ -824,6 +843,62 @@ impl TaskSource for SubprocessSource {
             .ask("set_document_metadata", metadata_params(id, key, value))
             .await?;
         Ok(result.document)
+    }
+
+    async fn task_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Err(self.unrendered("a task's stored template answers, which `task answers` prints and `task render` regenerates over"))
+    }
+
+    async fn document_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Err(self.unrendered("a document's stored template answers, which `document answers` prints and `document render` regenerates over"))
+    }
+
+    async fn write_task_rendered(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = (write, answers);
+        Err(self.unrendered("a task create from a template"))
+    }
+
+    async fn write_document_rendered(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = (write, answers);
+        Err(self.unrendered("a document create from a template"))
+    }
+
+    async fn set_task_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(self.unrendered("a task's regenerate in place"))
+    }
+
+    async fn set_document_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(self.unrendered("a document's regenerate in place"))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {

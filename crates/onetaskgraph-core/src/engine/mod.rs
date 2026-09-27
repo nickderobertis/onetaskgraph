@@ -23,6 +23,7 @@ mod join;
 mod local;
 mod metadata;
 mod narrow;
+mod rendered;
 mod resume;
 
 use std::collections::BTreeMap;
@@ -58,6 +59,10 @@ pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{TaskContentSet, TaskPrioritySet};
+pub use rendered::{
+    Body, DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
+    TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
+};
 
 /// One item, under the qualified id the engine addresses it by.
 ///
@@ -432,6 +437,122 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
+    },
+
+    /// `task create` or `document create` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot create a {record}: its plugin is {kind}, which has no write side\n\
+         next: create it in a source whose plugin can be written — `onetaskgraph sources list` \
+         reports each one's plugin."
+    )]
+    NotCreatable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// Which kind of record was to be created.
+        record: MetadataRecord,
+    },
+
+    /// `task render` or `document render` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot write a {record}'s rendering: its plugin is {kind}, which has no \
+         write side\n\
+         next: render it with --dry-run to read the result, or regenerate a {record} of a source \
+         whose plugin can be written."
+    )]
+    RenderingNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// A task or a document.
+        record: RenderedRecord,
+    },
+
+    /// A regenerate left required variables unanswered, because the answers stored beside the
+    /// item could not be used or did not cover them.
+    #[error(
+        "supply every required answer to regenerate {id}: {} unanswered, and {reason}\n\
+         next: answer {} with --var NAME=VALUE or an answers file (--answers FILE), or run \
+         interactively to be asked.",
+        names.join(", "),
+        if names.len() == 1 { "it" } else { "each" }
+    )]
+    MissingAnswers {
+        /// The item regenerated.
+        id: String,
+        /// Every required variable left unanswered, in declaration order.
+        names: Vec<String>,
+        /// What became of the stored answers, as a clause: why they were not the base, or
+        /// that they were and did not answer these.
+        reason: String,
+    },
+
+    /// A template could not be loaded or rendered, or refused the answers it was given.
+    #[error("{error}")]
+    Template {
+        /// What the template refused.
+        error: crate::template::TemplateError,
+    },
+
+    /// An answers read named an item with no answers stored beside it.
+    #[error(
+        "{record} {id} has no stored template answers: {reason}\n\
+         next: regenerate it with every required answer (`onetaskgraph {record} render {id} \
+         --var NAME=VALUE`), or read its provenance with `onetaskgraph {record} show {id}`."
+    )]
+    NoStoredAnswers {
+        /// A task or a document.
+        record: RenderedRecord,
+        /// The item.
+        id: String,
+        /// Why none are there.
+        reason: String,
+    },
+
+    /// A regenerate named no template, and the item records none.
+    #[error(
+        "{record} {id} records no template it was rendered from, and none was given\n\
+         next: name one with --template FILE or --template-loader FILE."
+    )]
+    NoTemplate {
+        /// A task or a document.
+        record: RenderedRecord,
+        /// The item.
+        id: String,
+    },
+
+    /// A regenerate named no template, and the item's `onetaskgraph.template` entry is not one
+    /// this product writes, so it names nothing to render.
+    #[error(
+        "{record} {id} records a template entry this product did not write — {problem}\n\
+         next: regenerate it with --template FILE or --template-loader FILE and every required \
+         answer, which records a fresh entry."
+    )]
+    MalformedProvenance {
+        /// A task or a document.
+        record: RenderedRecord,
+        /// The item.
+        id: String,
+        /// What is wrong with the entry.
+        problem: String,
+    },
+
+    /// A regenerate named no template, and the one the item records is not a readable file.
+    #[error(
+        "{record} {id} was rendered from {reference:?}, which is not a readable file, so it \
+         cannot be re-read; a recorded reference is never turned into a location\n\
+         next: supply the template with --template-loader FILE (a loader document naming what \
+         to render), or name a template file with --template FILE."
+    )]
+    TemplateNotAFile {
+        /// A task or a document.
+        record: RenderedRecord,
+        /// The item.
+        id: String,
+        /// The provenance `template` it records.
+        reference: String,
     },
 
     /// A priority other than `none` was to be written — by `task priority set` or by a copy —

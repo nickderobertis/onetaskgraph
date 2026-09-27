@@ -116,31 +116,54 @@ pub enum TemplateCommand {
 }
 
 /// `onetaskgraph template variables`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("template_source").required(true).args(["file", "template_loader"]))]
 pub struct TemplateVariablesArgs {
     /// The template to read, at a path. It is known to its chain, and in its digest, by its
     /// file name; its own directory is not searched unless it is also a --search-path.
     #[arg(value_name = "FILE")]
-    pub file: std::path::PathBuf,
+    pub file: Option<std::path::PathBuf>,
 
     /// Resolve `extends`, `include` and `import` names in this directory. Repeat for several,
     /// searched in order; the working directory is never searched unless it is named.
-    #[arg(long = "search-path", value_name = "DIR")]
+    #[arg(
+        long = "search-path",
+        value_name = "DIR",
+        conflicts_with = "template_loader"
+    )]
     pub search_path: Vec<std::path::PathBuf>,
+
+    /// Read the template from a loader document in place of FILE: a JSON object naming its
+    /// `entry`, the `search_path` and inline `templates` its chain resolves over, and a
+    /// `reference`; `-` reads standard input.
+    #[arg(long = "template-loader", value_name = "FILE")]
+    pub template_loader: Option<std::path::PathBuf>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// `onetaskgraph template render`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("template_source").required(true).args(["file", "template_loader"]))]
 pub struct TemplateRenderArgs {
     /// The template to read, at a path. It is known to its chain, and in its digest, by its
     /// file name; its own directory is not searched unless it is also a --search-path.
     #[arg(value_name = "FILE")]
-    pub file: std::path::PathBuf,
+    pub file: Option<std::path::PathBuf>,
 
     /// Resolve `extends`, `include` and `import` names in this directory. Repeat for several,
     /// searched in order; the working directory is never searched unless it is named.
-    #[arg(long = "search-path", value_name = "DIR")]
+    #[arg(
+        long = "search-path",
+        value_name = "DIR",
+        conflicts_with = "template_loader"
+    )]
     pub search_path: Vec<std::path::PathBuf>,
+
+    /// Read the template from a loader document in place of FILE; `-` reads standard input.
+    #[arg(long = "template-loader", value_name = "FILE")]
+    pub template_loader: Option<std::path::PathBuf>,
 
     /// Read answers from this YAML file, a mapping from variable name to value; `-` reads
     /// standard input.
@@ -157,6 +180,7 @@ pub struct TemplateRenderArgs {
     )]
     pub var: Vec<VarAssignment>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// One `--var NAME=VALUE`, split where it was typed.
 ///
@@ -287,6 +311,215 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+    /// Create a task in one source, its body rendered from a template or given as it is.
+    ///
+    /// Rendered from a template, it records where it came from under the reserved
+    /// `onetaskgraph.template` metadata key, and a source that keeps an authoring file
+    /// (local-md) stores the answers beside it for a later `task render`.
+    Create(TaskCreateArgs),
+    /// Regenerate one task's content from its template in place, and nothing else about it.
+    ///
+    /// The answers start from the ones stored beside it when they are in step with its
+    /// provenance; --var, --answers and --unset are laid over them.
+    Render(RenderArgs),
+    /// Print the template answers stored beside one task.
+    Answers(AnswersArgs),
+}
+
+/// Where a created item's body comes from: exactly one of a template file, a loader
+/// document, a body file, or — with none of them — standard input.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
+#[derive(Debug, Args)]
+pub struct CreateBodyArgs {
+    /// Render the body from this template file, recorded by its absolute path.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["template_loader", "body_file"])]
+    pub template: Option<std::path::PathBuf>,
+
+    /// Resolve the template's `extends`, `include` and `import` names in this directory.
+    /// Repeat for several.
+    #[arg(long = "search-path", value_name = "DIR", requires = "template")]
+    pub search_path: Vec<std::path::PathBuf>,
+
+    /// Render the body from the template a loader document states, recorded by its
+    /// `reference`; `-` reads standard input.
+    #[arg(
+        long = "template-loader",
+        value_name = "FILE",
+        conflicts_with = "body_file"
+    )]
+    pub template_loader: Option<std::path::PathBuf>,
+
+    /// Read the template's answers from this YAML file; `-` reads standard input.
+    #[arg(long, value_name = "FILE", requires = "rendered")]
+    pub answers: Option<std::path::PathBuf>,
+
+    /// Answer one template variable, over the answers file. Repeat for several.
+    #[arg(
+        long = "var",
+        value_name = "NAME=VALUE",
+        allow_hyphen_values = true,
+        value_parser = var_assignment,
+        requires = "rendered"
+    )]
+    pub var: Vec<VarAssignment>,
+
+    /// Read the body from this file, byte for byte, rather than rendering it.
+    #[arg(long = "body-file", value_name = "PATH")]
+    pub body_file: Option<std::path::PathBuf>,
+}
+// llmlint: ignore-end[invalid_states_unrepresentable]
+
+/// What every create names about the item besides its body.
+#[derive(Debug, Args)]
+pub struct CreateItemArgs {
+    /// The configured source to create it in.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CopyArgs::to`: `main` converts
+    /// it through `SourceName::new` with the next action a user needs.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+
+    /// The project to file it under, by the source's own id (or qualified with that source).
+    #[arg(long, value_name = "P")]
+    pub project: String,
+
+    /// Its title.
+    #[arg(long, value_name = "TITLE")]
+    pub title: String,
+
+    /// Give it this label. Repeat for several.
+    #[arg(long = "label", value_name = "L")]
+    pub label: Vec<String>,
+
+    /// A repository its work changes, as a normalized origin (`github.com/owner/name`). Repeat
+    /// for several.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — `main` converts each through the
+    /// contract's own `Repository` and refuses one naming the problem.
+    #[arg(long = "repository", value_name = "R")]
+    pub repository: Vec<String>,
+
+    /// Set one caller-owned metadata key to one JSON value. Repeat for several; a key in the
+    /// reserved `onetaskgraph.` namespace is refused.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `MetadataSetArgs::key`: `main`
+    /// converts each through `MetadataKey::new` and parses its value as JSON before anything
+    /// is built.
+    #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
+    pub metadata: Vec<String>,
+
+    #[command(flatten)]
+    pub body: CreateBodyArgs,
+}
+
+/// `onetaskgraph task create`.
+#[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("rendered").args(["template", "template_loader"]).multiple(false))]
+pub struct TaskCreateArgs {
+    #[command(flatten)]
+    pub item: CreateItemArgs,
+
+    /// Its status category; `todo` when none is given.
+    #[arg(long = "status", value_name = "CATEGORY")]
+    pub status: Option<StatusArg>,
+
+    /// A task it depends on, qualified (`work:T-1`). Repeat for several.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`.
+    #[arg(long = "depends-on", value_name = "ID")]
+    pub depends_on: Vec<String>,
+
+    /// A task it delivers, qualified. Repeat for several; each is kept in step with it.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`.
+    #[arg(long = "delivers", value_name = "ID")]
+    pub delivers: Vec<String>,
+}
+
+/// `onetaskgraph document create`.
+#[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("rendered").args(["template", "template_loader"]).multiple(false))]
+pub struct DocumentCreateArgs {
+    #[command(flatten)]
+    pub item: CreateItemArgs,
+
+    /// Write it under this id: a document the source holds by it is replaced, and otherwise
+    /// one is created under it.
+    #[arg(long = "id", value_name = "DOC", value_parser = native_id)]
+    pub id: Option<NativeId>,
+}
+
+/// `onetaskgraph task render` and `onetaskgraph document render`.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
+#[derive(Debug, Args)]
+pub struct RenderArgs {
+    /// The item's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Render this template file rather than the one the item records.
+    #[arg(long, value_name = "FILE", conflicts_with = "template_loader")]
+    pub template: Option<std::path::PathBuf>,
+
+    /// Resolve the template's `extends`, `include` and `import` names in this directory —
+    /// the given template's, or the recorded file's. Repeat for several.
+    #[arg(
+        long = "search-path",
+        value_name = "DIR",
+        conflicts_with = "template_loader"
+    )]
+    pub search_path: Vec<std::path::PathBuf>,
+
+    /// Render the template a loader document states, which a recorded reference that is not
+    /// a readable file requires; `-` reads standard input.
+    #[arg(long = "template-loader", value_name = "FILE")]
+    pub template_loader: Option<std::path::PathBuf>,
+
+    /// Read answers from this YAML file, laid over the base; `-` reads standard input.
+    #[arg(long, value_name = "FILE")]
+    pub answers: Option<std::path::PathBuf>,
+
+    /// Answer one variable, over the answers file. Repeat for several.
+    #[arg(
+        long = "var",
+        value_name = "NAME=VALUE",
+        allow_hyphen_values = true,
+        value_parser = var_assignment
+    )]
+    pub var: Vec<VarAssignment>,
+
+    /// Drop the answer this variable held, so it takes its default. Repeat for several.
+    #[arg(long = "unset", value_name = "NAME", value_parser = variable_name)]
+    pub unset: Vec<String>,
+
+    /// Render and report, and write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+}
+// llmlint: ignore-end[invalid_states_unrepresentable]
+
+/// `onetaskgraph task answers` and `onetaskgraph document answers`.
+#[derive(Debug, Args)]
+pub struct AnswersArgs {
+    /// The item's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+}
+
+/// One `--unset NAME`, refused unless a variable could be declared with it.
+fn variable_name(raw: &str) -> Result<String, String> {
+    if onetaskgraph_core::template::is_variable_name(raw) {
+        Ok(raw.to_owned())
+    } else {
+        Err(format!(
+            "{raw:?} is not a variable name, which matches ^[a-z][a-z0-9_]*$; next: name a \
+             variable the template declares — `onetaskgraph template variables` lists them"
+        ))
+    }
 }
 
 /// What `onetaskgraph task priority` can do.
@@ -526,6 +759,14 @@ pub enum DocumentCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+    /// Create — or, with --id naming one it holds, replace — a project document, its body
+    /// rendered from a template or given as it is.
+    Create(DocumentCreateArgs),
+    /// Regenerate one document's content from its template in place, and nothing else about
+    /// it.
+    Render(RenderArgs),
+    /// Print the template answers stored beside one document.
+    Answers(AnswersArgs),
 }
 
 /// What `onetaskgraph label` can do.

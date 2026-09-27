@@ -1,5 +1,7 @@
 //! The two traits a plugin implements, and the secret lookup it is handed.
 
+use std::collections::BTreeMap;
+
 use schemars::{JsonSchema, Schema};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -545,6 +547,151 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<NativeId>, SourceError> {
         let _ = (task, comment);
         Err(commentless(self.kind()))
+    }
+
+    /// Whether this source keeps template answers beside its items at all.
+    ///
+    /// What lets a regenerate tell an item whose answers went missing — a block deleted by
+    /// hand, which the regenerate writes back — from an item of a source that never keeps any,
+    /// where a missing answer is no difference. Defaulted to `false`, as
+    /// [`task_template_answers`](Self::task_template_answers) is defaulted to `None`; a source
+    /// that keeps answers answers `true` here.
+    fn keeps_template_answers(&self) -> bool {
+        false
+    }
+
+    /// The template answers the task `id` was last rendered from, as this source keeps them
+    /// beside the task — or `None` when it keeps none for it, or holds no such task.
+    ///
+    /// Keeping answers is a source's own choice, never an obligation: a source whose items
+    /// are one record in a hosted system has no room beside the item that is not the item, and
+    /// answers written into its content or its metadata would duplicate what the content
+    /// already says. Defaulted to `None`, which is what keeps this an addition rather than a
+    /// break. A source that keeps them owes three things: they are in neither
+    /// [`Task::content`] nor [`Task::metadata`], they are written only by
+    /// [`write_task_rendered`](Self::write_task_rendered) and
+    /// [`set_task_rendering`](Self::set_task_rendering), and they come back here exactly as
+    /// they were written, JSON types intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not answer, a record whose answers it
+    /// cannot read included.
+    async fn task_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Ok(None)
+    }
+
+    /// The template answers the document `id` was last rendered from, on exactly the terms of
+    /// [`task_template_answers`](Self::task_template_answers).
+    ///
+    /// # Errors
+    ///
+    /// As [`task_template_answers`](Self::task_template_answers).
+    async fn document_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Ok(None)
+    }
+
+    /// Create or update one task exactly as [`write_task`](Self::write_task) does, keeping
+    /// `answers` — the answers its content was rendered from — beside it in the same write
+    /// where this source keeps answers at all.
+    ///
+    /// The task arrives carrying its provenance under [`MetadataKey::TEMPLATE_KEY`] like any
+    /// other metadata entry. Defaulted to [`write_task`](Self::write_task) alone: a source that
+    /// keeps no answers writes the task and nothing beside it, which is the whole of what it
+    /// owes. A source that keeps them writes the task and the answers together, so a reader
+    /// never finds one without the other.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_task`](Self::write_task).
+    async fn write_task_rendered(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = answers;
+        self.write_task(write).await
+    }
+
+    /// Create or update one document, on exactly the terms of
+    /// [`write_task_rendered`](Self::write_task_rendered).
+    ///
+    /// # Errors
+    ///
+    /// As [`write_document`](Self::write_document).
+    async fn write_document_rendered(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = answers;
+        self.write_document(write).await
+    }
+
+    /// Replace one task's rendering — its content, byte for byte, its
+    /// [`MetadataKey::TEMPLATE_KEY`] entry, set to `provenance`, and the answers it keeps
+    /// beside the task where it keeps any — in one write, and change nothing else about it;
+    /// or answer `None` when this source holds no such task.
+    ///
+    /// The content is [`Task::content`] exactly as a later read reports it, on the terms of
+    /// [`set_task_content`](Self::set_task_content). Title, status, priority, labels, every
+    /// other metadata entry, repositories, dependencies, [`Task::delivers`],
+    /// [`Task::delivered_by`], project and comments are left exactly as they are. The write is
+    /// one write: a reader sees the task as it was or as it is now, never a new content beside
+    /// the old provenance or the old answers.
+    ///
+    /// Defaulted to [`unwritable_field`] on exactly the terms of
+    /// [`set_task_status`](Self::set_task_status). A source declaring
+    /// [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    /// [`Task::delivered_by`]: crate::Task::delivered_by
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot replace a task's rendering on
+    /// its own, or cannot represent this one; and whatever else the source could not do the
+    /// write for.
+    async fn set_task_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(unwritable_field(self.kind(), "rendering"))
+    }
+
+    /// Replace one document's rendering, on exactly the terms of
+    /// [`set_task_rendering`](Self::set_task_rendering). A source declaring
+    /// [`Capabilities::documents`] unsupported is never asked.
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_rendering`](Self::set_task_rendering).
+    async fn set_document_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(SourceError::Refused {
+            message: format!(
+                "the {} plugin cannot write a document's rendering on its own",
+                self.kind()
+            ),
+        })
     }
 
     /// What this source has sent to its backend since it was built and what that spent, or

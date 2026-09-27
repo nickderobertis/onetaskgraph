@@ -11,7 +11,7 @@ use std::path::Path;
 use dialoguer::Input;
 use dialoguer::console::Term;
 use onetaskgraph_core::{
-    Answers, Failure, Loaded, OutputFormat, Template, TemplateError, TemplateLoader,
+    Answers, Failure, Loaded, LoaderDocument, OutputFormat, Template, TemplateError, TemplateInput,
     TemplateVariable,
 };
 
@@ -34,7 +34,19 @@ pub(crate) fn run(
 ) -> Result<u8, Failure> {
     match command {
         TemplateCommand::Variables(args) => {
-            let template = load(&args.file, &args.search_path)?;
+            let input = match input(
+                args.file.as_deref(),
+                &args.search_path,
+                args.template_loader.as_deref(),
+                None,
+            )
+            .and_then(named)
+            {
+                Ok(input) => input,
+                Err(Refusal::Answers(message)) => return Ok(refused(&message)),
+                Err(Refusal::Failed(failure)) => return Err(failure),
+            };
+            let template = input.load().map_err(|error| failure(&error))?;
             // The declared set includes what an expression names when every variable takes
             // its default, which is the most this verb can know without answers.
             let described = template
@@ -49,19 +61,22 @@ pub(crate) fn run(
             Ok(EXIT_OK)
         }
         TemplateCommand::Render(args) => match render_template(out, loaded, args) {
-            Err(Refusal::Answers(message)) => {
-                // Best effort, as `fail` writes: the exit code carries the refusal regardless.
-                let _ = writeln!(io::stderr(), "onetaskgraph: {message}");
-                Ok(EXIT_USAGE)
-            }
+            Err(Refusal::Answers(message)) => Ok(refused(&message)),
             Err(Refusal::Failed(failure)) => Err(failure),
             Ok(()) => Ok(EXIT_OK),
         },
     }
 }
 
+/// Report a refusal of the invocation on standard error, and answer [`EXIT_USAGE`].
+pub(crate) fn refused(message: &str) -> u8 {
+    // Best effort, as `fail` writes: the exit code carries the refusal regardless.
+    let _ = writeln!(io::stderr(), "onetaskgraph: {message}");
+    EXIT_USAGE
+}
+
 /// Why a render did not happen.
-enum Refusal {
+pub(crate) enum Refusal {
     /// The answers were refused: exit `2`.
     Answers(String),
     /// The command failed: exit `1`.
@@ -84,19 +99,76 @@ impl From<TemplateError> for Refusal {
     }
 }
 
-fn failure(error: &TemplateError) -> Failure {
+pub(crate) fn failure(error: &TemplateError) -> Failure {
     Failure::decided(error.kind(), error.to_string())
 }
 
-/// Load the template at `file` over `search_path`.
-fn load(file: &Path, search_path: &[std::path::PathBuf]) -> Result<Template, Failure> {
-    search_path
-        .iter()
-        .fold(TemplateLoader::new(), |loader, directory| {
-            loader.with_directory(directory)
-        })
-        .load_path(file)
-        .map_err(|error| failure(&error))
+/// The template a verb names: the file at `file` over `search_path`, or the one the loader
+/// document at `loader` states — `None` when it names neither.
+///
+/// `answers` is the verb's `--answers`, so the one standard input is never promised to both:
+/// `--answers -` beside `--template-loader -` is refused as the invocation's mistake.
+pub(crate) fn input(
+    file: Option<&Path>,
+    search_path: &[std::path::PathBuf],
+    loader: Option<&Path>,
+    answers: Option<&Path>,
+) -> Result<Option<TemplateInput>, Refusal> {
+    if let Some(loader) = loader {
+        if loader.as_os_str() == "-" && answers.is_some_and(|answers| answers.as_os_str() == "-") {
+            return Err(Refusal::Answers(
+                "--answers - and --template-loader - both read standard input, which holds one \
+                 document\n\
+                 next: pass one of them as a file."
+                    .to_owned(),
+            ));
+        }
+        return loader_document(loader).map(|document| Some(TemplateInput::Loader(document)));
+    }
+    Ok(file.map(|path| TemplateInput::File {
+        path: path.to_owned(),
+        search_path: search_path.to_vec(),
+    }))
+}
+
+/// The template a `template` verb names, which clap has already required it to name.
+fn named(input: Option<TemplateInput>) -> Result<TemplateInput, Refusal> {
+    input.ok_or_else(|| {
+        Refusal::Answers(
+            "no template was named\nnext: name a template FILE, or pass --template-loader FILE."
+                .to_owned(),
+        )
+    })
+}
+
+/// The loader document at `path`, or on standard input for `-`.
+///
+/// One that cannot be read, or is not a loader document, is refused as the command failing:
+/// what it names is the template, not an answer.
+fn loader_document(path: &Path) -> Result<LoaderDocument, Refusal> {
+    let unreadable = |error: io::Error| {
+        Refusal::Failed(Failure::decided(
+            "template-loader-unreadable",
+            format!(
+                "--template-loader {}: could not read it: {error}\n\
+                 next: name a readable JSON file, or `-` for standard input.",
+                path.display()
+            ),
+        ))
+    };
+    let text = if path.as_os_str() == "-" {
+        let mut text = String::new();
+        io::stdin().read_to_string(&mut text).map_err(unreadable)?;
+        text
+    } else {
+        std::fs::read_to_string(path).map_err(unreadable)?
+    };
+    LoaderDocument::from_json(&text).map_err(|error| {
+        Refusal::Failed(Failure::decided(
+            error.kind(),
+            format!("--template-loader {}: {error}", path.display()),
+        ))
+    })
 }
 
 /// `template render`: resolve the answers in C2's order, prompt for the rest when
@@ -107,13 +179,50 @@ fn render_template(
     args: &TemplateRenderArgs,
 ) -> Result<(), Refusal> {
     let flags = var_answers(&args.var);
-    let template = load(&args.file, &args.search_path)?;
+    let template = input(
+        args.file.as_deref(),
+        &args.search_path,
+        args.template_loader.as_deref(),
+        args.answers.as_deref(),
+    )
+    .and_then(named)?
+    .load()?;
     let file = match &args.answers {
         Some(path) => answers_file(path)?,
         None => Answers::new(),
     };
-    let mut answers = file.overlay(&flags);
+    let answers = ask(
+        loaded,
+        &template,
+        file.overlay(&flags),
+        &std::collections::HashSet::new(),
+    )?;
+    let rendered = template.render(&answers)?;
+    match loaded.config.output() {
+        OutputFormat::Json => emit(
+            out,
+            &json(&rendered, "the rendered template")?,
+            "the rendered template",
+        )?,
+        // The body exactly as it rendered — its trailing newlines are part of it, so it is
+        // written as it is rather than through `emit`, which ends every answer with one.
+        OutputFormat::Text => write_body(out, &rendered.body)?,
+    }
+    Ok(())
+}
 
+/// The answers a verb was given — `--answers` under `--var`, which [`answers_given`] reads —
+/// with, when interactive, an answer asked for every variable of `template` they leave
+/// unanswered.
+///
+/// A variable `settled` names is never asked for: its answer, or its absence, is already
+/// decided.
+pub(crate) fn ask(
+    loaded: &Loaded,
+    template: &Template,
+    mut answers: Answers,
+    settled: &std::collections::HashSet<String>,
+) -> Result<Answers, Refusal> {
     // Asked in rounds: an answer can make an expression name a template that declares more,
     // and each round asks only what no earlier round asked.
     let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -121,7 +230,9 @@ fn render_template(
         let unanswered: Vec<TemplateVariable> = template
             .unanswered(&answers)?
             .into_iter()
-            .filter(|variable| !asked.contains(variable.name()))
+            .filter(|variable| {
+                !asked.contains(variable.name()) && !settled.contains(variable.name())
+            })
             .collect();
         if unanswered.is_empty() {
             break;
@@ -153,7 +264,7 @@ fn render_template(
                 if names.len() == 1 { "it" } else { "them" },
             )));
         }
-        let prompted = prompt(&template, &unanswered).map_err(|error| {
+        let prompted = prompt(template, &unanswered).map_err(|error| {
             Refusal::Failed(Failure::decided(
                 "template-prompt",
                 format!(
@@ -167,23 +278,23 @@ fn render_template(
         asked.extend(unanswered.iter().map(|variable| variable.name().to_owned()));
         answers = answers.overlay(&prompted);
     }
+    Ok(answers)
+}
 
-    let rendered = template.render(&answers)?;
-    match loaded.config.output() {
-        OutputFormat::Json => emit(
-            out,
-            &json(&rendered, "the rendered template")?,
-            "the rendered template",
-        )?,
-        // The body exactly as it rendered — its trailing newlines are part of it, so it is
-        // written as it is rather than through `emit`, which ends every answer with one.
-        OutputFormat::Text => write_body(out, &rendered.body)?,
-    }
-    Ok(())
+/// The answers a verb's `--answers` file and `--var` flags give, the flags laid over the file.
+pub(crate) fn answers_given(
+    path: Option<&Path>,
+    assignments: &[VarAssignment],
+) -> Result<Answers, Refusal> {
+    let file = match path {
+        Some(path) => answers_file(path)?,
+        None => Answers::new(),
+    };
+    Ok(file.overlay(&var_answers(assignments)))
 }
 
 /// Write a rendered body byte for byte, reporting a failed write as `emit` does.
-fn write_body(out: &mut impl Write, body: &str) -> Result<(), Failure> {
+pub(crate) fn write_body(out: &mut impl Write, body: &str) -> Result<(), Failure> {
     let unwritten = |error: io::Error| {
         Failure::decided(
             "write",

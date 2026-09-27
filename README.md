@@ -77,6 +77,15 @@ onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|can
 onetaskgraph task priority set <ID> none|urgent|high|medium|low
 onetaskgraph task content set <ID> --file PATH
 onetaskgraph task metadata set <ID> <KEY> <VALUE>
+onetaskgraph task create <SOURCE> --project P --title TITLE
+                         [--template FILE [--search-path DIR]... | --template-loader FILE
+                          | --body-file PATH]      # none of the three: the body on stdin
+                         [--answers FILE] [--var NAME=VALUE]... [--status CATEGORY]
+                         [--label L]... [--repository R]... [--depends-on ID]...
+                         [--delivers ID]... [--metadata KEY=JSON]...
+onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
+                         [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
+onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
@@ -86,12 +95,18 @@ onetaskgraph project metadata set <ID> <KEY> <VALUE>
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph document metadata set <ID> <KEY> <VALUE>
+onetaskgraph document create <SOURCE> --project P --title TITLE [--id DOC]
+                             ...                 # the body, label, repository and metadata
+                                                 # flags of `task create`
+onetaskgraph document render <ID> ...            # the flags of `task render`
+onetaskgraph document answers <ID>
 
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
 
-onetaskgraph template variables <FILE> [--search-path DIR]...
-onetaskgraph template render <FILE> [--search-path DIR]... [--answers FILE] [--var NAME=VALUE]...
+onetaskgraph template variables <FILE> [--search-path DIR]... | --template-loader FILE
+onetaskgraph template render <FILE> [--search-path DIR]... | --template-loader FILE
+                             [--answers FILE] [--var NAME=VALUE]...
 
 onetaskgraph config show                         # every setting and the layer it came from
 onetaskgraph schema                              # the JSON Schema bundle both SDKs use
@@ -393,6 +408,68 @@ An answer to no declared variable, an answer of the wrong type, and — when not
 interactive run with something left to ask whose standard input is not a terminal: it never
 waits for an answer nobody can type. Automation passes `--no-interactive`, which both SDKs
 always do.
+
+### Creating and regenerating from a template
+
+`task create` and `document create` make an item in one source, its body rendered from a
+template — `--template FILE`, or `--template-loader FILE` for a template a caller states
+(below) — with its answers taken exactly as `template render` takes them, or given as it is
+with `--body-file PATH` or on standard input. `task create` prints the new item's qualified
+id, and under `--json` the item exactly as `task show --json` prints it; `document create`
+answers as `document show` does, and with `--id DOC` naming a document the source holds it
+replaces that document rather than adding a second. A key of the reserved `onetaskgraph.`
+namespace given with `--metadata`, and a source that cannot be written, are refused by
+name before anything is written.
+
+An item rendered from a template records where it came from under the reserved metadata key
+`onetaskgraph.template`: the template's reference — a template file's absolute path, or a
+loader document's `reference` verbatim — the chain **digest** it rendered with, and the
+SHA-256 of its content (`body_digest`) and of its resolved answers as canonical JSON
+(`answers_digest`). An item made from a plain body records none. From that entry alone a
+hand edit (the content's hash is not `body_digest`) and a changed template (the chain's
+digest is not `digest`) are both visible. **It proves nothing about who wrote it**: a check
+reading only these hashes trusts them, so provenance forged by hand passes it. The entry is
+four strings, whatever the template's reference — nothing caps its length but what the
+destination caps a whole item at — and a copy carries it like any other metadata.
+
+**The answers themselves are kept in one place only**: beside the item in a `local-md`
+folder's own file, which is where an item is authored — never in its content or its
+metadata, so they cost a hosted item nothing, and nothing of a task is written twice into a
+GitHub issue. `task answers` and `document answers` print them as YAML (`--json`: one JSON
+object), and refuse, naming the item, when none are stored — which is every item of a
+source that keeps none. A copy carries content and metadata alone, **never the answers**,
+at either end.
+
+`task render` and `document render` regenerate an item in place, and write its content, its
+provenance and its stored answers in one write and **nothing else** — its id, title, status,
+labels, project, repositories, dependencies and every other metadata key stay as they were.
+The answers start from the stored ones when they hash to the recorded `answers_digest`;
+otherwise every required variable has to be answered again, and a render that leaves one
+unanswered is refused as `supply every required answer`, naming each and why the stored
+answers were not used (exit `2`). `--var`, `--answers` and `--unset NAME` — which drops an
+answer so its default applies — are laid over that base. The template is the one given;
+else the recorded reference, re-read when it is a readable file — its `extends`, `include`
+and `import` resolved over `--search-path` again, because the provenance records none;
+else the render is refused naming that reference, because a reference is never turned into
+a location. `--dry-run` renders and writes nothing; `--json` prints `{id, digest,
+body_digest, changed, body}`, and a render that would change nothing reports `changed:
+false` and writes nothing.
+
+A caller that layers templates of its own states the result with a **template loader
+document** — `--template-loader FILE`, `-` for standard input, but never together with
+`--answers -` — and this product renders exactly that, never resolving a caller's layers
+nor running a caller's command:
+
+```json
+{"reference": "<string>", "entry": "<name>", "search_path": ["<absolute dir>"],
+ "templates": [{"name": "<name>", "source": "<text>"}], "digest": "sha256:<hex>"}
+```
+
+`reference` (required, non-empty) is what the item records; `entry` (required) is loaded over
+the `search_path` directories, then the inline `templates`; `digest`, when present, must be
+the digest that chain computes, or the render is refused naming both. Every other key is
+ignored. `template variables` and `template render` take one in place of their `<FILE>`.
+[`docs/local-md.md`](./docs/local-md.md) describes the answers block.
 
 ### Exit codes
 

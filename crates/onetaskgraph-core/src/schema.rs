@@ -19,14 +19,15 @@ use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::template::{
-    ItemType, RenderedTemplate, TemplateVariable, TemplateVariables, VariableType,
+    ItemType, RenderedTemplate, TemplateProvenance, TemplateVariable, TemplateVariables,
+    VariableType,
 };
 use crate::{
     CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
     Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
-    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, SearchHit, SearchKind,
+    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated, SearchHit, SearchKind,
     SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail, TaskPrioritySet,
-    TaskStatusSet,
+    TaskStatusSet, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -42,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 21;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 22;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -175,6 +176,13 @@ pub fn schema_bundle() -> Value {
     roots.insert("VariableType", schema_for!(VariableType));
     roots.insert("ItemType", schema_for!(ItemType));
     roots.insert("RenderedTemplate", schema_for!(RenderedTemplate));
+    // What `task render` and `document render` answer with, what `task answers` and
+    // `document answers` answer with, and the `onetaskgraph.template` entry an item rendered
+    // from a template records — named, because a caller checking a hand edit or a changed
+    // template reads its hashes by name.
+    roots.insert("Regenerated", schema_for!(Regenerated));
+    roots.insert("TemplateAnswers", schema_for!(TemplateAnswers));
+    roots.insert("TemplateProvenance", schema_for!(TemplateProvenance));
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));

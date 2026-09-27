@@ -421,7 +421,7 @@ struct Common {
 /// The folder **is** the discriminator, for tasks, projects and documents alike; see this
 /// crate's `docs/local-md.md` for why that was chosen over a metadata marker and over a
 /// distinct file extension.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Task,
     Project,
@@ -774,10 +774,11 @@ impl LocalMdSource {
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
+        // Nor is a task's stored answers block, which ends the text above its section.
         let content = match kind {
             WorkKind::Task => {
                 let (above, comments) = sectioned(body);
-                body_text(above, comments.is_some())
+                content_of(above, comments.is_some())
             }
             WorkKind::Project => body_text(body, false),
         };
@@ -897,7 +898,7 @@ impl LocalMdSource {
             serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
-        let common = self.common(Kind::Document, path, body_text(body, false), front.into())?;
+        let common = self.common(Kind::Document, path, content_of(body, false), front.into())?;
         Ok(Document {
             id: common.id,
             title: common.title,
@@ -1216,39 +1217,22 @@ impl TaskSource for LocalMdSource {
         self.edges(WorkKind::Project, id, d, p)
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        let task = &write.item;
-        let near = write.target.as_ref().unwrap_or(&task.id);
-        for (field, list) in [
-            ("delivers", &task.delivers),
-            ("delivered_by", &task.delivered_by),
-        ] {
-            self.representable_list(field, near, list)?;
-        }
-        self.write_entry(
-            write.target.as_ref(),
-            &Outgoing::Work {
-                kind: WorkKind::Task,
-                status: &task.status,
-                priority: task.priority,
-                depends_on: &write.depends_on,
-                delivers: &task.delivers,
-                delivered_by: &task.delivered_by,
-                fields: Fields {
-                    id: &task.id,
-                    title: &task.title,
-                    content: task.content.as_deref(),
-                    labels: &task.labels,
-                    project: task.project.as_ref(),
-                    metadata: &task.metadata,
-                    repositories: &task.repositories,
-                },
-            },
-        )
+        self.write_task_with(write, None)
+    }
+    /// A task written with the answers it was rendered from stored after its content, in the
+    /// one write that lands the file; see [`ANSWERS_OPEN`].
+    async fn write_task_rendered(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<NativeId, SourceError> {
+        self.write_task_with(write, Some(answers))
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         let project = &write.item;
         self.write_entry(
             write.target.as_ref(),
+            None,
             &Outgoing::Work {
                 kind: WorkKind::Project,
                 status: &project.status,
@@ -1275,21 +1259,16 @@ impl TaskSource for LocalMdSource {
     /// carry an edge and no status to disagree with this folder's mapping.
     // llmlint: ignore[boundary_inputs_validated] `ItemWrite` carries `depends_on` for all three kinds and the frozen contract says nothing about a document's being empty, so a non-empty one is not an input this plugin may rule on. `in-memory`, the reference implementation of this method, ignores it for the same recorded reason; refusing here would make this the one source that rejects a call every other source accepts, which is a change to the contract rather than to this plugin and is its owner's to make.
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
-        let document = &write.item;
-        self.write_entry(
-            write.target.as_ref(),
-            &Outgoing::Document {
-                fields: Fields {
-                    id: &document.id,
-                    title: &document.title,
-                    content: document.content.as_deref(),
-                    labels: &document.labels,
-                    project: document.project.as_ref(),
-                    metadata: &document.metadata,
-                    repositories: &document.repositories,
-                },
-            },
-        )
+        self.write_document_with(write, None)
+    }
+    /// A document written with the answers it was rendered from, on the terms of
+    /// [`write_task_rendered`](TaskSource::write_task_rendered).
+    async fn write_document_rendered(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<NativeId, SourceError> {
+        self.write_document_with(write, Some(answers))
     }
     /// Rewrite the one `status:` entry of the task's front matter, and nothing else.
     ///
@@ -1448,6 +1427,77 @@ impl TaskSource for LocalMdSource {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Document, id)
     }
+    /// Every item this source writes is a file of its own, which holds its answers block.
+    fn keeps_template_answers(&self) -> bool {
+        true
+    }
+    /// The answers block of the task's file, read as YAML; see [`ANSWERS_OPEN`].
+    async fn task_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        self.stored_answers(Kind::Task, id)
+    }
+    /// The answers block of the document's file, read as YAML; see [`ANSWERS_OPEN`].
+    async fn document_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        self.stored_answers(Kind::Document, id)
+    }
+    /// Replace the task's content, provenance and stored answers in one write of its file,
+    /// keeping its front matter otherwise and its comments section byte for byte.
+    async fn set_task_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.set_rendering(
+            Kind::Task,
+            id,
+            &Rendering {
+                content,
+                provenance,
+                answers,
+            },
+            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |task, content, provenance| {
+                task.content = (!content.is_empty()).then(|| content.to_owned());
+                task.metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            },
+            |task| &task.title,
+        )
+    }
+    /// Replace the document's content, provenance and stored answers in one write of its
+    /// file, on the terms of [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_document_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.set_rendering(
+            Kind::Document,
+            id,
+            &Rendering {
+                content,
+                provenance,
+                answers,
+            },
+            |path, text| self.parse_document_text(path, text),
+            |document, content, provenance| {
+                document.content = (!content.is_empty()).then(|| content.to_owned());
+                document
+                    .metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            },
+            |document| &document.title,
+        )
+    }
     async fn task_comments(
         &self,
         task: &NativeId,
@@ -1517,6 +1567,85 @@ impl TaskSource for LocalMdSource {
         file.rewrite()?;
         Ok(Some(comment.clone()))
     }
+}
+
+/// The line that opens the template answers a task or a document stores in its own file:
+/// this line, the answers as a YAML mapping, and a line that is exactly [`ANSWERS_CLOSE`],
+/// after the content and before a task's comments section. `docs/local-md.md` describes the
+/// block for a person.
+///
+/// What the code holds to: the block is found as the **last** such block the
+/// text above the section ends in, so content can never end in one where none follows — a
+/// write whose content would read back that way is refused — and every write but a rendering
+/// write edits around it byte for byte. A project keeps none.
+pub const ANSWERS_OPEN: &str = "<!-- onetaskgraph:template-answers";
+
+/// The line that closes the stored answers block.
+pub const ANSWERS_CLOSE: &str = "-->";
+
+/// What one rendering write puts in a file: the content, the provenance entry and the
+/// answers, which land together or not at all.
+struct Rendering<'a> {
+    content: &'a str,
+    provenance: &'a serde_json::Value,
+    answers: &'a BTreeMap<String, serde_json::Value>,
+}
+
+/// The text above a task's comments section — or a document's whole body — split into the
+/// part holding the content and the YAML of the answers block that ends it, when one does.
+///
+/// Blank lines after the block — the one before a comments section, or any a person left at
+/// the end of the file — are framing rather than part of it.
+fn answered(above: &str) -> Option<(&str, &str)> {
+    let text = above.trim_end_matches('\n');
+    let close_at = text.strip_suffix(ANSWERS_CLOSE)?.len();
+    if close_at == 0 || !text[..close_at].ends_with('\n') {
+        return None;
+    }
+    let open_line = format!("{ANSWERS_OPEN}\n");
+    let open_at = match text[..close_at].rfind(&format!("\n{open_line}")) {
+        Some(at) => at + 1,
+        None if text.starts_with(&open_line) => 0,
+        None => return None,
+    };
+    Some((
+        &above[..open_at],
+        &text[open_at + open_line.len()..close_at],
+    ))
+}
+
+/// The content the text above a task's comments section — or a document's whole body —
+/// holds: everything above its answers block when it ends in one, less this format's own
+/// framing.
+fn content_of(above: &str, sectioned: bool) -> &str {
+    match answered(above) {
+        Some((region, _)) => body_text(region, true),
+        None => body_text(above, sectioned),
+    }
+}
+
+/// The answers block that stores `answers`, refused only when YAML cannot write them at all:
+/// whether what it writes reads back as the same values is the caller's read-back to check.
+fn answers_block(answers: &BTreeMap<String, serde_json::Value>) -> Result<String, SourceError> {
+    let yaml = serde_norway::to_string(answers).map_err(|e| SourceError::Refused {
+        message: format!(
+            "cannot represent these template answers as YAML: {e}; next: give answers JSON and \
+             YAML both carry"
+        ),
+    })?;
+    Ok(format!("{ANSWERS_OPEN}\n{yaml}{ANSWERS_CLOSE}\n"))
+}
+
+/// The body a file holds for `content` with `block` stored after it and — for a task —
+/// `section`, its comments section, after those, so [`content_of`] reads `content` back.
+fn answered_body(content: &str, block: &str, section: &str) -> String {
+    let mut text = framed(content, true);
+    text.push_str(block);
+    if !section.is_empty() {
+        text.push('\n');
+        text.push_str(section);
+    }
+    text
 }
 
 /// The heading line that opens a task file's comments section.
@@ -2329,9 +2458,17 @@ fn document_stem(id: &NativeId) -> Result<String, SourceError> {
 
 impl LocalMdSource {
     /// Create or update one file, answering with the id it is filed under.
+    ///
+    /// With `answers`, the content is written exactly as it is — not trimmed, as a copy's is —
+    /// and the answers are stored after it, so a read answers exactly that content and those
+    /// answers; the whole file is read back before anything is written and refused, naming the
+    /// field, when it would not. The file is then written through a staging file and a
+    /// rename, so a failed write leaves the file that was there — or none — and no staging
+    /// file behind.
     fn write_entry(
         &self,
         target: Option<&NativeId>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
         outgoing: &Outgoing<'_>,
     ) -> Result<NativeId, SourceError> {
         let kind = outgoing.kind();
@@ -2339,7 +2476,7 @@ impl LocalMdSource {
             Some(target) => (target.clone(), self.existing(kind, target)?),
             None => self.unused(kind, outgoing.fields().id)?,
         };
-        let mut document = self.render(outgoing)?;
+        let mut document = self.render(outgoing, answers)?;
         // An update of a task keeps the comments section the file already has, byte for byte:
         // a copy writes the task, and nothing a copy does adds, changes or removes a comment.
         // Only a file can hold a section: anything else at that path is left for the write
@@ -2368,10 +2505,242 @@ impl LocalMdSource {
                 message: format!("cannot create {}: {e}", parent.display()),
             })?;
         }
-        fs::write(&path, document).map_err(|e| SourceError::Unavailable {
-            message: format!("cannot write {}: {e}", path.display()),
-        })?;
+        let Some(answers) = answers else {
+            fs::write(&path, document).map_err(|e| SourceError::Unavailable {
+                message: format!("cannot write {}: {e}", path.display()),
+            })?;
+            return Ok(id);
+        };
+        let content = outgoing.fields().content.unwrap_or_default();
+        self.reads_back(kind, &path, &document, content, answers)?;
+        write_atomically(&path, &document)?;
         Ok(id)
+    }
+
+    /// Refuse `text`, the whole file about to be written at `path`, unless it reads back with
+    /// exactly `content` as its content and exactly `answers` as its stored answers.
+    fn reads_back(
+        &self,
+        kind: Kind,
+        path: &Path,
+        text: &str,
+        content: &str,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), SourceError> {
+        let read = match kind {
+            Kind::Task => task(self.parse_text(WorkKind::Task, path, text)?).content,
+            Kind::Document => self.parse_document_text(path, text)?.content,
+            Kind::Project => self.parse_text(WorkKind::Project, path, text)?.common.body,
+        };
+        if read.as_deref().unwrap_or_default() != content {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{}: cannot represent the field `content`: it would read back as {:?} rather \
+                     than as itself, because of how it ends — in what this source reads as its \
+                     own comments section or stored answers; next: change how the content ends",
+                    path.display(),
+                    read.as_deref().unwrap_or_default()
+                ),
+            });
+        }
+        if Self::answers_in(kind, path, text)?.as_ref() != Some(answers) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{}: cannot represent these template answers: written as YAML they would not \
+                     read back as the same values; next: give answers that read back as \
+                     themselves, such as strings without control characters",
+                    path.display()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// The answers stored in `text`, the contents of the file at `path`, when it stores any.
+    fn answers_in(
+        kind: Kind,
+        path: &Path,
+        text: &str,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        let (_, body) = Self::split_text(path, text)?;
+        let block = match kind {
+            Kind::Task => answered(sectioned(body).0),
+            Kind::Document => answered(body),
+            Kind::Project => None,
+        };
+        let Some((_, yaml)) = block else {
+            return Ok(None);
+        };
+        serde_norway::from_str::<Option<BTreeMap<String, serde_json::Value>>>(yaml)
+            .map(|answers| Some(answers.unwrap_or_default()))
+            .map_err(|e| SourceError::Malformed {
+                message: format!(
+                    "{}: the stored template answers are not a YAML mapping: {e}; next: correct \
+                     the block between `{ANSWERS_OPEN}` and `{ANSWERS_CLOSE}`, or remove it",
+                    path.display()
+                ),
+            })
+    }
+
+    /// The answers the record `id` names under `kind` stores, when it stores any.
+    ///
+    /// The record is read as a query reads it first, so a file that is not a readable record
+    /// is refused for the reason that read gives.
+    fn stored_answers(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        let Some(path) = self.locate(kind, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        if kind == Kind::Document {
+            self.parse_document_text(&path, &text)?;
+        } else {
+            self.parse_text(WorkKind::Task, &path, &text)?;
+        }
+        Self::answers_in(kind, &path, &text)
+    }
+
+    /// Replace the content, the [`MetadataKey::TEMPLATE_KEY`] entry and the stored answers of
+    /// the record `id` names under `kind` — a task or a document — in one write, and nothing
+    /// else; see [`set_task_rendering`](TaskSource::set_task_rendering).
+    ///
+    /// The provenance entry is edited by the rules a narrow metadata write follows
+    /// ([`STAGING_SUFFIX`]); the body becomes the content, framed as a content write frames
+    /// it, then the answers block, then — for a task — its comments section byte for byte.
+    /// The edited file is read back before anything is written, and the write is refused, the
+    /// file left as it was, unless it reads as the record did with exactly those three things
+    /// changed. A rendering the file already holds writes nothing; a file this process cannot
+    /// write is refused before anything is staged; and the file is replaced through a staging
+    /// file and a rename.
+    fn set_rendering<R: PartialEq>(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        rendering: &Rendering<'_>,
+        read: impl Fn(&Path, &str) -> Result<R, SourceError>,
+        expect: impl Fn(&mut R, &str, &serde_json::Value),
+        title: impl Fn(&R) -> &str,
+    ) -> Result<Option<()>, SourceError> {
+        let Some(path) = self.locate(kind, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        let mut expected = read(&path, &text)?;
+        let keyed = with_metadata_entry(&text, MetadataKey::TEMPLATE_KEY, rendering.provenance)
+            .map_err(|unnarrow| unnarrow.refusal_for(&path, MetadataKey::TEMPLATE_KEY))?;
+        let (_, body_at) = front_matter(&keyed).ok_or_else(|| unfronted(&path))?;
+        let body = &keyed[body_at..];
+        let section = match kind {
+            Kind::Task => &body[sectioned(body).0.len()..],
+            Kind::Document | Kind::Project => "",
+        };
+        let mut edited = keyed[..body_at].to_owned();
+        edited.push_str(&answered_body(
+            rendering.content,
+            &answers_block(rendering.answers)?,
+            section,
+        ));
+        expect(&mut expected, rendering.content, rendering.provenance);
+        let after = read(&path, &edited).map_err(|error| SourceError::Refused {
+            message: format!(
+                "{}: the rendering would leave a file this source cannot read: {error}; next: \
+                 {TIDY_BLOCK}",
+                path.display()
+            ),
+        })?;
+        if after != expected {
+            let reason = if title(&after) == title(&expected) {
+                "the file would read back as more than its content, its provenance and its \
+                 answers changed"
+                    .to_owned()
+            } else {
+                format!(
+                    "this {} has no `title:` in its front matter, so it is titled {:?} by its \
+                     content, and this content would title it {:?}",
+                    kind.noun(),
+                    title(&expected),
+                    title(&after)
+                )
+            };
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{}: cannot represent the field `content`: {reason}; next: give the {} a \
+                     `title:` in its front matter, or change how the content ends",
+                    path.display(),
+                    kind.noun()
+                ),
+            });
+        }
+        self.reads_back(kind, &path, &edited, rendering.content, rendering.answers)?;
+        if edited != text {
+            write_atomically(&path, &edited)?;
+        }
+        Ok(Some(()))
+    }
+
+    /// [`write_task`](TaskSource::write_task), storing `answers` after the content when given.
+    fn write_task_with(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+    ) -> Result<NativeId, SourceError> {
+        let task = &write.item;
+        let near = write.target.as_ref().unwrap_or(&task.id);
+        for (field, list) in [
+            ("delivers", &task.delivers),
+            ("delivered_by", &task.delivered_by),
+        ] {
+            self.representable_list(field, near, list)?;
+        }
+        self.write_entry(
+            write.target.as_ref(),
+            answers,
+            &Outgoing::Work {
+                kind: WorkKind::Task,
+                status: &task.status,
+                priority: task.priority,
+                depends_on: &write.depends_on,
+                delivers: &task.delivers,
+                delivered_by: &task.delivered_by,
+                fields: Fields {
+                    id: &task.id,
+                    title: &task.title,
+                    content: task.content.as_deref(),
+                    labels: &task.labels,
+                    project: task.project.as_ref(),
+                    metadata: &task.metadata,
+                    repositories: &task.repositories,
+                },
+            },
+        )
+    }
+
+    /// [`write_document`](TaskSource::write_document), storing `answers` after the content
+    /// when given.
+    fn write_document_with(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+    ) -> Result<NativeId, SourceError> {
+        let document = &write.item;
+        self.write_entry(
+            write.target.as_ref(),
+            answers,
+            &Outgoing::Document {
+                fields: Fields {
+                    id: &document.id,
+                    title: &document.title,
+                    content: document.content.as_deref(),
+                    labels: &document.labels,
+                    project: document.project.as_ref(),
+                    metadata: &document.metadata,
+                    repositories: &document.repositories,
+                },
+            },
+        )
     }
 
     /// Remove one item, so a copy that could not finish leaves this folder as it was.
@@ -2544,12 +2913,17 @@ impl LocalMdSource {
         let before = task(self.parse_text(WorkKind::Task, path, &text)?);
         let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(path))?;
         let body = &text[body_at..];
-        let section = &body[sectioned(body).0.len()..];
-        let mut edited = String::with_capacity(body_at + content.len() + section.len() + 3);
+        let above = sectioned(body).0;
+        // The stored answers block and the comments section, each byte for byte: neither is
+        // the content, so neither moves when it does.
+        let kept_at = answered(above).map_or(above.len(), |(region, _)| region.len());
+        let block = above.len() - kept_at;
+        let kept = &body[kept_at..];
+        let mut edited = String::with_capacity(body_at + content.len() + kept.len() + 3);
         edited.push_str(&text[..body_at]);
-        edited.push_str(&framed(content, !section.is_empty()));
-        let written_to = edited.len();
-        edited.push_str(section);
+        edited.push_str(&framed(content, !kept.is_empty()));
+        let written_to = edited.len() + block;
+        edited.push_str(kept);
         if edited == text {
             return Ok(());
         }
@@ -2569,6 +2943,14 @@ impl LocalMdSource {
             ));
         }
         let after = task(self.parse_text(WorkKind::Task, path, &edited)?);
+        if Self::answers_in(Kind::Task, path, &edited)?
+            != Self::answers_in(Kind::Task, path, &text)?
+        {
+            return Err(refused(
+                "it ends in what this source reads as its own stored answers block".to_owned(),
+                "change how the content ends",
+            ));
+        }
         // What a read will report is exactly what was asked for, or nothing is written.
         if after.content.as_deref().unwrap_or_default() != content {
             return Err(refused(
@@ -2596,7 +2978,14 @@ impl LocalMdSource {
     }
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.
-    fn render(&self, outgoing: &Outgoing<'_>) -> Result<String, SourceError> {
+    ///
+    /// With `answers`, the content is framed exactly rather than trimmed, and the answers
+    /// block follows it.
+    fn render(
+        &self,
+        outgoing: &Outgoing<'_>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+    ) -> Result<String, SourceError> {
         let is_task = matches!(
             outgoing,
             Outgoing::Work {
@@ -2671,6 +3060,14 @@ impl LocalMdSource {
         let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),
         })?;
+        if let Some(answers) = answers {
+            let content = outgoing.content.unwrap_or_default();
+            return Ok(format!(
+                "---\n{}\n---\n{}",
+                yaml.trim_end(),
+                answered_body(content, &answers_block(answers)?, "")
+            ));
+        }
         let body = outgoing.content.unwrap_or_default().trim();
         // Content that would itself read back as a comments section is refused: writing it
         // would turn part of a task's content into comments nobody wrote, which is the one
@@ -2747,6 +3144,11 @@ struct Unnarrow {
 impl Unnarrow {
     /// The refusal naming `path` and `key`.
     fn refusal(self, path: &Path, key: &MetadataKey) -> SourceError {
+        self.refusal_for(path, key.as_str())
+    }
+
+    /// The refusal naming `path` and `key`, a key this product reserves included.
+    fn refusal_for(self, path: &Path, key: &str) -> SourceError {
         SourceError::Refused {
             message: format!(
                 "{}: cannot set the metadata key `{key}` without changing anything else: {}; \
@@ -2835,8 +3237,42 @@ fn compact(value: &serde_json::Value) -> String {
     serde_json::to_string(value).expect("a JSON value renders")
 }
 
+/// Write `text` at `path` — replacing the file there, or creating one where there is none —
+/// through a staging file and a rename, by the rules [`STAGING_SUFFIX`] states.
+///
+/// A file already there that this process cannot write is refused before anything is
+/// staged: a rename would replace it regardless of its own permissions, and a file a person
+/// made read-only is one they meant not to have rewritten.
+fn write_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
+    let unavailable = |e: std::io::Error| SourceError::Unavailable {
+        message: format!("cannot write {}: {e}", path.display()),
+    };
+    if path.exists() {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(unavailable)?;
+        return replace_atomically(path, text);
+    }
+    staged(path, text, None)
+}
+
 /// Replace the file at `path` with `text` through a staging file beside it and a rename.
 fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
+    let unavailable = |e: std::io::Error| SourceError::Unavailable {
+        message: format!("cannot write {}: {e}", path.display()),
+    };
+    let permissions = fs::metadata(path).map_err(unavailable)?.permissions();
+    staged(path, text, Some(permissions))
+}
+
+/// Write `text` to a staging file beside `path` — with `permissions`, when given — and rename
+/// it over `path`; a staging file whose write or rename fails is removed.
+fn staged(
+    path: &Path,
+    text: &str,
+    permissions: Option<fs::Permissions>,
+) -> Result<(), SourceError> {
     let unavailable = |e: std::io::Error| SourceError::Unavailable {
         message: format!("cannot write {}: {e}", path.display()),
     };
@@ -2851,14 +3287,15 @@ fn replace_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
         std::process::id(),
         STAGED.fetch_add(1, Ordering::Relaxed)
     ));
-    let permissions = fs::metadata(path).map_err(unavailable)?.permissions();
     let written = (|| {
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&staging)?;
         file.write_all(text.as_bytes())?;
-        file.set_permissions(permissions)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.sync_all()?;
         drop(file);
         fs::rename(&staging, path)

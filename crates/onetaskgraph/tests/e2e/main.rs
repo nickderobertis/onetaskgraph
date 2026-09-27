@@ -68,6 +68,12 @@ mod no_persistence;
 // the engine's own refusal and the contract every plugin shares, so it cannot sit behind one
 // plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod priority;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown, an
+// in-memory source and the loopback GitHub board, with no credential and no network, in a few
+// seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
+// crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod rendered;
 mod source_host;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
 // the required real CLI boundary against a loopback board and completes nine journeys in

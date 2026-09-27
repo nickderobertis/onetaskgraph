@@ -326,6 +326,52 @@ hand. The rules, all of which the plugin enforces:
 `--author` is recorded here as given — this folder has no signed-in account to record
 instead — and must be one line with no control characters.
 
+## Stored template answers
+
+A task or a document created or regenerated from a template keeps the answers it was rendered
+from **in its own file and nowhere else** — the one place this product stores them — after its
+content and, for a task, before its comments section:
+
+```markdown
+---
+title: Ship the release
+status: todo
+metadata:
+  onetaskgraph.template: {template: /templates/task.md, digest: "sha256:…", body_digest: "sha256:…", answers_digest: "sha256:…"}
+---
+The rendered content, byte for byte.
+
+<!-- onetaskgraph:template-answers
+goal: Ship the release
+steps:
+- build
+- publish
+-->
+
+## Comments
+…
+```
+
+- **The block** is the line `<!-- onetaskgraph:template-answers`, the resolved answers as a
+  YAML mapping — defaults applied, `null` for an optional variable given neither — and a
+  line that is exactly `-->`. It is the last thing above the comments section, or in the
+  file, and a Markdown renderer shows none of it.
+- **It is in neither the content nor the metadata.** `task show`, every query and every copy
+  read the content above it; `task answers` and `document answers` are what print it.
+- **It is written only with the content and the provenance**, in the same write: a create
+  from a template and a `task render` or `document render` replace all three through a
+  staging file and a rename, so a failed write — a file or a folder this process cannot
+  write — leaves the file exactly as it was, and no staging file behind. A render that would
+  change nothing writes nothing.
+- **Every other write keeps it byte for byte**: a status, priority, metadata, delivered-by,
+  content or comment write edits around it, and a hand-written block is read on the same
+  terms. Content that would itself end in a block where none follows is refused, rather than
+  turned into answers nobody gave.
+- **A copy writes no answers.** Copying an item into this folder writes the item it carries,
+  and a copy over an existing file leaves no block behind: answers belong to the file an item
+  was rendered in, never to its copies.
+- A project keeps no answers; the block in a project file is ordinary content.
+
 ## Where this source says an entity is
 
 Every task, project and document this source reports carries a **location**: the

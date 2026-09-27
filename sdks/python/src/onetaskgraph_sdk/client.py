@@ -59,6 +59,10 @@ class Client(GeneratedClient):
                 value = options.pop(positional)
             except KeyError as error:
                 raise TypeError(f"missing required argument: {positional}") from error
+            # An operand a flag can stand in for — a template's file, beside
+            # `template_loader` — is left out rather than passed as the word `None`.
+            if value is None:
+                continue
             # A copy verb's positional is variadic; every other takes exactly one, so a
             # bare value is passed through as a list of one.
             given = value if isinstance(value, (list, tuple)) else [value]

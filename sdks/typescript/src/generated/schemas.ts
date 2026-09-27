@@ -8495,6 +8495,52 @@ export const runtimeSchemas = {
     "title": "QueryResponse",
     "type": "object"
   },
+  "Regenerated": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task render` and `document render` answer with.",
+    "properties": {
+      "body": {
+        "description": "The rendered content.",
+        "type": "string"
+      },
+      "body_digest": {
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the rendered content: what its provenance now records."
+      },
+      "changed": {
+        "description": "Whether its content, its provenance or its stored answers differ from what it held —\nwhat a write changed, or for a dry run what one would change.",
+        "type": "boolean"
+      },
+      "digest": {
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The chain digest it rendered with."
+      },
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The item regenerated."
+      }
+    },
+    "required": [
+      "id",
+      "digest",
+      "body_digest",
+      "changed",
+      "body"
+    ],
+    "title": "Regenerated",
+    "type": "object"
+  },
   "RenderedTemplate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "A rendered template: what `onetaskgraph template render` answers with.",
@@ -12055,6 +12101,51 @@ export const runtimeSchemas = {
       "delivered"
     ],
     "title": "TaskStatusSet",
+    "type": "object"
+  },
+  "TemplateAnswers": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": true,
+    "description": "What `task answers` and `document answers` answer with: the resolved answers an item was\nlast rendered from — defaults applied, `null` for an optional variable given neither — by\nvariable name, exactly as its source keeps them.",
+    "title": "TemplateAnswers",
+    "type": "object"
+  },
+  "TemplateProvenance": {
+    "$defs": {
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "What a task or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
+    "properties": {
+      "answers_digest": {
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,\nno insignificant whitespace, UTF-8."
+      },
+      "body_digest": {
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the item's content exactly as written."
+      },
+      "digest": {
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The chain digest the content was rendered with."
+      },
+      "template": {
+        "description": "The template it was rendered from: the absolute path of a template file, or a loader\ndocument's `reference` verbatim. Recorded whole, whatever its length.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "template",
+      "digest",
+      "body_digest",
+      "answers_digest"
+    ],
+    "title": "TemplateProvenance",
     "type": "object"
   },
   "TemplateVariable": {

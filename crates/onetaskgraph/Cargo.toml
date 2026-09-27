@@ -53,6 +53,9 @@ onetaskgraph-github-projects.workspace = true
 onetaskgraph-linear.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
+# The rendering journeys hash a created item's content and answers themselves, rather than
+# asking the engine that wrote the hashes to check its own work.
+sha2.workspace = true
 tempfile.workspace = true
 
 # A pseudo-terminal for the template prompting journeys, which only a Unix host can open.

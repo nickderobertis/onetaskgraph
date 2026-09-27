@@ -727,6 +727,30 @@ them do; this is the inventory of what is owed, not a status board.
 56. With a pseudo-terminal as standard input, `template render` asks for each unanswered
     variable in declaration order, asks again for a malformed value rather than exiting, and
     renders multi-line answers as they were typed.
+57. `task create` and `document create` make an item on a folder of Markdown and a GitHub
+    board from a template, a loader document, a body file or standard input; `task show` reads
+    back every field given, a rendered item records `onetaskgraph.template` provenance whose
+    two hashes are its content's and its resolved answers', a plain one records none, and a
+    reserved `--metadata` key and a source with no write side are refused, writing nothing.
+58. The answers are kept in the folder's own file and nowhere else: `task answers` prints them,
+    a board refuses naming the item, an issue created from a template with over 30,000
+    characters of answers holds only its content and a slot of the caller's keys and the
+    provenance, a copy carries none either way, and a hand-written block survives every other
+    write byte for byte.
+59. `task render` and `document render` regenerate in place: a changed answer renders afresh,
+    `--unset` drops one, the digest moves exactly when a chain source does, every other field
+    stays, an unchanged render and `--dry-run` write nothing, and answers out of step with the
+    provenance — or a board's, which keeps none — need every required answer, refused as
+    `supply every required answer` until given.
+60. A loader document supplies the template to `create`, `render`, `template variables` and
+    `template render`, its `reference` recorded verbatim and never run or resolved; a malformed
+    or incomplete one, a digest it misstates, `--answers -` beside `--template-loader -`, and
+    a regenerate whose recorded reference is not a file and names no loader are each refused.
+61. A rendering write made to fail — a file or a folder that cannot be written — leaves the
+    item's previous file byte-identical and no staging file behind.
+62. A source hosted over the stdio plugin protocol refuses a task or document create from a
+    template, a read of stored answers and a regenerate — dry run included — each naming the
+    source and the operation and writing nothing, while a plain-body create still crosses.
 
 ## What a copied document's references are pointed at
 

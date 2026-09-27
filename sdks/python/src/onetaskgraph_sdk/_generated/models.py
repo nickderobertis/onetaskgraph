@@ -23,6 +23,7 @@ from .query_response_of_qualified_label import QueryResponse as QueryResponseOfQ
 from .query_response_of_qualified_project import QueryResponse as QueryResponseOfQualifiedProject
 from .query_response_of_qualified_task import QueryResponse as QueryResponseOfQualifiedTask
 from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearchHit
+from .regenerated import Regenerated as Regenerated
 from .rendered_template import RenderedTemplate as RenderedTemplate
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
@@ -34,6 +35,8 @@ from .task_detail import TaskDetail as TaskDetail
 from .task_priority_set import TaskPrioritySet as TaskPrioritySet
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
+from .template_answers import TemplateAnswers as TemplateAnswers
+from .template_provenance import TemplateProvenance as TemplateProvenance
 from .template_variable import TemplateVariable as TemplateVariable
 from .template_variables import TemplateVariables as TemplateVariables
 from .variable_type import VariableType as VariableType
@@ -68,6 +71,7 @@ __all__ = [
     "QueryResponseOfQualifiedProject",
     "QueryResponseOfQualifiedTask",
     "QueryResponseOfSearchHit",
+    "Regenerated",
     "RenderedTemplate",
     "SourceFailure",
     "SourceListing",
@@ -79,6 +83,8 @@ __all__ = [
     "TaskPrioritySet",
     "TaskRef",
     "TaskStatusSet",
+    "TemplateAnswers",
+    "TemplateProvenance",
     "TemplateVariable",
     "TemplateVariables",
     "VariableType",

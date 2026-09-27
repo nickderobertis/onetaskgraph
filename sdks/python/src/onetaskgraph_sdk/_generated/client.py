@@ -24,6 +24,7 @@ from .models import (
     QueryResponseOfQualifiedProject,
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
+    Regenerated,
     RenderedTemplate,
     SourceListing,
     SourceName,
@@ -33,12 +34,16 @@ from .models import (
     TaskDetail,
     TaskPrioritySet,
     TaskStatusSet,
+    TemplateAnswers,
     TemplateVariables,
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("document", "answers"): ("id",),
     ("document", "copy"): ("ids",),
+    ("document", "create"): ("source",),
     ("document", "metadata", "set"): ("id", "key", "value"),
+    ("document", "render"): ("id",),
     ("document", "show"): ("id",),
     ("project", "copy"): ("id",),
     ("project", "deps"): ("id",),
@@ -47,15 +52,18 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
     ("sources", "status-options"): ("source",),
+    ("task", "answers"): ("id",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
     ("task", "comment", "list"): ("id",),
     ("task", "content", "set"): ("id",),
     ("task", "copy"): ("ids",),
+    ("task", "create"): ("source",),
     ("task", "deps"): ("id",),
     ("task", "metadata", "set"): ("id", "key", "value"),
     ("task", "priority", "set"): ("id", "priority"),
+    ("task", "render"): ("id",),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
     ("template", "render"): ("file",),
@@ -72,7 +80,7 @@ so until the binary refused the invocation.
 _ANSWERS = TypeAdapter(dict[str, JsonValue])
 
 
-def _answers_document(answers: Mapping[str, JsonValue]) -> str:
+def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:
     """The answers as the JSON document the binary reads on standard input.
 
     Validated strictly first, so a key that is not a string or a value JSON cannot carry
@@ -82,23 +90,25 @@ def _answers_document(answers: Mapping[str, JsonValue]) -> str:
     """
     if not isinstance(answers, Mapping):
         kind = type(answers).__name__
-        message = f"template_render: answers are a {kind}, not a mapping"
+        message = f"{method}: answers are a {kind}, not a mapping"
         raise TypeError(message)
     try:
         checked = _ANSWERS.validate_python(dict(answers), strict=True)
         return json.dumps(checked, allow_nan=False)
     except ValueError as error:
-        message = f"template_render: answers are not a JSON mapping: {error}"
+        message = f"{method}: answers are not a JSON mapping: {error}"
         raise TypeError(message) from error
 
 
-def _template_file(method: str, file: object) -> str:
-    """The template path, refused unless it is one.
+def _template_file(method: str, file: object) -> str | None:
+    """The template path, refused unless it is one — or `None`, for a loader document.
 
     Anything but a string would reach the binary as its string form, an empty one names
     no file, and one opening with `-` would be read as an option rather than as the file
     the caller named.
     """
+    if file is None:
+        return None
     if not isinstance(file, str) or not file or file.startswith("-"):
         message = (
             f"{method}: file is not a template path; next: pass the template's "
@@ -132,6 +142,39 @@ def _strings(method: str, option: str, values: object) -> list[str] | tuple[str,
     return values
 
 
+def _stdin(
+    method: str,
+    body: str | None,
+    answers: Mapping[str, JsonValue] | None,
+    named: bool = False,
+) -> str | None:
+    """What a create or a render writes to the binary's standard input.
+
+    The answers as JSON, or a create's plain body — never both, because standard input
+    holds one document; and never a body beside a template, a loader document or a body
+    file (`named`), which the binary reads instead of it.
+    """
+    if body is not None and answers is not None:
+        message = (
+            f"{method}: body and answers both go to standard input; next: pass a body "
+            "without a template, or answers with one"
+        )
+        raise TypeError(message)
+    if body is not None and named:
+        message = (
+            f"{method}: body is read only when no template, template_loader or "
+            "body_file names the body; next: pass one of them, not both"
+        )
+        raise TypeError(message)
+    if body is not None and not isinstance(body, str):
+        kind = type(body).__name__
+        message = f"{method}: body is a {kind}, not a string"
+        raise TypeError(message)
+    if answers is not None:
+        return _answers_document(method, answers)
+    return body
+
+
 class GeneratedClient:
     """Methods generated from the binary command surface."""
 
@@ -161,6 +204,24 @@ class GeneratedClient:
             set=set,
         )
 
+    async def document_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers:
+        """Run ``onetaskgraph document answers``."""
+        return await self._invoke(
+            ["document", "answers"],
+            TemplateAnswers,
+            id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def document_copy(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
@@ -185,6 +246,55 @@ class GeneratedClient:
             recreate=recreate,
             set=set,
             to=to,
+        )
+
+    async def document_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        id: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> QueryResponseOfQualifiedDocument:
+        """Run ``onetaskgraph document create``."""
+        return await self._invoke(
+            ["document", "create"],
+            QueryResponseOfQualifiedDocument,
+            source=source,
+            project=project,
+            title=title,
+            body_file=body_file,
+            default_sources=default_sources,
+            id=id,
+            label=label,
+            metadata=_strings("document_create", "metadata", metadata),
+            page_size=page_size,
+            repository=_strings("document_create", "repository", repository),
+            search_path=_strings("document_create", "search_path", search_path),
+            set=set,
+            template=template,
+            template_loader=template_loader,
+            var=_strings("document_create", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin(
+                "document_create",
+                body,
+                answers,
+                template is not None or template_loader is not None or body_file is not None,
+            ),
         )
 
     async def document_list(
@@ -245,6 +355,39 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+        )
+
+    async def document_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated:
+        """Run ``onetaskgraph document render``."""
+        return await self._invoke(
+            ["document", "render"],
+            Regenerated,
+            id=id,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            search_path=_strings("document_render", "search_path", search_path),
+            set=set,
+            template=template,
+            template_loader=template_loader,
+            unset=_strings("document_render", "unset", unset),
+            var=_strings("document_render", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin("document_render", None, answers),
         )
 
     async def document_show(
@@ -532,6 +675,24 @@ class GeneratedClient:
             set=set,
         )
 
+    async def task_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers:
+        """Run ``onetaskgraph task answers``."""
+        return await self._invoke(
+            ["task", "answers"],
+            TemplateAnswers,
+            id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def task_comment_add(
         self,
         id: GlobalId | str,
@@ -664,6 +825,62 @@ class GeneratedClient:
             to=to,
         )
 
+    async def task_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> TaskDetail:
+        """Run ``onetaskgraph task create``."""
+        return await self._invoke(
+            ["task", "create"],
+            TaskDetail,
+            source=source,
+            project=project,
+            title=title,
+            body_file=body_file,
+            default_sources=default_sources,
+            delivers=delivers,
+            depends_on=depends_on,
+            label=label,
+            metadata=_strings("task_create", "metadata", metadata),
+            page_size=page_size,
+            repository=_strings("task_create", "repository", repository),
+            search_path=_strings("task_create", "search_path", search_path),
+            set=set,
+            status=status,
+            template=template,
+            template_loader=template_loader,
+            var=_strings("task_create", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin(
+                "task_create",
+                body,
+                answers,
+                template is not None or template_loader is not None or body_file is not None,
+            ),
+        )
+
     async def task_deps(
         self,
         id: GlobalId | str,
@@ -789,6 +1006,39 @@ class GeneratedClient:
             set=set,
         )
 
+    async def task_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated:
+        """Run ``onetaskgraph task render``."""
+        return await self._invoke(
+            ["task", "render"],
+            Regenerated,
+            id=id,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            search_path=_strings("task_render", "search_path", search_path),
+            set=set,
+            template=template,
+            template_loader=template_loader,
+            unset=_strings("task_render", "unset", unset),
+            var=_strings("task_render", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin("task_render", None, answers),
+        )
+
     async def task_show(
         self,
         id: GlobalId | str,
@@ -833,12 +1083,13 @@ class GeneratedClient:
 
     async def template_render(
         self,
-        file: str,
+        file: str | None = None,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
     ) -> RenderedTemplate:
@@ -851,19 +1102,21 @@ class GeneratedClient:
             page_size=page_size,
             search_path=_strings("template_render", "search_path", search_path),
             set=set,
+            template_loader=template_loader,
             var=_strings("template_render", "var", var),
             answers=None if answers is None else "-",
-            stdin=None if answers is None else _answers_document(answers),
+            stdin=_stdin("template_render", None, answers),
         )
 
     async def template_variables(
         self,
-        file: str,
+        file: str | None = None,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
     ) -> TemplateVariables:
         """Run ``onetaskgraph template variables``."""
         return await self._invoke(
@@ -874,4 +1127,5 @@ class GeneratedClient:
             page_size=page_size,
             search_path=_strings("template_variables", "search_path", search_path),
             set=set,
+            template_loader=template_loader,
         )
