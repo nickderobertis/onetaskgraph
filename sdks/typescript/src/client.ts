@@ -213,29 +213,35 @@ function searchPathFlags(options: TemplateOptions): string[] {
 
 // The answers as the JSON document the binary reads on standard input, refused here when a
 // value is not one JSON can carry: `JSON.stringify` would otherwise drop an `undefined` or a
-// function without a word, write a non-finite number as `null`, and throw on a cycle or a
-// bigint, so the binary would validate answers other than the ones the caller passed.
+// function without a word, write a non-finite number or an array's hole as `null`, and throw
+// on a cycle or a bigint, so the binary would validate answers other than the ones the caller
+// passed. What is serialised is a copy built from the values just checked, never the caller's
+// own objects, so nothing the check did not read — a `toJSON` of an array's own, say — can
+// change what is sent.
 function answersDocument(answers: Record<string, JsonValue>): string {
   const within = new Set<object>();
-  const check = (value: unknown, path: string): void => {
-    if (value === null || typeof value === "string" || typeof value === "boolean") return;
-    if (typeof value === "number" && Number.isFinite(value)) return;
+  const copy = (value: unknown, path: string): JsonValue => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "object") {
       const prototype = Object.getPrototypeOf(value);
       const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
       if (plain && !within.has(value)) {
         within.add(value);
+        let copied: JsonValue;
         if (Array.isArray(value)) {
           // By index rather than by entry, so a hole in a sparse array is read as the
           // `undefined` it is and refused, rather than skipped and later written as `null`.
-          for (let index = 0; index < value.length; index += 1) {
-            check(value[index], `${path}[${index}]`);
-          }
+          copied = Array.from({ length: value.length }, (_, index) =>
+            copy(value[index], `${path}[${index}]`),
+          );
         } else {
-          for (const [key, item] of Object.entries(value)) check(item, `${path}.${key}`);
+          copied = Object.fromEntries(
+            Object.entries(value).map(([key, item]) => [key, copy(item, `${path}.${key}`)]),
+          );
         }
         within.delete(value);
-        return;
+        return copied;
       }
     }
     throw new TypeError(
@@ -243,8 +249,7 @@ function answersDocument(answers: Record<string, JsonValue>): string {
         "numbers, booleans, null, arrays and plain objects, with no cycle",
     );
   };
-  check(answers, "");
-  return JSON.stringify(answers);
+  return JSON.stringify(copy(answers, ""));
 }
 
 function copyFlags(options: CopyOptions): string[] {
@@ -425,6 +430,14 @@ export class OnetaskgraphClient {
   ): Promise<RenderedTemplate> {
     const args = [file, ...searchPathFlags(options)];
     for (const [name, value] of Object.entries(options.vars ?? {})) {
+      // Checked rather than interpolated whatever it is: a number or an object would reach the
+      // binary as its string form, which is not the value the caller passed.
+      if (typeof value !== "string") {
+        throw new TypeError(
+          `templateRender: vars.${name} is not a string; next: pass the text the command line ` +
+            "would take, or give a typed value in answers",
+        );
+      }
       args.push("--var", `${name}=${value}`);
     }
     if (options.answers === undefined) return this.run("template render", args);

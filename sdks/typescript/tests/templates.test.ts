@@ -142,3 +142,24 @@ test("answers JSON cannot carry are refused before the binary is started", async
     await expect(refused).rejects.toThrow(`${path} is not a JSON value`);
   }
 });
+
+test("what is sent is the answers checked, and a var is text or refused", async () => {
+  // An array carrying its own `toJSON`: serialising the caller's object would send "swapped".
+  const steps = ["checked"];
+  Object.defineProperty(steps, "toJSON", { value: () => ["swapped"] });
+  const rendered = await client.templateRender(task, {
+    searchPath: [library],
+    answers: { title: "t", steps },
+  });
+  expect(rendered.answers.steps).toEqual(["checked"]);
+  expect(rendered.body).toContain("- checked");
+
+  const refused = client.templateRender(task, {
+    searchPath: [library],
+    answers: { title: "t", steps: [] },
+    // Deliberately outside the declared type, as a caller whose values reached it untyped.
+    vars: { size: 5 } as unknown as Record<string, string>,
+  });
+  await expect(refused).rejects.toThrow(TypeError);
+  await expect(refused).rejects.toThrow("vars.size is not a string");
+});
