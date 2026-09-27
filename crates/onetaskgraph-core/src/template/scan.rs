@@ -102,7 +102,6 @@ pub(super) fn hooked(source: &str, file: usize) -> String {
     out
 }
 
-/// Where `part`, a slice of `whole`, starts in it.
 fn offset(whole: &str, part: &str) -> usize {
     part.as_ptr().addr() - whole.as_ptr().addr()
 }

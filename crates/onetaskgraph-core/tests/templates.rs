@@ -1211,8 +1211,6 @@ fn a_variable_a_named_template_declares_can_name_the_next_one() {
     assert_eq!(template.render(&answers).expect("renders").body, "[deep]");
 }
 
-/// The root names one part by an expression and another by a literal after it; the part the
-/// expression names names a third by a literal of its own.
 const ORDERED_ROOT: &str = "---\n\
 onetaskgraph_template: 1\n\
 variables:\n  \
@@ -1230,8 +1228,6 @@ fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_li
         ("nested.md", "nested\n"),
         ("second.md", "second\n"),
     ]);
-    // Found both ways: `root.md` and `literal.md` registered in-process, the rest through a
-    // search-path directory.
     let template = TemplateLoader::new()
         .with_directory(tree.path())
         .with_template("root.md", ORDERED_ROOT)

@@ -780,23 +780,12 @@ fn absorb(resolutions: &mut Resolutions, recorded: &Recorded) -> bool {
 }
 
 /// The body of each of `files` as [`discover`] renders it: with every expression that names a
-/// template wrapped in [`scan::HOOK`], so the render reports what it named — or as written,
-/// should wrapping ever leave it unparsable, when what it names is not found at all.
+/// template wrapped in [`scan::HOOK`], so the render reports what it named.
 fn hooked_bodies(files: &[ChainFile]) -> HashMap<String, String> {
     files
         .iter()
         .enumerate()
-        .map(|(index, file)| {
-            let hooked = scan::hooked(&file.body, index);
-            let parses = hooked == file.body
-                || environment()
-                    .template_from_named_str(&file.name, &hooked)
-                    .is_ok();
-            (
-                file.name.clone(),
-                if parses { hooked } else { file.body.clone() },
-            )
-        })
+        .map(|(index, file)| (file.name.clone(), scan::hooked(&file.body, index)))
         .collect()
 }
 
