@@ -62,26 +62,32 @@ impl Body {
     }
 
     /// The content, the metadata the item carries, and the answers kept beside it.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Template`] when a rendering's digest is not one.
     fn parts(
         &self,
         metadata: &BTreeMap<MetadataKey, Value>,
-    ) -> (
-        String,
-        BTreeMap<String, Value>,
-        Option<&BTreeMap<String, Value>>,
-    ) {
+    ) -> Result<
+        (
+            String,
+            BTreeMap<String, Value>,
+            Option<&BTreeMap<String, Value>>,
+        ),
+        EngineError,
+    > {
         let mut carried: BTreeMap<String, Value> = metadata
             .iter()
             .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
             .collect();
         match self {
-            Self::Plain(content) => (content.clone(), carried, None),
+            Self::Plain(content) => Ok((content.clone(), carried, None)),
             Self::Rendered { rendered, template } => {
-                carried.insert(
-                    TemplateProvenance::KEY.to_owned(),
-                    TemplateProvenance::of(template.clone(), rendered).to_value(),
-                );
-                (rendered.body.clone(), carried, Some(&rendered.answers))
+                let provenance = TemplateProvenance::of(template.clone(), rendered)
+                    .map_err(|error| EngineError::Template { error })?;
+                carried.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
+                Ok((rendered.body.clone(), carried, Some(&rendered.answers)))
             }
         }
     }
@@ -414,7 +420,7 @@ impl Engine {
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
         let source = self.creatable(&request.source, MetadataRecord::Task)?;
-        let (content, metadata, answers) = request.body.parts(&request.metadata);
+        let (content, metadata, answers) = request.body.parts(&request.metadata)?;
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let near = &request.source;
         let id = NativeId::from(slug(&request.title, "task").as_str());
@@ -500,7 +506,7 @@ impl Engine {
                 .map(|held| held.id),
             None => None,
         };
-        let (content, metadata, answers) = request.body.parts(&request.metadata);
+        let (content, metadata, answers) = request.body.parts(&request.metadata)?;
         let write = ItemWrite {
             target,
             item: Document {
@@ -686,7 +692,8 @@ impl Engine {
         dry_run: bool,
     ) -> Result<Regenerated, EngineError> {
         let rendered = regeneration.render(answers)?;
-        let provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered);
+        let provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
+            .map_err(|error| EngineError::Template { error })?;
         let changed = regeneration.content != rendered.body
             || regeneration.provenance.as_ref() != Some(&provenance)
             || regeneration

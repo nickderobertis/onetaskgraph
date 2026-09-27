@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
-use super::RenderedTemplate;
+use super::{RenderedTemplate, TemplateError};
 
 /// `sha256:` and 64 lowercase hex digits: the one form every hash a provenance entry records
 /// takes, and nothing else — built by hashing, or read and refused when it is not one.
@@ -124,15 +124,29 @@ impl TemplateProvenance {
     pub const KEY: &'static str = MetadataKey::TEMPLATE_KEY;
 
     /// The provenance of `rendered`, rendered from the template `template` names.
-    #[must_use]
-    pub fn of(template: impl Into<String>, rendered: &RenderedTemplate) -> Self {
-        Self {
-            template: template.into(),
-            // Every chain digest is computed by `template::digest`, in exactly this form.
-            digest: Sha256Digest(rendered.digest.clone()),
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::Malformed`] when the rendering's `digest` is not one — a
+    /// [`RenderedTemplate`] a caller assembled by hand rather than a render answered.
+    pub fn of(
+        template: impl Into<String>,
+        rendered: &RenderedTemplate,
+    ) -> Result<Self, TemplateError> {
+        let template = template.into();
+        let digest = Sha256Digest::parse(rendered.digest.clone()).map_err(|message| {
+            TemplateError::Malformed {
+                file: template.clone(),
+                key: Some("digest".to_owned()),
+                message,
+            }
+        })?;
+        Ok(Self {
+            template,
+            digest,
             body_digest: Sha256Digest::of(rendered.body.as_bytes()),
             answers_digest: Sha256Digest(answers_digest(&rendered.answers)),
-        }
+        })
     }
 
     /// The provenance `metadata` records, `None` when it records none.

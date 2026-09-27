@@ -10,7 +10,8 @@ use std::path::Path;
 
 use onetaskgraph_core::{
     Answers, Body, Config, DocumentCreate, Engine, EngineError, GlobalId, LoaderDocument,
-    RenderRequest, RenderedRecord, TaskCreate, TemplateError, TemplateInput, TemplateProvenance,
+    RenderRequest, RenderedRecord, RenderedTemplate, TaskCreate, TemplateError, TemplateInput,
+    TemplateProvenance,
 };
 use onetaskgraph_plugin_api::{MetadataKey, NativeId, SecretResolver, SourceName, StatusCategory};
 use secrecy::SecretString;
@@ -610,5 +611,130 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
             memory.id
         )),
         "{none}"
+    );
+}
+
+#[tokio::test]
+async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
+    let fixture = Fixture::new();
+    let template = TemplateInput::Loader(fixture.loader(BASE));
+    let plain = |title: &str| Body::Plain(format!("{title}, by hand."));
+    let created = fixture
+        .engine
+        .create_task(&TaskCreate {
+            source: name("memory"),
+            project: NativeId::from("launch"),
+            title: "Held".to_owned(),
+            body: plain("Held"),
+            status: None,
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            depends_on: Vec::new(),
+            delivers: Vec::new(),
+            metadata: BTreeMap::new(),
+        })
+        .await
+        .unwrap()
+        .task;
+    let request = RenderRequest {
+        template: Some(template.clone()),
+        answers: answers(json!({"goal": "In memory"})),
+        ..RenderRequest::default()
+    };
+    let regenerated = fixture
+        .engine
+        .render_task(&created.id, &request)
+        .await
+        .unwrap();
+    assert!(regenerated.changed);
+    let read = task(&fixture.engine, &created.id).await;
+    assert_eq!(read.content.as_deref(), Some(regenerated.body.as_str()));
+    let provenance = TemplateProvenance::read(&read.metadata).unwrap().unwrap();
+    assert_eq!(provenance.body_digest.as_str(), regenerated.body_digest);
+    assert_eq!(provenance.template, "caller:task/default");
+    assert!(matches!(
+        fixture
+            .engine
+            .template_answers(RenderedRecord::Task, &created.id)
+            .await,
+        Err(EngineError::NoStoredAnswers { .. })
+    ));
+
+    let document = fixture
+        .engine
+        .create_document(&DocumentCreate {
+            source: name("memory"),
+            project: NativeId::from("launch"),
+            title: "Memo".to_owned(),
+            id: Some(NativeId::from("memo")),
+            body: plain("Memo"),
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            metadata: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+    let regenerated = fixture
+        .engine
+        .render_document(&document.id, &request)
+        .await
+        .unwrap();
+    let read = fixture
+        .engine
+        .document(&document.id)
+        .await
+        .unwrap()
+        .items
+        .remove(0)
+        .item;
+    assert_eq!(read.content.as_deref(), Some(regenerated.body.as_str()));
+    assert_eq!(
+        TemplateProvenance::read(&read.metadata)
+            .unwrap()
+            .unwrap()
+            .body_digest
+            .as_str(),
+        regenerated.body_digest
+    );
+}
+
+#[tokio::test]
+async fn a_rendering_assembled_by_hand_with_no_digest_is_refused_before_anything_is_written() {
+    let fixture = Fixture::new();
+    let refused = fixture
+        .engine
+        .create_task(&TaskCreate {
+            source: name("work"),
+            project: NativeId::from("launch"),
+            title: "Forged".to_owned(),
+            body: Body::Rendered {
+                rendered: RenderedTemplate {
+                    body: "Forged.".to_owned(),
+                    digest: "not a digest".to_owned(),
+                    answers: BTreeMap::new(),
+                },
+                template: "by-hand".to_owned(),
+            },
+            status: None,
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            depends_on: Vec::new(),
+            delivers: Vec::new(),
+            metadata: BTreeMap::new(),
+        })
+        .await
+        .expect_err("a digest that is not one");
+    assert!(
+        refused
+            .to_string()
+            .contains("\"not a digest\" is not a digest"),
+        "{refused}"
+    );
+    assert_eq!(
+        fs::read_dir(fixture.root.path().join("tasks"))
+            .unwrap()
+            .count(),
+        0,
+        "nothing written"
     );
 }

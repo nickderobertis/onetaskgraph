@@ -257,10 +257,12 @@ test("every option of the create and render methods reaches the real binary as a
   ).rejects.toThrow("taskRender: options is not a plain object");
 });
 
-test("every flag the create, render, answers and template verbs take is one the client spells", () => {
-  // The other half of the test above: a flag the binary adds to one of these verbs has to reach
-  // the client too, or a caller could never pass it. Global flags are the client's own business
-  // — it always passes `--json` and `--no-interactive` — and are not options of any one call.
+test("every flag the create, render, answers and template verbs take is spelled in the client", () => {
+  // The other half of the test above, checked coarsely: a flag the binary adds to one of these
+  // verbs fails here unless `client.ts` spells it somewhere, which is where a caller's option
+  // would have to become it. Which method spells it is the test above's to prove, by driving
+  // each option to the real binary. Global flags are the client's own business — it always
+  // passes `--json` and `--no-interactive` — and are not options of any one call.
   const global = new Set([
     "set",
     "page-size",
