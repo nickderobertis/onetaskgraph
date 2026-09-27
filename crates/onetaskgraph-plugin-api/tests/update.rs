@@ -23,6 +23,8 @@ struct Rewritten {
     edges: Mutex<Vec<DependencyEdge>>,
     writes: Mutex<Vec<ItemWrite<Task>>>,
     reads: Mutex<usize>,
+    /// The id every write answers, when it is not the target the write named.
+    answers: Option<NativeId>,
 }
 
 impl Rewritten {
@@ -32,6 +34,7 @@ impl Rewritten {
             edges: Mutex::new(edges),
             writes: Mutex::new(Vec::new()),
             reads: Mutex::new(0),
+            answers: None,
         }
     }
 
@@ -128,7 +131,10 @@ impl TaskSource for Rewritten {
         held.id = write.target.clone().expect("an update names its target");
         *self.task.lock().expect("unpoisoned") = held;
         *self.edges.lock().expect("unpoisoned") = write.depends_on.clone();
-        Ok(write.target.clone().expect("an update names its target"))
+        Ok(self
+            .answers
+            .clone()
+            .unwrap_or_else(|| write.target.clone().expect("an update names its target")))
     }
 }
 
@@ -295,6 +301,31 @@ async fn an_update_both_setting_and_removing_a_key_is_refused_before_anything_is
     assert!(message.contains("team.a"), "{message}");
     assert!(source.writes().is_empty());
     assert_eq!(*source.reads.lock().expect("unpoisoned"), 0);
+}
+
+#[tokio::test]
+async fn a_write_answering_another_id_is_malformed_rather_than_an_update() {
+    let source = Rewritten {
+        answers: Some(NativeId::from("T-9")),
+        ..source()
+    };
+    let update = TaskUpdate {
+        title: Some("changed".to_owned()),
+        ..TaskUpdate::default()
+    };
+    let error = source
+        .update_task(&NativeId::from("T-1"), &update)
+        .await
+        .expect_err("a write that reached another record");
+    let SourceError::Malformed { message } = &error else {
+        panic!("answered as {error:?}");
+    };
+    assert!(
+        message.contains("T-1") && message.contains("T-9"),
+        "{message}"
+    );
+    // Nothing was read back to report as the update: the one read is the one before it.
+    assert_eq!(*source.reads.lock().expect("unpoisoned"), 1);
 }
 
 #[tokio::test]

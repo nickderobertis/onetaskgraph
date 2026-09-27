@@ -216,7 +216,8 @@ impl TaskUpdate {
     /// # Errors
     ///
     /// Returns [`SourceError::Refused`] for an update that both sets and removes a key,
-    /// [`SourceError::Malformed`] when the task could not be read back after the write, and
+    /// [`SourceError::Malformed`] when the write answers an id other than `id` or the task could
+    /// not be read back after it, and
     /// whatever the source's own read or write fails with.
     pub async fn rewrite<S: TaskSource + ?Sized>(
         &self,
@@ -243,13 +244,23 @@ impl TaskUpdate {
                 written: BTreeSet::new(),
             }));
         }
-        source
+        let wrote = source
             .write_task(&ItemWrite {
                 target: Some(id.clone()),
                 item: updated,
                 depends_on,
             })
             .await?;
+        // A write that names its target answers that target: another id means the source
+        // wrote some other record, and reading `id` back would report an update that never
+        // reached it.
+        if &wrote != id {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "task {id} was updated, and the source answered that it wrote {wrote}"
+                ),
+            });
+        }
         let task = source
             .get_task(id)
             .await?
