@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use onetaskgraph_local_md::{ANSWERS_CLOSE, ANSWERS_OPEN, STAGING_SUFFIX};
+use onetaskgraph_local_md::{ANSWERS_CLOSE, ANSWERS_OPEN};
 use onetaskgraph_plugin_api::{
     CommentBody, Document, ItemWrite, MetadataKey, NativeId, NewComment, Priority, SecretResolver,
     SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskSource,
@@ -418,7 +418,7 @@ async fn a_rendering_or_a_rendered_create_in_a_folder_it_cannot_write_writes_not
     assert!(
         !names(&root, "tasks")
             .iter()
-            .any(|name| name.ends_with(STAGING_SUFFIX))
+            .any(|name| name.ends_with(onetaskgraph_local_md::STAGING_SUFFIX))
     );
 }
 
