@@ -65,7 +65,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
-  `MetadataKey` and `MetadataRecord`; the
+  `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
+  `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody` and `NewComment`; the metering types `Metering` and
   `Metered`; and `SourceError`.
   **It depends on no other crate of this workspace.**

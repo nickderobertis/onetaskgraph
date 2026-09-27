@@ -11,8 +11,8 @@ use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
     ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
     PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, WriteSupport, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport, commentless,
+    documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -332,6 +332,43 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<Task>, SourceError> {
         let _ = (id, key, value);
         Err(unwritable_metadata(self.kind(), MetadataRecord::Task))
+    }
+
+    /// Apply a targeted update to one task this source holds — every field `update` names, and
+    /// nothing else — answering with a [`TaskUpdateOutcome`], or `None` when this source holds
+    /// no such task.
+    ///
+    /// The outcome is everything the engine reports about the call, so it reads nothing of its
+    /// own: the task as this source reads it once the update landed — from the one read it made
+    /// and what it then wrote, where its backend answers a write with what it holds — the
+    /// fields it actually wrote, and the `delivers` the task held before.
+    ///
+    /// A field already holding the requested value is sent no write, and an update in which
+    /// nothing differs sends no write at all. Every field `update` leaves unnamed — labels,
+    /// repositories, project, [`Task::delivered_by`] and comments always among them — is left
+    /// exactly as it is. An update naming one metadata key both to set and to remove is refused
+    /// before anything is written, in the words of [`TaskUpdate::consistent`].
+    ///
+    /// Defaulted to [`TaskUpdate::rewrite`]: read the task, apply the update, and — only when
+    /// anything differs — [`write_task`](Self::write_task) it with its `target` set. That keeps
+    /// this an addition rather than a break, and a source that predates it behaves correctly and
+    /// is merely not minimal; one whose backend can take a field on its own owes an override
+    /// that sends only what differs. A source declaring [`WriteSupport::Unsupported`] is never
+    /// asked.
+    ///
+    /// [`Task::delivered_by`]: crate::Task::delivered_by
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when the update contradicts itself, when a field it
+    /// names cannot be represented here — a category this source has disabled included — and
+    /// whatever else the source could not do the write for.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        update.rewrite(self, id).await
     }
 
     /// Set one key of the metadata of one project this source holds, on exactly the terms of

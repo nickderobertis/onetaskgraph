@@ -22,6 +22,7 @@ mod metadata;
 mod metering;
 mod query;
 mod source;
+mod update;
 mod work;
 mod write;
 
@@ -36,6 +37,7 @@ pub use query::{
     TextFields, TextQuery,
 };
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
+pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};
 pub use work::{
     DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, ItemKind, Label,
     Location, Priority, Project, Repository, Status, StatusCategory, Task, TaskRef,
