@@ -216,7 +216,11 @@ function searchPathFlags(options: TemplateOptions): string[] {
         "directory path strings",
     );
   }
-  return searchPath.flatMap((directory, index) => {
+  const flags: string[] = [];
+  // By index rather than by entry, so a hole in a sparse array is read as the `undefined` it
+  // is and refused, rather than skipped and the search path quietly shortened.
+  for (let index = 0; index < searchPath.length; index += 1) {
+    const directory: unknown = searchPath[index];
     // Checked rather than passed on whatever it is: a process argument has to be text, and
     // anything else would reach the binary as its string form or fail the spawn.
     if (typeof directory !== "string") {
@@ -225,8 +229,9 @@ function searchPathFlags(options: TemplateOptions): string[] {
           "each search directory as a path string",
       );
     }
-    return ["--search-path", directory];
-  });
+    flags.push("--search-path", directory);
+  }
+  return flags;
 }
 
 // The answers as the JSON document the binary reads on standard input, refused here when a

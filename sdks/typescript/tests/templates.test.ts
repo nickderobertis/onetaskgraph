@@ -171,6 +171,13 @@ test("a search path entry that is not a path string is refused before the binary
     "searchPath[1] is not a string",
   );
   await expect(client.templateRender(task, { searchPath })).rejects.toThrow(TypeError);
+
+  // A hole, assigned past the end: refused rather than skipped.
+  const sparse: string[] = [library];
+  sparse[2] = library;
+  await expect(client.templateVariables(task, { searchPath: sparse })).rejects.toThrow(
+    "searchPath[1] is not a string",
+  );
 });
 
 test("answers that are not a mapping are refused before the binary is started", async () => {
