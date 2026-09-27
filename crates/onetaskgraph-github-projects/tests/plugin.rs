@@ -12607,3 +12607,220 @@ async fn comment_calls_are_paced_waited_out_and_named_like_every_other_call() {
     assert_eq!(gaps.len(), 2, "{gaps:?}");
     assert!(gaps.iter().all(|gap| *gap >= interval), "{gaps:?}");
 }
+
+/// The three endings a content write must keep, on content with interior structure a trim
+/// would also leave alone.
+const CONTENT_ENDINGS: [&str; 3] = [
+    "# Goal\n\n- two\n  lines",
+    "# Goal\n\n- two\n  lines\n",
+    "# Goal\n\n- two\n  lines\n\n",
+];
+
+/// What the board stores for `content_id` before its metadata slot: the issue body less the
+/// slot and the one separator the source puts in front of it.
+fn stored_content(fixture: &Fixture, content_id: &str) -> String {
+    let body = fixture.item(content_id).body.unwrap_or_default();
+    body.rfind("\n\n<!-- onetaskgraph.metadata\n")
+        .map_or(body.clone(), |at| body[..at].to_owned())
+}
+
+/// A rendered item's provenance entry, as a rendering write carries it.
+fn rendered_provenance() -> Value {
+    json!({
+        "template": "/templates/task.md",
+        "digest": format!("sha256:{}", "a".repeat(64)),
+        "body_digest": format!("sha256:{}", "b".repeat(64)),
+        "answers_digest": format!("sha256:{}", "c".repeat(64)),
+    })
+}
+
+#[tokio::test]
+async fn every_task_content_write_stores_the_bytes_exactly_and_reads_them_back() {
+    let answers = BTreeMap::from([("goal".to_owned(), json!("Ship it"))]);
+    for content in CONTENT_ENDINGS {
+        let fixture = board(vec![]);
+        let source = source(&fixture);
+        let mut plain = task("T-1", "Plain", status(StatusCategory::Todo, "Todo"));
+        plain.content = Some(content.to_owned());
+        let mut rendered = plain.clone();
+        rendered.title = "Rendered".to_owned();
+        rendered.metadata =
+            BTreeMap::from([(MetadataKey::TEMPLATE_KEY.to_owned(), rendered_provenance())]);
+        let held = |id: NativeId| {
+            let source = &source;
+            async move { source.get_task(&id).await.unwrap().unwrap().content }
+        };
+
+        let created = source.write_task(&write(plain.clone())).await.unwrap();
+        assert_eq!(stored_content(&fixture, &created.0), content, "create");
+        assert_eq!(held(created.clone()).await.as_deref(), Some(content));
+        let from_template = source
+            .write_task_rendered(&write(rendered.clone()), &answers)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored_content(&fixture, &from_template.0),
+            content,
+            "rendered create"
+        );
+        assert_eq!(held(from_template.clone()).await.as_deref(), Some(content));
+
+        for again in CONTENT_ENDINGS {
+            // The write a copy makes over the item it made before.
+            plain.content = Some(again.to_owned());
+            source
+                .write_task(&ItemWrite {
+                    target: Some(created.clone()),
+                    item: plain.clone(),
+                    depends_on: vec![],
+                })
+                .await
+                .unwrap();
+            assert_eq!(stored_content(&fixture, &created.0), again, "update");
+            assert_eq!(held(created.clone()).await.as_deref(), Some(again));
+
+            rendered.content = Some(again.to_owned());
+            source
+                .write_task_rendered(
+                    &ItemWrite {
+                        target: Some(from_template.clone()),
+                        item: rendered.clone(),
+                        depends_on: vec![],
+                    },
+                    &answers,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                stored_content(&fixture, &from_template.0),
+                again,
+                "rendered update"
+            );
+            assert_eq!(held(from_template.clone()).await.as_deref(), Some(again));
+
+            source
+                .set_task_rendering(&from_template, again, &rendered_provenance(), &answers)
+                .await
+                .unwrap()
+                .expect("the task");
+            assert_eq!(
+                stored_content(&fixture, &from_template.0),
+                again,
+                "rendering"
+            );
+            let read = source.get_task(&from_template).await.unwrap().unwrap();
+            assert_eq!(read.content.as_deref(), Some(again));
+            assert_eq!(
+                read.metadata[MetadataKey::TEMPLATE_KEY],
+                rendered_provenance()
+            );
+
+            source
+                .set_task_content(&created, again)
+                .await
+                .unwrap()
+                .expect("the task");
+            assert_eq!(stored_content(&fixture, &created.0), again, "content set");
+            assert_eq!(held(created.clone()).await.as_deref(), Some(again));
+        }
+    }
+}
+
+#[tokio::test]
+async fn every_document_and_project_content_write_stores_the_bytes_exactly() {
+    let answers = BTreeMap::from([("goal".to_owned(), json!("Ship it"))]);
+    for content in CONTENT_ENDINGS {
+        let fixture = board(vec![]);
+        let source = source(&fixture);
+        let mut plain = document("D-1", "Design");
+        plain.content = Some(content.to_owned());
+        let mut rendered = plain.clone();
+        rendered.metadata =
+            BTreeMap::from([(MetadataKey::TEMPLATE_KEY.to_owned(), rendered_provenance())]);
+        let mut launch = project("P-1", "Launch", status(StatusCategory::Todo, "Todo"));
+        launch.content = Some(content.to_owned());
+        let document_content = |id: NativeId| {
+            let source = &source;
+            async move { source.get_document(&id).await.unwrap().unwrap().content }
+        };
+
+        let created = source.write_document(&write(plain.clone())).await.unwrap();
+        assert_eq!(stored_content(&fixture, &created.0), content, "create");
+        assert_eq!(
+            document_content(created.clone()).await.as_deref(),
+            Some(content)
+        );
+        let from_template = source
+            .write_document_rendered(&write(rendered.clone()), &answers)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored_content(&fixture, &from_template.0),
+            content,
+            "rendered create"
+        );
+        assert_eq!(
+            document_content(from_template.clone()).await.as_deref(),
+            Some(content)
+        );
+        let project_id = source.write_project(&write(launch.clone())).await.unwrap();
+        assert_eq!(stored_content(&fixture, &project_id.0), content, "project");
+
+        for again in CONTENT_ENDINGS {
+            plain.content = Some(again.to_owned());
+            source
+                .write_document(&ItemWrite {
+                    target: Some(created.clone()),
+                    item: plain.clone(),
+                    depends_on: vec![],
+                })
+                .await
+                .unwrap();
+            assert_eq!(stored_content(&fixture, &created.0), again, "update");
+            assert_eq!(
+                document_content(created.clone()).await.as_deref(),
+                Some(again)
+            );
+
+            source
+                .set_document_rendering(&from_template, again, &rendered_provenance(), &answers)
+                .await
+                .unwrap()
+                .expect("the document");
+            assert_eq!(
+                stored_content(&fixture, &from_template.0),
+                again,
+                "rendering"
+            );
+            assert_eq!(
+                document_content(from_template.clone()).await.as_deref(),
+                Some(again)
+            );
+
+            launch.content = Some(again.to_owned());
+            source
+                .write_project(&ItemWrite {
+                    target: Some(project_id.clone()),
+                    item: launch.clone(),
+                    depends_on: vec![],
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                stored_content(&fixture, &project_id.0),
+                again,
+                "project update"
+            );
+            assert_eq!(
+                source
+                    .get_project(&project_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .as_deref(),
+                Some(again)
+            );
+        }
+    }
+}
