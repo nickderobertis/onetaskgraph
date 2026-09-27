@@ -40,6 +40,8 @@ mod resolve;
 mod schema;
 mod secrets;
 pub mod subprocess;
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
+pub mod template;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
@@ -63,4 +65,8 @@ pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, 
 pub use subprocess::{
     MAX_LINE, Program, RequestDeadline, SubprocessConfig, SubprocessPlugin, SubprocessSource,
     serve, serve_plugin,
+};
+pub use template::{
+    Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, RenderedTemplate, Template,
+    TemplateError, TemplateLoader, TemplateVariable, TemplateVariables, VariableType,
 };

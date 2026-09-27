@@ -32,11 +32,22 @@ onetaskgraph-live = { path = "crates/onetaskgraph-live" }
 async-trait = "0.1.92"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
 clap = { version = "4.6.6", features = ["derive"] }
+# The binary's per-variable template prompts. Only the binary crate may name it: nothing below
+# the command line prompts. Default features off — the editor and password prompts are not
+# used, and they would add a temporary-file and a zeroising dependency for nothing.
+dialoguer = { version = "0.12.0", default-features = false }
 # Default features off: the resolvers fetch `$ref`s over HTTP and off the filesystem, and
 # every schema validated here is one a plugin handed over in memory. A validator that
 # could reach the network would be a way for work data to leave the process.
 jsonschema = { version = "0.50.1", default-features = false }
 graphql-parser = "0.4.1"
+# The task-template renderer. A caret on 2.24 rather than an exact pin: the host that renders
+# these templates beside this engine already builds minijinja 2.24, and one compatible 2.x
+# requirement keeps a build holding both to one copy. The features beyond the defaults are
+# what "full minijinja" means for a template author: a loader so `extends`, `include` and
+# `import` resolve over a search path, `break`/`continue`, and the `tojson` and `urlencode`
+# filters.
+minijinja = { version = "2.24.0", features = ["loader", "loop_controls", "json", "urlencode"] }
 # GitHub's published node-count rules, as a pure offline calculation over a GraphQL
 # document's own text. It is depended on rather than reimplemented: the number that
 # decides whether GitHub will execute a query at all is one arithmetic, and a second
@@ -44,6 +55,8 @@ graphql-parser = "0.4.1"
 github-graphql-node-count = "0.0.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
+# A template's digest: `sha256:` over every file of its chain.
+sha2 = "0.10.9"
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -72,6 +85,9 @@ windows-sys = { version = "0.61.2", features = [
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 assert_cmd = "2.2.2"
+# The prompting journeys' pseudo-terminal: already in this lockfile through tempfile, so
+# naming it adds no crate, only the `pty` module of one that is here.
+rustix = "1.1.4"
 predicates = "3.1.4"
 tempfile = "3.24.0"
 

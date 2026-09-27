@@ -26,6 +26,10 @@ path = "src/bin/onetaskgraph-source.rs"
 [dependencies]
 schemars.workspace = true
 clap.workspace = true
+# The per-variable prompts of `template render`. This crate alone: nothing below the command
+# line prompts, so no other crate may depend on it.
+# llmlint: ignore[new_command_or_client_gets_its_own_project] `template` is a verb of this same `onetaskgraph` command, not a second entry point or an external-system client: it reaches no network and no source, and its journeys run in about a second without a credential. The task that added it names it as `onetaskgraph template …`, which only this crate can answer.
+dialoguer.workspace = true
 # Both network destinations: the binary this repository ships registers every plugin kind,
 # and so does `onetaskgraph-source`, the reference host the journeys drive them through.
 onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
@@ -50,3 +54,7 @@ onetaskgraph-linear.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+
+# A pseudo-terminal for the template prompting journeys, which only a Unix host can open.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["pty", "fs", "termios"] }

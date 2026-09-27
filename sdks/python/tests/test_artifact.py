@@ -269,7 +269,18 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 20
+    assert emitted_bundle["version"] == 21
+    # Version 21 published what `template variables` and `template render` answer with, and
+    # the declaration and two vocabularies inside the first.
+    for verb, root in (
+        ("template_variables", "TemplateVariables"),
+        ("template_render", "RenderedTemplate"),
+    ):
+        assert generate.RESPONSE_ROOTS[verb] == root, verb
+        assert root in bundle["roots"], root
+    for root in ("TemplateVariable", "VariableType", "ItemType"):
+        assert root in bundle["roots"], root
+        assert root in generate.CONTRACT_ROOTS, root
     # Version 20 published a task's `priority` and what `task priority set`, `task content
     # set` and `sources fields` answer with.
     for root in ("QueryResponseOfQualifiedTask", "TaskDetail"):

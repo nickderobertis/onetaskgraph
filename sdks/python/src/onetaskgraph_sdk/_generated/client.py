@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Literal
+
+from pydantic import JsonValue, TypeAdapter
 
 from .models import (
     Comment,
@@ -20,6 +24,7 @@ from .models import (
     QueryResponseOfQualifiedProject,
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
+    RenderedTemplate,
     SourceListing,
     SourceName,
     StatusCategory,
@@ -28,6 +33,7 @@ from .models import (
     TaskDetail,
     TaskPrioritySet,
     TaskStatusSet,
+    TemplateVariables,
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -52,6 +58,8 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "priority", "set"): ("id", "priority"),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
+    ("template", "render"): ("file",),
+    ("template", "variables"): ("file",),
 }
 """The operands each command takes ahead of its options, in order, by command.
 
@@ -60,6 +68,68 @@ table of its own: a verb whose operand was named in one place and forgotten in t
 other generates a method that cannot do what it is named for, and nothing would say
 so until the binary refused the invocation.
 """
+
+_ANSWERS = TypeAdapter(dict[str, JsonValue])
+
+
+def _answers_document(answers: Mapping[str, JsonValue]) -> str:
+    """The answers as the JSON document the binary reads on standard input.
+
+    Validated strictly first, so a key that is not a string or a value JSON cannot carry
+    is refused here rather than coerced into something the caller did not pass; and
+    serialised with `allow_nan=False`, because `json.dumps` would otherwise write a
+    non-finite float as a bare `NaN` that the binary reads as text.
+    """
+    if not isinstance(answers, Mapping):
+        kind = type(answers).__name__
+        message = f"template_render: answers are a {kind}, not a mapping"
+        raise TypeError(message)
+    try:
+        checked = _ANSWERS.validate_python(dict(answers), strict=True)
+        return json.dumps(checked, allow_nan=False)
+    except ValueError as error:
+        message = f"template_render: answers are not a JSON mapping: {error}"
+        raise TypeError(message) from error
+
+
+def _template_file(method: str, file: object) -> str:
+    """The template path, refused unless it is one.
+
+    Anything but a string would reach the binary as its string form, an empty one names
+    no file, and one opening with `-` would be read as an option rather than as the file
+    the caller named.
+    """
+    if not isinstance(file, str) or not file or file.startswith("-"):
+        message = (
+            f"{method}: file is not a template path; next: pass the template's "
+            "path as a non-empty string, spelling one that starts with `-` as `./-…`"
+        )
+        raise TypeError(message)
+    return file
+
+
+def _strings(method: str, option: str, values: object) -> list[str] | tuple[str, ...] | None:
+    """The values of a repeated option, refused unless a list or tuple of strings.
+
+    Checked rather than passed on whatever they are: each becomes one process argument,
+    and anything but a string would reach the binary as its string form — a bare string
+    as one argument per character.
+    """
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        kind = type(values).__name__
+        message = f"{method}: {option} is a {kind}, not a list; next: pass a list of strings"
+        raise TypeError(message)
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            kind = type(value).__name__
+            message = (
+                f"{method}: {option}[{index}] is a {kind}, not a string; next: pass "
+                "each entry as a string"
+            )
+            raise TypeError(message)
+    return values
 
 
 class GeneratedClient:
@@ -758,5 +828,50 @@ class GeneratedClient:
             category=category,
             default_sources=default_sources,
             page_size=page_size,
+            set=set,
+        )
+
+    async def template_render(
+        self,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> RenderedTemplate:
+        """Run ``onetaskgraph template render``."""
+        return await self._invoke(
+            ["template", "render"],
+            RenderedTemplate,
+            file=_template_file("template_render", file),
+            default_sources=default_sources,
+            page_size=page_size,
+            search_path=_strings("template_render", "search_path", search_path),
+            set=set,
+            var=_strings("template_render", "var", var),
+            answers=None if answers is None else "-",
+            stdin=None if answers is None else _answers_document(answers),
+        )
+
+    async def template_variables(
+        self,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateVariables:
+        """Run ``onetaskgraph template variables``."""
+        return await self._invoke(
+            ["template", "variables"],
+            TemplateVariables,
+            file=_template_file("template_variables", file),
+            default_sources=default_sources,
+            page_size=page_size,
+            search_path=_strings("template_variables", "search_path", search_path),
             set=set,
         )

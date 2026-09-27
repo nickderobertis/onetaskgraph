@@ -205,8 +205,27 @@ fn every_verb() -> Vec<Vec<String>> {
         owned(&["search", SENTINELS[1]]),
         owned(&["config", "show"]),
         owned(&["schema"]),
+        // A template rendered from a user's words writes them nowhere but standard output.
+        // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two sub-second
+        // subprocesses that read one file in the sandbox and reach no source: this journey's
+        // claim is about every verb, so a verb it does not drive is a verb it proves nothing
+        // about, and it can only drive one from the binary crate that answers it.
+        owned(&["template", "variables", TEMPLATE]),
+        owned(&[
+            "template",
+            "render",
+            TEMPLATE,
+            "--var",
+            &format!("title={}", SENTINELS[0]),
+            "--no-interactive",
+        ]),
+        // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     ]
 }
+
+/// The template the `template` verbs above read, written into the project tree before the
+/// tree is first looked at, so the file itself is part of what the run may not change.
+const TEMPLATE: &str = "task-template.md";
 
 #[test]
 fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
@@ -232,6 +251,11 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
             homes.push(path);
         }
 
+        std::fs::write(
+            sandbox.project().join(TEMPLATE),
+            "---\nonetaskgraph_template: 1\nvariables:\n  title: {description: The title}\n---\n# {{ title }}\n",
+        )
+        .expect("the template is written");
         let before = snapshot(&root);
         assert!(
             before

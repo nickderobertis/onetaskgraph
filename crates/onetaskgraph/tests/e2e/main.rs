@@ -75,3 +75,9 @@ mod source_host;
 // subprocess journey; the plugin-isolation contract forbids moving it into a plugin crate.
 mod status_options;
 mod surface;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: the template journeys configure no source, reach no network and finish
+// in under a second, and `template` is a verb of this binary, so the binary crate is the
+// narrowest project that can own a journey driving it as a subprocess — the library half is
+// proven in `onetaskgraph-core`'s own `tests/templates.rs`, behind that crate's edge.
+mod templates;

@@ -2374,6 +2374,23 @@ export const runtimeSchemas = {
     ],
     "title": "ItemKind"
   },
+  "ItemType": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What each entry of a `list` variable holds.",
+    "oneOf": [
+      {
+        "const": "string",
+        "description": "Strings.",
+        "type": "string"
+      },
+      {
+        "const": "object",
+        "description": "Mappings from string keys to values.",
+        "type": "string"
+      }
+    ],
+    "title": "ItemType"
+  },
   "Label": {
     "$defs": {
       "NativeId": {
@@ -8478,6 +8495,32 @@ export const runtimeSchemas = {
     "title": "QueryResponse",
     "type": "object"
   },
+  "RenderedTemplate": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A rendered template: what `onetaskgraph template render` answers with.",
+    "properties": {
+      "answers": {
+        "additionalProperties": true,
+        "description": "Every declared variable and the value it rendered with — an answer, a default, or\n`null` for an optional variable given neither.",
+        "type": "object"
+      },
+      "body": {
+        "description": "The rendered text.",
+        "type": "string"
+      },
+      "digest": {
+        "description": "The digest of every file of the chain these answers render, in first-load order:\n`sha256:` and 64 lowercase hex digits. That is the order the render first read each\nfile, a template an expression named included, then any file of the chain it did not\nread.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "body",
+      "digest",
+      "answers"
+    ],
+    "title": "RenderedTemplate",
+    "type": "object"
+  },
   "Repository": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
@@ -12014,6 +12057,234 @@ export const runtimeSchemas = {
     "title": "TaskStatusSet",
     "type": "object"
   },
+  "TemplateVariable": {
+    "$defs": {
+      "ItemType": {
+        "description": "What each entry of a `list` variable holds.",
+        "oneOf": [
+          {
+            "const": "string",
+            "description": "Strings.",
+            "type": "string"
+          },
+          {
+            "const": "object",
+            "description": "Mappings from string keys to values.",
+            "type": "string"
+          }
+        ]
+      },
+      "VariableType": {
+        "description": "What one variable holds.",
+        "oneOf": [
+          {
+            "const": "string",
+            "description": "One line of text.",
+            "type": "string"
+          },
+          {
+            "const": "text",
+            "description": "Text of any number of lines.",
+            "type": "string"
+          },
+          {
+            "const": "integer",
+            "description": "A whole number.",
+            "type": "string"
+          },
+          {
+            "const": "boolean",
+            "description": "`true` or `false`.",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "description": "A list, of the variable's `items`.",
+            "type": "string"
+          },
+          {
+            "const": "object",
+            "description": "A mapping from string keys to values.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\na `default` is a value of the variable's type, and `required` is never `true` beside one.",
+    "properties": {
+      "declared_in": {
+        "description": "The chain file whose declaration this is: the one nearest the rendered template.",
+        "type": "string"
+      },
+      "default": {
+        "description": "The value used when no answer is given."
+      },
+      "description": {
+        "description": "What the variable is for; what a prompt shows.",
+        "type": "string"
+      },
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ItemType"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each entry holds, for a `list` variable and no other."
+      },
+      "name": {
+        "description": "The variable's name, as the template body uses it.",
+        "type": "string"
+      },
+      "required": {
+        "description": "Whether rendering without an answer is refused. An optional variable with no answer\nand no default renders as `none`.",
+        "type": "boolean"
+      },
+      "type": {
+        "$ref": "#/$defs/VariableType",
+        "description": "What the variable holds."
+      }
+    },
+    "required": [
+      "name",
+      "description",
+      "type",
+      "required",
+      "declared_in"
+    ],
+    "title": "TemplateVariable",
+    "type": "object"
+  },
+  "TemplateVariables": {
+    "$defs": {
+      "ItemType": {
+        "description": "What each entry of a `list` variable holds.",
+        "oneOf": [
+          {
+            "const": "string",
+            "description": "Strings.",
+            "type": "string"
+          },
+          {
+            "const": "object",
+            "description": "Mappings from string keys to values.",
+            "type": "string"
+          }
+        ]
+      },
+      "TemplateVariable": {
+        "description": "One variable of a template's declared set, merged down its chain.\n\nBuilt only by loading a template, so `items` is present exactly when `type` is `list`,\na `default` is a value of the variable's type, and `required` is never `true` beside one.",
+        "properties": {
+          "declared_in": {
+            "description": "The chain file whose declaration this is: the one nearest the rendered template.",
+            "type": "string"
+          },
+          "default": {
+            "description": "The value used when no answer is given."
+          },
+          "description": {
+            "description": "What the variable is for; what a prompt shows.",
+            "type": "string"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ItemType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What each entry holds, for a `list` variable and no other."
+          },
+          "name": {
+            "description": "The variable's name, as the template body uses it.",
+            "type": "string"
+          },
+          "required": {
+            "description": "Whether rendering without an answer is refused. An optional variable with no answer\nand no default renders as `none`.",
+            "type": "boolean"
+          },
+          "type": {
+            "$ref": "#/$defs/VariableType",
+            "description": "What the variable holds."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "type",
+          "required",
+          "declared_in"
+        ],
+        "type": "object"
+      },
+      "VariableType": {
+        "description": "What one variable holds.",
+        "oneOf": [
+          {
+            "const": "string",
+            "description": "One line of text.",
+            "type": "string"
+          },
+          {
+            "const": "text",
+            "description": "Text of any number of lines.",
+            "type": "string"
+          },
+          {
+            "const": "integer",
+            "description": "A whole number.",
+            "type": "string"
+          },
+          {
+            "const": "boolean",
+            "description": "`true` or `false`.",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "description": "A list, of the variable's `items`.",
+            "type": "string"
+          },
+          {
+            "const": "object",
+            "description": "A mapping from string keys to values.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `onetaskgraph template variables` answers with: a template's declared set.",
+    "properties": {
+      "digest": {
+        "description": "The chain's digest: `sha256:` and 64 lowercase hex digits, over every file it reads\nin first-load order — each template an expression names counted as it names one when\nevery variable takes its default.",
+        "type": "string"
+      },
+      "template": {
+        "description": "The rendered template's resolved name.",
+        "type": "string"
+      },
+      "variables": {
+        "description": "Every declared variable, in declaration order along the chain.",
+        "items": {
+          "$ref": "#/$defs/TemplateVariable"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "template",
+      "digest",
+      "variables"
+    ],
+    "title": "TemplateVariables",
+    "type": "object"
+  },
   "TextFields": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Which fields a [`TextQuery`] searches.",
@@ -12035,5 +12306,42 @@ export const runtimeSchemas = {
       }
     ],
     "title": "TextFields"
+  },
+  "VariableType": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What one variable holds.",
+    "oneOf": [
+      {
+        "const": "string",
+        "description": "One line of text.",
+        "type": "string"
+      },
+      {
+        "const": "text",
+        "description": "Text of any number of lines.",
+        "type": "string"
+      },
+      {
+        "const": "integer",
+        "description": "A whole number.",
+        "type": "string"
+      },
+      {
+        "const": "boolean",
+        "description": "`true` or `false`.",
+        "type": "string"
+      },
+      {
+        "const": "list",
+        "description": "A list, of the variable's `items`.",
+        "type": "string"
+      },
+      {
+        "const": "object",
+        "description": "A mapping from string keys to values.",
+        "type": "string"
+      }
+    ],
+    "title": "VariableType"
   }
 } as const;

@@ -90,6 +90,9 @@ onetaskgraph document metadata set <ID> <KEY> <VALUE>
 onetaskgraph label list [--source S]...
 onetaskgraph search <TEXT> [--in ...] [--kind task|project|both]
 
+onetaskgraph template variables <FILE> [--search-path DIR]...
+onetaskgraph template render <FILE> [--search-path DIR]... [--answers FILE] [--var NAME=VALUE]...
+
 onetaskgraph config show                         # every setting and the layer it came from
 onetaskgraph schema                              # the JSON Schema bundle both SDKs use
 ```
@@ -334,13 +337,70 @@ rather than a figure the backend reported. It is the source's own account, summe
 command, and a copy whose sources count nothing carries no `spent` at all rather than a
 zero. Its shape is the `spent` property of the `CopyReport` root of `onetaskgraph schema`.
 
+### Task templates
+
+A **task template** is a [minijinja](https://docs.rs/minijinja) document whose variables
+are declared in YAML front matter, so the shape of a task is a file you own rather than
+prose several tools restate:
+
+```jinja
+---
+onetaskgraph_template: 1          # required when front matter is present
+description: <string>             # optional
+variables:                        # optional; name -> declaration
+  <name>:                         # ^[a-z][a-z0-9_]*$
+    description: <string>         # required, non-empty: what a prompt shows
+    type: string                  # string | text | integer | boolean | list | object; default string
+    items: string                 # list only: string | object; default string
+    required: true                # default: true without `default`, false with one
+    default: <value of `type`>    # optional; `required: true` beside a default is refused
+---
+# {{ title }}
+{% for criterion in criteria %}
+- {{ criterion }}
+{% endfor %}
+```
+
+A file without front matter declares nothing; front matter with an unknown key is refused
+by that key. `string` is one line and `text` any number. The body is minijinja, whole —
+filters, loops, conditionals, macros, a variable used many times or not at all.
+`{% extends %}`, `{% include %}` and `{% import %}` find the files they name in the
+`--search-path` directories, in order, and never in the working directory unless you name
+it. The declared set is every chain file's front matter together: a redeclaration may change
+`description`, `default` and `required` — the file nearer the rendered one wins — but never
+`type` or `items`, which is refused naming both files. A template named by an expression —
+`{% include kind ~ ".md" %}` — is part of the chain too, for the answers that name it, and
+joins it at the tag that names it, exactly as a file a literal names would: its front matter
+joins the declared set at its own distance from the rendered file, and its bytes join the
+digest where rendering first reads it. Rendering is strict — a name that is
+neither declared nor set fails, naming it and its file — with no auto-escaping, trailing
+newlines kept, and `trim_blocks` and `lstrip_blocks` on. An optional variable with no
+answer and no default is `none`.
+
+`template variables` lists the declared set and the template's **digest**: `sha256:` over
+every chain file's name and bytes, which moves whenever any file of the chain does. Each
+variable `template render` needs takes the first of:
+
+1. `--var NAME=VALUE` — literal text for a `string` or `text` variable, YAML for any other;
+2. the answers file, `--answers FILE` (`-` for standard input): a YAML mapping of name to
+   value;
+3. a prompt, when the `interactive` setting is on — one variable at a time, showing its
+   description, type and default, asking again when a value is not of its type;
+4. its declared `default`.
+
+An answer to no declared variable, an answer of the wrong type, and — when not interactive
+— every required variable left unanswered, listed in one refusal, each exit `2`. So does an
+interactive run with something left to ask whose standard input is not a terminal: it never
+waits for an answer nobody can type. Automation passes `--no-interactive`, which both SDKs
+always do.
+
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success — every source asked, every source answered. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
-| `2` | The invocation itself was wrong — an unknown flag, a value out of range. |
+| `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
 | `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, or `task status set` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
@@ -489,6 +549,7 @@ layered over a user-level file at `$XDG_CONFIG_HOME/onetaskgraph/config.yaml`:
 default_sources: [work, notes]   # omitted means every configured source
 page_size: 50
 output: text                     # text | json
+interactive: true                # prompt for what a command was not given
 sources:
   work:
     plugin: linear
@@ -509,6 +570,7 @@ comma-separated:
 | --- | --- |
 | `ONETASKGRAPH_PAGE_SIZE=100` | top-level `page_size` |
 | `ONETASKGRAPH_DEFAULT_SOURCES=work,notes` | top-level `default_sources` |
+| `ONETASKGRAPH_INTERACTIVE=false` | top-level `interactive` |
 | `ONETASKGRAPH_SOURCES__WORK__CONFIG__ROOT=/tmp/tasks` | the `root` of the source named `work` |
 | `ONETASKGRAPH_SOURCES__GH_MAIN__PLUGIN=github-projects` | the plugin of the source named `gh-main` |
 
@@ -520,6 +582,7 @@ flags of their own:
 ```bash
 onetaskgraph config show --set sources.work.config.root=/tmp/tasks
 onetaskgraph config show --page-size 100 --default-sources work,notes --json
+onetaskgraph config show --no-interactive       # or --interactive; they conflict
 ```
 
 `onetaskgraph config show` is what makes precedence something you can see rather than

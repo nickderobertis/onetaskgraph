@@ -18,6 +18,7 @@ import type {
   QueryResponseOfQualifiedProject,
   QueryResponseOfQualifiedTask,
   QueryResponseOfSearchHit,
+  RenderedTemplate,
   SourceListings,
   StatusCategory,
   StatusOptionsReport,
@@ -25,6 +26,7 @@ import type {
   TaskDetail,
   TaskPrioritySet,
   TaskStatusSet,
+  TemplateVariables,
 } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
@@ -57,6 +59,24 @@ export type CopyOptions = {
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = { body: string } | { bodyFile: string };
 export type CommentAddOptions = CommentBodyOptions & { author?: string };
+// Where `extends`, `include` and `import` names resolve: these directories, in order, and never
+// the working directory unless it is one of them.
+export type TemplateOptions = { searchPath?: string[] };
+// A template's answers: a mapping the client writes to the binary's standard input, and
+// `vars` as `--var NAME=VALUE`, which outrank it — literal text for a `string` or `text`
+// variable, YAML for any other.
+export type TemplateRenderOptions = TemplateOptions & {
+  answers?: Record<string, JsonValue>;
+  vars?: Record<string, string>;
+};
+// A value JSON can carry, and so a value an answers document can hold.
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type ClientOptions = {
   binaryPath?: string;
   cwd?: string;
@@ -115,6 +135,8 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
   "document metadata set": "MetadataSet",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
+  "template variables": "TemplateVariables",
+  "template render": "RenderedTemplate",
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
@@ -124,7 +146,7 @@ const responseRoots: Record<string, keyof typeof runtimeSchemas> = {
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails.
+// fails. A template verb reads no source at all.
 const partialResponseCommands = new Set(
   Object.keys(responseRoots).filter(
     (command) =>
@@ -134,7 +156,8 @@ const partialResponseCommands = new Set(
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
-      !command.endsWith(" content set"),
+      !command.endsWith(" content set") &&
+      !command.startsWith("template "),
   ),
 );
 
@@ -182,6 +205,130 @@ function addFilters(args: string[], options: FilterOptions): void {
   for (const status of options.statuses ?? []) args.push("--status", status);
   if (options.search !== undefined) args.push("--search", options.search);
   if (options.fields !== undefined) args.push("--in", options.fields);
+}
+
+function searchPathFlags(options: TemplateOptions): string[] {
+  // Absent options are the default `{}`. Anything but a plain object is refused: a primitive
+  // or `null` would fail on the property read below naming neither the argument nor what to
+  // pass, and an array or a class instance would be read as no options at all.
+  const prototype =
+    options !== null && typeof options === "object" ? Object.getPrototypeOf(options) : 0;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      "templateVariables/templateRender: options is not a plain object; next: pass an " +
+        "options object, or omit it",
+    );
+  }
+  // Absent means none; an explicit `null` is not a list and is refused below with the rest.
+  const searchPath = options.searchPath === undefined ? [] : options.searchPath;
+  if (!Array.isArray(searchPath)) {
+    throw new TypeError(
+      "templateVariables/templateRender: searchPath is not an array; next: pass a list of " +
+        "directory path strings",
+    );
+  }
+  const flags: string[] = [];
+  // By index rather than by entry, so a hole in a sparse array is read as the `undefined` it
+  // is and refused, rather than skipped and the search path quietly shortened.
+  for (let index = 0; index < searchPath.length; index += 1) {
+    const directory: unknown = searchPath[index];
+    // Checked rather than passed on whatever it is: a process argument has to be text, and
+    // anything else would reach the binary as its string form or fail the spawn.
+    if (typeof directory !== "string") {
+      throw new TypeError(
+        `templateVariables/templateRender: searchPath[${index}] is not a string; next: pass ` +
+          "each search directory as a path string",
+      );
+    }
+    flags.push("--search-path", directory);
+  }
+  return flags;
+}
+
+// The template path, refused unless it is one: anything but a string would reach the binary as
+// its string form, an empty one names no file, and one opening with `-` would be read as an
+// option rather than as the file the caller named.
+function templateFile(method: string, file: unknown): string {
+  if (typeof file !== "string" || file.length === 0 || file.startsWith("-")) {
+    throw new TypeError(
+      `${method}: file is not a template path; next: pass the template's path as a non-empty ` +
+        "string, spelling one that starts with `-` as `./-…`",
+    );
+  }
+  return file;
+}
+
+// Refuse a key of `value` that what is sent would not carry: for an array anything but its
+// indices below `length` and `length` itself, such as its own `toJSON` or a key spelled like
+// an index past the largest an array has; for a mapping a symbol or a non-enumerable key,
+// which `Object.entries` skips. Either would otherwise be dropped in silence, and the binary
+// sent less than was handed over.
+function refuseUncarriedKey(value: object, path: string, entry: string): void {
+  const array = Array.isArray(value) ? value : undefined;
+  const uncarried = Reflect.ownKeys(value).find((key) => {
+    if (typeof key === "symbol") return true;
+    if (array !== undefined) {
+      return key !== "length" && !(/^(0|[1-9][0-9]*)$/.test(key) && Number(key) < array.length);
+    }
+    return !Object.prototype.propertyIsEnumerable.call(value, key);
+  });
+  if (uncarried !== undefined) {
+    throw new TypeError(
+      `templateRender: ${path} has the key ${String(uncarried)}, which is not sent; next: ` +
+        `give every ${entry} an enumerable string key, and an array nothing but its entries`,
+    );
+  }
+}
+
+// The answers as the JSON document the binary reads on standard input, refused here when a
+// value is not one JSON can carry: `JSON.stringify` would otherwise drop an `undefined` or a
+// function without a word, write a non-finite number or an array's hole as `null`, and throw
+// on a cycle or a bigint, so the binary would validate answers other than the ones the caller
+// passed. What is serialised is a copy built from the values just checked, never the caller's
+// own objects, so nothing the check did not read — a `toJSON` of an array's own, say — can
+// change what is sent.
+function answersDocument(answers: Record<string, JsonValue>): string {
+  const within = new Set<object>();
+  const copy = (value: unknown, path: string): JsonValue => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "object") {
+      const prototype = Object.getPrototypeOf(value);
+      const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
+      if (plain && !within.has(value)) {
+        within.add(value);
+        refuseUncarriedKey(value, `answers${path}`, "answer");
+        let copied: JsonValue;
+        if (Array.isArray(value)) {
+          // By index rather than by entry, so a hole in a sparse array is read as the
+          // `undefined` it is and refused, rather than skipped and later written as `null`.
+          copied = Array.from({ length: value.length }, (_, index) =>
+            copy(value[index], `${path}[${index}]`),
+          );
+        } else {
+          copied = Object.fromEntries(
+            Object.entries(value).map(([key, item]) => [key, copy(item, `${path}.${key}`)]),
+          );
+        }
+        within.delete(value);
+        return copied;
+      }
+    }
+    throw new TypeError(
+      `templateRender: answers${path} is not a JSON value; next: pass strings, finite ` +
+        "numbers, booleans, null, arrays and plain objects, with no cycle",
+    );
+  };
+  // An answers document is a mapping: an array would pass the element checks below and reach
+  // the binary as a document it refuses for its shape rather than for what is in it.
+  const prototype =
+    answers !== null && typeof answers === "object" ? Object.getPrototypeOf(answers) : undefined;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      "templateRender: answers is not a plain object; next: pass a mapping of variable name to value",
+    );
+  }
+  return JSON.stringify(copy(answers, ""));
 }
 
 function copyFlags(options: CopyOptions): string[] {
@@ -352,8 +499,48 @@ export class OnetaskgraphClient {
     return this.run("search", args);
   }
 
+  async templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
+    return this.run("template variables", [
+      templateFile("templateVariables", file),
+      ...searchPathFlags(options),
+    ]);
+  }
+  // The answers go over standard input as JSON, which is YAML, so no file is written for them.
+  async templateRender(
+    file: string,
+    options: TemplateRenderOptions = {},
+  ): Promise<RenderedTemplate> {
+    const args = [templateFile("templateRender", file), ...searchPathFlags(options)];
+    // Absent means none; an explicit `null` is not a mapping and is refused below.
+    const vars = options.vars === undefined ? {} : options.vars;
+    const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(
+        "templateRender: vars is not a plain object; next: pass a mapping of variable name to text",
+      );
+    }
+    refuseUncarriedKey(vars, "vars", "var");
+    for (const [name, value] of Object.entries(vars)) {
+      // Checked rather than interpolated whatever it is: a number or an object would reach the
+      // binary as its string form, which is not the value the caller passed.
+      if (typeof value !== "string") {
+        throw new TypeError(
+          `templateRender: vars.${name} is not a string; next: pass the text the command line ` +
+            "would take, or give a typed value in answers",
+        );
+      }
+      args.push("--var", `${name}=${value}`);
+    }
+    if (options.answers === undefined) return this.run("template render", args);
+    const document = answersDocument(options.answers);
+    args.push("--answers", "-");
+    return this.run("template render", args, document);
+  }
+
   private run<T>(command: string, args: string[], input?: string): Promise<T> {
-    const commandArgs = [...command.split(" "), ...args, "--json"];
+    // Every call is non-interactive: a library caller has no terminal to be asked on, and a
+    // command that would prompt refuses what it was not given instead of waiting.
+    const commandArgs = [...command.split(" "), ...args, "--json", "--no-interactive"];
     return new Promise((resolvePromise, reject) => {
       // Standard input is always a pipe, written with the body when there is one and closed
       // at once either way: a command that reads a body there must never wait on this

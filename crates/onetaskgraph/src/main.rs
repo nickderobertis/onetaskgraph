@@ -7,6 +7,7 @@
 
 mod cli;
 mod render;
+mod template;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -102,8 +103,11 @@ async fn main() -> ExitCode {
 }
 
 /// Report `message` on stderr and exit with `code`.
+///
+/// Best effort, never a panic: a standard error that has gone away — the terminal a prompt was
+/// on hung up — cannot be told why, and the exit code still says the run failed.
 fn fail(message: &str, code: u8) -> ExitCode {
-    eprintln!("onetaskgraph: {message}");
+    let _ = writeln!(io::stderr(), "onetaskgraph: {message}");
     ExitCode::from(code)
 }
 
@@ -507,6 +511,8 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 "labels",
             )
         }
+
+        Command::Template { command } => template::run(out, loaded, command),
 
         Command::Search(args) => {
             let request = SearchRequest {
@@ -1307,7 +1313,9 @@ mod tests {
                 "document copy",
                 "document metadata set",
                 "label list",
-                "search"
+                "search",
+                "template variables",
+                "template render"
             ])
         );
     }

@@ -79,7 +79,9 @@ class Client(GeneratedClient):
                         arguments.extend((flag, str(text)))
                 case _:
                     arguments.extend((flag, str(value)))
-        arguments.append("--json")
+        # Every call is non-interactive: a library caller has no terminal to be asked on, and a
+        # command that would prompt refuses what it was not given instead of waiting.
+        arguments.extend(("--json", "--no-interactive"))
         completed = await self._invoke_process(arguments, stdin)
         if completed.returncode not in {0, 4}:
             raise OnetaskgraphError(completed.stderr.strip(), exit_code=completed.returncode)

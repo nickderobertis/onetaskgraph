@@ -14,7 +14,7 @@
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
     Qualified, QualifiedEdge, QueryPlan, SearchHit, SourceListing, SourceState, TaskContentSet,
-    TaskPrioritySet, TaskStatusSet,
+    TaskPrioritySet, TaskStatusSet, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
@@ -207,6 +207,43 @@ pub fn metadata_set(set: &MetadataSet) -> String {
         rows.push(vec!["location:".to_owned(), located(location)]);
     }
     columns(&rows)
+}
+
+/// A template's declared set: its name and digest, then one row per variable — its name, its
+/// type, whether it is required or what it defaults to, the file declaring it, and what it
+/// is for.
+pub fn template_variables(described: &TemplateVariables) -> String {
+    let mut rendered = columns(&[
+        vec!["template:".to_owned(), described.template.clone()],
+        vec!["digest:".to_owned(), described.digest.clone()],
+    ]);
+    if described.variables.is_empty() {
+        rendered.push_str("\n(it declares no variables)\n");
+        return rendered;
+    }
+    let rows: Vec<Vec<String>> = described
+        .variables
+        .iter()
+        .map(|variable| {
+            vec![
+                variable.name().to_owned(),
+                match variable.items() {
+                    Some(items) => format!("{}<{}>", variable.kind(), items.as_str()),
+                    None => variable.kind().to_string(),
+                },
+                match (variable.default(), variable.required()) {
+                    (Some(default), _) => format!("default {default}"),
+                    (None, true) => "required".to_owned(),
+                    (None, false) => "optional".to_owned(),
+                },
+                variable.declared_in().to_owned(),
+                variable.description().to_owned(),
+            ]
+        })
+        .collect();
+    rendered.push('\n');
+    rendered.push_str(&columns(&rows));
+    rendered
 }
 
 /// One line per delivered task a write kept in step with a deliverer, saying in words what

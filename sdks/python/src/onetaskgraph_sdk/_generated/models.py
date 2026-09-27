@@ -11,6 +11,7 @@ from .effective_config import EffectiveConfig as EffectiveConfig
 from .failure_document import FailureDocument as FailureDocument
 from .fields_report import FieldsReport as FieldsReport
 from .global_id import GlobalId as GlobalId
+from .item_type import ItemType as ItemType
 from .location import Location as Location
 from .metadata_set import MetadataSet as MetadataSet
 from .page_of_document import Page as PageOfDocument
@@ -22,6 +23,7 @@ from .query_response_of_qualified_label import QueryResponse as QueryResponseOfQ
 from .query_response_of_qualified_project import QueryResponse as QueryResponseOfQualifiedProject
 from .query_response_of_qualified_task import QueryResponse as QueryResponseOfQualifiedTask
 from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearchHit
+from .rendered_template import RenderedTemplate as RenderedTemplate
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
@@ -32,6 +34,9 @@ from .task_detail import TaskDetail as TaskDetail
 from .task_priority_set import TaskPrioritySet as TaskPrioritySet
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
+from .template_variable import TemplateVariable as TemplateVariable
+from .template_variables import TemplateVariables as TemplateVariables
+from .variable_type import VariableType as VariableType
 
 # Every root is named here rather than left to the `import X as X` form alone: a
 # root whose generated class carries another name — every `QueryResponseOf…`, and
@@ -51,6 +56,7 @@ __all__ = [
     "FailureDocument",
     "FieldsReport",
     "GlobalId",
+    "ItemType",
     "Location",
     "MetadataSet",
     "PageOfDocument",
@@ -62,6 +68,7 @@ __all__ = [
     "QueryResponseOfQualifiedProject",
     "QueryResponseOfQualifiedTask",
     "QueryResponseOfSearchHit",
+    "RenderedTemplate",
     "SourceFailure",
     "SourceListing",
     "SourceName",
@@ -72,4 +79,7 @@ __all__ = [
     "TaskPrioritySet",
     "TaskRef",
     "TaskStatusSet",
+    "TemplateVariable",
+    "TemplateVariables",
+    "VariableType",
 ]

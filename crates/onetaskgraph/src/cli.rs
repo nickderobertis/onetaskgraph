@@ -92,6 +92,115 @@ pub enum Command {
 
     /// Search tasks, projects, or both.
     Search(SearchArgs),
+
+    /// Read a task template's variables, and render it from answers.
+    ///
+    /// A template is minijinja with YAML front matter declaring its variables. `extends`,
+    /// `include` and `import` resolve over the --search-path directories alone.
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommand,
+    },
+}
+
+/// What `onetaskgraph template` can do.
+#[derive(Debug, Subcommand)]
+pub enum TemplateCommand {
+    /// List every variable a template's chain declares, and the chain's digest.
+    Variables(TemplateVariablesArgs),
+    /// Render a template from answers, asking for the rest when interactive.
+    ///
+    /// Each variable takes the first of: --var, the answers file, a prompt (when
+    /// interactive), its default. Every refusal of an answer exits 2.
+    Render(TemplateRenderArgs),
+}
+
+/// `onetaskgraph template variables`.
+#[derive(Debug, Args)]
+pub struct TemplateVariablesArgs {
+    /// The template to read, at a path. It is known to its chain, and in its digest, by its
+    /// file name; its own directory is not searched unless it is also a --search-path.
+    #[arg(value_name = "FILE")]
+    pub file: std::path::PathBuf,
+
+    /// Resolve `extends`, `include` and `import` names in this directory. Repeat for several,
+    /// searched in order; the working directory is never searched unless it is named.
+    #[arg(long = "search-path", value_name = "DIR")]
+    pub search_path: Vec<std::path::PathBuf>,
+}
+
+/// `onetaskgraph template render`.
+#[derive(Debug, Args)]
+pub struct TemplateRenderArgs {
+    /// The template to read, at a path. It is known to its chain, and in its digest, by its
+    /// file name; its own directory is not searched unless it is also a --search-path.
+    #[arg(value_name = "FILE")]
+    pub file: std::path::PathBuf,
+
+    /// Resolve `extends`, `include` and `import` names in this directory. Repeat for several,
+    /// searched in order; the working directory is never searched unless it is named.
+    #[arg(long = "search-path", value_name = "DIR")]
+    pub search_path: Vec<std::path::PathBuf>,
+
+    /// Read answers from this YAML file, a mapping from variable name to value; `-` reads
+    /// standard input.
+    #[arg(long, value_name = "FILE")]
+    pub answers: Option<std::path::PathBuf>,
+
+    /// Answer one variable, over the answers file: literal text for a `string` or `text`
+    /// variable, YAML for any other type. Repeat for several.
+    #[arg(
+        long = "var",
+        value_name = "NAME=VALUE",
+        allow_hyphen_values = true,
+        value_parser = var_assignment
+    )]
+    pub var: Vec<VarAssignment>,
+}
+
+/// One `--var NAME=VALUE`, split where it was typed.
+///
+/// The value stays text: whether it is taken literally or read as YAML is decided by the type
+/// the template declares for `name`, which is not known until the template is loaded.
+#[derive(Debug, Clone)]
+pub struct VarAssignment {
+    /// The variable answered: a name a variable could be declared with. Private, so the only
+    /// way to build one is `var_assignment` below, which refuses any other name.
+    name: String,
+    /// The answer, as typed.
+    value: String,
+}
+
+impl VarAssignment {
+    /// The variable answered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The answer, as typed.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+/// Split one `--var` at its first `=`, refusing one with none, or whose name no variable
+/// could be declared with.
+fn var_assignment(raw: &str) -> Result<VarAssignment, String> {
+    let (name, value) = raw.split_once('=').ok_or_else(|| {
+        "that is not NAME=VALUE; next: write it as --var NAME=VALUE, for example \
+         --var title=\"Ship it\""
+            .to_owned()
+    })?;
+    if !onetaskgraph_core::template::is_variable_name(name) {
+        return Err(format!(
+            "{name:?} is not a variable name, which matches ^[a-z][a-z0-9_]*$; next: name a \
+             variable the template declares — `onetaskgraph template variables` lists them"
+        ));
+    }
+    Ok(VarAssignment {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    })
 }
 
 /// What `onetaskgraph sources` can do.
@@ -930,6 +1039,16 @@ pub struct Overrides {
     /// Shorthand for --output json.
     #[arg(long, global = true)]
     pub json: bool,
+
+    // llmlint: ignore-block[invalid_states_unrepresentable] Two presence-only flags, as `json` beside `output` above: clap's derive has no one-field spelling for a pair of opposing switches. Both fields are private, so only clap builds them, `conflicts_with` refuses both at once where they are typed (exit 2), and `layer` maps each to the one `interactive` setting immediately.
+    /// Prompt for what a command was not given (the `interactive` setting's default).
+    #[arg(long, global = true, conflicts_with = "no_interactive")]
+    interactive: bool,
+
+    /// Never prompt: refuse what a command was not given instead. For scripts and automation.
+    #[arg(long = "no-interactive", global = true)]
+    no_interactive: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 impl Overrides {
@@ -958,6 +1077,12 @@ impl Overrides {
         }
         if self.json {
             settings.push(at("output", Value::from("json"), "--json"));
+        }
+        if self.interactive {
+            settings.push(at("interactive", Value::Bool(true), "--interactive"));
+        }
+        if self.no_interactive {
+            settings.push(at("interactive", Value::Bool(false), "--no-interactive"));
         }
 
         // Last, so `--set output=text` beats `--json`: the general form is the more

@@ -18,3 +18,8 @@ on `PATH` by the packaged binary distribution. Pass `cwd=` to select the directo
 which configuration is discovered. Partial query exit status 4 is parsed and returned,
 so callers can inspect each typed `SourceFailure`; other non-zero statuses raise
 `OnetaskgraphError` with the exit code.
+
+Every call also passes `--no-interactive`, so no call ever waits on a prompt: a template
+variable nothing answers takes its default, and a required one left unanswered raises with
+exit code 2. `template_render(file, search_path=..., answers={...}, var=[...])` hands the
+`answers` mapping to the binary on standard input, and each `var` (`NAME=VALUE`) outranks it.

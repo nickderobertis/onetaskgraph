@@ -43,6 +43,7 @@ impl EffectiveConfig {
                 "output",
                 serde_json::to_value(config.output()).expect("an output format renders as JSON"),
             ),
+            ("interactive", Value::Bool(config.interactive())),
             (
                 "default_sources",
                 serde_json::to_value(config.selected_sources())
