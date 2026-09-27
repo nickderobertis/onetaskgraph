@@ -14,19 +14,81 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
-- `onetaskgraph.` belongs to this product. It defines exactly six keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly seven keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
-  `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`) and `onetaskgraph.item_kind`
-  (`ItemKind::METADATA_KEY`) in the contract crate, and `onetaskgraph.origin`
-  (`GlobalId::ORIGIN_KEY`) in the engine — that last one carries a *qualified* id, whose
-  contents no plugin ever constructs or interprets, though `github-projects` routes the
-  key itself into a text field of its own.
+  `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
+  (`ItemKind::METADATA_KEY`) and `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`) in
+  the contract crate, and `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
+  that last one carries a *qualified* id, whose contents no plugin ever constructs or
+  interprets, though `github-projects` routes the key itself into a text field of its own.
 - `onepipeline.` belongs to that consumer.
 
 Every other key is the caller's. A source returns it exactly as it holds it — the same
 value, of the same JSON type — and this product never interprets it.
+
+### `onetaskgraph.template`: where a rendered item came from
+
+A task or a document created or regenerated from a template — `task create`, `document
+create`, `task render`, `document render`, or the engine's `create_task` and
+`render_task` from Rust — records this entry; one created from a plain body records none:
+
+```json
+{"template": "<string>", "digest": "sha256:<hex>", "body_digest": "sha256:<hex>", "answers_digest": "sha256:<hex>"}
+```
+
+- `template` is the absolute path of a `--template` file, a loader document's `reference`
+  verbatim, or a library caller's own string.
+- `digest` is the template chain's digest the content was rendered with — the one `template
+  variables` reports.
+- `body_digest` is the SHA-256 of the item's content exactly as written.
+- `answers_digest` is the SHA-256 of the resolved answers, defaults applied, as canonical
+  JSON: keys sorted at every depth, no insignificant whitespace, UTF-8.
+
+Its schema is the `TemplateProvenance` root of `onetaskgraph schema`. It has **no length
+cap**: three fixed-size hashes and the caller's string, bounded only by what the destination
+bounds a whole item by, which the source reports when a write exceeds it. A copy carries it
+like any other metadata. Only a rendering write sets it: a `--metadata` key, `metadata set`
+and a caller's `MetadataKey` can never name it, because the whole `onetaskgraph.` namespace
+is refused there.
+
+From the entry alone, a hand edit — the content's own hash is not `body_digest` — and a
+changed template — the chain's digest is not `digest` — are both visible. **The accepted
+weakness:** a check that reads only these hashes trusts them, so provenance forged by hand,
+hashes and all, passes it. It says what an item was rendered from, not who wrote it.
+
+**The answers are not in it, and are in no other metadata key either.** They are kept only
+where an item is authored as a file of its own — `local-md` keeps them in a block of the
+item's file, which [`local-md.md`](./local-md.md) describes — and nowhere else: not in the
+content, not in the metadata, and not in a comment, so a hosted item carries the four
+strings above and nothing of its answers but what the template rendered into its content.
+A copy carries content and metadata alone, so **it never carries answers**, at either end:
+a board item copied from a folder holds the provenance and no answers, and a file copied
+back out of the board holds no answers block. A regenerate starts from the stored answers
+only when they hash to `answers_digest`; otherwise — a source that keeps none, or answers
+edited by hand — it needs every required answer again.
+
+#### The template loader document
+
+A caller that layers templates of its own states the result as a **loader document**, and
+this product renders exactly what it says — it never resolves a caller's layers, never runs
+a caller's command, and never turns a recorded `reference` into a location:
+
+```json
+{"reference": "<string>", "entry": "<name>", "search_path": ["<absolute dir>", "..."], "templates": [{"name": "<name>", "source": "<text>"}], "digest": "sha256:<hex>"}
+```
+
+`reference` is required and non-empty, and is what the item records as `template`, verbatim.
+`entry` is required, and is loaded over the `search_path` directories in order and then the
+`templates` pairs, exactly as a template's own `extends`, `include` and `import` names are.
+`digest`, when present, must equal the digest that chain computes, or the render is refused
+naming both. Every other key is ignored. A malformed document, a missing key, a directory
+that is not absolute or cannot be read, and a mismatched digest are each refused by name,
+and nothing is written. It is given as `--template-loader FILE` (`-` for standard input,
+never beside `--answers -`), and in Rust as `LoaderDocument`. Regenerating an item whose
+recorded `template` is not a readable file **requires** one: the refusal says so and names
+the recorded reference.
 
 ### `onetaskgraph.item_kind` is one plugin's, and only one plugin's
 

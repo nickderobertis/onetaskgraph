@@ -212,6 +212,18 @@ pub struct Regenerated {
 #[serde(transparent)]
 pub struct TemplateAnswers(pub BTreeMap<String, Value>);
 
+impl TemplateAnswers {
+    /// The answers as a YAML mapping — the document an answers file holds, so what this
+    /// prints can be handed back with `--answers`.
+    ///
+    /// # Errors
+    ///
+    /// Why the answers could not be written as YAML.
+    pub fn to_yaml(&self) -> Result<String, String> {
+        serde_norway::to_string(&self.0).map_err(|error| error.to_string())
+    }
+}
+
 /// Why a regenerate did not start from the answers stored beside the item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnusedAnswers {
@@ -283,6 +295,17 @@ impl Regeneration {
     #[must_use]
     pub fn base(&self) -> &Answers {
         &self.base
+    }
+
+    /// Every variable the stored answers settle when they are the base — an optional one
+    /// they left `null` included, which a render leaves unanswered again — and none when
+    /// they are not.
+    pub fn settled(&self) -> impl Iterator<Item = &str> {
+        self.stored
+            .iter()
+            .filter(|_| self.unused.is_none())
+            .flat_map(BTreeMap::keys)
+            .map(String::as_str)
     }
 
     /// Why the stored answers were not the base, when they were not.

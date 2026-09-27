@@ -96,19 +96,88 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "template"], &["variables", "render"]),
     (
         &["help", "template", "variables"],
-        &["<FILE>", "--search-path", "--json"],
+        &["<FILE>", "--search-path", "--template-loader", "--json"],
     ),
     (
         &["help", "template", "render"],
         &[
             "<FILE>",
             "--search-path",
+            "--template-loader",
             "--answers",
             "--var",
             "--no-interactive",
             "--json",
         ],
     ),
+    (&["help", "task"], &["create", "render", "answers"]),
+    (
+        &["help", "task", "create"],
+        &[
+            "<SOURCE>",
+            "--project",
+            "--title",
+            "--template",
+            "--search-path",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--body-file",
+            "--status",
+            "--label",
+            "--repository",
+            "--depends-on",
+            "--delivers",
+            "--metadata",
+            "--json",
+        ],
+    ),
+    (
+        &["help", "task", "render"],
+        &[
+            "<ID>",
+            "--template",
+            "--search-path",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--unset",
+            "--dry-run",
+            "--json",
+        ],
+    ),
+    (&["help", "task", "answers"], &["<ID>", "--json"]),
+    (&["help", "document"], &["create", "render", "answers"]),
+    (
+        &["help", "document", "create"],
+        &[
+            "<SOURCE>",
+            "--project",
+            "--title",
+            "--id",
+            "--template",
+            "--template-loader",
+            "--answers",
+            "--var",
+            "--body-file",
+            "--label",
+            "--repository",
+            "--metadata",
+            "--json",
+        ],
+    ),
+    (
+        &["help", "document", "render"],
+        &[
+            "<ID>",
+            "--template",
+            "--template-loader",
+            "--var",
+            "--unset",
+            "--dry-run",
+        ],
+    ),
+    (&["help", "document", "answers"], &["<ID>", "--json"]),
 ];
 
 #[test]
@@ -194,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 21);
+    assert_eq!(bundle["version"], 22);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -219,6 +288,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task priority set",
             "task content set",
             "task metadata set",
+            "task create",
+            "task render",
+            "task answers",
             "project list",
             "project show",
             "project deps",
@@ -228,6 +300,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "document show",
             "document copy",
             "document metadata set",
+            "document create",
+            "document render",
+            "document answers",
             "label list",
             "search",
             "template variables",
@@ -275,6 +350,11 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "Setting",
         "Origin",
         "SecretsReport",
+        // What `task render` and `document render`, and `task answers` and `document
+        // answers`, answer with, and the provenance entry a rendered item records.
+        "Regenerated",
+        "TemplateAnswers",
+        "TemplateProvenance",
     ] {
         let schema = &roots[root];
         assert!(schema.is_object(), "the bundle is missing {root}");

@@ -83,7 +83,8 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     document(&json!({
         DESTINATION: {"plugin": "local-md", "config": {
             "root": sandbox.subdirectory(DESTINATION),
-            "status_mapping": {SENTINELS[4]: "todo"},
+            // `todo` too, the word a created task is written with when none is given.
+            "status_mapping": {SENTINELS[4]: "todo", "todo": "todo"},
         }},
         "work": boundary.source("in-memory", json!({
                 "capabilities": {"documents": "native", "max_page_size": 2},
@@ -125,6 +126,8 @@ fn every_verb() -> Vec<Vec<String>> {
     let task = qualified("work", "T-1");
     let project = qualified("work", "P-1");
     let held_document = qualified("work", "D-1");
+    // The id `task create` below files its task under: its title, in lower case.
+    let created = qualified(DESTINATION, &SENTINELS[0].to_lowercase());
     let owned = |arguments: &[&str]| arguments.iter().map(|part| (*part).to_owned()).collect();
     vec![
         // The write, twice: once creating and once updating, so both halves of the verb
@@ -220,6 +223,61 @@ fn every_verb() -> Vec<Vec<String>> {
             "--no-interactive",
         ]),
         // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+        // A task and a document created from that template, regenerated, and their answers
+        // read: each writes into the named destination's own store — the item's file, which is
+        // where its answers are kept — and nowhere else.
+        owned(&[
+            "task",
+            "create",
+            DESTINATION,
+            "--project",
+            "P-1",
+            "--title",
+            SENTINELS[0],
+            "--template",
+            TEMPLATE,
+            "--var",
+            &format!("title={}", SENTINELS[0]),
+            "--no-interactive",
+        ]),
+        owned(&[
+            "task",
+            "render",
+            &created,
+            "--var",
+            &format!("title={}", SENTINELS[1]),
+            "--no-interactive",
+        ]),
+        owned(&["task", "answers", &created]),
+        owned(&[
+            "document",
+            "create",
+            DESTINATION,
+            "--project",
+            "P-1",
+            "--title",
+            SENTINELS[0],
+            "--id",
+            "sentinel-document",
+            "--template",
+            TEMPLATE,
+            "--var",
+            &format!("title={}", SENTINELS[0]),
+            "--no-interactive",
+        ]),
+        owned(&[
+            "document",
+            "render",
+            &qualified(DESTINATION, "sentinel-document"),
+            "--var",
+            &format!("title={}", SENTINELS[1]),
+            "--no-interactive",
+        ]),
+        owned(&[
+            "document",
+            "answers",
+            &qualified(DESTINATION, "sentinel-document"),
+        ]),
     ]
 }
 

@@ -7,6 +7,7 @@
 
 mod cli;
 mod render;
+mod rendered;
 mod template;
 
 use std::io::{self, Write};
@@ -19,7 +20,7 @@ use onetaskgraph_core::{
     CopyItems, CopyRequest, CopyScope, Delivered, DeliveryOutcome, DependencyRequest,
     DocumentFilters, DocumentRequest, Engine, Environment, Failure, FailureDocument, Filters,
     GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
-    ProjectSelector, QueryResponse, SearchRequest, SourceFailure, TaskRequest,
+    ProjectSelector, QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
@@ -327,6 +328,25 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     command: MetadataCommand::Set(args),
                 },
         } => metadata_set(out, loaded, MetadataRecord::Project, args).await,
+
+        Command::Task {
+            command: TaskCommand::Create(args),
+        } => rendered::create_task(out, loaded, args).await,
+        Command::Task {
+            command: TaskCommand::Render(args),
+        } => rendered::regenerate(out, loaded, RenderedRecord::Task, args).await,
+        Command::Task {
+            command: TaskCommand::Answers(args),
+        } => rendered::stored(out, loaded, RenderedRecord::Task, args).await,
+        Command::Document {
+            command: DocumentCommand::Create(args),
+        } => rendered::create_document(out, loaded, args).await,
+        Command::Document {
+            command: DocumentCommand::Render(args),
+        } => rendered::regenerate(out, loaded, RenderedRecord::Document, args).await,
+        Command::Document {
+            command: DocumentCommand::Answers(args),
+        } => rendered::stored(out, loaded, RenderedRecord::Document, args).await,
 
         Command::Document {
             command:
@@ -1303,6 +1323,9 @@ mod tests {
                 "task priority set",
                 "task content set",
                 "task metadata set",
+                "task create",
+                "task render",
+                "task answers",
                 "project list",
                 "project show",
                 "project deps",
@@ -1312,6 +1335,9 @@ mod tests {
                 "document show",
                 "document copy",
                 "document metadata set",
+                "document create",
+                "document render",
+                "document answers",
                 "label list",
                 "search",
                 "template variables",
