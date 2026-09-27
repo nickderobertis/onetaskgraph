@@ -1089,12 +1089,12 @@ impl Template {
     ///
     /// [`TemplateError::Malformed`], [`TemplateError::Unreadable`] and
     /// [`TemplateError::NotFound`] for a file found this way, or one its literals name, as for
-    /// any chain file; and [`TemplateError::ChainConflict`] for a declaration of it whose
-    /// `type` or `items` another chain file's contradicts.
+    /// any chain file; [`TemplateError::ChainConflict`] for a declaration of it whose `type`
+    /// or `items` another chain file's contradicts; and [`TemplateError::Malformed`] for the
+    /// rendered template when the files its expressions name give defaults that name one
+    /// another in turn, so that what they name never settles.
     pub fn expand(&self, answers: &Answers) -> Result<Self, TemplateError> {
         let mut expanded = self.clone();
-        // A render naming what an earlier one did, other than the last, is going round a
-        // cycle of defaults; it stops at the chain it has.
         let mut named = vec![expanded.resolutions.clone()];
         loop {
             let resolutions = discover(
@@ -1104,8 +1104,16 @@ impl Template {
                 &expanded.loader,
                 answers,
             )?;
-            if named.contains(&resolutions) {
+            if resolutions == expanded.resolutions {
                 return Ok(expanded);
+            }
+            if named.contains(&resolutions) {
+                return Err(TemplateError::malformed(
+                    &self.name,
+                    None,
+                    "what its expressions name never settles: each template they name gives a \
+                     default naming another, round a cycle; answer the variable that decides it",
+                ));
             }
             named.push(resolutions.clone());
             let files = expanded.rebuild(&resolutions)?;

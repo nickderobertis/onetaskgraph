@@ -1067,8 +1067,6 @@ fn a_template_an_expression_names_joins_the_chain_and_its_front_matter_the_decla
     let template = dynamic().load_name("root.md").expect("it loads");
     assert_eq!(template.chain().collect::<Vec<_>>(), ["root.md"]);
 
-    // With every variable at its default the expression names `detail.md`, which names
-    // `footer.md` by a literal: both join the chain, in first-load order.
     let expanded = template.expand(&Answers::new()).expect("it expands");
     assert_eq!(
         expanded.chain().collect::<Vec<_>>(),
@@ -1537,4 +1535,37 @@ fn a_file_only_an_earlier_discovery_named_leaves_the_chain() {
             ("c.md", "C"),
         ])
     );
+}
+
+#[test]
+fn expressions_whose_defaults_name_each_other_in_turn_are_refused_until_answered() {
+    let declaring = |default: &str, body: &str| {
+        format!(
+            "---\nonetaskgraph_template: 1\nvariables:\n  pick: {{description: p, default: {default}}}\n---\n{body}"
+        )
+    };
+    let lit = declaring("x", "L");
+    let template = TemplateLoader::new()
+        .with_template(
+            "root.md",
+            "{% include pick ~ \".md\" %}{% include \"lit.md\" %}",
+        )
+        .with_template("lit.md", lit.as_str())
+        .with_template("x.md", declaring("y", "X"))
+        .with_template("y.md", declaring("x", "Y"))
+        .load_name("root.md")
+        .expect("it loads");
+
+    let error = template
+        .render(&Answers::new())
+        .expect_err("x.md's default names y.md, whose default names x.md");
+    assert!(
+        matches!(&error, TemplateError::Malformed { file, key: None, .. } if file == "root.md"),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("never settles"), "{error}");
+
+    let mut answers = Answers::new();
+    answers.set("pick", json!("y"));
+    assert_eq!(template.render(&answers).expect("renders").body, "YL");
 }
