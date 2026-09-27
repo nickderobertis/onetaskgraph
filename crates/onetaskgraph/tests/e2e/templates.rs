@@ -638,12 +638,43 @@ variables:\n  \
         }
     }
 
+    /// A terminal to type on and nowhere a person can read the prompt: refused, not asked.
     #[test]
-    fn each_unanswered_variable_is_asked_in_order_and_a_malformed_value_is_asked_again() {
+    fn a_terminal_on_standard_input_with_standard_error_redirected_is_refused_rather_than_asked() {
         let sandbox = Sandbox::new();
         let task = sandbox.project().join("prompted.md");
         std::fs::write(&task, PROMPTED).expect("the template");
+        let (master, terminal) = pseudo_terminal();
 
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        for (variable, _) in std::env::vars() {
+            if variable.starts_with("ONETASKGRAPH_") {
+                command.env_remove(variable);
+            }
+        }
+        let output = command
+            .current_dir(sandbox.project())
+            .env("XDG_CONFIG_HOME", sandbox.config_home())
+            .env_remove("HOME")
+            .args(["template", "render", path(&task)])
+            .stdin(terminal)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("the binary runs");
+        drop(master);
+        let problem = stderr(&output);
+        assert_eq!(output.status.code(), Some(2), "{problem}");
+        assert!(
+            problem.contains("standard error, where the prompts are written, is not a terminal"),
+            "{problem}"
+        );
+        assert!(problem.contains("--no-interactive"), "{problem}");
+        assert!(output.stdout.is_empty());
+    }
+
+    /// A fresh pseudo-terminal: the side this test holds, and the side a child is handed.
+    fn pseudo_terminal() -> (std::fs::File, std::fs::File) {
         let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("a pseudo-terminal");
         grantpt(&master).expect("granted");
         unlockpt(&master).expect("unlocked");
@@ -653,6 +684,16 @@ variables:\n  \
             .write(true)
             .open(OsStr::from_bytes(name.as_bytes()))
             .expect("the terminal side");
+        (std::fs::File::from(master), terminal)
+    }
+
+    #[test]
+    fn each_unanswered_variable_is_asked_in_order_and_a_malformed_value_is_asked_again() {
+        let sandbox = Sandbox::new();
+        let task = sandbox.project().join("prompted.md");
+        std::fs::write(&task, PROMPTED).expect("the template");
+
+        let (mut master, terminal) = pseudo_terminal();
 
         // A plain process rather than the sandbox's `assert_cmd` one, which cannot hand its
         // child a terminal: the same sandboxed environment, spelled out.
@@ -675,7 +716,6 @@ variables:\n  \
         // Only the child holds the terminal side now, so the reader below ends when it does.
         drop(command);
 
-        let mut master = std::fs::File::from(master);
         let text = Arc::new(Mutex::new(String::new()));
         let reader = {
             let text = Arc::clone(&text);
@@ -708,6 +748,10 @@ variables:\n  \
         type_in("4\r");
 
         screen.expect("notes (text, required): Free notes");
+        screen.expect("then a line holding only `.`:");
+        // Nothing at all, for a required variable with no default: asked again.
+        type_in(".\r");
+        screen.expect("notes is required; enter a value; try again.");
         screen.expect("then a line holding only `.`:");
         type_in("first line\r  second, indented\r.\r");
 

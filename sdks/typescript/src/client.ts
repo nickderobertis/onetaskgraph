@@ -208,7 +208,17 @@ function addFilters(args: string[], options: FilterOptions): void {
 }
 
 function searchPathFlags(options: TemplateOptions): string[] {
-  return (options.searchPath ?? []).flatMap((directory) => ["--search-path", directory]);
+  return (options.searchPath ?? []).flatMap((directory, index) => {
+    // Checked rather than passed on whatever it is: a process argument has to be text, and
+    // anything else would reach the binary as its string form or fail the spawn.
+    if (typeof directory !== "string") {
+      throw new TypeError(
+        `templateVariables/templateRender: searchPath[${index}] is not a string; next: pass ` +
+          "each search directory as a path string",
+      );
+    }
+    return ["--search-path", directory];
+  });
 }
 
 // The answers as the JSON document the binary reads on standard input, refused here when a
@@ -420,7 +430,7 @@ export class OnetaskgraphClient {
     return this.run("search", args);
   }
 
-  templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
+  async templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
     return this.run("template variables", [file, ...searchPathFlags(options)]);
   }
   // The answers go over standard input as JSON, which is YAML, so no file is written for them.

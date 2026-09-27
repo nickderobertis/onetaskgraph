@@ -915,3 +915,35 @@ fn a_rendered_digest_moves_when_a_file_an_expression_named_changes() {
     assert_eq!(unchanged, chain, "the chain itself did not change");
     assert_ne!(moved, first, "the file the render read did");
 }
+
+#[test]
+fn a_file_an_expression_names_that_cannot_be_read_as_a_template_fails_the_render_as_itself() {
+    let tree = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(tree.path().join("binary.md"), [0xff, 0xfe, 0x00]).expect("written");
+    std::fs::write(
+        tree.path().join("broken.md"),
+        "---\nonetaskgraph_template: 1\n",
+    )
+    .expect("written");
+    let template = TemplateLoader::new()
+        .with_directory(tree.path())
+        .with_template(
+            "root.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which}\n---\n{% include kind ~ \".md\" %}",
+        )
+        .load_name("root.md")
+        .expect("it loads");
+    for (kind, expected) in [
+        ("binary", "binary.md: it is not UTF-8 text"),
+        ("broken", "no later line reading `---` closes it"),
+    ] {
+        let mut answers = Answers::new();
+        answers.set("kind", json!(kind));
+        let error = template.render(&answers).expect_err(kind);
+        assert!(
+            matches!(error, TemplateError::Render { .. }),
+            "{kind}: {error:?}"
+        );
+        assert!(error.to_string().contains(expected), "{kind}: {error}");
+    }
+}

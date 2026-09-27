@@ -163,3 +163,12 @@ test("what is sent is the answers checked, and a var is text or refused", async 
   await expect(refused).rejects.toThrow(TypeError);
   await expect(refused).rejects.toThrow("vars.size is not a string");
 });
+
+test("a search path entry that is not a path string is refused before the binary is started", async () => {
+  // Deliberately outside the declared type, as a caller whose values reached it untyped.
+  const searchPath = [library, 7] as unknown as string[];
+  await expect(client.templateVariables(task, { searchPath })).rejects.toThrow(
+    "searchPath[1] is not a string",
+  );
+  await expect(client.templateRender(task, { searchPath })).rejects.toThrow(TypeError);
+});

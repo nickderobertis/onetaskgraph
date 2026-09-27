@@ -110,11 +110,20 @@ fn render_template(
 
     let unanswered = template.unanswered(&answers)?;
     if loaded.config.interactive() && !unanswered.is_empty() {
-        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        // The answers are read from standard input and the prompts written to standard
+        // error, so both have to be the terminal a person is at.
+        let not_a_terminal = if !io::stdin().is_terminal() {
+            Some("standard input is not a terminal")
+        } else if !io::stderr().is_terminal() {
+            Some("standard error, where the prompts are written, is not a terminal")
+        } else {
+            None
+        };
+        if let Some(not_a_terminal) = not_a_terminal {
             let names: Vec<&str> = unanswered.iter().map(|variable| variable.name()).collect();
             return Err(Refusal::Answers(format!(
-                "template {}: {} unanswered ({}) and standard input is not a terminal, so \
-                 there is nobody to ask\n\
+                "template {}: {} unanswered ({}) and {not_a_terminal}, so there is nobody to \
+                 ask\n\
                  next: answer {} with --var NAME=VALUE or an answers file (--answers FILE), \
                  and pass --no-interactive (or set `interactive: false`) so a variable with a \
                  default takes it instead of being asked for.",

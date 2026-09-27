@@ -1030,7 +1030,11 @@ impl Template {
             if let Some(body) = bodies.get(name) {
                 return Ok(Some(body.clone()));
             }
-            let Ok(Some(source)) = loader.find(name) else {
+            // A file that is there and cannot be read is that failure, not a missing file.
+            let Some(source) = loader.find(name).map_err(|error| {
+                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, error.to_string())
+            })?
+            else {
                 return Ok(None);
             };
             let split = front_matter::split(name, &source).map_err(|error| {
