@@ -76,6 +76,22 @@ impl TaskUpdate {
             && self.depends_on.is_none()
     }
 
+    /// Whether this update names `field`, which is the only way a source may report it written.
+    #[must_use]
+    pub fn names(&self, field: UpdatedField) -> bool {
+        match field {
+            UpdatedField::Title => self.title.is_some(),
+            UpdatedField::Content => self.content.is_some(),
+            UpdatedField::Status => self.status.is_some(),
+            UpdatedField::Priority => self.priority.is_some(),
+            UpdatedField::Metadata => {
+                !self.metadata_set.is_empty() || !self.metadata_remove.is_empty()
+            }
+            UpdatedField::Delivers => self.delivers.is_some(),
+            UpdatedField::DependsOn => self.depends_on.is_some(),
+        }
+    }
+
     /// Every metadata key this update both sets and removes, in order.
     ///
     /// An update naming one is refused before anything is written: which of the two it meant

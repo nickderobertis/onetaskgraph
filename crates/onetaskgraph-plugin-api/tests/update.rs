@@ -338,6 +338,18 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
     assert_eq!(back, whole);
     assert!(!whole.is_empty());
     assert!(TaskUpdate::default().is_empty());
+    for field in [
+        UpdatedField::Title,
+        UpdatedField::Content,
+        UpdatedField::Status,
+        UpdatedField::Priority,
+        UpdatedField::Metadata,
+        UpdatedField::Delivers,
+        UpdatedField::DependsOn,
+    ] {
+        assert!(whole.names(field), "{field:?}");
+        assert!(!TaskUpdate::default().names(field), "{field:?}");
+    }
     assert_eq!(
         serde_json::to_value(BTreeSet::from([
             UpdatedField::DependsOn,

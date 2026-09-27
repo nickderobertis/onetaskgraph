@@ -1444,7 +1444,11 @@ impl TaskSource for LocalMdSource {
                 })
                 .collect::<Vec<_>>()
         });
-        let edges_differ = edges.as_ref().is_some_and(|edges| *edges != edges_before);
+        // Edges are a set: the same far ends in another order are the edges the task holds.
+        let edges_differ = edges.as_ref().is_some_and(|edges| {
+            edges.len() != edges_before.len()
+                || edges.iter().any(|edge| !edges_before.contains(edge))
+        });
         let edited = self.updated_text(
             &path,
             &text,
@@ -1461,7 +1465,10 @@ impl TaskSource for LocalMdSource {
         }
         let reread = self.parse_text(WorkKind::Task, &path, &edited)?;
         let edges_after = reread.dependencies.clone();
-        if task(reread) != wanted || (edges_differ && edges.as_ref() != Some(&edges_after)) {
+        let edges_landed = edges.as_ref().is_none_or(|edges| {
+            edges.len() == edges_after.len() && edges.iter().all(|edge| edges_after.contains(edge))
+        });
+        if task(reread) != wanted || (edges_differ && !edges_landed) {
             return Err(SourceError::Refused {
                 message: format!(
                     "{}: cannot update this task without changing more than the update names: \

@@ -830,16 +830,33 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        match result.outcome {
-            Some(outcome) if outcome.task.id != *id => Err(SourceError::Malformed {
+        let Some(outcome) = result.outcome else {
+            return Ok(None);
+        };
+        if outcome.task.id != *id {
+            return Err(SourceError::Malformed {
                 message: format!(
                     "the plugin answered update_task for {id} with the task {}, which is not the \
                      task it was asked to update",
                     outcome.task.id
                 ),
-            }),
-            outcome => Ok(outcome),
+            });
         }
+        // The engine reports what the plugin says it wrote, so a field the update never named
+        // is not an answer to this update.
+        if let Some(unnamed) = outcome.written.iter().find(|field| !update.names(**field)) {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered update_task for {id} saying it wrote {}, which the \
+                     update did not name",
+                    serde_json::to_value(unnamed)
+                        .ok()
+                        .and_then(|field| field.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| format!("{unnamed:?}"))
+                ),
+            });
+        }
+        Ok(Some(outcome))
     }
 
     async fn set_delivered_by(

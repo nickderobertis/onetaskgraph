@@ -187,8 +187,9 @@ fn folder(sandbox: &Sandbox) -> PathBuf {
 /// What `T-1`'s file holds before anything is updated.
 fn held() -> String {
     "---\ntitle: One\nstatus: todo\nmetadata:\n  onepipeline.claim: r-1\n  \"onepipeline.kept\": [1]\n\
-     delivers: [\"T-2\"]\n---\nThe body.\n\n## Comments\n\n<!-- comment C-1 author=\"ada\" \
-     created=\"2026-09-01T00:00:00Z\" updated=\"2026-09-01T00:00:00Z\" -->\nFirst.\n<!-- /comment -->\n"
+     delivers: [\"T-2\"]\n---\nThe body.\n\n## Comments\n\n<!-- onetaskgraph:comment id=\"C-1\" \
+     author=\"ada\" created_at=\"2026-09-01T00:00:00Z\" updated_at=\"2026-09-01T00:00:00Z\" -->\n\
+     ### ada — 2026-09-01T00:00:00Z\n\nFirst.\n\n<!-- /onetaskgraph:comment -->\n"
         .to_owned()
 }
 
@@ -692,5 +693,157 @@ fn a_linear_update_sends_one_issue_update_of_what_differs() {
         stderr(&refused).contains("cannot carry delivers"),
         "{}",
         stderr(&refused)
+    );
+}
+
+/// The far ends of a task's forward edges, as `task deps` reports them.
+fn depends_on(sandbox: &Sandbox, id: &str) -> Vec<String> {
+    answered("deps", sandbox, &["--json", "task", "deps", id])["items"]
+        .as_array()
+        .expect("a page of edges")
+        .iter()
+        .map(|edge| edge["to"]["id"].as_str().expect("a far end").to_owned())
+        .collect()
+}
+
+#[test]
+fn named_dependencies_replace_the_tasks_own_and_none_clears_them() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+    assert!(depends_on(&sandbox, "work:T-1").is_empty());
+
+    let answer = answered(
+        "depends-on",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "work:T-1",
+            "--depends-on",
+            "work:T-3",
+            "--depends-on",
+            "work:T-2",
+        ],
+    );
+    assert_eq!(written(&answer), ["depends-on"]);
+    assert_eq!(
+        answer["delivered"],
+        json!([]),
+        "neither status nor delivers was named"
+    );
+    assert_eq!(depends_on(&sandbox, "work:T-1"), ["work:T-3", "work:T-2"]);
+    assert!(
+        read(&root, "T-1").contains(
+            "depends_on: [{\"id\":\"T-3\",\"kind\":\"blocks\",\"item\":\"task\"},\
+             {\"id\":\"T-2\",\"kind\":\"blocks\",\"item\":\"task\"}]\n"
+        ),
+        "{}",
+        read(&root, "T-1")
+    );
+
+    // The same set, in another order, is the set the task holds: nothing is written.
+    let again = answered(
+        "same set",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "work:T-1",
+            "--depends-on",
+            "work:T-2",
+            "--depends-on",
+            "work:T-3",
+        ],
+    );
+    assert!(written(&again).is_empty(), "{again}");
+
+    let cleared = answered(
+        "none",
+        &sandbox,
+        &["--json", "task", "update", "work:T-1", "--no-depends-on"],
+    );
+    assert_eq!(written(&cleared), ["depends-on"]);
+    assert!(depends_on(&sandbox, "work:T-1").is_empty());
+    assert_eq!(
+        read(&root, "T-1"),
+        held(),
+        "clearing them took the entry back out"
+    );
+}
+
+#[test]
+fn a_body_file_that_cannot_be_read_as_text_is_refused_before_anything_is_asked() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+    let bodies = sandbox.subdirectory("bodies");
+    let absent = bodies.join("absent.md");
+    let refused = exits(
+        "absent",
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "work:T-1",
+            "--body-file",
+            absent.to_str().expect("a UTF-8 path"),
+        ],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(
+        said.contains("--body-file")
+            && said.contains("could not read it")
+            && said.contains("next:"),
+        "{said}"
+    );
+
+    let binary = bodies.join("binary.md");
+    std::fs::write(&binary, [0xff, 0xfe, 0x00]).expect("a file that is not UTF-8");
+    let refused = exits(
+        "not text",
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "work:T-1",
+            "--body-file",
+            binary.to_str().expect("a UTF-8 path"),
+        ],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(
+        said.contains("is not UTF-8 text") && said.contains("next:"),
+        "{said}"
+    );
+    assert_eq!(read(&root, "T-1"), held(), "a refused body wrote nothing");
+
+    // A readable one replaces the content alone, the comments below it kept byte for byte.
+    let good = bodies.join("good.md");
+    std::fs::write(&good, "A new body.").expect("a body");
+    let answer = answered(
+        "good",
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "work:T-1",
+            "--body-file",
+            good.to_str().expect("a UTF-8 path"),
+        ],
+    );
+    assert_eq!(written(&answer), ["content"]);
+    assert_eq!(
+        read(&root, "T-1"),
+        held().replace("The body.\n", "A new body.\n")
     );
 }

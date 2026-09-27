@@ -375,6 +375,77 @@ function pathOption(method: string, name: string, value: unknown): string {
   return value;
 }
 
+// Every member `TaskUpdateOptions` has, and the one flag each is sent as. `delivers` and
+// `dependsOn` are sent as their `--no-…` twin when empty, which is how a list is cleared. Exported
+// so tests/client.test.ts can reconcile it against the flags `task update --help` reports.
+export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, string>> = {
+  title: "--title",
+  bodyFile: "--body-file",
+  status: "--status",
+  statusName: "--status-name",
+  priority: "--priority",
+  metadata: "--metadata",
+  removeMetadata: "--remove-metadata",
+  delivers: "--delivers",
+  dependsOn: "--depends-on",
+};
+
+// A string option, refused unless it is one: anything else would reach the binary as its string
+// form, which is not the value the caller wrote.
+function stringOption(method: string, name: string, value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${method}: ${name} is not a string; next: pass it as a string`);
+  }
+  return value;
+}
+
+// The flags one targeted update is sent as, every member checked before the binary is started.
+export function taskUpdateFlags(options: unknown): string[] {
+  const method = "taskUpdate";
+  if (!isPlainObject(options)) {
+    throw new TypeError(
+      `${method}: options is not an object; next: pass the fields to write as a plain object`,
+    );
+  }
+  refuseUncarriedKey(options, "options", "option", method);
+  const unknown = Object.keys(options).find((key) => !(key in taskUpdateOptionFlags));
+  if (unknown !== undefined) {
+    throw new TypeError(
+      `${method}: options has the member ${unknown}, which names no field; next: name only ` +
+        Object.keys(taskUpdateOptionFlags).join(", "),
+    );
+  }
+  const args: string[] = [];
+  for (const name of ["title", "status", "statusName", "priority"] as const) {
+    if (options[name] !== undefined) {
+      args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
+    }
+  }
+  if (options.bodyFile !== undefined) {
+    args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
+  }
+  if (options.metadata !== undefined) {
+    // Checked as a whole first, as a create's metadata is.
+    const checked: Record<string, JsonValue> = JSON.parse(
+      jsonDocument(options.metadata, method, "metadata"),
+    );
+    for (const [key, value] of Object.entries(checked)) {
+      args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+    }
+  }
+  for (const key of stringList(method, "removeMetadata", options.removeMetadata)) {
+    args.push("--remove-metadata", key);
+  }
+  for (const name of ["delivers", "dependsOn"] as const) {
+    if (options[name] === undefined) continue;
+    const flag = taskUpdateOptionFlags[name];
+    const ids = stringList(method, name, options[name]);
+    if (ids.length === 0) args.push(flag.replace("--", "--no-"));
+    for (const id of ids) args.push(flag, id);
+  }
+  return args;
+}
+
 // The flags naming a create's or a render's template and its answers, and what goes to
 // standard input: the answers as JSON, or a create's plain `body` — never both.
 function templateSourceArguments(
@@ -685,37 +756,7 @@ export class OnetaskgraphClient {
   }
   // One targeted update of one task: at least one field has to be named.
   taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated> {
-    const method = "taskUpdate";
-    const args = [id];
-    if (options.title !== undefined) args.push("--title", options.title);
-    if (options.bodyFile !== undefined) {
-      args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
-    }
-    if (options.status !== undefined) args.push("--status", options.status);
-    if (options.statusName !== undefined) args.push("--status-name", options.statusName);
-    if (options.priority !== undefined) args.push("--priority", options.priority);
-    if (options.metadata !== undefined) {
-      // Checked as a whole first, as a create's metadata is.
-      const checked: Record<string, JsonValue> = JSON.parse(
-        jsonDocument(options.metadata, method, "metadata"),
-      );
-      for (const [key, value] of Object.entries(checked)) {
-        args.push("--metadata", `${key}=${JSON.stringify(value)}`);
-      }
-    }
-    for (const key of stringList(method, "removeMetadata", options.removeMetadata)) {
-      args.push("--remove-metadata", key);
-    }
-    for (const [name, flag, values] of [
-      ["delivers", "--delivers", options.delivers],
-      ["dependsOn", "--depends-on", options.dependsOn],
-    ] as const) {
-      if (values === undefined) continue;
-      const ids = stringList(method, name, values);
-      if (ids.length === 0) args.push(flag === "--delivers" ? "--no-delivers" : "--no-depends-on");
-      for (const id of ids) args.push(flag, id);
-    }
-    return this.run("task update", args);
+    return this.run("task update", [id, ...taskUpdateFlags(options)]);
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];

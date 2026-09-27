@@ -2379,6 +2379,22 @@ async fn a_targeted_update_answered_for_another_task_is_malformed() {
         "update_task"
     );
 
+    // Nor is one saying it wrote a field the update never named.
+    let mut unnamed = other.clone();
+    unnamed["task"]["id"] = json!("T-1");
+    unnamed["written"] = json!(["status", "title"]);
+    let (source, _) = recording(vec![handshake.clone(), json!({"outcome": unnamed})]);
+    let refused = source
+        .expect("the handshake completes")
+        .update_task(&NativeId::from("T-1"), &settling())
+        .await
+        .expect_err("a field the update did not name");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message }
+            if message.contains("title") && message.contains("did not name")),
+        "{refused:?}"
+    );
+
     // An answer leaving the member out says nothing about whether the task is there.
     let (source, _) = recording(vec![handshake, json!({})]);
     assert!(matches!(

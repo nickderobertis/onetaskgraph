@@ -18,6 +18,8 @@ import {
   OnetaskgraphValidationError,
   assertCompleteCommandSurface,
   clientCommands,
+  taskUpdateFlags,
+  taskUpdateOptionFlags,
 } from "../src/index.ts";
 import type { CopyReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
@@ -679,6 +681,52 @@ test("several fields of one task are updated in one call through the real binary
   } finally {
     rmSync(updateRoot, { recursive: true, force: true });
   }
+});
+
+test("taskUpdate sends exactly the flags the binary's task update reports, no more and no fewer", () => {
+  // The option-to-flag table is a second statement of the command line, so it is reconciled
+  // against the binary's own help both ways: a flag the binary gains that no option sends, and
+  // an option sending a flag the binary does not have, each fail here.
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  // The global flags every verb takes, which `config show`, having none of its own, reports alone.
+  const global = flags(["config", "show"]);
+  const own = [...flags(["task", "update"])].filter((flag) => !global.has(flag)).sort();
+  const sent = new Set(
+    [
+      ...taskUpdateFlags({
+        title: "t",
+        bodyFile: "body.md",
+        status: "done",
+        statusName: "Shipped",
+        priority: "low",
+        metadata: { "myapp.a": 1 },
+        removeMetadata: ["myapp.b"],
+        delivers: ["work:T-2"],
+        dependsOn: ["work:T-3"],
+      }),
+      ...taskUpdateFlags({ delivers: [], dependsOn: [] }),
+    ].filter((argument) => argument.startsWith("--")),
+  );
+  expect([...sent].sort()).toEqual(own);
+  for (const flag of Object.values(taskUpdateOptionFlags)) expect(own).toContain(flag);
+});
+
+test("taskUpdate refuses options it could not send as the caller wrote them", () => {
+  expect(() => taskUpdateFlags(null)).toThrow("options is not an object");
+  expect(() => taskUpdateFlags([])).toThrow("options is not an object");
+  expect(() => taskUpdateFlags({ title: 3 })).toThrow("title is not a string");
+  expect(() => taskUpdateFlags({ status: ["done"] })).toThrow("status is not a string");
+  expect(() => taskUpdateFlags({ labels: ["x"] })).toThrow("labels, which names no field");
+  expect(() => taskUpdateFlags({ removeMetadata: "myapp.a" })).toThrow("is not an array");
+  expect(() => taskUpdateFlags({ metadata: { "myapp.a": () => 1 } })).toThrow("metadata");
 });
 
 test("a task's key reaches list, show and search beside its id, and is absent where none", async () => {
