@@ -130,6 +130,33 @@ def test_template_render_hands_the_answers_over_on_stdin_and_never_prompts(
     assert rendered.digest == described.digest
 
 
+def test_a_caller_setting_interactive_back_on_is_refused_rather_than_prompted(
+    binary: Path, tmp_path: Path
+) -> None:
+    """`--set` outranks the SDK's --no-interactive, and the pipe it hands over is no terminal."""
+    task, library = template(tmp_path)
+    client = Client(binary, cwd=tmp_path)
+
+    async def render() -> RenderedTemplate:
+        # Bounded, so a call that waited on a prompt fails here instead of hanging the suite.
+        return await asyncio.wait_for(
+            client.template_render(
+                str(task),
+                search_path=[str(library)],
+                set=["interactive=true"],
+                answers={"steps": ["build"]},
+            ),
+            timeout=60,
+        )
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(render())
+    assert refused.value.exit_code == 2
+    assert "title" in str(refused.value)
+    assert "not a terminal" in str(refused.value)
+    assert "--no-interactive" in str(refused.value)
+
+
 def test_every_refused_answer_is_exit_two_naming_what_it_refuses(
     binary: Path, tmp_path: Path
 ) -> None:
