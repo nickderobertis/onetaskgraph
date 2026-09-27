@@ -4701,8 +4701,9 @@ answers: {
 body: string
 /**
  * The digest of every file of the chain these answers render, in first-load order:
- * `sha256:` and 64 lowercase hex digits. Each template an expression named for these
- * answers is in that order where the tag naming it is, as a literal's file would be.
+ * `sha256:` and 64 lowercase hex digits. That is the order the render first read each
+ * file, a template an expression named included, then any file of the chain it did not
+ * read.
  */
 digest: string
 [k: string]: any

@@ -703,7 +703,6 @@ fn a_template_named_by_an_expression_is_loaded_as_the_render_reaches_it() {
     answers.set("kind", json!("plain"));
     let rendered = template.render(&answers).expect("renders");
     assert_eq!(rendered.body, "a plain part\n");
-    // What the render read is in its digest: the root, then the file its expression named.
     assert_eq!(template.digest(), expected_digest(&[("root.md", root)]));
     assert_eq!(
         rendered.digest,
@@ -1233,8 +1232,6 @@ fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_li
         .load_name("root.md")
         .expect("it loads");
 
-    // The expression-named include is read before the literal one below it, and what it names
-    // by a literal before that too: first-load order, which C1 takes the digest in.
     let in_load_order = expected_digest(&[
         ("root.md", ORDERED_ROOT),
         ("first.md", FIRST),
@@ -1568,4 +1565,49 @@ fn expressions_whose_defaults_name_each_other_in_turn_are_refused_until_answered
     let mut answers = Answers::new();
     answers.set("pick", json!("y"));
     assert_eq!(template.render(&answers).expect("renders").body, "YL");
+}
+
+#[test]
+fn the_digest_follows_the_order_a_render_reads_its_files_across_loop_iterations() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  parts: {description: which, type: list, default: [\"1\", \"2\"]}\n---\n\
+                {% for p in parts %}\
+                {% include \"a\" ~ p ~ \".md\" %}{% include \"b\" ~ p ~ \".md\" %}{% include \"lit.md\" %}\
+                {% endfor %}\
+                {% if false %}{% include \"never.md\" %}{% endif %}\
+                {% include \"z.md\" %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("a1.md", "A1")
+        .with_template("b1.md", "B1")
+        .with_template("a2.md", "A2")
+        .with_template("b2.md", "B2")
+        .with_template("lit.md", "L")
+        .with_template("z.md", "Z")
+        .with_template("never.md", "N")
+        .load_name("root.md")
+        .expect("it loads");
+
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "A1B1LA2B2LZ");
+    let read_first = [
+        ("root.md", root),
+        ("a1.md", "A1"),
+        ("b1.md", "B1"),
+        ("lit.md", "L"),
+        ("a2.md", "A2"),
+        ("b2.md", "B2"),
+        ("z.md", "Z"),
+        ("never.md", "N"),
+    ];
+    assert_eq!(
+        rendered.digest,
+        expected_digest(&read_first),
+        "an untaken branch's file, never read, follows every file the render read"
+    );
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        read_first.map(|(name, _)| name)
+    );
+    assert_eq!(expanded.digest(), rendered.digest);
 }

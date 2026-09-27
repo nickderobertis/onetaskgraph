@@ -43,7 +43,11 @@
 //! # The digest
 //!
 //! `sha256:` and the lowercase hex SHA-256 over, for each chain file in first-load order, its
-//! resolved name, a NUL, its full bytes — front matter included — and a NUL.
+//! resolved name, a NUL, its full bytes — front matter included — and a NUL. First-load
+//! order is the order rendering reads the files — for the chain's own digest, rendering with
+//! every variable at its default — the rendered file first, and a file named by an expression
+//! where the render first reads it like any other; the files no render reads, in a branch it
+//! did not take, follow in the order the chain names them.
 //!
 //! No prompting happens here. A caller that prompts asks [`Template::unanswered`] what is
 //! left, puts the answers it gathers over the ones it had with [`Answers::overlay`], and
@@ -686,7 +690,8 @@ impl TemplateLoader {
     /// names, depth first in the order its tags name them, skipping any already read. A tag
     /// naming its template by a literal names what it spells; one naming it by an expression
     /// names what `resolutions` records it evaluating to, in the order it was reached. That
-    /// order is the chain's first-load order, which the digest is taken in.
+    /// order is what nearness breaks ties by until [`Template::expand`] reads the chain in
+    /// first-load order.
     fn build(
         &self,
         name: String,
@@ -874,9 +879,8 @@ struct ChainFile {
 
 /// Merge every chain file's declarations into the declared set.
 ///
-/// Nearness is the fewest references from the rendered file, ties going to the file loaded
-/// first; the order is the files' first-load order, each variable where it was first
-/// declared.
+/// Nearness is the fewest references from the rendered file, ties going to the file earlier
+/// in `files`; the order is theirs, each variable where it was first declared.
 fn merge(files: &[ChainFile]) -> Result<Vec<TemplateVariable>, TemplateError> {
     let index_of: HashMap<&str, usize> = files
         .iter()
@@ -1037,8 +1041,9 @@ pub struct RenderedTemplate {
     /// The rendered text.
     pub body: String,
     /// The digest of every file of the chain these answers render, in first-load order:
-    /// `sha256:` and 64 lowercase hex digits. Each template an expression named for these
-    /// answers is in that order where the tag naming it is, as a literal's file would be.
+    /// `sha256:` and 64 lowercase hex digits. That is the order the render first read each
+    /// file, a template an expression named included, then any file of the chain it did not
+    /// read.
     pub digest: String,
     /// Every declared variable and the value it rendered with — an answer, a default, or
     /// `null` for an optional variable given neither.
@@ -1077,10 +1082,11 @@ impl Template {
     /// every tag naming a template by an expression reporting what it named. A file found that
     /// way may declare a variable, or a nearer default, that decides what an expression
     /// names, so it repeats until a render names what the one before it did; a file only an
-    /// earlier render named is not part of the chain. Each file so found takes its place in the chain at the tag that
-    /// names it, exactly as a file a literal names would: its nearness is its own distance
-    /// from the rendered template, and it is in first-load order where that tag is. A template
-    /// named by no expression expands to itself.
+    /// earlier render named is not part of the chain. Each file so found joins the chain at
+    /// the tag that names it, exactly as a file a literal names would: its nearness is its own
+    /// distance from the rendered template. The expanded chain is in first-load order — the
+    /// order that last render first read each file, then any it did not read. A template
+    /// named by no expression expands to its own files in that order.
     ///
     /// [`Template::unanswered`], [`Template::resolve`] and [`Template::render`] each expand
     /// first, so a caller need not.
@@ -1097,7 +1103,7 @@ impl Template {
         let mut expanded = self.clone();
         let mut named = vec![expanded.resolutions.clone()];
         loop {
-            let resolutions = discover(
+            let Discovered { resolutions, read } = discover(
                 &expanded.name,
                 &expanded.files,
                 &expanded.variables,
@@ -1105,7 +1111,15 @@ impl Template {
                 answers,
             )?;
             if resolutions == expanded.resolutions {
-                return Ok(expanded);
+                let files = in_read_order(expanded.files, &read);
+                let variables = merge(&files)?;
+                return Ok(Self::assemble(
+                    self.name.clone(),
+                    files,
+                    variables,
+                    resolutions,
+                    self.loader.clone(),
+                ));
             }
             if named.contains(&resolutions) {
                 return Err(TemplateError::malformed(
@@ -1154,10 +1168,11 @@ impl Template {
         &self.variables
     }
 
-    /// The resolved name of every file of the chain, in first-load order: the files
-    /// [`Template::digest`] is taken over. For a loaded template these are the rendered one
-    /// and each `extends`, `include` and `import` its literals reach; a template an expression
-    /// names joins them in what [`Template::expand`] answers.
+    /// The resolved name of every file of the chain: the files [`Template::digest`] is taken
+    /// over, in its order. For a loaded template these are the rendered one and each
+    /// `extends`, `include` and `import` its literals reach, in the order they name them;
+    /// what [`Template::expand`] answers adds each template an expression names, all in
+    /// first-load order.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
     }
@@ -1320,7 +1335,7 @@ fn discover(
     variables: &[TemplateVariable],
     loader: &TemplateLoader,
     answers: &Answers,
-) -> Result<Resolutions, TemplateError> {
+) -> Result<Discovered, TemplateError> {
     let mut context = BTreeMap::new();
     for variable in variables {
         let answered = match answers.given(&variable.name) {
@@ -1339,11 +1354,17 @@ fn discover(
     let loader = loader.clone();
     let failed: Arc<Mutex<Option<TemplateError>>> = Arc::default();
     let failure = Arc::clone(&failed);
+    let read: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reading = Arc::clone(&read);
     let mut environment = environment();
     environment.set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
     let recorded = record_names(&mut environment, files);
     environment.set_loader(move |name| {
+        let mut reading = reading.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(body) = bodies.get(name) {
+            if !reading.iter().any(|read| read == name) {
+                reading.push(name.to_owned());
+            }
             return Ok(Some(body.clone()));
         }
         let source = match loader.find(name) {
@@ -1369,8 +1390,41 @@ fn discover(
     if let Some(error) = failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
         return Err(error);
     }
-    let recorded = recorded.lock().unwrap_or_else(PoisonError::into_inner);
-    Ok(recorded.clone())
+    let resolutions = recorded
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let read = read.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    Ok(Discovered { resolutions, read })
+}
+
+/// What a lenient render of a chain found: what its naming expressions named, and which of
+/// the chain's files it read, in the order it first read each.
+struct Discovered {
+    resolutions: Resolutions,
+    read: Vec<String>,
+}
+
+/// `files` in first-load order: the root, then every file a render of them read in the order
+/// it first read it, then the files no render reaches — an untaken branch's — in the order
+/// the chain names them.
+fn in_read_order(files: Vec<ChainFile>, read: &[String]) -> Vec<ChainFile> {
+    let mut files: Vec<(usize, ChainFile)> = files
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| {
+            let at = if index == 0 {
+                0
+            } else {
+                read.iter()
+                    .position(|name| *name == file.name)
+                    .map_or(read.len() + index, |at| at + 1)
+            };
+            (at, file)
+        })
+        .collect();
+    files.sort_by_key(|(at, _)| *at);
+    files.into_iter().map(|(_, file)| file).collect()
 }
 
 /// A minijinja failure as the template failure it is, located in the file's own lines.

@@ -370,9 +370,9 @@ it. The declared set is every chain file's front matter together: a redeclaratio
 `description`, `default` and `required` — the file nearer the rendered one wins — but never
 `type` or `items`, which is refused naming both files. A template named by an expression —
 `{% include kind ~ ".md" %}` — is part of the chain too, for the answers that name it, and
-takes its place there at the tag that names it, exactly as a file a literal names would: its
-front matter joins the declared set at its own distance from the rendered file, and its bytes
-join the digest in first-load order where that tag is. Rendering is strict — a name that is
+joins it at the tag that names it, exactly as a file a literal names would: its front matter
+joins the declared set at its own distance from the rendered file, and its bytes join the
+digest where rendering first reads it. Rendering is strict — a name that is
 neither declared nor set fails, naming it and its file — with no auto-escaping, trailing
 newlines kept, and `trim_blocks` and `lstrip_blocks` on. An optional variable with no
 answer and no default is `none`.

@@ -7,8 +7,8 @@
 //! template by a string literal, or by a list of them, whichever branch it sits in. A tag
 //! naming one by an expression cannot be read before rendering, so it is found here by its
 //! place in the file instead, and [`hooked`] marks its expression so that a render reports
-//! what it named and where — which is how such a file takes its place in the chain at the
-//! tag that names it, as [`super::Template::expand`] says.
+//! what it named and where — which is how such a file joins the chain at the tag that names
+//! it, as [`super::Template::expand`] says.
 
 use std::ops::Range;
 

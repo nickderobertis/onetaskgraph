@@ -8509,7 +8509,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "digest": {
-        "description": "The digest of every file of the chain these answers render, in first-load order:\n`sha256:` and 64 lowercase hex digits. Each template an expression named for these\nanswers is in that order where the tag naming it is, as a literal's file would be.",
+        "description": "The digest of every file of the chain these answers render, in first-load order:\n`sha256:` and 64 lowercase hex digits. That is the order the render first read each\nfile, a template an expression named included, then any file of the chain it did not\nread.",
         "type": "string"
       }
     },
