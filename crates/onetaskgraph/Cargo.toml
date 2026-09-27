@@ -40,7 +40,6 @@ onetaskgraph-plugin-api.workspace = true
 onetaskgraph-status-options.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_norway.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
