@@ -677,6 +677,47 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
 }
 
 #[test]
+fn a_board_item_in_no_priority_costs_its_update_one_read_of_the_boards_fields() {
+    // GitHub leaves an empty single-select out of an item's field values, so an item with no
+    // priority does not say which options the Priority field has. The update reads the
+    // board's fields once for that, reads none of the board's items, and writes the one field.
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "github-projects", "config": config}
+    })));
+    board.assign_priority("T-1", None);
+    let id = qualified(SOURCE, "T-1");
+    let item_reads = board.board_item_reads().len();
+
+    let from = board.served().len();
+    let answer = answered(
+        "board",
+        &sandbox,
+        &["--json", "task", "update", &id, "--priority", "urgent"],
+    );
+    assert_eq!(
+        requests_since(&board, from),
+        ["read", "read", "updateProjectV2ItemFieldValue"],
+        "the item, the board's fields, and the priority write"
+    );
+    assert!(
+        board.served()[from + 1]
+            .0
+            .contains("boardFields:repositoryOwner"),
+        "the second read is of the board's fields"
+    );
+    assert_eq!(
+        board.board_item_reads().len(),
+        item_reads,
+        "no read of the board's items"
+    );
+    assert_eq!(written(&answer), ["priority"]);
+    assert_eq!(answer["spent"]["requests"], 3, "{answer}");
+    assert_eq!(board.priority("T-1").as_deref(), Some("Urgent"));
+}
+
+#[test]
 fn a_linear_update_sends_one_issue_update_of_what_differs() {
     let row = ROWS
         .iter()

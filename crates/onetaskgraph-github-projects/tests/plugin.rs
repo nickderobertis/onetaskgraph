@@ -12769,6 +12769,35 @@ async fn a_targeted_update_is_one_read_one_body_update_and_one_status_write() {
 }
 
 #[tokio::test]
+async fn an_item_holding_no_status_costs_its_update_one_read_of_the_boards_fields() {
+    // GitHub leaves an empty single-select out of an item's field values, so an item in no
+    // Status column does not say which options the board has. The update reads the board's
+    // fields once for that. It does not read the board's items, and it sends only the
+    // status write.
+    let fixture = update_board(Item::issue("I_1", "a task").body("The prose."));
+    let requests_before = fixture.documents().len();
+    let outcome = source(&fixture)
+        .update_task(
+            &id("I_1"),
+            &TaskUpdate {
+                status: Some(status(StatusCategory::InProgress, "in-progress")),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect("the update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        every_request(&fixture)[requests_before..],
+        ["issue", "boardFields", "updateProjectV2ItemFieldValue"],
+        "one read of the item, one of the board's fields, and the status write"
+    );
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+    assert_eq!(outcome.written, BTreeSet::from([UpdatedField::Status]));
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+}
+
+#[tokio::test]
 async fn a_terminal_status_selects_its_option_then_closes_in_the_one_body_update() {
     let fixture = update_board(settled_task());
     let source = source(&fixture);
