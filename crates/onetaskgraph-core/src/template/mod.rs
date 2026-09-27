@@ -73,7 +73,7 @@ pub use answers::Answers;
 use answers::Given;
 pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
 pub use input::{LoaderDocument, TemplateInput};
-pub use provenance::{TemplateProvenance, answers_digest, body_digest};
+pub use provenance::{Sha256Digest, TemplateProvenance, answers_digest, body_digest};
 
 /// What one variable holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]

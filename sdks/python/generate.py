@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -176,12 +176,19 @@ OPTION_PLACEHOLDERS = {
     "var": "NAME=VALUE",
 }
 
-# Options one command spells differently from every other that shares their name, by command:
-# the type and the placeholder that command's help really reports. `task create` takes one
-# `--status`, the category the task is created in, where every list verb takes several to
-# filter by.
-COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, tuple[str, str | None]]] = {
-    ("task", "create"): {"status": ("choices", "CATEGORY")},
+
+class OptionShape(NamedTuple):
+    """How one command's help spells an option: the type generated for it, and its placeholder."""
+
+    type: str
+    placeholder: str | None
+
+
+# Options one command spells differently from every other that shares their name, by command.
+# `task create` takes one `--status`, the category the task is created in, where every list verb
+# takes several to filter by.
+COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
+    ("task", "create"): {"status": OptionShape(type="choices", placeholder="CATEGORY")},
 }
 
 
@@ -307,7 +314,7 @@ def validate_option_placeholders(
     """Reject help whose option value shapes drifted from generated typing."""
     overrides = COMMAND_OPTIONS.get(command, {})
     for name in names:
-        expected = overrides[name][1] if name in overrides else OPTION_PLACEHOLDERS[name]
+        expected = overrides[name].placeholder if name in overrides else OPTION_PLACEHOLDERS[name]
         if placeholders[name] != expected:
             raise SystemExit(
                 f"binary changed the value shape for option --{name.replace('_', '-')}"
@@ -317,7 +324,7 @@ def validate_option_placeholders(
 def option_type(command: tuple[str, ...], name: str) -> str:
     """Derive finite option domains from clap help and scalar shapes from placeholders."""
     overrides = COMMAND_OPTIONS.get(command, {})
-    configured = overrides[name][0] if name in overrides else OPTION_TYPES[name]
+    configured = overrides[name].type if name in overrides else OPTION_TYPES[name]
     if configured not in {"choices", "choice_list"}:
         return configured
     cli_name = name.removesuffix("_").replace("_", "-")
@@ -752,18 +759,32 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "",
         "",
         "def _stdin(",
-        "    method: str, body: str | None, answers: Mapping[str, JsonValue] | None",
+        "    method: str,",
+        "    body: str | None,",
+        "    answers: Mapping[str, JsonValue] | None,",
+        "    named: bool = False,",
         ") -> str | None:",
         '    """What a create or a render writes to the binary\'s standard input.',
         "",
         "    The answers as JSON, or a create's plain body — never both, because standard input",
-        "    holds one document.",
+        "    holds one document; and never a body beside a template, a loader document or a body",
+        "    file (`named`), which the binary reads instead of it.",
         '    """',
         "    if body is not None and answers is not None:",
         "        message = (",
         '            f"{method}: body and answers both go to standard input; next: pass a body "',
         '            "without a template, or answers with one"',
         "        )",
+        "        raise TypeError(message)",
+        "    if body is not None and named:",
+        "        message = (",
+        '            f"{method}: body is read only when no template, template_loader or "',
+        '            "body_file names the body; next: pass one of them, not both"',
+        "        )",
+        "        raise TypeError(message)",
+        "    if body is not None and not isinstance(body, str):",
+        "        kind = type(body).__name__",
+        '        message = f"{method}: body is a {kind}, not a string"',
         "        raise TypeError(message)",
         "    if answers is not None:",
         "        return _answers_document(method, answers)",
@@ -843,8 +864,13 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         ]
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
-            has_body = "body" if command in BODY_COMMANDS else "None"
-            passed.append(f"stdin=_stdin({name!r}, {has_body}, answers)")
+            if command in BODY_COMMANDS:
+                named = (
+                    "template is not None or template_loader is not None or body_file is not None"
+                )
+                passed.append(f"stdin=_stdin({name!r}, body, answers, {named})")
+            else:
+                passed.append(f"stdin=_stdin({name!r}, None, answers)")
         elif body:
             passed.append("stdin=body")
         lines.extend(

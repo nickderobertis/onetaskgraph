@@ -589,7 +589,7 @@ impl Engine {
                 source: id.source.to_string(),
             }),
             (Some(recorded), Some(answers))
-                if crate::template::answers_digest(answers) != recorded.answers_digest =>
+                if crate::template::answers_digest(answers) != recorded.answers_digest.as_str() =>
             {
                 Some(UnusedAnswers::OutOfStep)
             }

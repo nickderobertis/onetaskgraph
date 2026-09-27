@@ -34,6 +34,12 @@ pub struct LoaderDocument {
 }
 
 impl LoaderDocument {
+    /// Every key a loader document is read for, in the order the contract states them — the
+    /// reader below takes its keys from here, and the documentation's examples are held to it.
+    /// Every other key is ignored.
+    pub const KEYS: [&'static str; 5] =
+        ["reference", "entry", "search_path", "templates", "digest"];
+
     /// Read a loader document from its JSON text.
     ///
     /// # Errors
@@ -56,14 +62,21 @@ impl LoaderDocument {
                 Some(_) => Err(malformed(format!("`{key}` is not a string"))),
             }
         };
-        let reference = text_at("reference")?
+        let [
+            reference_key,
+            entry_key,
+            search_key,
+            templates_key,
+            digest_key,
+        ] = Self::KEYS;
+        let reference = text_at(reference_key)?
             .filter(|reference| !reference.is_empty())
-            .ok_or_else(|| malformed("`reference` is missing or empty".to_owned()))?;
-        let entry = text_at("entry")?
+            .ok_or_else(|| malformed(format!("`{reference_key}` is missing or empty")))?;
+        let entry = text_at(entry_key)?
             .filter(|entry| !entry.is_empty())
-            .ok_or_else(|| malformed("`entry` is missing or empty".to_owned()))?;
-        let digest = text_at("digest")?;
-        let search_path = match document.get("search_path") {
+            .ok_or_else(|| malformed(format!("`{entry_key}` is missing or empty")))?;
+        let digest = text_at(digest_key)?;
+        let search_path = match document.get(search_key) {
             None => Vec::new(),
             Some(Value::Array(directories)) => directories
                 .iter()
@@ -73,15 +86,17 @@ impl LoaderDocument {
                         Ok(PathBuf::from(directory))
                     }
                     Value::String(directory) => Err(malformed(format!(
-                        "`search_path[{index}]` is {directory:?}, which is not an absolute \
+                        "`{search_key}[{index}]` is {directory:?}, which is not an absolute \
                          directory"
                     ))),
-                    _ => Err(malformed(format!("`search_path[{index}]` is not a string"))),
+                    _ => Err(malformed(format!(
+                        "`{search_key}[{index}]` is not a string"
+                    ))),
                 })
                 .collect::<Result<_, _>>()?,
-            Some(_) => return Err(malformed("`search_path` is not a list".to_owned())),
+            Some(_) => return Err(malformed(format!("`{search_key}` is not a list"))),
         };
-        let templates = match document.get("templates") {
+        let templates = match document.get(templates_key) {
             None => Vec::new(),
             Some(Value::Array(pairs)) => pairs
                 .iter()
@@ -90,14 +105,14 @@ impl LoaderDocument {
                     let field = |key: &str| match pair.get(key) {
                         Some(Value::String(text)) => Ok(text.clone()),
                         _ => Err(malformed(format!(
-                            "`templates[{index}]` has no string `{key}`; each entry is \
+                            "`{templates_key}[{index}]` has no string `{key}`; each entry is \
                              {{\"name\": <name>, \"source\": <text>}}"
                         ))),
                     };
                     Ok((field("name")?, field("source")?))
                 })
                 .collect::<Result<_, TemplateError>>()?,
-            Some(_) => return Err(malformed("`templates` is not a list".to_owned())),
+            Some(_) => return Err(malformed(format!("`{templates_key}` is not a list"))),
         };
         Ok(Self {
             reference,

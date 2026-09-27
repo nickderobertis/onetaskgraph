@@ -73,6 +73,6 @@ pub use subprocess::{
 };
 pub use template::{
     Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, LoaderDocument,
-    RenderedTemplate, Template, TemplateError, TemplateInput, TemplateLoader, TemplateProvenance,
-    TemplateVariable, TemplateVariables, VariableType,
+    RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput, TemplateLoader,
+    TemplateProvenance, TemplateVariable, TemplateVariables, VariableType,
 };

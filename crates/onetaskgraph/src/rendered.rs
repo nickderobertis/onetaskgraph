@@ -238,9 +238,24 @@ fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
             ),
         ))
     })?;
+    // Qualified with the source it is created in, a project is that source's own; qualified
+    // with any other configured source it names a project the item cannot be filed under, and is
+    // refused rather than read as a native id full of colons. A prefix naming no configured
+    // source is part of a native id, as `task list --project` reads one.
     let project = match GlobalId::from_str(&args.project) {
         Ok(id) if id.source == source => id.native,
-        _ => NativeId::from(args.project.as_str()),
+        Ok(id) if loaded.config.sources().contains_key(&id.source) => {
+            return Err(Refusal::Failed(Failure::decided(
+                "project-in-another-source",
+                format!(
+                    "--project {}: that project is in source {}, and this creates in {source}; an \
+                     item is filed under a project of its own source\n\
+                     next: name a project of {source}, or create the item in {}.",
+                    args.project, id.source, id.source
+                ),
+            )));
+        }
+        Ok(_) | Err(_) => NativeId::from(args.project.as_str()),
     };
     let repositories = args
         .repository

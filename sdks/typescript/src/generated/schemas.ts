@@ -12106,20 +12106,27 @@ export const runtimeSchemas = {
     "type": "object"
   },
   "TemplateProvenance": {
+    "$defs": {
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What a task or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
     "properties": {
       "answers_digest": {
-        "description": "`sha256:` and the lowercase hex SHA-256 of the resolved answers — defaults applied — as\ncanonical JSON: keys sorted, no insignificant whitespace, UTF-8.",
-        "type": "string"
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,\nno insignificant whitespace, UTF-8."
       },
       "body_digest": {
-        "description": "`sha256:` and the lowercase hex SHA-256 of the item's content exactly as written.",
-        "type": "string"
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The SHA-256 of the item's content exactly as written."
       },
       "digest": {
-        "description": "The chain digest the content was rendered with: `sha256:` and 64 lowercase hex digits.",
-        "type": "string"
+        "$ref": "#/$defs/Sha256Digest",
+        "description": "The chain digest the content was rendered with."
       },
       "template": {
         "description": "The template it was rendered from: the absolute path of a template file, or a loader\ndocument's `reference` verbatim. Recorded whole, whatever its length.",

@@ -145,12 +145,15 @@ async fn a_task_created_from_a_loader_document_records_provenance_and_stores_its
         provenance.template, "caller:task/default",
         "the reference, verbatim"
     );
-    assert_eq!(provenance.body_digest, sha256(&content));
+    assert_eq!(provenance.body_digest.as_str(), sha256(&content));
     assert_eq!(
-        provenance.answers_digest,
+        provenance.answers_digest.as_str(),
         sha256(r#"{"goal":"Ship it","owner":null,"steps":["build"]}"#)
     );
-    assert_eq!(provenance.digest, template.load().unwrap().digest());
+    assert_eq!(
+        provenance.digest.as_str(),
+        template.load().unwrap().digest()
+    );
     assert_eq!(read.metadata["caller.kept"], json!({"nested": [1, true]}));
 
     let stored = fixture
@@ -256,14 +259,15 @@ async fn an_edited_loader_document_changes_the_digest_and_the_rendering() {
         .unwrap();
 
     assert_ne!(
-        regenerated.digest, before.digest,
+        regenerated.digest,
+        before.digest.as_str(),
         "an inline pair is a chain source"
     );
     assert_eq!(regenerated.body, "# Task, edited\n\nGoal: Ship it\n");
     let after = TemplateProvenance::read(&task(&fixture.engine, &id).await.metadata)
         .unwrap()
         .unwrap();
-    assert_eq!(after.digest, regenerated.digest);
+    assert_eq!(after.digest.as_str(), regenerated.digest);
     assert_eq!(
         after.answers_digest, before.answers_digest,
         "the same answers"
@@ -412,7 +416,11 @@ async fn a_regenerate_needs_a_template_it_can_read_and_never_turns_a_reference_i
         .await
         .unwrap();
     assert!(regenerated.body.starts_with("Edited. Goal: From a file"));
-    assert_ne!(regenerated.digest, recorded.digest, "the file changed");
+    assert_ne!(
+        regenerated.digest,
+        recorded.digest.as_str(),
+        "the file changed"
+    );
 }
 
 #[tokio::test]

@@ -142,17 +142,33 @@ def _strings(method: str, option: str, values: object) -> list[str] | tuple[str,
     return values
 
 
-def _stdin(method: str, body: str | None, answers: Mapping[str, JsonValue] | None) -> str | None:
+def _stdin(
+    method: str,
+    body: str | None,
+    answers: Mapping[str, JsonValue] | None,
+    named: bool = False,
+) -> str | None:
     """What a create or a render writes to the binary's standard input.
 
     The answers as JSON, or a create's plain body — never both, because standard input
-    holds one document.
+    holds one document; and never a body beside a template, a loader document or a body
+    file (`named`), which the binary reads instead of it.
     """
     if body is not None and answers is not None:
         message = (
             f"{method}: body and answers both go to standard input; next: pass a body "
             "without a template, or answers with one"
         )
+        raise TypeError(message)
+    if body is not None and named:
+        message = (
+            f"{method}: body is read only when no template, template_loader or "
+            "body_file names the body; next: pass one of them, not both"
+        )
+        raise TypeError(message)
+    if body is not None and not isinstance(body, str):
+        kind = type(body).__name__
+        message = f"{method}: body is a {kind}, not a string"
         raise TypeError(message)
     if answers is not None:
         return _answers_document(method, answers)
@@ -273,7 +289,12 @@ class GeneratedClient:
             template_loader=template_loader,
             var=_strings("document_create", "var", var),
             answers=None if answers is None else "-",
-            stdin=_stdin("document_create", body, answers),
+            stdin=_stdin(
+                "document_create",
+                body,
+                answers,
+                template is not None or template_loader is not None or body_file is not None,
+            ),
         )
 
     async def document_list(
@@ -852,7 +873,12 @@ class GeneratedClient:
             template_loader=template_loader,
             var=_strings("task_create", "var", var),
             answers=None if answers is None else "-",
-            stdin=_stdin("task_create", body, answers),
+            stdin=_stdin(
+                "task_create",
+                body,
+                answers,
+                template is not None or template_loader is not None or body_file is not None,
+            ),
         )
 
     async def task_deps(

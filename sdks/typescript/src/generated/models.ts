@@ -6455,16 +6455,16 @@ export namespace GeneratedTemplateProvenance {
  */
 export interface TemplateProvenance {
 /**
- * `sha256:` and the lowercase hex SHA-256 of the resolved answers — defaults applied — as
- * canonical JSON: keys sorted, no insignificant whitespace, UTF-8.
+ * The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,
+ * no insignificant whitespace, UTF-8.
  */
 answers_digest: string
 /**
- * `sha256:` and the lowercase hex SHA-256 of the item's content exactly as written.
+ * The SHA-256 of the item's content exactly as written.
  */
 body_digest: string
 /**
- * The chain digest the content was rendered with: `sha256:` and 64 lowercase hex digits.
+ * The chain digest the content was rendered with.
  */
 digest: string
 /**

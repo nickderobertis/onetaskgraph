@@ -394,6 +394,19 @@ function createArguments(
   if (options.bodyFile !== undefined) {
     args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
   }
+  // The binary reads a body from standard input only when nothing else names one, so a body
+  // beside a template, a loader document or a body file would be dropped in silence.
+  if (
+    options.body !== undefined &&
+    (options.template !== undefined ||
+      options.templateLoader !== undefined ||
+      options.bodyFile !== undefined)
+  ) {
+    throw new TypeError(
+      `${method}: body is read only when no template, templateLoader or bodyFile names the ` +
+        "body; next: pass one of them, not both",
+    );
+  }
   for (const label of stringList(method, "labels", options.labels)) args.push("--label", label);
   for (const repository of stringList(method, "repositories", options.repositories)) {
     args.push("--repository", repository);

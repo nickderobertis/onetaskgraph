@@ -23,6 +23,83 @@ use sha2::{Digest as _, Sha256};
 
 use super::RenderedTemplate;
 
+/// `sha256:` and 64 lowercase hex digits: the one form every hash a provenance entry records
+/// takes, and nothing else — built by hashing, or read and refused when it is not one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Sha256Digest(String);
+
+/// Written by hand rather than derived, so the schema states the form a digest must take and
+/// both SDKs' models refuse any other — a derive would describe the `String` it is read from.
+impl JsonSchema for Sha256Digest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Sha256Digest".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "`sha256:` and 64 lowercase hex digits.",
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+        })
+    }
+}
+
+impl Sha256Digest {
+    /// The digest of `bytes`.
+    #[must_use]
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(sha256(bytes))
+    }
+
+    /// The digest `text` spells.
+    ///
+    /// # Errors
+    ///
+    /// Why `text` is not `sha256:` and 64 lowercase hex digits.
+    pub fn parse(text: impl Into<String>) -> Result<Self, String> {
+        let text = text.into();
+        let hex = text.strip_prefix("sha256:").unwrap_or_default();
+        if hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            Ok(Self(text))
+        } else {
+            Err(format!(
+                "{text:?} is not a digest: `sha256:` and 64 lowercase hex digits"
+            ))
+        }
+    }
+
+    /// The digest as it is spelled.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Sha256Digest {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(text)
+    }
+}
+
+impl From<Sha256Digest> for String {
+    fn from(digest: Sha256Digest) -> Self {
+        digest.0
+    }
+}
+
+impl std::fmt::Display for Sha256Digest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// What a task or a document created or regenerated from a template records under
 /// [`TemplateProvenance::KEY`].
 ///
@@ -32,13 +109,13 @@ pub struct TemplateProvenance {
     /// The template it was rendered from: the absolute path of a template file, or a loader
     /// document's `reference` verbatim. Recorded whole, whatever its length.
     pub template: String,
-    /// The chain digest the content was rendered with: `sha256:` and 64 lowercase hex digits.
-    pub digest: String,
-    /// `sha256:` and the lowercase hex SHA-256 of the item's content exactly as written.
-    pub body_digest: String,
-    /// `sha256:` and the lowercase hex SHA-256 of the resolved answers — defaults applied — as
-    /// canonical JSON: keys sorted, no insignificant whitespace, UTF-8.
-    pub answers_digest: String,
+    /// The chain digest the content was rendered with.
+    pub digest: Sha256Digest,
+    /// The SHA-256 of the item's content exactly as written.
+    pub body_digest: Sha256Digest,
+    /// The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,
+    /// no insignificant whitespace, UTF-8.
+    pub answers_digest: Sha256Digest,
 }
 
 impl TemplateProvenance {
@@ -50,9 +127,10 @@ impl TemplateProvenance {
     pub fn of(template: impl Into<String>, rendered: &RenderedTemplate) -> Self {
         Self {
             template: template.into(),
-            digest: rendered.digest.clone(),
-            body_digest: body_digest(&rendered.body),
-            answers_digest: answers_digest(&rendered.answers),
+            // Every chain digest is computed by `template::digest`, in exactly this form.
+            digest: Sha256Digest(rendered.digest.clone()),
+            body_digest: Sha256Digest::of(rendered.body.as_bytes()),
+            answers_digest: Sha256Digest(answers_digest(&rendered.answers)),
         }
     }
 
@@ -67,32 +145,14 @@ impl TemplateProvenance {
         let Some(value) = metadata.get(Self::KEY) else {
             return Ok(None);
         };
-        let entry: Self = serde_json::from_value(value.clone()).map_err(|error| {
-            format!(
-                "its `{}` entry is not the four strings template, digest, body_digest and \
-                 answers_digest: {error}",
-                Self::KEY
-            )
-        })?;
-        for (field, digest) in [
-            ("digest", &entry.digest),
-            ("body_digest", &entry.body_digest),
-            ("answers_digest", &entry.answers_digest),
-        ] {
-            let hex = digest.strip_prefix("sha256:").unwrap_or_default();
-            if hex.len() != 64
-                || !hex
-                    .bytes()
-                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-            {
-                return Err(format!(
-                    "its `{}` entry's {field} is {digest:?}, not `sha256:` and 64 lowercase hex \
-                     digits",
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                format!(
+                    "its `{}` entry is not a template reference and three digests: {error}",
                     Self::KEY
-                ));
-            }
-        }
-        Ok(Some(entry))
+                )
+            })
     }
 
     /// The entry as the JSON value a metadata map holds.
@@ -192,9 +252,9 @@ mod tests {
     fn a_provenance_entry_reads_back_and_a_foreign_one_is_refused_by_name() {
         let entry = TemplateProvenance {
             template: "/t.md".to_owned(),
-            digest: format!("sha256:{}", "1".repeat(64)),
-            body_digest: body_digest("body"),
-            answers_digest: answers_digest(&BTreeMap::new()),
+            digest: Sha256Digest::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            body_digest: Sha256Digest::of(b"body"),
+            answers_digest: Sha256Digest::parse(answers_digest(&BTreeMap::new())).unwrap(),
         };
         let metadata = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), entry.to_value())]);
         assert_eq!(TemplateProvenance::read(&metadata), Ok(Some(entry.clone())));
@@ -211,7 +271,7 @@ mod tests {
         assert!(
             TemplateProvenance::read(&short)
                 .unwrap_err()
-                .contains("body_digest is \"sha256:abc\"")
+                .contains("\"sha256:abc\" is not a digest")
         );
     }
 }

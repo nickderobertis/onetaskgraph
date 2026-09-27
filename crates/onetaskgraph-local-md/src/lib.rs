@@ -1565,43 +1565,15 @@ impl TaskSource for LocalMdSource {
     }
 }
 
-/// The line that opens the template answers a task or a document stores in its own file.
+/// The line that opens the template answers a task or a document stores in its own file:
+/// this line, the answers as a YAML mapping, and a line that is exactly [`ANSWERS_CLOSE`],
+/// after the content and before a task's comments section. `docs/local-md.md` describes the
+/// block for a person.
 ///
-/// # The answers block, rule by rule
-///
-/// A task or a document created or regenerated from a template keeps the answers it was
-/// rendered from **in its own file and nowhere else**, after its content and — for a task —
-/// before its comments section:
-///
-/// ```markdown
-/// The rendered content, byte for byte.
-///
-/// <!-- onetaskgraph:template-answers
-/// goal: Ship the release
-/// steps:
-/// - build
-/// - publish
-/// -->
-/// ```
-///
-/// - The block is this line, the resolved answers as a YAML mapping, and a line that is
-///   exactly [`ANSWERS_CLOSE`]; it is the last thing above the comments section, and a file
-///   holds at most one. It is an HTML comment, so a Markdown renderer shows none of it.
-/// - It is in **neither the content nor the metadata**: a read reports the content above it,
-///   so a search never matches an answer, and nothing a query returns carries it. It is read
-///   only by [`task_template_answers`](TaskSource::task_template_answers) and its document
-///   sibling, and written only by a rendering write — a create from a template and a
-///   regenerate — in the same write that lands the content and the `onetaskgraph.template`
-///   provenance, so a file never holds a new content beside old answers.
-/// - Every other write keeps it byte for byte: a status, priority, metadata, delivered-by,
-///   content or comment write edits around it. A copy writes the item it carries and no
-///   answers, so a copy into an existing file leaves none behind.
-/// - A hand-written block is read on the same terms, and content that would itself end in one
-///   is refused rather than turned into answers nobody gave.
-/// - A project keeps no answers: the block in a project file is ordinary content.
-///
-/// `docs/local-md.md` describes the same block for a person; this is its one executable
-/// source.
+/// What the code holds to: the block is found as the **last** such block the
+/// text above the section ends in, so content can never end in one where none follows — a
+/// write whose content would read back that way is refused — and every write but a rendering
+/// write edits around it byte for byte. A project keeps none.
 pub const ANSWERS_OPEN: &str = "<!-- onetaskgraph:template-answers";
 
 /// The line that closes the stored answers block.

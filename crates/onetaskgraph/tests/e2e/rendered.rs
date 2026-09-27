@@ -538,6 +538,48 @@ fn a_reserved_metadata_key_and_an_unwritable_source_are_refused_and_nothing_is_w
     );
     assert!(!plan.notes.join("tasks").exists(), "nothing written");
 
+    let elsewhere = plan.exits(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "back:P-1",
+            "--title",
+            "Misfiled",
+            "--body-file",
+            &plan.file("body.md", "x"),
+        ],
+        1,
+    );
+    assert!(
+        stderr(&elsewhere).contains("that project is in source back"),
+        "{}",
+        stderr(&elsewhere)
+    );
+    assert!(!plan.notes.join("tasks").exists(), "nothing written");
+    let own = stdout(&plan.exits(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "notes:P-1",
+            "--title",
+            "Filed",
+            "--body-file",
+            &plan.file("body.md", "x"),
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    assert_eq!(
+        plan.task(&own)["project"],
+        "P-1",
+        "its own source's prefix is dropped"
+    );
+
     let unwritable = plan.exits(
         &[
             "task",
@@ -580,6 +622,96 @@ fn a_reserved_metadata_key_and_an_unwritable_source_are_refused_and_nothing_is_w
         "{}",
         stderr(&document)
     );
+}
+
+#[test]
+fn a_source_with_no_documents_or_no_write_side_refuses_before_writing_anything() {
+    let sandbox = Sandbox::new();
+    let templates = sandbox.subdirectory("templates");
+    std::fs::write(templates.join("task.md"), TASK).unwrap();
+    std::fs::write(templates.join("header.md"), HEADER).unwrap();
+    let digest = format!("sha256:{}", "0".repeat(64));
+    let recorded = json!({
+        "template": path(&std::path::absolute(templates.join("task.md")).unwrap()),
+        "digest": digest, "body_digest": digest, "answers_digest": digest,
+    });
+    sandbox.project_document(&document(&json!({
+        // Writable, and declaring no documents: the in-memory default.
+        "plain": {"plugin": "in-memory", "config": {}},
+        "frozen": {"plugin": "in-memory", "config": {
+            "capabilities": {"writes": "unsupported"},
+            "tasks": [{"id": "T-1", "title": "Held", "content": "As it was.",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                       "metadata": {"onetaskgraph.template": recorded}}],
+        }},
+    })));
+    let run = |arguments: &[&str]| {
+        sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone()
+    };
+    let body = sandbox.subdirectory("inputs").join("body.md");
+    std::fs::write(&body, "x").unwrap();
+
+    let documentless = run(&[
+        "document",
+        "create",
+        "plain",
+        "--project",
+        "P-1",
+        "--title",
+        "Design",
+        "--body-file",
+        &path(&body),
+    ]);
+    assert_eq!(
+        documentless.status.code(),
+        Some(1),
+        "{}",
+        stderr(&documentless)
+    );
+    assert!(
+        stderr(&documentless).contains("source plain has no documents"),
+        "{}",
+        stderr(&documentless)
+    );
+
+    let unwritable = run(&[
+        "task",
+        "render",
+        "frozen:T-1",
+        "--search-path",
+        &path(&templates),
+        "--var",
+        "goal=x",
+        "--no-interactive",
+    ]);
+    assert_eq!(unwritable.status.code(), Some(1), "{}", stderr(&unwritable));
+    assert!(
+        stderr(&unwritable).contains("source frozen cannot write a task's rendering"),
+        "{}",
+        stderr(&unwritable)
+    );
+    // The render itself happened — a dry run is what that source can be asked for.
+    let dry = run(&[
+        "task",
+        "render",
+        "frozen:T-1",
+        "--search-path",
+        &path(&templates),
+        "--var",
+        "goal=x",
+        "--dry-run",
+        "--no-interactive",
+        "--json",
+    ]);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let shown: Value =
+        serde_json::from_str(&stdout(&run(&["task", "show", "frozen:T-1", "--json"]))).unwrap();
+    assert_eq!(shown["items"][0]["item"]["content"], "As it was.");
 }
 
 #[test]

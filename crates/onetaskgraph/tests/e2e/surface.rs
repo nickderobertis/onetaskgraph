@@ -596,6 +596,78 @@ fn readme() -> String {
     std::fs::read_to_string(path).expect("the README is readable")
 }
 
+/// The object of every ```json block of `text` that parses as one.
+fn json_objects(text: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    text.split("```json\n")
+        .skip(1)
+        .filter_map(|block| block.split("\n```").next())
+        .filter_map(|block| serde_json::from_str::<serde_json::Value>(block).ok())
+        .filter_map(|value| value.as_object().cloned())
+        .collect()
+}
+
+#[test]
+fn the_documents_spell_the_provenance_entry_and_the_loader_document_as_the_binary_reads_them() {
+    // The README and `docs/metadata.md` each show the two shapes a caller writes against: the
+    // `onetaskgraph.template` entry an item records, and the loader document a caller supplies.
+    // Their keys are held to the emitted `TemplateProvenance` root and to the keys the loader
+    // document is read for, so neither example can drift from what the binary does.
+    let bundle: serde_json::Value = serde_json::from_slice(
+        &onetaskgraph()
+            .arg("schema")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("schema output is valid JSON");
+    let provenance: std::collections::BTreeSet<String> =
+        bundle["roots"]["TemplateProvenance"]["properties"]
+            .as_object()
+            .expect("the provenance root has properties")
+            .keys()
+            .cloned()
+            .collect();
+    let loader: std::collections::BTreeSet<String> = onetaskgraph_core::LoaderDocument::KEYS
+        .iter()
+        .map(|key| (*key).to_owned())
+        .collect();
+    let metadata_doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+
+    for (name, text, owes_provenance) in [
+        ("README.md", readme(), false),
+        ("docs/metadata.md", metadata_doc, true),
+    ] {
+        let objects = json_objects(&text);
+        let keys = |object: &serde_json::Map<String, serde_json::Value>| {
+            object
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<String>>()
+        };
+        let loaders: Vec<_> = objects.iter().filter(|o| o.contains_key("entry")).collect();
+        assert!(!loaders.is_empty(), "{name} shows no loader document");
+        for object in loaders {
+            assert_eq!(keys(object), loader, "{name}'s loader document example");
+        }
+        let entries: Vec<_> = objects
+            .iter()
+            .filter(|o| o.contains_key("answers_digest"))
+            .collect();
+        assert_eq!(
+            !entries.is_empty(),
+            owes_provenance,
+            "{name}'s provenance example"
+        );
+        for object in entries {
+            assert_eq!(keys(object), provenance, "{name}'s provenance example");
+        }
+    }
+}
+
 #[test]
 fn the_readme_documents_the_command_surface_this_binary_actually_has() {
     // The README spells the verbs, the flags and the exit codes a second time, for the

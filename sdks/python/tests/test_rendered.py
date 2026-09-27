@@ -98,18 +98,18 @@ def test_a_task_is_created_regenerated_and_its_answers_read_without_a_prompt(
     assert (task.item.metadata or {})["myapp.estimate"] == 3
     recorded = provenance(created)
     assert recorded.template == str(template.resolve())
-    assert recorded.body_digest == sha256(task.item.content)
+    assert recorded.body_digest.root == sha256(task.item.content)
 
     answers = run(client.task_answers(identifier))
     assert isinstance(answers, TemplateAnswers)
     assert answers.model_dump() == {"goal": "Ship it", "steps": ["build"]}
-    assert recorded.answers_digest == sha256('{"goal":"Ship it","steps":["build"]}')
+    assert recorded.answers_digest.root == sha256('{"goal":"Ship it","steps":["build"]}')
 
     regenerated = run(client.task_render(identifier, var=["goal=Ship it again"]))
     assert isinstance(regenerated, Regenerated)
     assert regenerated.changed
     assert regenerated.body == "Goal: Ship it again\n- build\n", "steps came from storage"
-    assert regenerated.digest == recorded.digest
+    assert regenerated.digest == recorded.digest.root
     again = run(client.task_render(identifier))
     assert not again.changed
 
@@ -184,6 +184,13 @@ def test_a_loader_document_names_the_template_and_body_with_answers_is_refused(
     )
     assert provenance(created).template == "caller:task"
 
+    with pytest.raises(TypeError, match="body is read only when no template"):
+        run(client.task_create("notes", "P-1", "Both", template=str(template), body="x"))
+    with pytest.raises(TypeError, match="body is read only when no template"):
+        run(client.document_create("notes", "P-1", "Both", body_file="b.md", body="x"))
+    with pytest.raises(TypeError, match="body is a int, not a string"):
+        # Deliberately outside the declared type, as a caller whose values reached it untyped.
+        run(client.task_create("notes", "P-1", "Typed", body=7))  # ty: ignore[invalid-argument-type]
     with pytest.raises(TypeError, match="body and answers both go to standard input"):
         run(
             client.task_create(

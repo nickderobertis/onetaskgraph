@@ -6,27 +6,33 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
+
+
+class Sha256Digest(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="`sha256:` and 64 lowercase hex digits.",
+            pattern="^sha256:[0-9a-f]{64}$",
+        ),
+    ]
 
 
 class TemplateProvenance(BaseModel):
     answers_digest: Annotated[
-        str,
+        Sha256Digest,
         Field(
-            description="`sha256:` and the lowercase hex SHA-256 of the resolved answers — defaults applied — as\ncanonical JSON: keys sorted, no insignificant whitespace, UTF-8."
+            description="The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,\nno insignificant whitespace, UTF-8."
         ),
     ]
     body_digest: Annotated[
-        str,
-        Field(
-            description="`sha256:` and the lowercase hex SHA-256 of the item's content exactly as written."
-        ),
+        Sha256Digest,
+        Field(description="The SHA-256 of the item's content exactly as written."),
     ]
     digest: Annotated[
-        str,
-        Field(
-            description="The chain digest the content was rendered with: `sha256:` and 64 lowercase hex digits."
-        ),
+        Sha256Digest,
+        Field(description="The chain digest the content was rendered with."),
     ]
     template: Annotated[
         str,

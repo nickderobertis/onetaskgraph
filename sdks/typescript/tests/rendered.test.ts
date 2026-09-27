@@ -182,6 +182,12 @@ test("a path, a body or metadata the binary could not be handed is refused befor
     "templateVariables: templateLoader is not a path",
   );
   await expect(
+    client.taskCreate("notes", "P-1", "Refused", { template, body: "ignored" }),
+  ).rejects.toThrow("taskCreate: body is read only when no template");
+  await expect(
+    client.documentCreate("notes", "P-1", "Refused", { bodyFile: "b.md", body: "ignored" }),
+  ).rejects.toThrow("documentCreate: body is read only when no template");
+  await expect(
     client.taskCreate("notes", "P-1", "Refused", { bodyFile: "--json" }),
   ).rejects.toThrow("taskCreate: bodyFile is not a path");
   await expect(
