@@ -558,6 +558,14 @@ function renderInvocation(
   id: string,
   options: RenderOptions,
 ): [string, string[], string | undefined] {
+  // A render reads no body: the binary renders one, so a `body` that reached here untyped would
+  // be written to standard input and never read.
+  if (isPlainObject(options) && (options as { body?: unknown }).body !== undefined) {
+    throw new TypeError(
+      `${method}: body is not an option of a render; next: pass answers or vars, which the ` +
+        "template renders the body from",
+    );
+  }
   const { args, input } = templateSourceArguments(method, options);
   for (const name of stringList(method, "unset", options.unset)) args.push("--unset", name);
   if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {

@@ -209,6 +209,16 @@ test("a path, a body or metadata the binary could not be handed is refused befor
     // Outside the declared type on purpose, as the `body` above is.
     client.taskRender("notes:design", { unset: ["ok", 3 as unknown as string] }),
   ).rejects.toThrow("taskRender: unset[1] is not a string");
+  for (const [method, render] of [
+    ["taskRender", client.taskRender.bind(client)],
+    ["documentRender", client.documentRender.bind(client)],
+  ] as const) {
+    await expect(
+      // Outside the declared type on purpose: a render has no body option, and one that
+      // reached it untyped would be written to a standard input the binary never reads.
+      render("notes:design", { body: "x" } as unknown as RenderOptions),
+    ).rejects.toThrow(`${method}: body is not an option of a render`);
+  }
 });
 
 test("every option of the create and render methods reaches the real binary as a flag it takes", async () => {
@@ -251,6 +261,16 @@ test("every option of the create and render methods reaches the real binary as a
     metadata: { "myapp.every": 1 },
   });
   expect(document.items[0]?.item.content).toBe("From a file.");
+  const regenerated = await client.documentRender(document.items[0]?.id ?? "", {
+    template,
+    searchPath: [root],
+    answers: { goal: "Again" },
+    vars: { steps: "[two]" },
+    unset: ["steps"],
+    dryRun: true,
+  });
+  expect(regenerated.body).toBe("Goal: Again\n");
+  expect(regenerated.changed).toBe(true);
   await expect(
     // Deliberately outside the declared type, as a caller whose values reached it untyped.
     client.taskRender(task?.id ?? "", [] as unknown as RenderOptions),
