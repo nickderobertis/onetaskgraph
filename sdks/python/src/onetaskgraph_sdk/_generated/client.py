@@ -92,6 +92,22 @@ def _answers_document(answers: Mapping[str, JsonValue]) -> str:
         raise TypeError(message) from error
 
 
+def _template_file(method: str, file: object) -> str:
+    """The template path, refused unless it is one.
+
+    Anything but a string would reach the binary as its string form, an empty one names
+    no file, and one opening with `-` would be read as an option rather than as the file
+    the caller named.
+    """
+    if not isinstance(file, str) or not file or file.startswith("-"):
+        message = (
+            f"{method}: file is not a template path; next: pass the template's "
+            "path as a non-empty string, spelling one that starts with `-` as `./-…`"
+        )
+        raise TypeError(message)
+    return file
+
+
 class GeneratedClient:
     """Methods generated from the binary command surface."""
 
@@ -806,7 +822,7 @@ class GeneratedClient:
         return await self._invoke(
             ["template", "render"],
             RenderedTemplate,
-            file=file,
+            file=_template_file("template_render", file),
             default_sources=default_sources,
             page_size=page_size,
             search_path=search_path,
@@ -829,7 +845,7 @@ class GeneratedClient:
         return await self._invoke(
             ["template", "variables"],
             TemplateVariables,
-            file=file,
+            file=_template_file("template_variables", file),
             default_sources=default_sources,
             page_size=page_size,
             search_path=search_path,

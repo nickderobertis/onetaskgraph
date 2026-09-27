@@ -564,6 +564,10 @@ BODY_COMMANDS = {("task", "comment", "add"), ("task", "comment", "edit")}
 # `--answers -`, so a caller holding answers needs no file to hand them over.
 ANSWERS_COMMANDS = {("template", "render")}
 
+# The commands whose `file` operand names a template, which generated methods check before the
+# binary is started: see `_template_file` below.
+TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
+
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     """Generate one typed method per discovered public command."""
@@ -631,6 +635,22 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '        message = f"template_render: answers are not a JSON mapping: {error}"',
         "        raise TypeError(message) from error",
         "",
+        "",
+        "def _template_file(method: str, file: object) -> str:",
+        '    """The template path, refused unless it is one.',
+        "",
+        "    Anything but a string would reach the binary as its string form, an empty one names",
+        "    no file, and one opening with `-` would be read as an option rather than as the file",
+        "    the caller named.",
+        '    """',
+        '    if not isinstance(file, str) or not file or file.startswith("-"):',
+        "        message = (",
+        '            f"{method}: file is not a template path; next: pass the template\'s "',
+        '            "path as a non-empty string, spelling one that starts with `-` as `./-…`"',
+        "        )",
+        "        raise TypeError(message)",
+        "    return file",
+        "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
         "",
@@ -692,6 +712,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         if parameters[-1] == "*":
             parameters.pop()
         passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
+        if command in TEMPLATE_FILE_COMMANDS:
+            passed[0] = f"file=_template_file({name!r}, file)"
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
             passed.append("stdin=None if answers is None else _answers_document(answers)")

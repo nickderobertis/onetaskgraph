@@ -196,3 +196,27 @@ def test_answers_json_cannot_carry_are_refused_before_the_binary_is_started(
                 answers=[("title", "t"), ("steps", [])],  # ty: ignore[invalid-argument-type]
             )
         )
+
+
+def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_is_started(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A non-string, an empty path and one the binary would read as an option are refused."""
+    _, library = template(tmp_path)
+    client = Client(binary, cwd=tmp_path)
+    # Deliberately outside the declared type, as a caller whose values reached it untyped.
+    refused: list[object] = [7, None, tmp_path / "task.md", "", "--json", "-"]
+    for file in refused:
+        with pytest.raises(TypeError, match="template_variables: file is not a template path"):
+            run(client.template_variables(file))  # ty: ignore[invalid-argument-type]
+        with pytest.raises(TypeError, match="template_render: file is not a template path"):
+            run(
+                client.template_render(
+                    file,  # ty: ignore[invalid-argument-type]
+                    search_path=[str(library)],
+                )
+            )
+
+    # The remedy the refusal names: the same file spelled from the directory it is in.
+    (tmp_path / "-dashed.md").write_text("dashed\n", encoding="utf-8")
+    assert run(client.template_render("./-dashed.md")).body == "dashed\n"

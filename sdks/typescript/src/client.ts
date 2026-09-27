@@ -234,6 +234,19 @@ function searchPathFlags(options: TemplateOptions): string[] {
   return flags;
 }
 
+// The template path, refused unless it is one: anything but a string would reach the binary as
+// its string form, an empty one names no file, and one opening with `-` would be read as an
+// option rather than as the file the caller named.
+function templateFile(method: string, file: unknown): string {
+  if (typeof file !== "string" || file.length === 0 || file.startsWith("-")) {
+    throw new TypeError(
+      `${method}: file is not a template path; next: pass the template's path as a non-empty ` +
+        "string, spelling one that starts with `-` as `./-…`",
+    );
+  }
+  return file;
+}
+
 // The answers as the JSON document the binary reads on standard input, refused here when a
 // value is not one JSON can carry: `JSON.stringify` would otherwise drop an `undefined` or a
 // function without a word, write a non-finite number or an array's hole as `null`, and throw
@@ -453,14 +466,17 @@ export class OnetaskgraphClient {
   }
 
   async templateVariables(file: string, options: TemplateOptions = {}): Promise<TemplateVariables> {
-    return this.run("template variables", [file, ...searchPathFlags(options)]);
+    return this.run("template variables", [
+      templateFile("templateVariables", file),
+      ...searchPathFlags(options),
+    ]);
   }
   // The answers go over standard input as JSON, which is YAML, so no file is written for them.
   async templateRender(
     file: string,
     options: TemplateRenderOptions = {},
   ): Promise<RenderedTemplate> {
-    const args = [file, ...searchPathFlags(options)];
+    const args = [templateFile("templateRender", file), ...searchPathFlags(options)];
     // Absent means none; an explicit `null` is not a mapping and is refused below.
     const vars = options.vars === undefined ? {} : options.vars;
     const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;

@@ -180,6 +180,27 @@ test("a search path entry that is not a path string is refused before the binary
   );
 });
 
+test("a template file that is not a path string is refused before the binary is started", async () => {
+  // Deliberately outside the declared type, as a caller whose values reached it untyped.
+  for (const file of [7, undefined, null, "", "--json", "-"]) {
+    const path = file as unknown as string;
+    await expect(client.templateVariables(path)).rejects.toThrow(
+      "templateVariables: file is not a template path",
+    );
+    await expect(client.templateRender(path, { searchPath: [library] })).rejects.toThrow(
+      "templateRender: file is not a template path",
+    );
+  }
+
+  // The remedy the refusal names: the same file spelled from the directory it is in.
+  const dashed = resolve(root, "-dashed.md");
+  writeFileSync(dashed, "dashed\n");
+  const rendered = await new OnetaskgraphClient({ binaryPath: binary, cwd: root }).templateRender(
+    "./-dashed.md",
+  );
+  expect(rendered.body).toBe("dashed\n");
+});
+
 test("answers that are not a mapping are refused before the binary is started", async () => {
   for (const answers of [["title", "t"], null, new Map([["title", "t"]])]) {
     const refused = client.templateRender(task, {
