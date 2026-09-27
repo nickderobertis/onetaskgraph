@@ -764,6 +764,59 @@ fn search_path_directories_are_searched_in_the_order_given() {
 }
 
 #[test]
+fn a_name_that_climbs_out_of_the_search_path_or_is_absolute_reads_nothing_outside_it() {
+    let outside = directory(&[("secret.md", "outside the search path\n")]);
+    let searched = outside.path().join("templates");
+    std::fs::create_dir(&searched).expect("the search directory");
+    std::fs::write(searched.join("inside.md"), "inside\n").expect("a template");
+    let secret = outside.path().join("secret.md");
+    let absolute = secret.to_str().expect("a UTF-8 path");
+    let loader = || TemplateLoader::new().with_directory(&searched);
+
+    for name in [
+        "../secret.md",
+        "./../secret.md",
+        "inside/../../secret.md",
+        absolute,
+    ] {
+        let error = loader()
+            .load_name(name)
+            .expect_err("the name is not looked for on disk");
+        assert!(
+            matches!(&error, TemplateError::NotFound { name: missing, .. } if missing == name),
+            "{name}: {error:?}"
+        );
+
+        let root = format!("{{% include {name:?} %}}");
+        let error = loader()
+            .with_template("root.md", root)
+            .load_name("root.md")
+            .expect_err("an include resolves inside the search path alone");
+        assert!(
+            matches!(
+                &error,
+                TemplateError::NotFound { name: missing, referenced_from: Some(from), .. }
+                    if missing == name && from == "root.md"
+            ),
+            "{name}: {error:?}"
+        );
+    }
+
+    // The same spelling registered in-process is the caller's own pair, and resolves.
+    let rendered = loader()
+        .with_template("../shared.md", "registered\n")
+        .with_template(
+            "root.md",
+            "{% include \"../shared.md\" %}{% include \"inside.md\" %}",
+        )
+        .load_name("root.md")
+        .expect("a registered pair is found by its name")
+        .render(&Answers::new())
+        .expect("renders");
+    assert_eq!(rendered.body, "registered\ninside\n");
+}
+
+#[test]
 fn boolean_and_object_list_answers_are_typed_as_declared() {
     let template = TemplateLoader::new()
         .with_template(

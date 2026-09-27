@@ -6,10 +6,9 @@
 //! serde position), and a file's variables keep the order they were written in, which is the
 //! order a prompt asks them in.
 
-use serde_json::Value;
 use serde_norway::Value as Yaml;
 
-use super::{ItemType, TemplateError, VariableType, check_value};
+use super::{ItemType, TemplateError, TemplateVariable, VariableType, check_value};
 
 /// The front matter's own version key, and the one value it may take.
 const VERSION_KEY: &str = "onetaskgraph_template";
@@ -35,24 +34,14 @@ fn listed(keys: &[&str]) -> String {
 
 /// A file with its front matter taken off.
 pub(super) struct Split {
-    /// The declarations the front matter made, in the order it made them.
-    pub declarations: Vec<Declaration>,
+    /// The declarations the front matter made, in the order it made them, each
+    /// `declared_in` this file until the chain is merged.
+    pub declarations: Vec<TemplateVariable>,
     /// What the renderer compiles: everything after the closing `---` line.
     pub body: String,
     /// How many lines the front matter took, so a body line number can be reported as the
     /// file's own.
     pub offset_lines: usize,
-}
-
-/// One variable as one file declares it, before the chain is merged.
-#[derive(Debug, Clone)]
-pub(super) struct Declaration {
-    pub name: String,
-    pub description: String,
-    pub kind: VariableType,
-    pub items: Option<ItemType>,
-    pub required: bool,
-    pub default: Option<Value>,
 }
 
 /// Split `source` into its declarations and its body.
@@ -115,7 +104,7 @@ fn trim_line_end(line: &str) -> &str {
 }
 
 /// Read the front matter mapping, refusing any key C1 does not define.
-fn read(file: &str, matter: &Yaml) -> Result<Vec<Declaration>, TemplateError> {
+fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateError> {
     let Yaml::Mapping(mapping) = matter else {
         return Err(TemplateError::malformed(
             file,
@@ -224,7 +213,11 @@ pub fn is_variable_name(name: &str) -> bool {
 }
 
 /// One variable's declaration, refused by key.
-fn declaration_of(file: &str, name: String, value: &Yaml) -> Result<Declaration, TemplateError> {
+fn declaration_of(
+    file: &str,
+    name: String,
+    value: &Yaml,
+) -> Result<TemplateVariable, TemplateError> {
     let base = format!("variables.{name}");
     if !is_variable_name(&name) {
         return Err(TemplateError::malformed(
@@ -348,13 +341,14 @@ fn declaration_of(file: &str, name: String, value: &Yaml) -> Result<Declaration,
         ));
     }
 
-    Ok(Declaration {
+    Ok(TemplateVariable {
         required: required.unwrap_or(default.is_none()),
         name,
         description,
         kind,
         items,
         default,
+        declared_in: file.to_owned(),
     })
 }
 

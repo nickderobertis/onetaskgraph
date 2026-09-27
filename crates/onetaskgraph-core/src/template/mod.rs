@@ -69,7 +69,6 @@ use sha2::{Digest as _, Sha256};
 
 pub use answers::Answers;
 use answers::Given;
-use front_matter::Declaration;
 pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
 
 /// What one variable holds.
@@ -171,10 +170,7 @@ impl ItemType {
 ///
 /// Built only by loading a template, so `items` is present exactly when `type` is `list`,
 /// a `default` is a value of the variable's type, and `required` is never `true` beside one.
-// llmlint: ignore[invalid_states_unrepresentable] Every field is private and the one
-// constructor is the chain merge, which copies a declaration the front matter parser already
-// refused unless those three rules held; the flat shape is the wire contract C1 fixes
-// (`type`, `items`, `required`, `default` side by side), which a nested enum would change.
+// llmlint: ignore-block[invalid_states_unrepresentable] Every field is private and the one constructor is `front_matter::declaration_of`, which refuses a declaration unless those three rules hold; the chain merge only clones what it built. The flat shape is the wire contract C1 fixes and `TemplateVariables` emits (`type`, `items`, `required`, `default` side by side), which a nested enum would change for both SDKs.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TemplateVariable {
     /// The variable's name, as the template body uses it.
@@ -196,6 +192,7 @@ pub struct TemplateVariable {
     /// The chain file whose declaration this is: the one nearest the rendered template.
     declared_in: String,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 impl TemplateVariable {
     /// The variable's name.
@@ -879,7 +876,7 @@ struct ChainFile {
     source: String,
     body: String,
     offset_lines: usize,
-    declarations: Vec<Declaration>,
+    declarations: Vec<TemplateVariable>,
     /// The chain files its tags name, in the order they name them: what nearness is measured
     /// over.
     names: Vec<String>,
@@ -919,18 +916,7 @@ fn merge(files: &[ChainFile]) -> Result<Vec<TemplateVariable>, TemplateError> {
         for declaration in &file.declarations {
             match merged.get(declaration.name.as_str()) {
                 None => {
-                    merged.insert(
-                        &declaration.name,
-                        TemplateVariable {
-                            name: declaration.name.clone(),
-                            description: declaration.description.clone(),
-                            kind: declaration.kind,
-                            items: declaration.items,
-                            required: declaration.required,
-                            default: declaration.default.clone(),
-                            declared_in: file.name.clone(),
-                        },
-                    );
+                    merged.insert(&declaration.name, declaration.clone());
                 }
                 Some(nearer) => {
                     if nearer.kind != declaration.kind {

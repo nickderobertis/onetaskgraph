@@ -346,6 +346,44 @@ fn answers_resolve_flag_over_file_over_default() {
     );
 }
 
+#[test]
+fn a_variable_given_by_several_vars_takes_the_last_one_typed() {
+    let sandbox = Sandbox::new();
+    let (task, library) = chain(&sandbox);
+    let answers = sandbox.project().join("answers.yaml");
+    std::fs::write(&answers, "title: From the file\ncount: 1\n").expect("an answers file");
+
+    let output = run(
+        &sandbox,
+        &[
+            "template",
+            "render",
+            path(&task),
+            "--search-path",
+            path(&library),
+            "--answers",
+            path(&answers),
+            "--var",
+            "title=First",
+            "--var",
+            "count=2",
+            "--var",
+            "steps=[a]",
+            "--var",
+            "title=Second",
+            "--var",
+            "count=3",
+            "--no-interactive",
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let rendered: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    assert_eq!(rendered["answers"]["title"], "Second");
+    assert_eq!(rendered["answers"]["count"], 3);
+    assert_eq!(rendered["body"], "# Second (nobody)\nSECOND x3\n1. a\n");
+}
+
 /// Every C2 refusal: exit 2, the problem named on standard error, nothing rendered.
 #[test]
 fn every_answer_refusal_exits_two_naming_what_it_refuses() {

@@ -164,13 +164,23 @@ pub struct TemplateRenderArgs {
 /// the template declares for `name`, which is not known until the template is loaded.
 #[derive(Debug, Clone)]
 pub struct VarAssignment {
-    /// The variable answered: a name a variable could be declared with, checked where it is
-    /// parsed.
-    // llmlint: ignore[invalid_states_unrepresentable] Built only by `var_assignment` below,
-    // which refuses a name that fails `is_variable_name`; clap hands this crate nothing else.
-    pub name: String,
+    /// The variable answered: a name a variable could be declared with. Private, so the only
+    /// way to build one is `var_assignment` below, which refuses any other name.
+    name: String,
     /// The answer, as typed.
-    pub value: String,
+    value: String,
+}
+
+impl VarAssignment {
+    /// The variable answered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The answer, as typed.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
 }
 
 /// Split one `--var` at its first `=`, refusing one with none, or whose name no variable
@@ -1030,17 +1040,15 @@ pub struct Overrides {
     #[arg(long, global = true)]
     pub json: bool,
 
+    // llmlint: ignore-block[invalid_states_unrepresentable] Two presence-only flags, as `json` beside `output` above: clap's derive has no one-field spelling for a pair of opposing switches. Both fields are private, so only clap builds them, `conflicts_with` refuses both at once where they are typed (exit 2), and `layer` maps each to the one `interactive` setting immediately.
     /// Prompt for what a command was not given (the `interactive` setting's default).
-    // llmlint: ignore[invalid_states_unrepresentable] Two presence-only flags, as `json` beside
-    // `output` above: clap's derive has no one-field spelling for a pair of opposing switches,
-    // `conflicts_with` refuses both at once where they are typed (exit 2), and `layer` maps
-    // each to the one `interactive` setting immediately.
     #[arg(long, global = true, conflicts_with = "no_interactive")]
-    pub interactive: bool,
+    interactive: bool,
 
     /// Never prompt: refuse what a command was not given instead. For scripts and automation.
     #[arg(long = "no-interactive", global = true)]
-    pub no_interactive: bool,
+    no_interactive: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 impl Overrides {

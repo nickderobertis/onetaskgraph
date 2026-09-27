@@ -198,7 +198,7 @@ fn write_body(out: &mut impl Write, body: &str) -> Result<(), Failure> {
 fn var_answers(assignments: &[VarAssignment]) -> Answers {
     let mut answers = Answers::new();
     for assignment in assignments {
-        answers.set_text(&assignment.name, &assignment.value);
+        answers.set_text(assignment.name(), assignment.value());
     }
     answers
 }
