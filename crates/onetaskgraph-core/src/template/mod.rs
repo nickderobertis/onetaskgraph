@@ -66,7 +66,7 @@ use sha2::{Digest as _, Sha256};
 pub use answers::Answers;
 use answers::Given;
 use front_matter::Declaration;
-pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS};
+pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
 
 /// What one variable holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]

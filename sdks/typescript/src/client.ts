@@ -208,7 +208,14 @@ function addFilters(args: string[], options: FilterOptions): void {
 }
 
 function searchPathFlags(options: TemplateOptions): string[] {
-  return (options.searchPath ?? []).flatMap((directory, index) => {
+  const searchPath = options.searchPath ?? [];
+  if (!Array.isArray(searchPath)) {
+    throw new TypeError(
+      "templateVariables/templateRender: searchPath is not an array; next: pass a list of " +
+        "directory path strings",
+    );
+  }
+  return searchPath.flatMap((directory, index) => {
     // Checked rather than passed on whatever it is: a process argument has to be text, and
     // anything else would reach the binary as its string form or fail the spawn.
     if (typeof directory !== "string") {
@@ -448,7 +455,14 @@ export class OnetaskgraphClient {
     options: TemplateRenderOptions = {},
   ): Promise<RenderedTemplate> {
     const args = [file, ...searchPathFlags(options)];
-    for (const [name, value] of Object.entries(options.vars ?? {})) {
+    const vars = options.vars ?? {};
+    const prototype = vars !== null && typeof vars === "object" ? Object.getPrototypeOf(vars) : 0;
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(
+        "templateRender: vars is not a plain object; next: pass a mapping of variable name to text",
+      );
+    }
+    for (const [name, value] of Object.entries(vars)) {
       // Checked rather than interpolated whatever it is: a number or an object would reach the
       // binary as its string form, which is not the value the caller passed.
       if (typeof value !== "string") {

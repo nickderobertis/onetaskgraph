@@ -393,6 +393,10 @@ fn every_answer_refusal_exits_two_naming_what_it_refuses() {
             vec!["'count' for '--var <NAME=VALUE>': that is not NAME=VALUE"],
         ),
         (
+            vec!["--no-interactive", "--var", "=nameless", "--var", "Title=x"],
+            vec!["\"\" is not a variable name"],
+        ),
+        (
             vec!["--no-interactive", "--answers", path(&malformed)],
             vec!["the answers document is refused", "not a mapping"],
         ),

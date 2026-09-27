@@ -162,24 +162,33 @@ pub struct TemplateRenderArgs {
 /// the template declares for `name`, which is not known until the template is loaded.
 #[derive(Debug, Clone)]
 pub struct VarAssignment {
-    /// The variable answered.
+    /// The variable answered: a name a variable could be declared with, checked where it is
+    /// parsed.
+    // llmlint: ignore[invalid_states_unrepresentable] Built only by `var_assignment` below,
+    // which refuses a name that fails `is_variable_name`; clap hands this crate nothing else.
     pub name: String,
     /// The answer, as typed.
     pub value: String,
 }
 
-/// Split one `--var` at its first `=`, refusing one with none.
+/// Split one `--var` at its first `=`, refusing one with none, or whose name no variable
+/// could be declared with.
 fn var_assignment(raw: &str) -> Result<VarAssignment, String> {
-    raw.split_once('=')
-        .map(|(name, value)| VarAssignment {
-            name: name.to_owned(),
-            value: value.to_owned(),
-        })
-        .ok_or_else(|| {
-            "that is not NAME=VALUE; next: write it as --var NAME=VALUE, for example \
-             --var title=\"Ship it\""
-                .to_owned()
-        })
+    let (name, value) = raw.split_once('=').ok_or_else(|| {
+        "that is not NAME=VALUE; next: write it as --var NAME=VALUE, for example \
+         --var title=\"Ship it\""
+            .to_owned()
+    })?;
+    if !onetaskgraph_core::template::is_variable_name(name) {
+        return Err(format!(
+            "{name:?} is not a variable name, which matches ^[a-z][a-z0-9_]*$; next: name a \
+             variable the template declares — `onetaskgraph template variables` lists them"
+        ));
+    }
+    Ok(VarAssignment {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    })
 }
 
 /// What `onetaskgraph sources` can do.

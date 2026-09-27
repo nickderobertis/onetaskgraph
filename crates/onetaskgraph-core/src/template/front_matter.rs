@@ -213,8 +213,9 @@ fn render_yaml(value: &Yaml) -> String {
         .unwrap_or_else(|_| "?".to_owned())
 }
 
-/// Whether `name` is a variable name C1 admits: `^[a-z][a-z0-9_]*$`.
-fn valid_name(name: &str) -> bool {
+/// Whether `name` is one a variable can be declared with: `^[a-z][a-z0-9_]*$`.
+#[must_use]
+pub fn is_variable_name(name: &str) -> bool {
     let mut characters = name.chars();
     characters
         .next()
@@ -225,7 +226,7 @@ fn valid_name(name: &str) -> bool {
 /// One variable's declaration, refused by key.
 fn declaration_of(file: &str, name: String, value: &Yaml) -> Result<Declaration, TemplateError> {
     let base = format!("variables.{name}");
-    if !valid_name(&name) {
+    if !is_variable_name(&name) {
         return Err(TemplateError::malformed(
             file,
             Some(&base),

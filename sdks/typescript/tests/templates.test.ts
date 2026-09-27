@@ -183,3 +183,19 @@ test("answers that are not a mapping are refused before the binary is started", 
     await expect(refused).rejects.toThrow("answers is not a plain object");
   }
 });
+
+test("a search path that is not a list and vars that are not a mapping are refused", async () => {
+  // Deliberately outside the declared types, as a caller whose values reached it untyped.
+  const searchPath = library as unknown as string[];
+  await expect(client.templateVariables(task, { searchPath })).rejects.toThrow(
+    "searchPath is not an array",
+  );
+  for (const vars of [["title=t"], "title=t", 7]) {
+    await expect(
+      client.templateRender(task, {
+        searchPath: [library],
+        vars: vars as unknown as Record<string, string>,
+      }),
+    ).rejects.toThrow("vars is not a plain object");
+  }
+});
