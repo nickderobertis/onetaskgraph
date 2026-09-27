@@ -2459,12 +2459,12 @@ fn document_stem(id: &NativeId) -> Result<String, SourceError> {
 impl LocalMdSource {
     /// Create or update one file, answering with the id it is filed under.
     ///
-    /// With `answers`, the content is written exactly as it is — not trimmed, as a copy's is —
-    /// and the answers are stored after it, so a read answers exactly that content and those
-    /// answers; the whole file is read back before anything is written and refused, naming the
-    /// field, when it would not. The file is then written through a staging file and a
-    /// rename, so a failed write leaves the file that was there — or none — and no staging
-    /// file behind.
+    /// The content is written exactly as it is, with or without `answers`, and the answers
+    /// are stored after it, so a read answers exactly that content and those answers — none,
+    /// for a plain write; the whole file is read back before anything is written and refused,
+    /// naming the field, when it would not. A rendering write then goes through a staging
+    /// file and a rename, so a failed write leaves the file that was there — or none — and no
+    /// staging file behind.
     fn write_entry(
         &self,
         target: Option<&NativeId>,
@@ -2505,27 +2505,28 @@ impl LocalMdSource {
                 message: format!("cannot create {}: {e}", parent.display()),
             })?;
         }
-        let Some(answers) = answers else {
+        let content = outgoing.fields().content.unwrap_or_default();
+        self.reads_back(kind, &path, &document, content, answers)?;
+        if answers.is_none() {
             fs::write(&path, document).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot write {}: {e}", path.display()),
             })?;
             return Ok(id);
-        };
-        let content = outgoing.fields().content.unwrap_or_default();
-        self.reads_back(kind, &path, &document, content, answers)?;
+        }
         write_atomically(&path, &document)?;
         Ok(id)
     }
 
     /// Refuse `text`, the whole file about to be written at `path`, unless it reads back with
-    /// exactly `content` as its content and exactly `answers` as its stored answers.
+    /// exactly `content` as its content and exactly `answers` as its stored answers — none,
+    /// when there are none.
     fn reads_back(
         &self,
         kind: Kind,
         path: &Path,
         text: &str,
         content: &str,
-        answers: &BTreeMap<String, serde_json::Value>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), SourceError> {
         let read = match kind {
             Kind::Task => task(self.parse_text(WorkKind::Task, path, text)?).content,
@@ -2543,7 +2544,7 @@ impl LocalMdSource {
                 ),
             });
         }
-        if Self::answers_in(kind, path, text)?.as_ref() != Some(answers) {
+        if Self::answers_in(kind, path, text)?.as_ref() != answers {
             return Err(SourceError::Refused {
                 message: format!(
                     "{}: cannot represent these template answers: written as YAML they would not \
@@ -2674,7 +2675,13 @@ impl LocalMdSource {
                 ),
             });
         }
-        self.reads_back(kind, &path, &edited, rendering.content, rendering.answers)?;
+        self.reads_back(
+            kind,
+            &path,
+            &edited,
+            rendering.content,
+            Some(rendering.answers),
+        )?;
         if edited != text {
             write_atomically(&path, &edited)?;
         }
@@ -2979,8 +2986,7 @@ impl LocalMdSource {
 
     /// One file's whole text, or a refusal naming the field this source cannot hold.
     ///
-    /// With `answers`, the content is framed exactly rather than trimmed, and the answers
-    /// block follows it.
+    /// The content is framed exactly, and with `answers` the answers block follows it.
     fn render(
         &self,
         outgoing: &Outgoing<'_>,
@@ -3068,11 +3074,14 @@ impl LocalMdSource {
                 answered_body(content, &answers_block(answers)?, "")
             ));
         }
-        let body = outgoing.content.unwrap_or_default().trim();
+        // Framed exactly rather than trimmed, so a read answers the very bytes written: a
+        // rendered item's `body_digest` is the hash of its content, and a copy that moved a
+        // byte of it would report a hand edit nobody made.
+        let body = framed(outgoing.content.unwrap_or_default(), false);
         // Content that would itself read back as a comments section is refused: writing it
         // would turn part of a task's content into comments nobody wrote, which is the one
         // thing a copy may never do to a comment.
-        if is_task && sectioned(&format!("{body}\n")).1.is_some() {
+        if is_task && sectioned(&body).1.is_some() {
             return Err(SourceError::Refused {
                 message: format!(
                     "cannot represent the field `content` of {}: it ends in a `{COMMENTS_HEADING}` \
@@ -3083,7 +3092,7 @@ impl LocalMdSource {
                 ),
             });
         }
-        Ok(format!("---\n{}\n---\n{body}\n", yaml.trim_end()))
+        Ok(format!("---\n{}\n---\n{body}", yaml.trim_end()))
     }
 }
 

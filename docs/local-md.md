@@ -400,6 +400,12 @@ what it wrote: every caller-defined `metadata` key with its value and its JSON t
 A document's front matter is written without a `status` and without a `depends_on`, so what
 lands under `documents/` is a document rather than a task with fields left blank.
 
+The body is the item's content byte for byte, framed exactly as a content write frames it, so
+a trailing newline — or two — reads back as it was written and a rendered item's
+`body_digest` still matches its content. Content that would not read back as itself — one
+ending in what this source reads as a comments section or a stored answers block, or in a lone
+carriage return — is refused naming the field, and nothing is written.
+
 Three things it refuses rather than doing quietly. A `target` naming an item this folder
 does not hold is refused instead of created, because the engine established that id before
 asking. A **status** this folder's `status_mapping` would read back as a different category
