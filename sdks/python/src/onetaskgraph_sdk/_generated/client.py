@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from .models import (
     Comment,
@@ -68,6 +68,24 @@ table of its own: a verb whose operand was named in one place and forgotten in t
 other generates a method that cannot do what it is named for, and nothing would say
 so until the binary refused the invocation.
 """
+
+_ANSWERS = TypeAdapter(dict[str, JsonValue])
+
+
+def _answers_document(answers: Mapping[str, JsonValue]) -> str:
+    """The answers as the JSON document the binary reads on standard input.
+
+    Validated strictly first, so a key that is not a string or a value JSON cannot carry
+    is refused here rather than coerced into something the caller did not pass; and
+    serialised with `allow_nan=False`, because `json.dumps` would otherwise write a
+    non-finite float as a bare `NaN` that the binary reads as text.
+    """
+    try:
+        checked = _ANSWERS.validate_python(dict(answers), strict=True)
+        return json.dumps(checked, allow_nan=False)
+    except ValueError as error:
+        message = f"template_render: answers are not a JSON mapping: {error}"
+        raise TypeError(message) from error
 
 
 class GeneratedClient:
@@ -791,7 +809,7 @@ class GeneratedClient:
             set=set,
             var=var,
             answers=None if answers is None else "-",
-            stdin=None if answers is None else json.dumps(dict(answers)),
+            stdin=None if answers is None else _answers_document(answers),
         )
 
     async def template_variables(

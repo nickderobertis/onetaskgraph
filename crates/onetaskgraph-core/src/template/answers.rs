@@ -30,7 +30,8 @@ pub struct Answers {
 }
 
 impl Answers {
-    /// No answers at all.
+    /// Answers to nothing: rendered from these, every default is taken and every required
+    /// variable is refused.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

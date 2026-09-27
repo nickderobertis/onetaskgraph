@@ -15,7 +15,7 @@ use onetaskgraph_core::{
     TemplateVariable,
 };
 
-use crate::cli::{TemplateCommand, TemplateRenderArgs};
+use crate::cli::{TemplateCommand, TemplateRenderArgs, VarAssignment};
 use crate::{EXIT_OK, EXIT_USAGE, emit, json, render};
 
 /// The line that ends a multi-line answer at a prompt.
@@ -78,7 +78,6 @@ impl From<TemplateError> for Refusal {
     }
 }
 
-/// A template failure as the command failure it is.
 fn failure(error: &TemplateError) -> Failure {
     Failure::decided(error.kind(), error.to_string())
 }
@@ -101,9 +100,7 @@ fn render_template(
     loaded: &Loaded,
     args: &TemplateRenderArgs,
 ) -> Result<(), Refusal> {
-    // The command line's own answers are read, and refused, before the template is: a
-    // `--var` without `=` is a typing mistake whatever the template declares.
-    let flags = var_answers(&args.var)?;
+    let flags = var_answers(&args.var);
     let template = load(&args.file, &args.search_path)?;
     let file = match &args.answers {
         Some(path) => answers_file(path)?,
@@ -172,18 +169,12 @@ fn write_body(out: &mut impl Write, body: &str) -> Result<(), Failure> {
 }
 
 /// Every `--var NAME=VALUE`, as answers kept as text until they meet their declarations.
-fn var_answers(assignments: &[String]) -> Result<Answers, Refusal> {
+fn var_answers(assignments: &[VarAssignment]) -> Answers {
     let mut answers = Answers::new();
     for assignment in assignments {
-        let Some((name, value)) = assignment.split_once('=') else {
-            return Err(Refusal::Answers(format!(
-                "--var {assignment}: that is not NAME=VALUE\n\
-                 next: write it as --var NAME=VALUE, for example --var title=\"Ship it\"."
-            )));
-        };
-        answers.set_text(name, value);
+        answers.set_text(&assignment.name, &assignment.value);
     }
-    Ok(answers)
+    answers
 }
 
 /// The answers document at `path`, or on standard input for `-`.

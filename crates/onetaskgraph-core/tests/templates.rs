@@ -701,9 +701,13 @@ fn a_template_named_by_an_expression_is_loaded_as_the_render_reaches_it() {
 
     let mut answers = Answers::new();
     answers.set("kind", json!("plain"));
+    let rendered = template.render(&answers).expect("renders");
+    assert_eq!(rendered.body, "a plain part\n");
+    // What the render read is in its digest: the chain, then the file the expression named.
+    assert_eq!(template.digest(), expected_digest(&[("root.md", root)]));
     assert_eq!(
-        template.render(&answers).expect("renders").body,
-        "a plain part\n"
+        rendered.digest,
+        expected_digest(&[("root.md", root), ("plain.md", "a plain part\n")])
     );
 
     answers.set("kind", json!("declaring"));
@@ -883,4 +887,31 @@ fn the_readme_front_matter_is_the_one_the_parser_reads() {
         ItemType::ALL.map(|items| items.as_str().to_owned()),
         "the README's item types"
     );
+}
+
+#[test]
+fn a_rendered_digest_moves_when_a_file_an_expression_named_changes() {
+    let tree = directory(&[("part.md", "one\n")]);
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which}\n---\n{% include kind ~ \".md\" %}";
+    let render = || {
+        let template = TemplateLoader::new()
+            .with_directory(tree.path())
+            .with_template("root.md", root)
+            .load_name("root.md")
+            .expect("it loads");
+        let mut answers = Answers::new();
+        answers.set("kind", json!("part"));
+        let rendered = template.render(&answers).expect("renders");
+        (template.digest().to_owned(), rendered.digest)
+    };
+    let (chain, first) = render();
+    assert_ne!(
+        chain, first,
+        "the render read a file the chain does not name"
+    );
+    assert_eq!(render().1, first, "stable across runs");
+    std::fs::write(tree.path().join("part.md"), "two\n").expect("rewritten");
+    let (unchanged, moved) = render();
+    assert_eq!(unchanged, chain, "the chain itself did not change");
+    assert_ne!(moved, first, "the file the render read did");
 }

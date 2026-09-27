@@ -390,7 +390,7 @@ fn every_answer_refusal_exits_two_naming_what_it_refuses() {
         ),
         (
             vec!["--no-interactive", "--var", "count"],
-            vec!["--var count: that is not NAME=VALUE"],
+            vec!["'count' for '--var <NAME=VALUE>': that is not NAME=VALUE"],
         ),
         (
             vec!["--no-interactive", "--answers", path(&malformed)],

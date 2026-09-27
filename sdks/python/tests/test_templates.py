@@ -163,3 +163,26 @@ def test_every_refused_answer_is_exit_two_naming_what_it_refuses(
         )
     assert undeclared.value.exit_code == 2
     assert "colour" in str(undeclared.value)
+
+
+def test_answers_json_cannot_carry_are_refused_before_the_binary_is_started(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A non-finite number, a non-string key and a value that is not JSON never reach it."""
+    task, library = template(tmp_path)
+    client = Client(binary, cwd=tmp_path)
+    refused: list[object] = [
+        {"title": "t", "steps": [], "size": float("nan")},
+        {"title": "t", "steps": [], 1: "a key that is not a string"},
+        {"title": "t", "steps": {"a", "set"}},
+    ]
+    for answers in refused:
+        with pytest.raises(TypeError, match="answers are not a JSON mapping"):
+            run(
+                client.template_render(
+                    str(task),
+                    search_path=[str(library)],
+                    # Deliberately outside the declared type: the runtime half of that check.
+                    answers=answers,  # ty: ignore[invalid-argument-type]
+                )
+            )

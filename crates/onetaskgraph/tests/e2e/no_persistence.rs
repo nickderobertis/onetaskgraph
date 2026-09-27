@@ -206,6 +206,10 @@ fn every_verb() -> Vec<Vec<String>> {
         owned(&["config", "show"]),
         owned(&["schema"]),
         // A template rendered from a user's words writes them nowhere but standard output.
+        // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two sub-second
+        // subprocesses that read one file in the sandbox and reach no source: this journey's
+        // claim is about every verb, so a verb it does not drive is a verb it proves nothing
+        // about, and it can only drive one from the binary crate that answers it.
         owned(&["template", "variables", TEMPLATE]),
         owned(&[
             "template",
@@ -215,6 +219,7 @@ fn every_verb() -> Vec<Vec<String>> {
             &format!("title={}", SENTINELS[0]),
             "--no-interactive",
         ]),
+        // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     ]
 }
 

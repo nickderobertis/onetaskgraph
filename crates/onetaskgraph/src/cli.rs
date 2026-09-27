@@ -147,12 +147,39 @@ pub struct TemplateRenderArgs {
 
     /// Answer one variable, over the answers file: literal text for a `string` or `text`
     /// variable, YAML for any other type. Repeat for several.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — the value half is read by the type
-    /// the template declares, which is not known until the template is loaded; `template` in
-    /// `main` splits `NAME=VALUE` and refuses one without `=` at exit 2 before anything loads.
-    #[arg(long = "var", value_name = "NAME=VALUE", allow_hyphen_values = true)]
-    pub var: Vec<String>,
+    #[arg(
+        long = "var",
+        value_name = "NAME=VALUE",
+        allow_hyphen_values = true,
+        value_parser = var_assignment
+    )]
+    pub var: Vec<VarAssignment>,
+}
+
+/// One `--var NAME=VALUE`, split where it was typed.
+///
+/// The value stays text: whether it is taken literally or read as YAML is decided by the type
+/// the template declares for `name`, which is not known until the template is loaded.
+#[derive(Debug, Clone)]
+pub struct VarAssignment {
+    /// The variable answered.
+    pub name: String,
+    /// The answer, as typed.
+    pub value: String,
+}
+
+/// Split one `--var` at its first `=`, refusing one with none.
+fn var_assignment(raw: &str) -> Result<VarAssignment, String> {
+    raw.split_once('=')
+        .map(|(name, value)| VarAssignment {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        })
+        .ok_or_else(|| {
+            "that is not NAME=VALUE; next: write it as --var NAME=VALUE, for example \
+             --var title=\"Ship it\""
+                .to_owned()
+        })
 }
 
 /// What `onetaskgraph sources` can do.

@@ -56,7 +56,7 @@ mod scan;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -693,7 +693,11 @@ impl TemplateLoader {
         }
 
         let variables = merge(&files, &edges)?;
-        let digest = digest(&files);
+        let digest = digest(
+            files
+                .iter()
+                .map(|file| (file.name.as_str(), file.source.as_str())),
+        );
         Ok(Template {
             name: root,
             files,
@@ -842,13 +846,13 @@ fn conflict(
     }
 }
 
-/// The chain's digest, over every file in first-load order.
-fn digest(files: &[ChainFile]) -> String {
+/// The digest over `files`, each a resolved name and its full source, in first-load order.
+fn digest<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
     let mut hasher = Sha256::new();
-    for file in files {
-        hasher.update(file.name.as_bytes());
+    for (name, source) in files {
+        hasher.update(name.as_bytes());
         hasher.update([0]);
-        hasher.update(file.source.as_bytes());
+        hasher.update(source.as_bytes());
         hasher.update([0]);
     }
     let hash = hasher.finalize();
@@ -897,7 +901,9 @@ pub struct TemplateVariables {
 pub struct RenderedTemplate {
     /// The rendered text.
     pub body: String,
-    /// The chain's digest: `sha256:` and 64 lowercase hex digits.
+    /// The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is
+    /// the chain's digest, as `template variables` reports it, unless the render loaded a
+    /// template an expression named; then those files are counted after the chain's.
     pub digest: String,
     /// Every declared variable and the value it rendered with — an answer, a default, or
     /// `null` for an optional variable given neither.
@@ -923,7 +929,11 @@ impl Template {
         &self.variables
     }
 
-    /// Every chain file's resolved name, in first-load order.
+    /// The resolved name of every file the chain names by a literal — the rendered one, and
+    /// each `extends`, `include` and `import` reaching further — in first-load order: the
+    /// files [`Template::digest`] is taken over. A template named by an expression is not
+    /// among them, because nothing names it until a render does; [`Template::render`] counts
+    /// it into that render's digest instead.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
     }
@@ -989,7 +999,10 @@ impl Template {
     ///
     /// A template named by an expression rather than a literal is loaded as the render
     /// reaches it, through the same search path; it may not declare variables, because its
-    /// declarations could not have been read before the render began.
+    /// declarations could not have been read before the render began. Every such file is
+    /// part of what produced the body, so the rendered digest is taken over the chain and
+    /// then those files in the order the render loaded them — and so differs from
+    /// [`Template::digest`] exactly when the render loaded one.
     ///
     /// # Errors
     ///
@@ -1010,6 +1023,8 @@ impl Template {
                 .collect(),
         );
         let loader = self.loader.clone();
+        let loaded: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let recorded = Arc::clone(&loaded);
         let mut environment = environment();
         environment.set_loader(move |name| {
             if let Some(body) = bodies.get(name) {
@@ -1030,6 +1045,10 @@ impl Template {
                     ),
                 ));
             }
+            recorded
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((name.to_owned(), source));
             Ok(Some(split.body))
         });
 
@@ -1037,9 +1056,24 @@ impl Template {
             .get_template(&self.name)
             .and_then(|template| template.render(&resolved))
             .map_err(|error| render_error(&error, &offsets))?;
+        let loaded = loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        let digest = if loaded.is_empty() {
+            self.digest.clone()
+        } else {
+            digest(
+                self.files
+                    .iter()
+                    .map(|file| (file.name.as_str(), file.source.as_str()))
+                    .chain(
+                        loaded
+                            .iter()
+                            .map(|(name, source)| (name.as_str(), source.as_str())),
+                    ),
+            )
+        };
         Ok(RenderedTemplate {
             body: rendered,
-            digest: self.digest.clone(),
+            digest,
             answers: resolved,
         })
     }

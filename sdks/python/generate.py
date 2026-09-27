@@ -583,7 +583,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from collections.abc import Mapping",
         "from typing import Literal",
         "",
-        "from pydantic import JsonValue",
+        "from pydantic import JsonValue, TypeAdapter",
         "",
         "from .models import (",
         *[
@@ -608,6 +608,24 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "other generates a method that cannot do what it is named for, and nothing would say",
         "so until the binary refused the invocation.",
         '"""',
+        "",
+        "_ANSWERS = TypeAdapter(dict[str, JsonValue])",
+        "",
+        "",
+        "def _answers_document(answers: Mapping[str, JsonValue]) -> str:",
+        '    """The answers as the JSON document the binary reads on standard input.',
+        "",
+        "    Validated strictly first, so a key that is not a string or a value JSON cannot carry",
+        "    is refused here rather than coerced into something the caller did not pass; and",
+        "    serialised with `allow_nan=False`, because `json.dumps` would otherwise write a",
+        "    non-finite float as a bare `NaN` that the binary reads as text.",
+        '    """',
+        "    try:",
+        "        checked = _ANSWERS.validate_python(dict(answers), strict=True)",
+        "        return json.dumps(checked, allow_nan=False)",
+        "    except ValueError as error:",
+        '        message = f"template_render: answers are not a JSON mapping: {error}"',
+        "        raise TypeError(message) from error",
         "",
         "class GeneratedClient:",
         '    """Methods generated from the binary command surface."""',
@@ -672,7 +690,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         passed = [f"{item}={item}" for item in [*taken, *required, *keywords]]
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
-            passed.append("stdin=None if answers is None else json.dumps(dict(answers))")
+            passed.append("stdin=None if answers is None else _answers_document(answers)")
         elif body:
             passed.append("stdin=body")
         lines.extend(

@@ -8509,7 +8509,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "digest": {
-        "description": "The chain's digest: `sha256:` and 64 lowercase hex digits.",
+        "description": "The digest of every file the render read: `sha256:` and 64 lowercase hex digits. It is\nthe chain's digest, as `template variables` reports it, unless the render loaded a\ntemplate an expression named; then those files are counted after the chain's.",
         "type": "string"
       }
     },
