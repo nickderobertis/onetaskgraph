@@ -1313,3 +1313,86 @@ fn each_file_a_loop_of_one_expression_names_is_in_the_digest_in_the_order_it_was
         ])
     );
 }
+
+#[test]
+fn a_file_an_expression_names_is_as_near_as_its_tag_makes_it() {
+    let declaring = |description: &str, kind: &str| {
+        format!(
+            "---\nonetaskgraph_template: 1\nvariables:\n  owner: {{description: {description}, type: {kind}}}\n---\n"
+        )
+    };
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which, default: near}\n---\n{% include kind ~ \".md\" %}{% include \"peer.md\" %}";
+    let near = declaring("the part's owner", "string");
+    let peer = format!(
+        "{}{{% include \"deep.md\" %}}",
+        declaring("the peer's owner", "string")
+    );
+    let deep = declaring("the deep owner", "string");
+    let loader = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("near.md", near.as_str())
+        .with_template("peer.md", peer.as_str())
+        .with_template("deep.md", deep.as_str());
+    let declared = |loader: &TemplateLoader| {
+        let expanded = loader
+            .load_name("root.md")
+            .expect("it loads")
+            .expand(&Answers::new())
+            .expect("it expands");
+        let owner = expanded
+            .variables()
+            .iter()
+            .find(|variable| variable.name() == "owner")
+            .expect("owner is declared")
+            .clone();
+        (
+            owner.declared_in().to_owned(),
+            owner.description().to_owned(),
+        )
+    };
+
+    // `near.md` and `peer.md` are both one tag from the root, and the expression's tag is read
+    // first, so its file is the nearer; `deep.md` is two tags away.
+    assert_eq!(
+        declared(&loader),
+        ("near.md".to_owned(), "the part's owner".to_owned())
+    );
+    // With the expression naming nothing that declares `owner`, the literal peer is nearest.
+    let quiet = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("near.md", "no declarations\n")
+        .with_template("peer.md", peer.as_str())
+        .with_template("deep.md", deep.as_str());
+    assert_eq!(
+        declared(&quiet),
+        ("peer.md".to_owned(), "the peer's owner".to_owned())
+    );
+
+    // A file the expression names two tags away is farther than a literal's one tag away.
+    let far_root = "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which, default: hop}\n---\n{% include kind ~ \".md\" %}{% include \"peer.md\" %}";
+    let far = TemplateLoader::new()
+        .with_template("root.md", far_root)
+        .with_template("hop.md", "{% include \"near.md\" %}")
+        .with_template("near.md", near.as_str())
+        .with_template("peer.md", declaring("the peer's owner", "string"));
+    assert_eq!(
+        declared(&far),
+        ("peer.md".to_owned(), "the peer's owner".to_owned())
+    );
+
+    // And a retyping names the nearer file first, whichever way each was named.
+    let retyped = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("near.md", near.as_str())
+        .with_template("peer.md", declaring("the peer's owner", "integer"));
+    let error = retyped
+        .load_name("root.md")
+        .expect("it loads")
+        .expand(&Answers::new())
+        .expect_err("owner is a string in near.md");
+    assert!(
+        matches!(&error, TemplateError::ChainConflict { variable, field: ChainField::Type, nearer, farther, .. }
+            if variable == "owner" && nearer == "near.md" && farther == "peer.md"),
+        "{error:?}"
+    );
+}

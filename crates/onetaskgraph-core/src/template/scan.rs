@@ -448,4 +448,29 @@ mod tests {
         );
         assert_eq!(hooked("{{ x }}", 0), "{{ x }}");
     }
+
+    #[test]
+    fn every_form_of_a_naming_tag_still_parses_and_renders_the_same_once_hooked() {
+        let source = "{% if false %}{% extends 'base-' ~ kind %}{% endif %}\
+                      {%- include 'x' ~ kind -%}\
+                      {% include parts ignore missing with context %}\
+                      {% include parts with context ignore missing %}\
+                      {% include name_with without context %}\
+                      {% import 'x' ~ kind as m with context %}{{ m.a() }}\
+                      {% from 'x' ~ kind import a as b %}{{ b() }}\
+                      {% include 'x.md' if kind else 'y.md' %}";
+        let render = |source: &str| {
+            let mut environment = minijinja::Environment::new();
+            environment.add_function(HOOK, |_: usize, _: usize, value: minijinja::Value| value);
+            environment.set_loader(|name| {
+                Ok((name == "x.md").then(|| "{% macro a() %}A{% endmacro %}".to_owned()))
+            });
+            environment
+                .render_str(source, minijinja::context! {kind => ".md", parts => ["none.md", "x.md"], name_with => "x.md"})
+                .expect("it renders")
+        };
+        let hooked = hooked(source, 0);
+        assert_eq!(hooked.matches(HOOK).count(), 8, "{hooked}");
+        assert_eq!(render(&hooked), render(source));
+    }
 }

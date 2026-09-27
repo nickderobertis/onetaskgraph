@@ -785,9 +785,9 @@ fn absorb(resolutions: &mut Resolutions, recorded: &Recorded) -> bool {
     grew
 }
 
-/// The body of each of `files` as a render is given it: with every expression that names a
+/// The body of each of `files` as [`discover`] renders it: with every expression that names a
 /// template wrapped in [`scan::HOOK`], so the render reports what it named — or as written,
-/// should wrapping ever leave it unparsable, which costs only that report.
+/// should wrapping ever leave it unparsable, when what it names is not found at all.
 fn hooked_bodies(files: &[ChainFile]) -> HashMap<String, String> {
     files
         .iter()
@@ -1232,12 +1232,9 @@ impl Template {
 
     /// [`Template::render`] over this chain as it stands.
     ///
-    /// A template the strict render asks for that the chain does not hold — one expansion's
-    /// lenient render could not reach, because it failed before getting there — is read
-    /// through the search path as it is asked for, and refused if it declares a variable,
-    /// since answers were already held to a declared set without it. The chain is then read
-    /// again with what the render named, so such a file is in the digest where the tag naming
-    /// it is.
+    /// The render reads only the files of this chain. [`Template::expand`] found them by
+    /// rendering from exactly the values this render is given, so a file it names that the
+    /// chain does not hold is one that was not there to find, and is not found here either.
     fn render_here(&self, answers: &Answers) -> Result<RenderedTemplate, TemplateError> {
         let resolved = self.resolve_here(answers)?;
 
@@ -1246,79 +1243,20 @@ impl Template {
             .iter()
             .map(|file| (file.name.clone(), file.offset_lines))
             .collect();
-        let bodies = Arc::new(hooked_bodies(&self.files));
-        let loader = self.loader.clone();
-        let loaded: Arc<Mutex<Vec<String>>> = Arc::default();
-        let read = Arc::clone(&loaded);
+        let bodies: HashMap<String, String> = self
+            .files
+            .iter()
+            .map(|file| (file.name.clone(), file.body.clone()))
+            .collect();
         let mut environment = environment();
-        let recorded = record_names(&mut environment, &self.files);
-        environment.set_loader(move |name| {
-            if let Some(body) = bodies.get(name) {
-                return Ok(Some(body.clone()));
-            }
-            // A file that is there and cannot be read is that failure, not a missing file.
-            let Some(source) = loader.find(name).map_err(|error| {
-                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, error.to_string())
-            })?
-            else {
-                return Ok(None);
-            };
-            let split = front_matter::split(name, &source).map_err(|error| {
-                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, error.to_string())
-            })?;
-            if !split.declarations.is_empty() {
-                return Err(minijinja::Error::new(
-                    minijinja::ErrorKind::InvalidOperation,
-                    format!(
-                        "{name} is named by an expression the variables' defaults and answers \
-                         did not reach before rendering, and declares variables; name it with \
-                         a string literal"
-                    ),
-                ));
-            }
-            read.lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(name.to_owned());
-            Ok(Some(split.body))
-        });
-
+        environment.set_loader(move |name| Ok(bodies.get(name).cloned()));
         let rendered = environment
             .get_template(&self.name)
             .and_then(|template| template.render(&resolved))
             .map_err(|error| render_error(&error, &offsets))?;
-        let loaded = loaded.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut resolutions = self.resolutions.clone();
-        let grew = absorb(
-            &mut resolutions,
-            &recorded.lock().unwrap_or_else(PoisonError::into_inner),
-        );
-        let digest = if loaded.is_empty() && !grew {
-            self.digest.clone()
-        } else {
-            let (files, _) = self.rebuild(&resolutions)?;
-            if let Some(unplaced) = loaded
-                .iter()
-                .find(|name| files.iter().all(|file| file.name != **name))
-            {
-                return Err(TemplateError::Render {
-                    file: Some(unplaced.clone()),
-                    line: None,
-                    name: None,
-                    message: format!(
-                        "{unplaced} was read by the render, but no tag of the chain could be \
-                         found naming it, so it has no place in the digest"
-                    ),
-                });
-            }
-            digest(
-                files
-                    .iter()
-                    .map(|file| (file.name.as_str(), file.source.as_str())),
-            )
-        };
         Ok(RenderedTemplate {
             body: rendered,
-            digest,
+            digest: self.digest.clone(),
             answers: resolved,
         })
     }
