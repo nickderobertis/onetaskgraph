@@ -1,9 +1,9 @@
 //! Every path that stores an item's content stores it byte for byte, however it ends.
 //!
 //! A rendered item's provenance records the SHA-256 of its content, so a write that moves one
-//! trailing newline reads back as a hand edit nobody made. Each test drives the real source
-//! through the trait, through each write a copy, a create, a rendering and a content set make,
-//! with content ending in no newline, in one and in two, and reads it back.
+//! trailing newline reads back as a hand edit nobody made. Between them the tests drive the
+//! real source through the trait, through every write a copy, a create, a rendering and a
+//! content set make, with content ending in no newline, in one and in two, and read it back.
 
 use std::collections::BTreeMap;
 
@@ -206,22 +206,22 @@ async fn every_document_and_project_write_keeps_the_content_exactly() {
 }
 
 /// What a drift check hashes is what a read answers, so a hand edit of an interior line of a
-/// copied rendering has to read back as the edit — neither normalised away nor lost.
+/// rendered task has to read back as the edit — neither normalised away nor lost.
 #[tokio::test]
-async fn an_interior_edit_of_a_copied_rendering_reads_back_as_the_edit() {
+async fn an_interior_edit_of_a_rendered_task_reads_back_as_the_edit() {
     for content in ENDINGS {
         let source = source();
-        let copied = source
+        let rendered = source
             .write_task(&write(None, task(content)))
             .await
             .unwrap();
         let edited = content.replacen("- two\n", "- three\n", 1);
         source
-            .set_task_content(&copied, &edited)
+            .set_task_content(&rendered, &edited)
             .await
             .unwrap()
             .expect("the task");
-        let read = task_content(&source, &copied).await;
+        let read = task_content(&source, &rendered).await;
         assert_eq!(read, edited);
         assert_ne!(read, content, "the edit is visible to a drift check");
     }

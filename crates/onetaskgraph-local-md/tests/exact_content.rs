@@ -1,9 +1,9 @@
 //! Every path that stores an item's content stores it byte for byte, however it ends.
 //!
 //! A rendered item's provenance records the SHA-256 of its content, so a write that moves one
-//! trailing newline reads back as a hand edit nobody made. Each test drives the real plugin
-//! over a real folder, through each write a copy, a create, a rendering and a content set
-//! make, with content ending in no newline, in one and in two, and reads it back.
+//! trailing newline reads back as a hand edit nobody made. Between them the tests drive the
+//! real plugin over a real folder, through every write a copy, a create, a rendering and a
+//! content set make, with content ending in no newline, in one and in two, and read it back.
 
 use std::collections::BTreeMap;
 use std::fs;
