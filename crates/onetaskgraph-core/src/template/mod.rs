@@ -671,8 +671,8 @@ impl TemplateLoader {
     /// Read the whole chain from its root, depth first, and merge its declarations.
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
         let resolutions = Resolutions::new();
-        let (files, edges) = self.build(root.clone(), source, &resolutions)?;
-        let variables = merge(&files, &edges)?;
+        let files = self.build(root.clone(), source, &resolutions)?;
+        let variables = merge(&files)?;
         Ok(Template::assemble(
             root,
             files,
@@ -692,22 +692,18 @@ impl TemplateLoader {
         name: String,
         source: String,
         resolutions: &Resolutions,
-    ) -> Result<Chain, TemplateError> {
+    ) -> Result<Vec<ChainFile>, TemplateError> {
         let mut files = Vec::new();
-        let mut edges = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        let mut pending = vec![(name, source, None::<usize>)];
+        let mut pending = vec![(name, source)];
         // A stack, pushed in reverse, so the first name a file spells is the next one read.
-        while let Some((name, source, parent)) = pending.pop() {
-            if let Some(parent) = parent {
-                edges.push((parent, name.clone()));
-            }
+        while let Some((name, source)) = pending.pop() {
             if !seen.insert(name.clone()) {
                 continue;
             }
             let split = front_matter::split(&name, &source)?;
             compile_check(&name, &split.body, split.offset_lines)?;
-            let index = files.len();
+            let mut names = Vec::new();
             let mut children = Vec::new();
             for named in scan::named(&split.body) {
                 let references = match named {
@@ -729,12 +725,13 @@ impl TemplateLoader {
                     let mut resolved = false;
                     for candidate in &reference.candidates {
                         if seen.contains(candidate) || *candidate == name {
-                            edges.push((index, candidate.clone()));
+                            names.push(candidate.clone());
                             resolved = true;
                             break;
                         }
                         if let Some(source) = self.find(candidate)? {
-                            children.push((candidate.clone(), source, Some(index)));
+                            names.push(candidate.clone());
+                            children.push((candidate.clone(), source));
                             resolved = true;
                             break;
                         }
@@ -751,9 +748,10 @@ impl TemplateLoader {
                 body: split.body,
                 offset_lines: split.offset_lines,
                 declarations: split.declarations,
+                names,
             });
         }
-        Ok((files, edges))
+        Ok(files)
     }
 }
 
@@ -761,10 +759,6 @@ impl TemplateLoader {
 /// is written in and its ordinal there: the candidates of each value it was reached with, in
 /// the order renders first reached them.
 type Resolutions = BTreeMap<(String, usize), Vec<Vec<String>>>;
-
-/// A chain as read: its files in first-load order, and which file names which, by index into
-/// them — what nearness is measured over.
-type Chain = (Vec<ChainFile>, Vec<(usize, String)>);
 
 /// What one render's tags naming a template by an expression named: each tag, as a
 /// [`Resolutions`] key, and the candidates of the value it was reached with, in the order
@@ -869,6 +863,9 @@ struct ChainFile {
     body: String,
     offset_lines: usize,
     declarations: Vec<Declaration>,
+    /// The chain files its tags name, in the order they name them: what nearness is measured
+    /// over.
+    names: Vec<String>,
 }
 
 /// Merge every chain file's declarations into the declared set.
@@ -876,10 +873,7 @@ struct ChainFile {
 /// Nearness is the fewest references from the rendered file, ties going to the file loaded
 /// first; the order is the files' first-load order, each variable where it was first
 /// declared.
-fn merge(
-    files: &[ChainFile],
-    edges: &[(usize, String)],
-) -> Result<Vec<TemplateVariable>, TemplateError> {
+fn merge(files: &[ChainFile]) -> Result<Vec<TemplateVariable>, TemplateError> {
     let index_of: HashMap<&str, usize> = files
         .iter()
         .enumerate()
@@ -891,7 +885,7 @@ fn merge(
     }
     let mut queue = VecDeque::from([0usize]);
     while let Some(at) = queue.pop_front() {
-        for (_, child) in edges.iter().filter(|(parent, _)| *parent == at) {
+        for child in &files[at].names {
             if let Some(&child) = index_of.get(child.as_str())
                 && depth[child] == usize::MAX
             {
@@ -1106,8 +1100,8 @@ impl Template {
             if !absorb(&mut resolutions, &recorded) {
                 return Ok(expanded);
             }
-            let (files, edges) = expanded.rebuild(&resolutions)?;
-            let variables = merge(&files, &edges)?;
+            let files = expanded.rebuild(&resolutions)?;
+            let variables = merge(&files)?;
             expanded = Self::assemble(
                 self.name.clone(),
                 files,
@@ -1119,7 +1113,7 @@ impl Template {
     }
 
     /// This template's chain, read again from its root with `resolutions`.
-    fn rebuild(&self, resolutions: &Resolutions) -> Result<Chain, TemplateError> {
+    fn rebuild(&self, resolutions: &Resolutions) -> Result<Vec<ChainFile>, TemplateError> {
         let root = self
             .files
             .first()

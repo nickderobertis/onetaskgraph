@@ -1266,7 +1266,6 @@ fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_li
         "stable across runs"
     );
 
-    // Other answers name another file, which takes that same place.
     let mut answers = Answers::new();
     answers.set("kind", json!("second"));
     let rendered = template.render(&answers).expect("renders");
@@ -1280,14 +1279,13 @@ fn a_file_an_expression_names_is_in_the_digest_where_its_tag_is_not_after_the_li
         ])
     );
 
-    // A file the expression names that a later literal names too is read once, where it was
-    // first read.
     answers.set("kind", json!("literal"));
     let rendered = template.render(&answers).expect("renders");
     assert_eq!(rendered.body, "literal\nliteral\n");
     assert_eq!(
         rendered.digest,
-        expected_digest(&[("root.md", ORDERED_ROOT), ("literal.md", "literal\n")])
+        expected_digest(&[("root.md", ORDERED_ROOT), ("literal.md", "literal\n")]),
+        "read once, where it was first read"
     );
 }
 
@@ -1357,7 +1355,6 @@ fn a_file_an_expression_names_is_as_near_as_its_tag_makes_it() {
         declared(&loader),
         ("near.md".to_owned(), "the part's owner".to_owned())
     );
-    // With the expression naming nothing that declares `owner`, the literal peer is nearest.
     let quiet = TemplateLoader::new()
         .with_template("root.md", root)
         .with_template("near.md", "no declarations\n")
@@ -1368,7 +1365,6 @@ fn a_file_an_expression_names_is_as_near_as_its_tag_makes_it() {
         ("peer.md".to_owned(), "the peer's owner".to_owned())
     );
 
-    // A file the expression names two tags away is farther than a literal's one tag away.
     let far_root = "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which, default: hop}\n---\n{% include kind ~ \".md\" %}{% include \"peer.md\" %}";
     let far = TemplateLoader::new()
         .with_template("root.md", far_root)
@@ -1380,7 +1376,6 @@ fn a_file_an_expression_names_is_as_near_as_its_tag_makes_it() {
         ("peer.md".to_owned(), "the peer's owner".to_owned())
     );
 
-    // And a retyping names the nearer file first, whichever way each was named.
     let retyped = TemplateLoader::new()
         .with_template("root.md", root)
         .with_template("near.md", near.as_str())
@@ -1394,5 +1389,67 @@ fn a_file_an_expression_names_is_as_near_as_its_tag_makes_it() {
         matches!(&error, TemplateError::ChainConflict { variable, field: ChainField::Type, nearer, farther, .. }
             if variable == "owner" && nearer == "near.md" && farther == "peer.md"),
         "{error:?}"
+    );
+}
+
+#[test]
+fn a_literal_carrying_a_context_marker_is_read_into_the_chain() {
+    let root = "{% import \"macros.md\" as m with context %}\
+                {% include \"part.md\" with context ignore missing %}\
+                {% include \"absent.md\" without context ignore missing %}{{ m.a() }}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template(
+            "macros.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  word: {description: w, default: A}\n---\n{% macro a() %}{{ word }}{% endmacro %}",
+        )
+        .with_template("part.md", "P")
+        .load_name("root.md")
+        .expect("it loads");
+    assert_eq!(
+        template.chain().collect::<Vec<_>>(),
+        ["root.md", "macros.md", "part.md"],
+        "read before rendering, as literals"
+    );
+    assert_eq!(template.variables()[0].declared_in(), "macros.md");
+    assert_eq!(
+        template.render(&Answers::new()).expect("renders").body,
+        "PA"
+    );
+}
+
+#[test]
+fn an_optional_variable_left_unanswered_is_none_when_what_an_expression_names_is_found() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  note: {description: n, required: false}\n---\n{% if note is none %}{% include \"no\" ~ \"-note.md\" %}{% else %}{{ note }}{% endif %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template(
+            "no-note.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  why: {description: why there is none, default: unsaid}\n---\n({{ why }})",
+        )
+        .load_name("root.md")
+        .expect("it loads");
+    let expanded = template.expand(&Answers::new()).expect("it expands");
+    assert_eq!(
+        expanded.chain().collect::<Vec<_>>(),
+        ["root.md", "no-note.md"]
+    );
+    assert_eq!(
+        expanded
+            .variables()
+            .iter()
+            .map(|variable| variable.name())
+            .collect::<Vec<_>>(),
+        ["note", "why"]
+    );
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "(unsaid)");
+    assert_eq!(rendered.answers.get("note"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        template
+            .render(Answers::new().set("note", json!("given")))
+            .expect("renders")
+            .body,
+        "given"
     );
 }
