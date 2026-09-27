@@ -166,11 +166,16 @@ pub fn schema_bundle() -> Value {
 
     // What `template variables` and `template render` answer with, and the declaration and
     // the two vocabularies inside the first, which a caller branches on by name.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This table is the one
+    // document both SDKs are generated from, and every verb's answer is a root of it by
+    // design — `SCHEMA_BUNDLE_VERSION` and `PUBLISHED_BUNDLES` hold it whole. A template root
+    // registered anywhere else would be one no SDK is generated against.
     roots.insert("TemplateVariables", schema_for!(TemplateVariables));
     roots.insert("TemplateVariable", schema_for!(TemplateVariable));
     roots.insert("VariableType", schema_for!(VariableType));
     roots.insert("ItemType", schema_for!(ItemType));
     roots.insert("RenderedTemplate", schema_for!(RenderedTemplate));
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     roots.insert("Setting", schema_for!(Setting));

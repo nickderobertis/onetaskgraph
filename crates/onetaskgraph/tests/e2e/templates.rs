@@ -419,7 +419,7 @@ fn every_answer_refusal_exits_two_naming_what_it_refuses() {
 }
 
 #[test]
-fn interactive_with_nothing_to_prompt_on_is_refused_naming_the_way_out_and_never_hangs() {
+fn an_interactive_render_without_a_terminal_is_refused_naming_the_way_out_and_never_hangs() {
     let sandbox = Sandbox::new();
     let (task, library) = chain(&sandbox);
 

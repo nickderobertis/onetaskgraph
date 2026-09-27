@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use onetaskgraph_core::{Answers, TemplateError, TemplateLoader, VariableType};
+use onetaskgraph_core::{Answers, ChainField, TemplateError, TemplateLoader, VariableType};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
@@ -255,7 +255,7 @@ fn a_redeclaration_that_changes_type_or_items_is_refused_naming_both_files() {
     let error = loader.load_name("child.md").expect_err("type changed");
     let message = error.to_string();
     assert!(
-        matches!(&error, TemplateError::ChainConflict { variable, field: "type", nearer, farther, .. }
+        matches!(&error, TemplateError::ChainConflict { variable, field: ChainField::Type, nearer, farther, .. }
             if variable == "criteria" && nearer == "child.md" && farther == "base.md"),
         "{message}"
     );
@@ -274,7 +274,13 @@ fn a_redeclaration_that_changes_type_or_items_is_refused_naming_both_files() {
         .with_template("macros.md", MACROS);
     let error = loader.load_name("child.md").expect_err("items changed");
     assert!(
-        matches!(&error, TemplateError::ChainConflict { field: "items", .. }),
+        matches!(
+            &error,
+            TemplateError::ChainConflict {
+                field: ChainField::Items,
+                ..
+            }
+        ),
         "{error}"
     );
 }
@@ -615,5 +621,135 @@ fn a_template_is_found_by_path_under_its_file_name() {
             .expect_err("missing")
             .kind(),
         "template-not-found"
+    );
+}
+
+#[test]
+fn a_list_include_loads_its_first_candidate_that_resolves_and_only_that_one() {
+    let later = "---\nonetaskgraph_template: 1\nvariables:\n  from_later: {description: x}\n---\nlater {{ from_later }}\n";
+    let loader = TemplateLoader::new()
+        .with_template(
+            "root.md",
+            "{% include [\"absent.md\", \"later.md\", \"last.md\"] %}",
+        )
+        .with_template("later.md", later)
+        .with_template("last.md", "never read");
+    let template = loader.load_name("root.md").expect("the chain loads");
+    assert_eq!(
+        template.chain().collect::<Vec<_>>(),
+        ["root.md", "later.md"]
+    );
+    assert_eq!(
+        template
+            .variables()
+            .iter()
+            .map(|variable| variable.name())
+            .collect::<Vec<_>>(),
+        ["from_later"],
+        "the candidate the render loads is the one whose front matter counts"
+    );
+    let mut answers = Answers::new();
+    answers.set("from_later", json!("yes"));
+    assert_eq!(
+        template.render(&answers).expect("renders").body,
+        "later yes\n"
+    );
+
+    let error = TemplateLoader::new()
+        .with_template("root.md", "{% include [\"a.md\", \"b.md\"] %}")
+        .load_name("root.md")
+        .expect_err("no candidate resolves");
+    assert!(
+        error
+            .to_string()
+            .contains("\"a.md or b.md\" was not found (named by root.md)"),
+        "{error}"
+    );
+
+    let template = TemplateLoader::new()
+        .with_template(
+            "root.md",
+            "[{% include [\"a.md\", \"b.md\"] ignore missing %}]",
+        )
+        .load_name("root.md")
+        .expect("`ignore missing` makes a missing list no error");
+    assert_eq!(
+        template.render(&Answers::new()).expect("renders").body,
+        "[]"
+    );
+}
+
+#[test]
+fn a_template_named_by_an_expression_is_loaded_as_the_render_reaches_it() {
+    let root = "---\nonetaskgraph_template: 1\nvariables:\n  kind: {description: which part}\n---\n{% include kind ~ \".md\" %}";
+    let loader = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("plain.md", "a plain part\n")
+        .with_template(
+            "declaring.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  more: {description: y}\n---\nx\n",
+        );
+    let template = loader.load_name("root.md").expect("the chain loads");
+    assert_eq!(
+        template.chain().collect::<Vec<_>>(),
+        ["root.md"],
+        "an expression names nothing before rendering"
+    );
+
+    let mut answers = Answers::new();
+    answers.set("kind", json!("plain"));
+    assert_eq!(
+        template.render(&answers).expect("renders").body,
+        "a plain part\n"
+    );
+
+    answers.set("kind", json!("declaring"));
+    let error = template
+        .render(&answers)
+        .expect_err("its declarations came too late");
+    assert!(
+        matches!(&error, TemplateError::Render { message, .. }
+            if message.contains("declaring.md is named by an expression and declares variables")),
+        "{error:?}"
+    );
+
+    answers.set("kind", json!("nowhere"));
+    let error = template.render(&answers).expect_err("nothing resolves it");
+    assert!(matches!(error, TemplateError::Render { .. }), "{error:?}");
+    assert!(error.to_string().contains("nowhere.md"), "{error}");
+}
+
+#[test]
+fn search_path_directories_are_searched_in_the_order_given() {
+    let first = directory(&[("part.md", "from the first\n")]);
+    let second = directory(&[
+        ("part.md", "from the second\n"),
+        ("only.md", "only in the second\n"),
+    ]);
+    let root = "{% include \"part.md\" %}{% include \"only.md\" %}";
+    let render = |loader: TemplateLoader| {
+        loader
+            .with_template("root.md", root)
+            .load_name("root.md")
+            .expect("the chain loads")
+            .render(&Answers::new())
+            .expect("renders")
+            .body
+    };
+    assert_eq!(
+        render(
+            TemplateLoader::new()
+                .with_directory(first.path())
+                .with_directory(second.path())
+        ),
+        "from the first\nonly in the second\n"
+    );
+    assert_eq!(
+        render(
+            TemplateLoader::new()
+                .with_directory(second.path())
+                .with_directory(first.path())
+        ),
+        "from the second\nonly in the second\n"
     );
 }

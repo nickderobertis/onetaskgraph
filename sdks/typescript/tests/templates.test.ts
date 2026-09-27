@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
+import { type JsonValue, OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 
@@ -115,4 +115,25 @@ test("a refused answer is an execution error carrying exit 2 and what it refuses
     answers: { title: "t", steps: "not a list" },
   });
   await expect(mistyped).rejects.toThrow('"steps" is not a list');
+});
+
+test("answers JSON cannot carry are refused before the binary is started", async () => {
+  const cyclic: Record<string, unknown> = { title: "t" };
+  cyclic.self = cyclic;
+  const refusals: [unknown, string][] = [
+    [{ title: "t", steps: [Number.NaN] }, "answers.steps[0]"],
+    [{ title: undefined }, "answers.title"],
+    [{ title: "t", when: new Date(0) }, "answers.when"],
+    [cyclic, "answers.self"],
+  ];
+  for (const [answers, path] of refusals) {
+    const refused = client.templateRender(task, {
+      searchPath: [library],
+      // Deliberately outside the declared type: this is the runtime half of that boundary,
+      // for a caller whose values reached it untyped.
+      answers: answers as Record<string, JsonValue>,
+    });
+    await expect(refused).rejects.toThrow(TypeError);
+    await expect(refused).rejects.toThrow(`${path} is not a JSON value`);
+  }
 });

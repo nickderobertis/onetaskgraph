@@ -66,9 +66,17 @@ export type TemplateOptions = { searchPath?: string[] };
 // `vars` as `--var NAME=VALUE`, which outrank it — literal text for a `string` or `text`
 // variable, YAML for any other.
 export type TemplateRenderOptions = TemplateOptions & {
-  answers?: Record<string, unknown>;
+  answers?: Record<string, JsonValue>;
   vars?: Record<string, string>;
 };
+// A value JSON can carry, and so a value an answers document can hold.
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type ClientOptions = {
   binaryPath?: string;
   cwd?: string;
@@ -201,6 +209,36 @@ function addFilters(args: string[], options: FilterOptions): void {
 
 function searchPathFlags(options: TemplateOptions): string[] {
   return (options.searchPath ?? []).flatMap((directory) => ["--search-path", directory]);
+}
+
+// The answers as the JSON document the binary reads on standard input, refused here when a
+// value is not one JSON can carry: `JSON.stringify` would otherwise drop an `undefined` or a
+// function without a word, write a non-finite number as `null`, and throw on a cycle or a
+// bigint, so the binary would validate answers other than the ones the caller passed.
+function answersDocument(answers: Record<string, JsonValue>): string {
+  const within = new Set<object>();
+  const check = (value: unknown, path: string): void => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return;
+    if (typeof value === "number" && Number.isFinite(value)) return;
+    if (typeof value === "object") {
+      const prototype = Object.getPrototypeOf(value);
+      const plain = Array.isArray(value) || prototype === Object.prototype || prototype === null;
+      if (plain && !within.has(value)) {
+        within.add(value);
+        for (const [key, item] of Object.entries(value)) {
+          check(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`);
+        }
+        within.delete(value);
+        return;
+      }
+    }
+    throw new TypeError(
+      `templateRender: answers${path} is not a JSON value; next: pass strings, finite ` +
+        "numbers, booleans, null, arrays and plain objects, with no cycle",
+    );
+  };
+  check(answers, "");
+  return JSON.stringify(answers);
 }
 
 function copyFlags(options: CopyOptions): string[] {
@@ -375,14 +413,18 @@ export class OnetaskgraphClient {
     return this.run("template variables", [file, ...searchPathFlags(options)]);
   }
   // The answers go over standard input as JSON, which is YAML, so no file is written for them.
-  templateRender(file: string, options: TemplateRenderOptions = {}): Promise<RenderedTemplate> {
+  async templateRender(
+    file: string,
+    options: TemplateRenderOptions = {},
+  ): Promise<RenderedTemplate> {
     const args = [file, ...searchPathFlags(options)];
     for (const [name, value] of Object.entries(options.vars ?? {})) {
       args.push("--var", `${name}=${value}`);
     }
     if (options.answers === undefined) return this.run("template render", args);
+    const document = answersDocument(options.answers);
     args.push("--answers", "-");
-    return this.run("template render", args, JSON.stringify(options.answers));
+    return this.run("template render", args, document);
   }
 
   private run<T>(command: string, args: string[], input?: string): Promise<T> {

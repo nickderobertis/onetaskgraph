@@ -320,6 +320,24 @@ fn describe(value: &Value) -> String {
     }
 }
 
+/// Which field of a declaration two chain files disagree about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainField {
+    /// The variable's `type`.
+    Type,
+    /// A `list` variable's `items`.
+    Items,
+}
+
+impl fmt::Display for ChainField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Type => "type",
+            Self::Items => "items",
+        })
+    }
+}
+
 /// Why a template could not be loaded, answered or rendered.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -366,8 +384,8 @@ pub enum TemplateError {
     ChainConflict {
         /// The variable.
         variable: String,
-        /// Which field differs: `type` or `items`.
-        field: &'static str,
+        /// Which field differs.
+        field: ChainField,
         /// The file nearer the rendered template.
         nearer: String,
         /// What that file declares.
@@ -628,14 +646,23 @@ impl TemplateLoader {
             let index = files.len();
             let mut children = Vec::new();
             for reference in scan::references(&split.body) {
-                if seen.contains(&reference.name) || reference.name == name {
-                    edges.push((index, reference.name));
-                    continue;
+                // The first candidate that resolves is the one the render loads, so it is the
+                // one that belongs to the chain; the rest are not read.
+                let mut resolved = false;
+                for candidate in &reference.candidates {
+                    if seen.contains(candidate) || *candidate == name {
+                        edges.push((index, candidate.clone()));
+                        resolved = true;
+                        break;
+                    }
+                    if let Some(source) = self.find(candidate)? {
+                        children.push((candidate.clone(), source, Some(index)));
+                        resolved = true;
+                        break;
+                    }
                 }
-                match self.find(&reference.name)? {
-                    Some(source) => children.push((reference.name, source, Some(index))),
-                    None if reference.optional => {}
-                    None => return Err(self.not_found(&reference.name, Some(&name))),
+                if !resolved && !reference.optional {
+                    return Err(self.not_found(&reference.candidates.join(" or "), Some(&name)));
                 }
             }
             pending.extend(children.into_iter().rev());
@@ -745,7 +772,7 @@ fn merge(
                     if nearer.kind != declaration.kind {
                         return Err(conflict(
                             nearer,
-                            "type",
+                            ChainField::Type,
                             nearer.kind.as_str(),
                             &file.name,
                             declaration.kind.as_str(),
@@ -757,7 +784,7 @@ fn merge(
                             |items: Option<ItemType>| items.map_or("none", ItemType::as_str);
                         return Err(conflict(
                             nearer,
-                            "items",
+                            ChainField::Items,
                             spell(nearer.items),
                             &file.name,
                             spell(declaration.items),
@@ -782,7 +809,7 @@ fn merge(
 
 fn conflict(
     nearer: &TemplateVariable,
-    field: &'static str,
+    field: ChainField,
     nearer_value: &'static str,
     farther: &str,
     farther_value: &'static str,

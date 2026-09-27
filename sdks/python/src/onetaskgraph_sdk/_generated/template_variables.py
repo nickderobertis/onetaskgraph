@@ -31,6 +31,8 @@ class TemplateVariable(BaseModel):
             description="The chain file whose declaration this is: the one nearest the rendered template."
         ),
     ]
+    # A default is arbitrary JSON by the emitted wire contract: a value of the
+    # variable's own `type`, which the declaration beside it names.
     default: Annotated[Any | None, Field(description="The value used when no answer is given.")] = (
         None
     )

@@ -993,6 +993,10 @@ pub struct Overrides {
     pub json: bool,
 
     /// Prompt for what a command was not given (the `interactive` setting's default).
+    // llmlint: ignore[invalid_states_unrepresentable] Two presence-only flags, as `json` beside
+    // `output` above: clap's derive has no one-field spelling for a pair of opposing switches,
+    // `conflicts_with` refuses both at once where they are typed (exit 2), and `layer` maps
+    // each to the one `interactive` setting immediately.
     #[arg(long, global = true, conflicts_with = "no_interactive")]
     pub interactive: bool,
 

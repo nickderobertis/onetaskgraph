@@ -374,6 +374,13 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 "    # A metadata value is arbitrary JSON by the emitted wire contract: the key's\n"
                 "    # value as the source reads it back, of whatever JSON type the caller set.",
             )
+        if root in {"TemplateVariable", "TemplateVariables"}:
+            generated = any_json_value(
+                generated,
+                "    # A default is arbitrary JSON by the emitted wire contract: a value of the\n"
+                "    # variable's own `type`, which the declaration beside it names.",
+                field="default",
+            )
         if any("dict[str, Any]" in line for line in generated):
             generated = [
                 line.replace("from pydantic import ", "from pydantic import JsonValue, ").replace(
@@ -466,8 +473,8 @@ def rename_qualified_definitions(value: JsonValue) -> None:
     replace_references(value, renames)
 
 
-def any_json_value(lines: list[str], reason: str) -> list[str]:
-    """Put `reason` above a `value` field the code generator typed `Any`, saying why it is.
+def any_json_value(lines: list[str], reason: str, field: str = "value") -> list[str]:
+    """Put `reason` above a `field` the code generator typed `Any`, saying why it is.
 
     A schema that constrains nothing accepts any JSON value, and `Any` is the only annotation
     that says so; the comment is what tells a reader the escape is the contract rather than a
@@ -476,8 +483,8 @@ def any_json_value(lines: list[str], reason: str) -> list[str]:
     annotated: list[str] = []
     for index, line in enumerate(lines):
         following = lines[index + 1].strip() if index + 1 < len(lines) else ""
-        if line.startswith("    value: Annotated[Any") or (
-            line == "    value: Annotated[" and following == "Any,"
+        if line.startswith(f"    {field}: Annotated[Any") or (
+            line == f"    {field}: Annotated[" and following.startswith("Any")
         ):
             annotated.append(reason)
         annotated.append(line)

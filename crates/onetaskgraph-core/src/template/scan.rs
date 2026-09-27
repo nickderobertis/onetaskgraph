@@ -7,12 +7,13 @@
 //! naming one by an expression cannot be read before rendering; the renderer still loads
 //! what it names, as [`super::Template::render`] says.
 
-/// One template a tag names.
+/// One template a tag names: one name, or a list of candidates of which the first that
+/// resolves is the one loaded — minijinja's own rule for `{% include [a, b] %}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Reference {
-    /// The name as written.
-    pub name: String,
-    /// Written with `ignore missing`, so a name nothing resolves is not an error.
+    /// The names as written, in the order they are tried.
+    pub candidates: Vec<String>,
+    /// Written with `ignore missing`, so candidates nothing resolves are not an error.
     pub optional: bool,
 }
 
@@ -35,19 +36,14 @@ pub(super) fn references(source: &str) -> Vec<Reference> {
             let (word, arguments) = split_word(tag);
             match word {
                 "raw" => rest = skip_raw(rest),
-                "extends" | "import" | "from" => {
-                    found.extend(literal_names(arguments).into_iter().map(|name| Reference {
-                        name,
-                        optional: false,
-                    }));
-                }
-                "include" => {
-                    let optional = arguments.contains("ignore missing");
-                    found.extend(
-                        literal_names(arguments)
-                            .into_iter()
-                            .map(|name| Reference { name, optional }),
-                    );
+                "extends" | "import" | "from" | "include" => {
+                    let candidates = literal_names(arguments);
+                    if !candidates.is_empty() {
+                        found.push(Reference {
+                            candidates,
+                            optional: word == "include" && arguments.contains("ignore missing"),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -193,11 +189,15 @@ fn string_literal(text: &str) -> Option<(String, &str)> {
 mod tests {
     use super::*;
 
-    fn names(source: &str) -> Vec<(String, bool)> {
+    fn names(source: &str) -> Vec<(Vec<String>, bool)> {
         references(source)
             .into_iter()
-            .map(|reference| (reference.name, reference.optional))
+            .map(|reference| (reference.candidates, reference.optional))
             .collect()
+    }
+
+    fn one(name: &str) -> (Vec<String>, bool) {
+        (vec![name.to_owned()], false)
     }
 
     #[test]
@@ -210,12 +210,11 @@ mod tests {
         assert_eq!(
             names(source),
             [
-                ("base.md".to_owned(), false),
-                ("part.md".to_owned(), false),
-                ("macros.md".to_owned(), false),
-                ("helpers.md".to_owned(), false),
-                ("a.md".to_owned(), true),
-                ("b.md".to_owned(), true),
+                one("base.md"),
+                one("part.md"),
+                one("macros.md"),
+                one("helpers.md"),
+                (vec!["a.md".to_owned(), "b.md".to_owned()], true),
             ]
         );
     }
@@ -228,6 +227,6 @@ mod tests {
                       {% include kind ~ '.md' %}\n\
                       {% include 'prefix-' ~ kind %}\n\
                       {% if x %}{% include 'branch.md' %}{% endif %}";
-        assert_eq!(names(source), [("branch.md".to_owned(), false)]);
+        assert_eq!(names(source), [one("branch.md")]);
     }
 }
