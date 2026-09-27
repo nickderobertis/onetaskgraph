@@ -40,7 +40,7 @@ mod resolve;
 mod schema;
 mod secrets;
 pub mod subprocess;
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This crate is the one library the CLI and both SDKs share (the SDKs through the binary), and the task that introduced templates fixes their API at this crate's root so a Rust consumer renders without the binary. A crate of its own would be a new published sibling — a change to the release surface `release-targets.toml` freezes — which is not this change's to make.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
 pub mod template;
 
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};

@@ -803,6 +803,80 @@ fn a_malformed_template_and_a_chain_type_conflict_are_refused_by_name() {
     assert_eq!(failure["failure"]["kind"], "template-chain-conflict");
 }
 
+#[test]
+fn loop_controls_and_the_urlencode_filter_render_as_minijinja_renders_them() {
+    let sandbox = Sandbox::new();
+    let task = sandbox.project().join("t.md");
+    std::fs::write(
+        &task,
+        "---\nonetaskgraph_template: 1\nvariables:\n  steps: {description: s, type: list}\n  \
+         query: {description: q}\n---\n\
+         {% for step in steps %}{% if step == \"skip\" %}{% continue %}{% endif %}\
+         {% if step == \"stop\" %}{% break %}{% endif %}{{ step }};{% endfor %}\n\
+         https://example.test/?q={{ query | urlencode }}\n",
+    )
+    .expect("written");
+    let output = run(
+        &sandbox,
+        &[
+            "template",
+            "render",
+            path(&task),
+            "--var",
+            "steps=[build, skip, test, stop, release]",
+            "--var",
+            "query=a b&c",
+            "--no-interactive",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        // `trim_blocks` takes the newline after `{% endfor %}`, as C1 turns it on.
+        "build;test;https://example.test/?q=a%20b%26c\n"
+    );
+}
+
+#[test]
+fn a_search_path_that_is_not_a_directory_is_refused_naming_it() {
+    let sandbox = Sandbox::new();
+    let task = sandbox.project().join("t.md");
+    std::fs::write(&task, "no chain\n").expect("written");
+    let missing = sandbox.project().join("no-such-library");
+
+    for search in [missing.as_path(), task.as_path()] {
+        let output = run(
+            &sandbox,
+            &[
+                "template",
+                "render",
+                path(&task),
+                "--search-path",
+                path(search),
+                "--no-interactive",
+                "--json",
+            ],
+        );
+        let problem = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{problem}");
+        assert!(
+            problem.contains(&format!("search path {} cannot be searched", path(search))),
+            "{problem}"
+        );
+        assert!(problem.contains("next: "), "{problem}");
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        assert_eq!(failure["failure"]["kind"], "template-search-path");
+    }
+
+    // Without the bad directory the same template renders.
+    let output = run(
+        &sandbox,
+        &["template", "render", path(&task), "--no-interactive"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "no chain\n");
+}
+
 /// The prompting journey: a real pseudo-terminal on standard input and error.
 #[cfg(unix)]
 mod prompting {

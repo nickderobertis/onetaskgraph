@@ -1,4 +1,4 @@
-// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This module is where the task that introduced templates fixes their library API: at `onetaskgraph-core`'s crate root, beside the engine every surface shares, so a Rust consumer renders without the binary. A crate of its own would be a new published sibling — a change to the release surface `release-targets.toml` freezes — which is not this change's to make; `crates/onetaskgraph-core/src/lib.rs` carries the same reason where the module is declared.
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This module is where the task that introduced templates fixes their library API: at `onetaskgraph-core`'s crate root, beside the engine every surface shares, so a Rust consumer renders without the binary. A crate of its own would be a new published sibling — a change to the release surface `release-targets.toml` freezes — which is not this change's to make.
 //! Task templates: a minijinja document with a declared set of variables, rendered from
 //! answers.
 //!
@@ -392,6 +392,18 @@ pub enum TemplateError {
         /// Why the read failed.
         message: String,
     },
+    /// A search path directory that is missing or is not a directory, refused before any
+    /// template is looked for, so a mistyped one is not silently searched as empty.
+    #[error(
+        "search path {directory} cannot be searched: {message}\n\
+         next: give a directory that exists, or leave it out of the search path."
+    )]
+    SearchPath {
+        /// The directory as it was given.
+        directory: String,
+        /// Why it cannot be searched.
+        message: String,
+    },
     /// A chain file that is not a template this format reads.
     #[error(
         "template {file}: {}{message}\nnext: {}",
@@ -511,6 +523,7 @@ impl TemplateError {
         match self {
             Self::NotFound { .. } => "template-not-found",
             Self::Unreadable { .. } => "template-unreadable",
+            Self::SearchPath { .. } => "template-search-path",
             Self::Malformed { .. } => "template-malformed",
             Self::ChainConflict { .. } => "template-chain-conflict",
             Self::MalformedAnswers { .. } => "template-answers-malformed",
@@ -585,8 +598,10 @@ impl TemplateLoader {
     /// [`TemplateError::NotFound`] for a file that cannot be read or a chain name nothing
     /// resolves; [`TemplateError::Malformed`] for a chain file that is not UTF-8, whose front
     /// matter is refused, or whose body does not parse; [`TemplateError::ChainConflict`] for
-    /// a variable two chain files type differently.
+    /// a variable two chain files type differently; [`TemplateError::SearchPath`] for a
+    /// search path directory that is missing or is not a directory.
     pub fn load_path(&self, path: &Path) -> Result<Template, TemplateError> {
+        self.searchable()?;
         let shown = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -618,6 +633,7 @@ impl TemplateLoader {
     /// As [`TemplateLoader::load_path`], and [`TemplateError::NotFound`] when the search
     /// path resolves `name` to nothing.
     pub fn load_name(&self, name: &str) -> Result<Template, TemplateError> {
+        self.searchable()?;
         let source = self.find(name)?.ok_or_else(|| self.not_found(name, None))?;
         self.load_chain(name.to_owned(), source)
     }
@@ -689,6 +705,22 @@ impl TemplateLoader {
             resolutions,
             self.clone(),
         ))
+    }
+
+    /// Refuse a search path directory that is missing or is not a directory.
+    fn searchable(&self) -> Result<(), TemplateError> {
+        for directory in &self.directories {
+            let refused = |message: String| TemplateError::SearchPath {
+                directory: directory.display().to_string(),
+                message,
+            };
+            match std::fs::metadata(directory) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Err(refused("it is not a directory".to_owned())),
+                Err(error) => return Err(refused(error.to_string())),
+            }
+        }
+        Ok(())
     }
 
     /// Read the chain from `name`, whose source is `source`: that file, then every file it

@@ -143,6 +143,24 @@ test("answers JSON cannot carry are refused before the binary is started", async
   }
 });
 
+test("an answer key JSON cannot carry is refused rather than dropped", async () => {
+  const hidden = { title: "t" };
+  Object.defineProperty(hidden, "steps", { value: ["a"], enumerable: false });
+  const refusals: [Record<string, unknown>, string][] = [
+    [{ title: "t", [Symbol("steps")]: ["a"] }, "answers has the key Symbol(steps)"],
+    [{ title: "t", nested: { [Symbol("x")]: 1 } }, "answers.nested has the key Symbol(x)"],
+    [hidden, "answers has the key steps"],
+  ];
+  for (const [answers, message] of refusals) {
+    const refused = client.templateRender(task, {
+      searchPath: [library],
+      answers: answers as Record<string, JsonValue>,
+    });
+    await expect(refused).rejects.toThrow(TypeError);
+    await expect(refused).rejects.toThrow(message);
+  }
+});
+
 test("what is sent is the answers checked, and a var is text or refused", async () => {
   // An array carrying its own `toJSON`: serialising the caller's object would send "swapped".
   const steps = ["checked"];

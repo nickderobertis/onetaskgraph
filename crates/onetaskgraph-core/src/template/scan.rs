@@ -1,4 +1,4 @@
-// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] One part of the `template` module, which sits in this crate for the reason its `mod.rs` states at the head of the file: the task that introduced templates fixes their API at `onetaskgraph-core`'s crate root, and a crate of their own would be a new published sibling that is not this change's to add.
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] A part of the `template` module; why that module sits in this crate is stated once, at the head of its `mod.rs`.
 //! The templates one template names, read off its source before anything renders.
 //!
 //! minijinja resolves `extends`, `include` and `import` lazily, as the render reaches them,

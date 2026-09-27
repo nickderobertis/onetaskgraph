@@ -272,6 +272,18 @@ function answersDocument(answers: Record<string, JsonValue>): string {
             copy(value[index], `${path}[${index}]`),
           );
         } else {
+          // `Object.entries` reads only enumerable string keys, so a symbol or non-enumerable
+          // key would be dropped in silence and the binary sent less than was handed over.
+          const unread = Reflect.ownKeys(value).find(
+            (key) =>
+              typeof key === "symbol" || !Object.prototype.propertyIsEnumerable.call(value, key),
+          );
+          if (unread !== undefined) {
+            throw new TypeError(
+              `templateRender: answers${path} has the key ${String(unread)}, which JSON cannot ` +
+                "carry; next: give every answer an enumerable string key",
+            );
+          }
           copied = Object.fromEntries(
             Object.entries(value).map(([key, item]) => [key, copy(item, `${path}.${key}`)]),
           );

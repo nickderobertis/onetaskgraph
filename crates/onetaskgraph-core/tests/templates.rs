@@ -246,6 +246,33 @@ fn the_working_directory_is_never_searched_unless_it_is_given() {
 }
 
 #[test]
+fn a_search_path_directory_that_is_missing_or_a_file_is_refused_before_any_load() {
+    let library = directory(&[("root.md", "fine\n")]);
+    let missing = library.path().join("absent");
+    let file = library.path().join("root.md");
+    for search in [&missing, &file] {
+        let loader = TemplateLoader::new()
+            .with_directory(library.path())
+            .with_directory(search)
+            .with_template("root.md", "fine\n");
+        for error in [
+            loader.load_name("root.md").expect_err("refused"),
+            loader.load_path(&file).expect_err("refused"),
+        ] {
+            assert_eq!(error.kind(), "template-search-path", "{error}");
+            assert!(
+                error.to_string().contains(&search.display().to_string()),
+                "{error}"
+            );
+        }
+    }
+    TemplateLoader::new()
+        .with_directory(library.path())
+        .load_name("root.md")
+        .expect("a directory that is there is searched");
+}
+
+#[test]
 fn a_redeclaration_that_changes_type_or_items_is_refused_naming_both_files() {
     let loader = TemplateLoader::new()
         .with_template(
