@@ -39,14 +39,9 @@ class Loopback(http.server.ThreadingHTTPServer):
 class Unconditional(http.server.SimpleHTTPRequestHandler):
     """Every request answered with the file as it is now, never `304 Not Modified`.
 
-    The stock handler sends `Last-Modified` and answers a matching `If-Modified-Since` with
-    304 whenever the file's mtime, truncated to whole seconds, is not later than it. The
-    check edits an index file cargo has already cached and resolves again, often within the
-    same second as that cache, so cargo revalidated to 304, kept the release the edit
-    removed, and the check's "sibling absent from the registry" case passed or failed by the
-    clock. With no validator sent and none honoured, what cargo resolves against is always
-    the index as the check last wrote it. scripts/check-crate-sibling-resolution-same-second.sh
-    drives that check with every mtime pinned to one second, which is what holds this.
+    The stock handler's validator is a whole-second mtime, which cannot tell an index file
+    the check rewrote from the copy cargo cached earlier in the same second. So none is sent
+    and none is honoured; scripts/check-crate-sibling-resolution-same-second.sh holds both.
     """
 
     def send_head(self):
