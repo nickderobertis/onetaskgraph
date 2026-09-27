@@ -989,3 +989,22 @@ fn ignore_missing_inside_a_file_name_does_not_make_the_include_optional() {
         "[]"
     );
 }
+
+#[test]
+fn an_escaped_name_is_the_file_minijinja_loads() {
+    let root = "{% include \"tab\\u0041.md\" %}{% include 'it\\'s.md' %}";
+    let template = TemplateLoader::new()
+        .with_template("root.md", root)
+        .with_template("tabA.md", "unicode\n")
+        .with_template("it's.md", "quote\n")
+        .load_name("root.md")
+        .expect("both escaped names resolve");
+    assert_eq!(
+        template.chain().collect::<Vec<_>>(),
+        ["root.md", "tabA.md", "it's.md"]
+    );
+    let rendered = template.render(&Answers::new()).expect("renders");
+    assert_eq!(rendered.body, "unicode\nquote\n");
+    // The render loaded nothing the chain did not already name.
+    assert_eq!(rendered.digest, template.digest());
+}

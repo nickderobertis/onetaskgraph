@@ -172,28 +172,31 @@ fn trailer(tag: &str, after: &str) -> Option<bool> {
 }
 
 /// One string literal at the start of `text`, unescaped, and what follows it.
+///
+/// This finds only where the literal ends; what it spells is minijinja's own reading of it,
+/// so a name this scan reads and the name the render asks for are one decoding, whatever
+/// escapes it uses.
 fn string_literal(text: &str) -> Option<(String, &str)> {
     let mut characters = text.char_indices();
     let (_, open) = characters.next()?;
     if open != '"' && open != '\'' {
         return None;
     }
-    let mut value = String::new();
     let mut escaped = false;
     for (index, character) in characters {
         if escaped {
-            value.push(match character {
-                'n' => '\n',
-                't' => '\t',
-                other => other,
-            });
             escaped = false;
         } else if character == '\\' {
             escaped = true;
         } else if character == open {
-            return Some((value, &text[index + 1..]));
-        } else {
-            value.push(character);
+            let literal = &text[..=index];
+            let value = minijinja::Environment::new()
+                .compile_expression(literal)
+                .and_then(|expression| expression.eval(()))
+                .ok()?;
+            return value
+                .as_str()
+                .map(|name| (name.to_owned(), &text[index + 1..]));
         }
     }
     None
