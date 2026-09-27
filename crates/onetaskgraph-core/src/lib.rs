@@ -54,8 +54,8 @@ pub use engine::{
     TaskStatusSet, settled,
 };
 pub use engine::{
-    DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderedRecord, TaskCreate,
-    TaskCreated, TemplateAnswers, UnusedAnswers,
+    DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
+    TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};

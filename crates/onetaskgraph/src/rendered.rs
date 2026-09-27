@@ -14,7 +14,7 @@ use std::str::FromStr as _;
 
 use onetaskgraph_core::{
     Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, RenderRequest,
-    RenderedRecord, TaskCreate,
+    RenderTemplate, RenderedRecord, TaskCreate,
 };
 use onetaskgraph_plugin_api::{MetadataKey, NativeId, Repository, SourceName};
 use serde_json::Value;
@@ -146,8 +146,12 @@ async fn regenerated(
             record,
             id,
             &RenderRequest {
-                template,
-                search_path: args.search_path.clone(),
+                template: template.map_or_else(
+                    || RenderTemplate::Recorded {
+                        search_path: args.search_path.clone(),
+                    },
+                    RenderTemplate::Given,
+                ),
                 ..RenderRequest::default()
             },
         )

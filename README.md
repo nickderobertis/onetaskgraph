@@ -469,9 +469,7 @@ nor running a caller's command:
 the `search_path` directories, then the inline `templates`; `digest`, when present, must be
 the digest that chain computes, or the render is refused naming both. Every other key is
 ignored. `template variables` and `template render` take one in place of their `<FILE>`.
-[`docs/metadata.md`](./docs/metadata.md) states the provenance key and the loader document
-beside the other reserved keys, and [`docs/local-md.md`](./docs/local-md.md) the answers
-block.
+[`docs/local-md.md`](./docs/local-md.md) describes the answers block.
 
 ### Exit codes
 

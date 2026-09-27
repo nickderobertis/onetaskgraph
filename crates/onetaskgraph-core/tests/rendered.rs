@@ -10,8 +10,8 @@ use std::path::Path;
 
 use onetaskgraph_core::{
     Answers, Body, Config, DocumentCreate, Engine, EngineError, GlobalId, LoaderDocument,
-    RenderRequest, RenderedRecord, RenderedTemplate, TaskCreate, TemplateError, TemplateInput,
-    TemplateProvenance,
+    RenderRequest, RenderTemplate, RenderedRecord, RenderedTemplate, TaskCreate, TemplateError,
+    TemplateInput, TemplateProvenance,
 };
 use onetaskgraph_plugin_api::{MetadataKey, NativeId, SecretResolver, SourceName, StatusCategory};
 use secrecy::SecretString;
@@ -191,7 +191,7 @@ async fn a_regenerate_overlays_new_answers_and_an_unchanged_one_writes_nothing()
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(template.clone()),
+                template: RenderTemplate::Given(template.clone()),
                 answers: overlay,
                 ..RenderRequest::default()
             },
@@ -222,7 +222,7 @@ async fn a_regenerate_overlays_new_answers_and_an_unchanged_one_writes_nothing()
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(template),
+                template: RenderTemplate::Given(template),
                 ..RenderRequest::default()
             },
         )
@@ -252,7 +252,7 @@ async fn an_edited_loader_document_changes_the_digest_and_the_rendering() {
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(edited),
+                template: RenderTemplate::Given(edited),
                 ..RenderRequest::default()
             },
         )
@@ -296,7 +296,7 @@ async fn answers_out_of_step_with_the_provenance_need_every_required_answer() {
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(template.clone()),
+                template: RenderTemplate::Given(template.clone()),
                 answers: answers(json!({"steps": ["x"]})),
                 ..RenderRequest::default()
             },
@@ -324,7 +324,7 @@ async fn answers_out_of_step_with_the_provenance_need_every_required_answer() {
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(template),
+                template: RenderTemplate::Given(template),
                 answers: answers(json!({"goal": "Ship it"})),
                 ..RenderRequest::default()
             },
@@ -440,10 +440,9 @@ async fn a_dry_run_renders_and_writes_nothing() {
         .render_task(
             &id,
             &RenderRequest {
-                template: Some(template),
+                template: RenderTemplate::Given(template),
                 answers: overlay,
                 dry_run: true,
-                ..RenderRequest::default()
             },
         )
         .await
@@ -565,7 +564,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
         .render_document(
             &created.id,
             &RenderRequest {
-                template: Some(template),
+                template: RenderTemplate::Given(template),
                 answers: answers(json!({"goal": "Design it again"})),
                 ..RenderRequest::default()
             },
@@ -637,7 +636,7 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
         .unwrap()
         .task;
     let request = RenderRequest {
-        template: Some(template.clone()),
+        template: RenderTemplate::Given(template.clone()),
         answers: answers(json!({"goal": "In memory"})),
         ..RenderRequest::default()
     };

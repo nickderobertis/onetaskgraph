@@ -60,7 +60,7 @@ hashes and all, passes it. It says what an item was rendered from, not who wrote
 
 **The answers are not in it, and are in no other metadata key either.** They are kept only
 where an item is authored as a file of its own — `local-md` keeps them in a block of the
-item's file, which [`local-md.md`](./local-md.md) describes — and nowhere else: not in the
+item's file, after its body and before any comments section — and nowhere else: not in the
 content, not in the metadata, and not in a comment, so a hosted item carries the four
 strings above and nothing of its answers but what the template rendered into its content.
 A copy carries content and metadata alone, so **it never carries answers**, at either end:

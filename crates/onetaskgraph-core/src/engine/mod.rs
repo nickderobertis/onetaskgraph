@@ -60,8 +60,8 @@ pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{TaskContentSet, TaskPrioritySet};
 pub use rendered::{
-    Body, DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderedRecord, TaskCreate,
-    TaskCreated, TemplateAnswers, UnusedAnswers,
+    Body, DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
+    TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
 
 /// One item, under the qualified id the engine addresses it by.

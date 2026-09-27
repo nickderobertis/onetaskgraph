@@ -212,15 +212,36 @@ impl RenderedRecord {
     }
 }
 
+/// Which template a regenerate renders.
+///
+/// One of two, rather than an optional template beside a search path: a search path means
+/// something only for the recorded file, and a given template carries its own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RenderTemplate {
+    /// The template given: a file with the directories its chain resolves over, or a loader
+    /// document.
+    Given(TemplateInput),
+    /// The `template` the item records, when that is a readable file, its chain resolved over
+    /// `search_path`. A recorded reference that is not a file is refused, never resolved.
+    Recorded {
+        /// The directories the recorded file's chain resolves over.
+        search_path: Vec<PathBuf>,
+    },
+}
+
+impl Default for RenderTemplate {
+    fn default() -> Self {
+        Self::Recorded {
+            search_path: Vec::new(),
+        }
+    }
+}
+
 /// What `task render` and `document render` are asked.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderRequest {
-    /// The template to render; `None` renders the recorded `template` when that is a
-    /// readable file.
-    pub template: Option<TemplateInput>,
-    /// The directories a recorded template file's chain resolves over, when `template` is
-    /// `None`.
-    pub search_path: Vec<PathBuf>,
+    /// The template to render.
+    pub template: RenderTemplate,
     /// The answers laid over the base: the stored ones when they are in step with the item's
     /// provenance, none otherwise. An unset name drops its answer.
     pub answers: Answers,
@@ -643,30 +664,32 @@ impl Engine {
         let (content, metadata) = self.read_item(source, record, id).await?;
         let read = TemplateProvenance::read(&metadata);
         let template = match (&request.template, &read) {
-            (Some(given), _) => given.clone(),
+            (RenderTemplate::Given(given), _) => given.clone(),
             // An entry this product did not write names nothing it can trust: with no template
             // given there is nothing to render, and the refusal says why.
-            (None, Err(problem)) => {
+            (RenderTemplate::Recorded { .. }, Err(problem)) => {
                 return Err(EngineError::MalformedProvenance {
                     record: record.noun(),
                     id: id.to_string(),
                     problem: problem.clone(),
                 });
             }
-            (None, Ok(Some(recorded))) if Path::new(&recorded.template).is_file() => {
+            (RenderTemplate::Recorded { search_path }, Ok(Some(recorded)))
+                if Path::new(&recorded.template).is_file() =>
+            {
                 TemplateInput::File {
                     path: PathBuf::from(&recorded.template),
-                    search_path: request.search_path.clone(),
+                    search_path: search_path.clone(),
                 }
             }
-            (None, Ok(Some(recorded))) => {
+            (RenderTemplate::Recorded { .. }, Ok(Some(recorded))) => {
                 return Err(EngineError::TemplateNotAFile {
                     record: record.noun(),
                     id: id.to_string(),
                     reference: recorded.template.clone(),
                 });
             }
-            (None, Ok(None)) => {
+            (RenderTemplate::Recorded { .. }, Ok(None)) => {
                 return Err(EngineError::NoTemplate {
                     record: record.noun(),
                     id: id.to_string(),

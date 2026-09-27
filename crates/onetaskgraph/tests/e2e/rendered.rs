@@ -1101,6 +1101,39 @@ fn documents_are_created_on_both_kinds_of_source_and_their_answers_read_where_ke
         plan.json(&["document", "show", "notes:memo"])["items"][0]["item"]["title"],
         "Memo, replaced"
     );
+
+    // On the board too, under the id the board gave it: the same issue, and no new one.
+    let create = |title: &str, id: Option<&str>| {
+        let mut arguments = vec![
+            "document",
+            "create",
+            "board",
+            "--project",
+            "P-1",
+            "--title",
+            title,
+            "--body-file",
+            &body,
+        ];
+        if let Some(id) = id {
+            arguments.extend(["--id", id]);
+        }
+        stdout(&plan.exits(&arguments, 0)).trim().to_owned()
+    };
+    let first = create("Board memo", None);
+    let sent = plan.board().documents().len();
+    assert_eq!(create("Board memo, replaced", Some(native(&first))), first);
+    assert!(
+        !plan.board().documents()[sent..]
+            .iter()
+            .any(|document| document.contains("createIssue")
+                || document.contains("addProjectV2ItemById")),
+        "a replacement created an issue"
+    );
+    assert_eq!(
+        plan.json(&["document", "show", &first])["items"][0]["item"]["title"],
+        "Board memo, replaced"
+    );
 }
 
 #[test]
@@ -1285,7 +1318,14 @@ fn a_board_item_regenerates_from_every_required_answer_and_keeps_its_issue() {
     let id = plan.create(
         "board",
         "On the board",
-        &["--var", "goal=Ship it", "--var", "owner=ada"],
+        &[
+            "--var",
+            "goal=Ship it",
+            "--var",
+            "owner=ada",
+            "--metadata",
+            r#"myapp.keep={"n": 1}"#,
+        ],
     );
     let sent = plan.board().documents().len();
 
@@ -1338,6 +1378,9 @@ fn a_board_item_regenerates_from_every_required_answer_and_keeps_its_issue() {
         slot["onetaskgraph.template"]["body_digest"],
         regenerated["body_digest"]
     );
+    // The provenance entry is the one slot entry a regenerate moves: the caller's own stays.
+    assert_eq!(slot["myapp.keep"], json!({"n": 1}), "{slot:#}");
+    assert_eq!(plan.task(&id)["metadata"]["myapp.keep"], json!({"n": 1}));
 }
 
 #[test]
