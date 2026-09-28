@@ -688,7 +688,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from collections.abc import Mapping",
         "from typing import Literal",
         "",
-        "from pydantic import BaseModel, JsonValue, RootModel, TypeAdapter, ValidationError",
+        "from pydantic import JsonValue, TypeAdapter",
         "",
         "from .models import (",
         *[
