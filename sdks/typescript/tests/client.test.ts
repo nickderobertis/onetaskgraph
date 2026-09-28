@@ -901,6 +901,46 @@ test("a task's priority is listed, filtered and set through the real binary", as
   }
 });
 
+function commentedFolder(): string {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-commented-"));
+  mkdirSync(resolve(root, "work/tasks"), { recursive: true });
+  const comment = (created: string, updated: string) =>
+    `\n## Comments\n\n<!-- onetaskgraph:comment id="c-1" author="ada" created_at="${created}" updated_at="${updated}" -->\n### ada — ${created}\n\nA word.\n\n<!-- /onetaskgraph:comment -->\n`;
+  const task = (name: string, comments: string) =>
+    writeFileSync(
+      resolve(root, `work/tasks/${name}.md`),
+      `---\ntitle: ${name}\nstatus: todo\n---\nThe body.\n${comments}`,
+    );
+  task("new", comment("2026-09-21T09:00:00Z", "2026-09-21T09:00:00Z"));
+  task("edited", comment("2026-09-01T09:00:00Z", "2026-09-25T09:00:00Z"));
+  task("old", comment("2026-09-01T09:00:00Z", "2026-09-02T09:00:00Z"));
+  task("silent", "");
+  writeFileSync(
+    resolve(root, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { work: { plugin: "local-md", config: { root: resolve(root, "work") } } },
+    }),
+  );
+  return root;
+}
+
+test("a task list is narrowed to comment activity since an instant through the real binary", async () => {
+  const root = commentedFolder();
+  try {
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const commented = await client.taskList({ commentedSince: "2026-09-20T12:00:00Z" });
+    expect(commented.items.map((task) => task.id).sort()).toEqual(["work:edited", "work:new"]);
+    const everything = await client.taskList();
+    expect(everything.items).toHaveLength(4);
+
+    const refused = client.taskList({ commentedSince: "2026-09-20T12:00:00" });
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 2 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a task's content is replaced from a file through the real binary, and nothing else", async () => {
   const contentRoot = priorityFolder();
   try {
