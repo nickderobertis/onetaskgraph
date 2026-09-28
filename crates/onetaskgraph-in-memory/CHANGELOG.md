@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.48](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.2.47...onetaskgraph-in-memory-v0.2.48) - 2026-09-28
+
+### Added
+
+- *(task)* add a targeted task update and classify budget exhaustion ([#2805](https://github.com/nickderobertis/onetaskgraph/pull/2805))
+
+### Fixed
+
+- *(local-md)* keep an item's content byte for byte on write, so a copied rendering still matches its digest ([#2812](https://github.com/nickderobertis/onetaskgraph/pull/2812))
+
 ## [0.2.47](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.2.46...onetaskgraph-in-memory-v0.2.47) - 2026-09-27
 
 ### Added
