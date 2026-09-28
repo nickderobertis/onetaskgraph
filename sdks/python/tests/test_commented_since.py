@@ -96,13 +96,13 @@ def store(tmp_path: Path) -> Path:
     for task in STORE:
         tasks = tmp_path / task.folder / "tasks"
         tasks.mkdir(parents=True, exist_ok=True)
-        (tasks / f"{task.name}.md").write_text(task.text(), encoding="utf-8")
+        (tasks / f"{task.name}.md").write_text(task.text(), encoding="utf-8", newline="\n")
     mapping = {"todo": "todo", "shipped": "done"}
     sources = {
         folder: {"plugin": "local-md", "config": {"root": folder, "status_mapping": mapping}}
         for folder in ("home", "away")
     }
-    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}))
+    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}), encoding="utf-8")
     return tmp_path
 
 
