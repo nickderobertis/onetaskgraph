@@ -11,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use onetaskgraph_plugin_api::{
-    ItemWrite, MetadataKey, NativeId, Priority, SecretResolver, SourceError, SourceName,
-    SourcePlugin, Status, StatusCategory, Task, TaskRef, TaskSource, TaskUpdate, UpdatedField,
+    Document, ItemWrite, MetadataKey, NativeId, Priority, Project, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Task, TaskRef, TaskSource, TaskUpdate,
+    UpdatedField,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -348,6 +349,61 @@ async fn a_rendered_task_ending_in_a_kept_block_scalar_reads_back_as_written_and
         Some(answers),
         "the answers block is where it was"
     );
+}
+
+#[tokio::test]
+async fn a_project_and_a_document_ending_in_a_block_scalar_read_back_as_written() {
+    for value in [steps("## What\nWork.\n"), steps("## What\nWork.\n\n")] {
+        let metadata = BTreeMap::from([("zzz.value".to_owned(), value.clone())]);
+        let (_root, source) = folder();
+        let project = source
+            .write_project(&ItemWrite {
+                target: None,
+                item: Project {
+                    id: NativeId::from("launch"),
+                    title: "Launch".to_owned(),
+                    content: None,
+                    status: Status {
+                        category: StatusCategory::Todo,
+                        name: "todo".to_owned(),
+                    },
+                    labels: Vec::new(),
+                    url: None,
+                    location: None,
+                    created_at: None,
+                    updated_at: None,
+                    metadata: metadata.clone(),
+                    repositories: Vec::new(),
+                },
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect("the project is written");
+        let document = source
+            .write_document(&ItemWrite {
+                target: None,
+                item: Document {
+                    id: NativeId::from("design"),
+                    title: "Design".to_owned(),
+                    content: None,
+                    project: None,
+                    labels: Vec::new(),
+                    url: None,
+                    location: None,
+                    created_at: None,
+                    updated_at: None,
+                    metadata: metadata.clone(),
+                    repositories: Vec::new(),
+                },
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect("the document is written");
+        let project = source.get_project(&project).await.unwrap().expect("held");
+        assert_eq!(project.metadata, metadata);
+        let document = source.get_document(&document).await.unwrap().expect("held");
+        assert_eq!(document.metadata, metadata);
+    }
 }
 
 #[tokio::test]
