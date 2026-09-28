@@ -295,6 +295,62 @@ async fn a_targeted_update_of_another_field_leaves_each_writer_layout_byte_for_b
 }
 
 #[tokio::test]
+async fn a_rendered_task_ending_in_a_kept_block_scalar_reads_back_as_written_and_updates() {
+    // A rendered write lays its answers block after the front matter, which is the other
+    // branch of the writer that closes it.
+    let kept = steps("## What\nWork.\n\n");
+    let answers = BTreeMap::from([("goal".to_owned(), json!("Ship it"))]);
+    let (root, source) = folder();
+    let id = source
+        .write_task_rendered(
+            &ItemWrite {
+                target: None,
+                item: task(ARRANGEMENTS[0], &kept),
+                depends_on: Vec::new(),
+            },
+            &answers,
+        )
+        .await
+        .expect("the task is written");
+    let path = root.path().join(format!("tasks/{}.md", id.as_str()));
+    let file = fs::read_to_string(&path).expect("the task file");
+    assert!(file.contains("task: |+\n"), "{file}");
+    let before = source.get_task(&id).await.unwrap().expect("held");
+    assert_eq!(before.metadata["zzz.value"], kept, "{file}");
+
+    let outcome = source
+        .update_task(
+            &id,
+            &TaskUpdate {
+                title: Some("Renamed".to_owned()),
+                metadata_remove: BTreeSet::from([key("aaa.other")]),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect("the update lands")
+        .expect("held");
+    assert_eq!(
+        outcome.written,
+        BTreeSet::from([UpdatedField::Title, UpdatedField::Metadata])
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        once(
+            &once(&file, "---\ntitle: Layout\n", "---\ntitle: Renamed\n"),
+            "  aaa.other: 1\n",
+            ""
+        )
+    );
+    assert_eq!(outcome.task.metadata["zzz.value"], kept);
+    assert_eq!(
+        source.task_template_answers(&id).await.unwrap(),
+        Some(answers),
+        "the answers block is where it was"
+    );
+}
+
+#[tokio::test]
 async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
     let held = steps("## What\nWork.\n\n## Acceptance criteria\n\n- x\n");
     let replacement = steps("## What\nOther work.\n\n");
