@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.49](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.2.48...onetaskgraph-local-md-v0.2.49) - 2026-09-28
+
+### Fixed
+
+- *(local-md)* update a task whose metadata holds block-scalar sequences ([#2887](https://github.com/nickderobertis/onetaskgraph/pull/2887))
+
 ## [0.2.48](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.2.47...onetaskgraph-local-md-v0.2.48) - 2026-09-28
 
 ### Added
