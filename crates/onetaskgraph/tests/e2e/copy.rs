@@ -2267,6 +2267,87 @@ fn a_project_copied_beside_itself_files_its_tasks_under_the_copy_and_links_them_
             root.join("tasks/rule-scope-2/beta.md"),
         ]
     );
+
+    // A task the project gains afterwards, copied on its own, follows the project's copy too.
+    std::fs::write(
+        root.join("tasks/rule-scope/gamma.md"),
+        "---\ntitle: Gamma\nstatus: todo\nproject: rule-scope\n---\nbody\n",
+    )
+    .expect("a later task");
+    let alone = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authoring:rule-scope/gamma",
+            "--to",
+            "authoring",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&alone),
+        vec![(
+            "authoring:rule-scope/gamma".to_owned(),
+            json!("authoring:rule-scope-2/gamma"),
+            "created".to_owned()
+        )]
+    );
+    assert_eq!(
+        shown(&sandbox, "task", "authoring:rule-scope-2/gamma")["project"],
+        json!("rule-scope-2")
+    );
+}
+
+#[test]
+fn tasks_copied_together_beside_themselves_depend_on_each_others_copies() {
+    // With no copy of their project to follow, the copies stay in it; what moves is the edge,
+    // which names the other copy rather than the task it was copied from.
+    let sandbox = Sandbox::new();
+    let root = project_scoped_plans(&sandbox);
+
+    let copied = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authoring:rule-scope/alpha",
+            "authoring:rule-scope/beta",
+            "--to",
+            "authoring",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&copied)
+            .into_iter()
+            .map(|(_, destination, _)| destination)
+            .collect::<Vec<_>>(),
+        vec![
+            json!("authoring:rule-scope/alpha-2"),
+            json!("authoring:rule-scope/beta-2")
+        ]
+    );
+    let dependencies: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "deps", "authoring:rule-scope/alpha-2", "--json"],
+    ))
+    .expect("task dependencies emit JSON");
+    assert_eq!(
+        dependencies["items"],
+        json!([{
+            "from": {"id": "authoring:rule-scope/alpha-2", "kind": "task"},
+            "to": {"id": "authoring:rule-scope/beta-2", "kind": "task"},
+            "kind": "blocks"
+        }]),
+        "{dependencies:#}"
+    );
+    assert!(
+        std::fs::read_to_string(root.join("tasks/rule-scope/alpha.md"))
+            .expect("the original")
+            .contains("depends_on: [rule-scope/beta]"),
+        "the task copied from keeps its own edge"
+    );
 }
 
 #[test]
