@@ -689,9 +689,11 @@ impl LocalMdSource {
 
     /// The YAML front matter and the body of `text`, the contents of the file at `path`, split
     /// apart.
+    ///
+    /// The YAML is [`front_yaml`]'s, whose last line keeps its line ending.
     fn split_text<'t>(path: &Path, text: &'t str) -> Result<(&'t str, &'t str), SourceError> {
         front_matter(text)
-            .map(|(yaml, body_at)| (yaml, &text[body_at..]))
+            .and_then(|(_, body_at)| Some((front_yaml(text)?, &text[body_at..])))
             .ok_or_else(|| unfronted(path))
     }
 
@@ -1894,12 +1896,32 @@ fn front_matter(text: &str) -> Option<(&str, usize)> {
     None
 }
 
+/// The YAML of `text`'s front matter as a reader parses it: [`front_matter`]'s, with the line
+/// ending its last line has in the file — the one the closing `---` follows.
+///
+/// That ending is part of the last line's value, not of the delimiter. A `|` block scalar,
+/// which this source's own writer lays every multi-line string out as, ends there when it is
+/// the front matter's last value, and without its ending it would read back one newline short
+/// of what was written — so the task this source had just written would read as something
+/// else, and every narrow edit that put a line after that scalar would move its value.
+fn front_yaml(text: &str) -> Option<&str> {
+    let (yaml, _) = front_matter(text)?;
+    let (open, ending) = if text.starts_with("---\r\n") {
+        (5, 2)
+    } else {
+        (4, 1)
+    };
+    Some(&text[open..open + yaml.len() + ending])
+}
+
 /// `text` with its front matter's top-level `key` entry replaced by `key: value`, or removed
 /// when `value` is `None`, and every other byte exactly as it was — or `None` when `text` has
 /// no front matter.
 ///
 /// An entry is its `key:` line and every line after it that continues it: an indented line,
-/// or a `- ` sequence item. An absent key is added as the last line of the front matter. The
+/// or a `- ` sequence item, with any blank line between two of those — and the blank lines
+/// after it too when its value ends in a block scalar that keeps them, by [`keeps_breaks`].
+/// An absent key is added as the last line of the front matter. The
 /// line ending written is the one the file already uses.
 fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String> {
     let (open, newline) = if text.starts_with("---\r\n") {
@@ -1933,13 +1955,26 @@ fn with_front_entry(text: &str, key: &str, value: Option<&str>) -> Option<String
             &text[end..]
         ));
     };
+    let content = |at: usize| {
+        lines
+            .get(at)
+            .map(|&(from, to)| text[from..to].trim_end_matches(['\r', '\n']))
+    };
     let mut last = index;
-    while let Some(&(from, to)) = lines.get(last + 1) {
-        let line = text[from..to].trim_end_matches(['\r', '\n']);
-        if line.starts_with([' ', '\t']) || line == "-" || line.starts_with("- ") {
-            last += 1;
+    let mut next = index + 1;
+    while let Some(line) = content(next) {
+        if line.trim().is_empty() {
+            next += 1;
+        } else if line.starts_with([' ', '\t']) || line == "-" || line.starts_with("- ") {
+            last = next;
+            next += 1;
         } else {
             break;
+        }
+    }
+    if keeps_breaks((index..=last).filter_map(content)) {
+        while content(last + 1).is_some_and(|line| line.trim().is_empty()) {
+            last += 1;
         }
     }
     let from = lines[index].0;
@@ -2055,9 +2090,9 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
         ProjectFilter::Orphans => None,
         ProjectFilter::Is(id) => Some(id),
     };
-    let project = match front_matter(text) {
+    let project = match front_yaml(text) {
         None => None,
-        Some((yaml, _)) => match serde_norway::from_str::<Filing>(yaml) {
+        Some(yaml) => match serde_norway::from_str::<Filing>(yaml) {
             Ok(filing) => filing.project,
             Err(_) => return false,
         },
@@ -3025,7 +3060,7 @@ impl LocalMdSource {
             message: format!("{}: {e}", path.display()),
         })?;
         let rewritten = with_front_entry(&text, key, value).ok_or_else(|| unfronted(path))?;
-        let Some((yaml, _)) = front_matter(&rewritten) else {
+        let Some(yaml) = front_yaml(&rewritten) else {
             return Err(unfronted(path));
         };
         serde_norway::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
@@ -3264,11 +3299,14 @@ impl LocalMdSource {
         let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),
         })?;
+        // The one line break that ends the rendering, whose place the closing `---` line's own
+        // takes, and nothing more: the blank lines before it are the last value's when that is
+        // a block scalar keeping its trailing line breaks (`|+`), which a trim would drop.
+        let yaml = yaml.strip_suffix('\n').unwrap_or(&yaml);
         if let Some(answers) = answers {
             let content = outgoing.content.unwrap_or_default();
             return Ok(format!(
-                "---\n{}\n---\n{}",
-                yaml.trim_end(),
+                "---\n{yaml}\n---\n{}",
                 answered_body(content, &answers_block(answers)?, "")
             ));
         }
@@ -3290,7 +3328,7 @@ impl LocalMdSource {
                 ),
             });
         }
-        Ok(format!("---\n{}\n---\n{body}", yaml.trim_end()))
+        Ok(format!("---\n{yaml}\n---\n{body}"))
     }
 }
 
@@ -3553,7 +3591,16 @@ fn with_metadata_entry(
         lines.push(Line { from: at, to: next });
         at = next;
     }
+    // Front matter whose last line is blank ends in the ending of the line before it, and that
+    // blank line — whose own ending is the closing delimiter's — is one of its lines too: a
+    // block scalar that keeps its trailing line breaks can end there.
+    if yaml.ends_with('\n') {
+        lines.push(Line { from: end, to: end });
+    }
     let content = |line: Line| text[line.from..line.to].trim_end_matches(['\r', '\n']);
+    // Whether `line` ends in a line ending of its own; the front matter's last line does not,
+    // because its ending is the closing delimiter's.
+    let ended = |line: Line| text[line.from..line.to].ends_with('\n');
     let written_key = serde_json::to_string(key).expect("a string renders");
     let entry = |indent: usize| {
         let value = value.expect("only a set writes an entry");
@@ -3564,7 +3611,7 @@ fn with_metadata_entry(
     // ending before it goes instead.
     let without = |first: Line, last: Line| {
         let (mut from, to) = (first.from, last.to);
-        if !text[..to].ends_with('\n') && from > start {
+        if !ended(last) && from > start {
             from -= newline.len();
         }
         format!("{}{}", &text[..from], &text[to..])
@@ -3572,7 +3619,7 @@ fn with_metadata_entry(
     // A new line after `line`: that line's own ending ends it, or — for the last line of the
     // front matter, whose ending is the closing delimiter's — a new ending goes before it.
     let after = |line: Line, written: &str| {
-        if text[..line.to].ends_with('\n') {
+        if ended(line) {
             format!("{}{written}{newline}{}", &text[..line.to], &text[line.to..])
         } else {
             format!("{}{newline}{written}{}", &text[..line.to], &text[line.to..])
@@ -3664,6 +3711,20 @@ fn with_metadata_entry(
             });
         }
     }
+    // The blank lines after an entry whose value keeps its trailing line breaks are that
+    // value's, so they go with the entry: an entry added after it, or removed or replaced
+    // below or in place of it, leaves them where a read finds them.
+    for entry in &mut entries {
+        let (_, first, last) = entry;
+        if keeps_breaks((*first..=*last).map(|at| content(lines[at]))) {
+            while lines
+                .get(entry.2 + 1)
+                .is_some_and(|&line| content(line).trim().is_empty())
+            {
+                entry.2 += 1;
+            }
+        }
+    }
     let matching: Vec<&(String, usize, usize)> =
         entries.iter().filter(|(found, ..)| found == key).collect();
     if value.is_none() {
@@ -3687,11 +3748,7 @@ fn with_metadata_entry(
         ([], Some(&(_, _, last))) => Ok(after(lines[last], &entry(entry_indent))),
         (&[&(_, first, last)], _) => {
             let (from, to) = (lines[first].from, lines[last].to);
-            let ending = if text[..to].ends_with('\n') {
-                newline
-            } else {
-                ""
-            };
+            let ending = if ended(lines[last]) { newline } else { "" };
             Ok(format!(
                 "{}{}{ending}{}",
                 &text[..from],
@@ -3704,6 +3761,49 @@ fn with_metadata_entry(
             next: "remove all but one of those entries",
         }),
     }
+}
+
+/// Whether the entry of front matter whose lines are `lines` ends in a block scalar that keeps
+/// its trailing line breaks — `|+`, `>+`, or either with an indentation indicator, which is how
+/// this source's own writer lays out a string ending in a blank line — so that the blank lines
+/// after the entry are part of its value rather than whitespace between entries.
+///
+/// A block scalar is open from its header to the first non-blank line indented no deeper than
+/// the line the header ends; only a line outside one can open another.
+fn keeps_breaks<'l>(lines: impl IntoIterator<Item = &'l str>) -> bool {
+    // Where a line's node starts: past its indentation and any `- ` of a sequence item.
+    let indent_of = |line: &str| line.len() - line.trim_start_matches([' ', '-']).len();
+    // The indentation of the line whose header opened the scalar still open, and whether that
+    // scalar keeps its breaks.
+    let mut open: Option<(usize, bool)> = None;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if open.is_some_and(|(header, _)| indent > header) {
+            continue;
+        }
+        // The last token before a comment, where a header sits.
+        let value = line.split(" #").next().unwrap_or(line).trim_end();
+        let token = value.rsplit([' ', '\t']).next().unwrap_or(value);
+        let header = token.strip_prefix(['|', '>']).filter(|indicators| {
+            indicators.len() <= 2
+                && indicators
+                    .chars()
+                    .all(|indicator| matches!(indicator, '+' | '-' | '1'..='9'))
+        });
+        // Its content is indented deeper than the node holding it: the key the header follows,
+        // or the `- ` of the sequence item it is.
+        let keyed = value[..value.len() - token.len()].trim_end().ends_with(':');
+        let parent = if keyed {
+            indent_of(line)
+        } else {
+            indent_of(line).saturating_sub(2)
+        };
+        open = header.map(|indicators| (parent, indicators.contains('+')));
+    }
+    open.is_some_and(|(_, keeps)| keeps)
 }
 
 /// The decoded key a mapping entry `line` starts with — double-quoted, single-quoted or

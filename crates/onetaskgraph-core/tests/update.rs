@@ -12,8 +12,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use onetaskgraph_core::{
-    ConfiguredSource, DeliveryOutcome, Engine, EngineError, GlobalId, ResolvedSource, TaskUpdated,
-    UpdatedField,
+    Body, ConfiguredSource, DeliveryOutcome, Engine, EngineError, GlobalId, ResolvedSource,
+    TaskCreate, TaskUpdated, UpdatedField,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Health, ItemKind,
@@ -779,4 +779,88 @@ async fn a_status_named_by_its_category_word_takes_the_sources_own_word_for_it()
         .await
         .expect_err("failed reads as cancelled here");
     assert!(error.to_string().contains("failed"), "{error}");
+}
+
+/// A `local-md` store with the fixture's tasks, under an engine that reaches the plugin
+/// itself — every write of it, `create_task`'s included — rather than through [`Watched`].
+fn unwatched_local_md() -> (Engine, tempfile::TempDir) {
+    let name = SourceName::new("work").expect("a valid source name");
+    let folder = tempfile::tempdir().expect("a scratch folder");
+    local_md(folder.path());
+    let source = onetaskgraph_local_md::Plugin
+        .build(&name, &json!({"root": folder.path()}), &NoSecrets)
+        .expect("the local-md plugin builds");
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name.clone(),
+            source,
+        ))],
+        vec![name],
+    );
+    (engine, folder)
+}
+
+/// What onepipeline writes for a node with `steps`: a sequence of step mappings, each ending
+/// in a multi-line `task` that `local-md`'s own writer lays out as a `|` block scalar.
+fn steps() -> Value {
+    let task = "## What\nWork.\n\n## Acceptance criteria\n\n- x\n";
+    json!([
+        {"id": "build", "persona": "engineer", "task": task},
+        {"id": "check", "persona": "reviewer", "deps": ["build"], "task": task},
+    ])
+}
+
+#[tokio::test]
+async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_for_byte() {
+    let (engine, folder) = unwatched_local_md();
+    let created = engine
+        .create_task(&TaskCreate {
+            source: SourceName::new("work").expect("a valid source name"),
+            project: NativeId::from("P"),
+            title: "A node with steps".to_owned(),
+            body: Body::plain("The node's body."),
+            status: None,
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            depends_on: Vec::new(),
+            delivers: Vec::new(),
+            metadata: BTreeMap::from([
+                (key("onepipeline.steps"), steps()),
+                (key("onepipeline.kind"), json!("implement")),
+            ]),
+        })
+        .await
+        .expect("the task is created")
+        .task;
+    let path = folder
+        .path()
+        .join(format!("tasks/{}.md", created.item.id.as_str()));
+    let file = std::fs::read_to_string(&path).expect("the task file");
+    assert!(
+        file.contains("task: |"),
+        "the writer lays the steps out as block scalars:\n{file}"
+    );
+
+    let answer = engine
+        .update_task(
+            &created.id,
+            &TaskUpdate {
+                metadata_set: BTreeMap::from([(key("onepipeline.node"), json!("x"))]),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect("the update lands");
+    assert_eq!(answer.written, BTreeSet::from([UpdatedField::Metadata]));
+    let after = std::fs::read_to_string(&path).expect("the task file");
+    assert_eq!(answer.task.metadata["onepipeline.node"], json!("x"));
+    assert_eq!(answer.task.metadata["onepipeline.steps"], steps());
+    // The one line the update named is the only thing added; every other byte is as it was.
+    let added = "  \"onepipeline.node\": \"x\"\n";
+    let at = after.find(added).expect("the named key's line");
+    assert_eq!(
+        format!("{}{}", &after[..at], &after[at + added.len()..]),
+        file,
+        "{after}"
+    );
 }
