@@ -287,14 +287,14 @@ class Task(BaseModel):
         Field(description="When the source says the task was created."),
     ] = None
     delivered_by: Annotated[
-        list[TaskRef] | None,
+        list[TaskRef],
         Field(
             description="Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
             validate_default=True,
         ),
     ] = []
     delivers: Annotated[
-        list[TaskRef] | None,
+        list[TaskRef],
         Field(
             description="The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
             validate_default=True,
@@ -320,7 +320,7 @@ class Task(BaseModel):
         ),
     ] = None
     metadata: Annotated[
-        dict[str, JsonValue] | None,
+        dict[str, JsonValue],
         Field(
             description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it."
         ),
@@ -336,7 +336,7 @@ class Task(BaseModel):
         Field(description="`None` is a first-class case — an orphan task — not an edge case."),
     ] = None
     repositories: Annotated[
-        list[Repository] | None,
+        list[Repository],
         Field(
             description="Normalized repository origins this task concerns, in source order and without\nrepeats.",
             validate_default=True,
