@@ -51,7 +51,11 @@ fn host(boundary: SourceBoundary) -> Sandbox {
             task("todo", &[("2026-09-21T09:00:00Z", "2026-09-21T09:00:00Z")]),
         ),
         ("home", "silent", task("todo", &[])),
-        ("home", "old", task("todo", &[(OLD, "2026-09-02T09:00:00Z")])),
+        (
+            "home",
+            "old",
+            task("todo", &[(OLD, "2026-09-02T09:00:00Z")]),
+        ),
         (
             "home",
             "edited",
@@ -60,7 +64,10 @@ fn host(boundary: SourceBoundary) -> Sandbox {
         (
             "away",
             "fresh",
-            task("shipped", &[("2026-09-22T09:00:00Z", "2026-09-22T09:00:00Z")]),
+            task(
+                "shipped",
+                &[("2026-09-22T09:00:00Z", "2026-09-22T09:00:00Z")],
+            ),
         ),
         ("away", "stale", task("todo", &[(OLD, OLD)])),
     ];
@@ -123,7 +130,10 @@ fn commented_since_keeps_exactly_the_tasks_with_a_comment_created_or_edited_sinc
         );
         // The same instant in another offset is the same instant.
         assert_eq!(
-            listed(&sandbox, &["--commented-since", "2026-09-20T08:00:00-04:00"]),
+            listed(
+                &sandbox,
+                &["--commented-since", "2026-09-20T08:00:00-04:00"]
+            ),
             ["away:fresh", "home:edited", "home:new"],
             "{boundary:?}"
         );

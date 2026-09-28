@@ -1097,11 +1097,7 @@ fn a_query_round_trips_with_every_filter_populated() {
         statuses: vec![StatusCategory::Todo, StatusCategory::InProgress],
         project: ProjectFilter::Is(NativeId::from("P-1")),
         priorities: Vec::new(),
-        commented_since: Some(
-            "2026-09-28T12:00:00Z"
-                .parse()
-                .expect("an RFC 3339 instant"),
-        ),
+        commented_since: Some("2026-09-28T12:00:00Z".parse().expect("an RFC 3339 instant")),
     };
     let encoded = serde_json::to_string(&query).expect("encodes");
     assert_eq!(
@@ -2319,15 +2315,30 @@ fn comment_activity_matches_a_comment_created_or_edited_at_or_after_the_instant(
         commented_since: Some(at(20)),
         ..TaskQuery::default()
     };
-    assert!(query.comments_match(&[comment(Some(21), Some(21))]), "created after");
-    assert!(query.comments_match(&[comment(Some(20), Some(20))]), "created at");
-    assert!(query.comments_match(&[comment(Some(1), Some(25))]), "edited after");
+    assert!(
+        query.comments_match(&[comment(Some(21), Some(21))]),
+        "created after"
+    );
+    assert!(
+        query.comments_match(&[comment(Some(20), Some(20))]),
+        "created at"
+    );
+    assert!(
+        query.comments_match(&[comment(Some(1), Some(25))]),
+        "edited after"
+    );
     assert!(
         query.comments_match(&[comment(Some(1), Some(2)), comment(Some(22), None)]),
         "any one of several"
     );
-    assert!(!query.comments_match(&[comment(Some(1), Some(19))]), "all before");
-    assert!(!query.comments_match(&[comment(None, None)]), "no time at all");
+    assert!(
+        !query.comments_match(&[comment(Some(1), Some(19))]),
+        "all before"
+    );
+    assert!(
+        !query.comments_match(&[comment(None, None)]),
+        "no time at all"
+    );
     assert!(!query.comments_match(&[]), "no comments");
     assert!(
         TaskQuery::default().comments_match(&[]),

@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_core::{
-    Config, Engine, Filters, Paging, Predicate, ProjectSelector, QueryResponse, Qualified,
+    Config, Engine, Filters, Paging, Predicate, ProjectSelector, Qualified, QueryResponse,
     TaskRequest,
 };
 use onetaskgraph_plugin_api::{SecretResolver, SourceName, StatusCategory, Task};
@@ -136,21 +136,17 @@ async fn the_engine_narrowing_a_source_answers_exactly_what_a_native_source_answ
             .collect();
         assert_eq!(native, expected, "{statuses:?}");
         assert!(
-            native_plans
-                .iter()
-                .all(|plan| plan["pushed_down"]
-                    .as_array()
-                    .expect("a list")
-                    .contains(&json!(Predicate::CommentedSince))),
+            native_plans.iter().all(|plan| plan["pushed_down"]
+                .as_array()
+                .expect("a list")
+                .contains(&json!(Predicate::CommentedSince))),
             "{native_plans:?}"
         );
         assert!(
-            narrowed_plans
-                .iter()
-                .all(|plan| plan["applied_locally"]
-                    .as_array()
-                    .expect("a list")
-                    .contains(&json!(Predicate::CommentedSince))),
+            narrowed_plans.iter().all(|plan| plan["applied_locally"]
+                .as_array()
+                .expect("a list")
+                .contains(&json!(Predicate::CommentedSince))),
             "{narrowed_plans:?}"
         );
     }

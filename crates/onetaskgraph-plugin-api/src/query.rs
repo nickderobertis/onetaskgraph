@@ -57,7 +57,9 @@ impl TaskQuery {
         let Some(since) = self.commented_since else {
             return true;
         };
-        comments.into_iter().any(|comment| commented_at_or_after(comment, since))
+        comments
+            .into_iter()
+            .any(|comment| commented_at_or_after(comment, since))
     }
 }
 
