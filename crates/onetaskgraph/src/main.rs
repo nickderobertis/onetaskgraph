@@ -231,6 +231,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     .iter()
                     .map(|priority| priority.priority())
                     .collect(),
+                commented_since: args.commented_since,
                 paging: paging(loaded, &args.paging)?,
             };
             let response = engine

@@ -52,6 +52,7 @@ fn request(priorities: Vec<Priority>) -> TaskRequest {
         filters: Filters::default(),
         project: ProjectSelector::Any,
         priorities,
+        commented_since: None,
         paging: Paging {
             limit: std::num::NonZeroU32::new(50).expect("not zero"),
             token: None,

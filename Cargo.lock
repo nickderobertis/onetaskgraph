@@ -1095,6 +1095,7 @@ name = "onetaskgraph"
 version = "0.2.49"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
  "dialoguer",
  "graphql-parser",
@@ -1119,6 +1120,7 @@ name = "onetaskgraph-core"
 version = "0.2.49"
 dependencies = [
  "async-trait",
+ "chrono",
  "jsonschema",
  "minijinja",
  "onetaskgraph-github-projects",

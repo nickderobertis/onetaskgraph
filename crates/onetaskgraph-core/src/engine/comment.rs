@@ -11,8 +11,10 @@
 //! the caller exactly what it read; a copy never reaches this module at all, which is what
 //! keeps a copy from reading or writing a comment at either end.
 
+use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Comment, CommentBody, Cursor, NativeId, NewComment, PageRequest, SourceError, SourceName, Task,
+    Comment, CommentBody, Cursor, NativeId, NewComment, Page, PageRequest, SourceError, SourceName,
+    Task, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -253,6 +255,82 @@ async fn walk(
         match page.next {
             Some(next) => cursor = Some(next),
             None => return Ok(Some(comments)),
+        }
+    }
+}
+
+/// Narrow one page of a source's tasks to those with a comment created or last edited at or
+/// after `since`, for a source that does not apply that predicate itself.
+///
+/// This is the one predicate the engine cannot answer from the row: a task does not carry its
+/// comments. So each task the other predicates left to the engine already keep — `local` —
+/// has its comments read, page by page, until one matches or they run out; a task every
+/// other predicate drops is never asked about. What is held is one task's page of comments
+/// at a time, and nothing of it outlives the call. A source whose tasks have no comments at
+/// all holds no comment activity, so none of its tasks is kept and it is asked nothing, and a
+/// task gone from the source by the time its comments are read is gone from the answer.
+///
+/// # Errors
+///
+/// Returns whatever the source returned for a comment read, and the two refusals every
+/// pagination loop of this engine owes.
+pub(super) async fn commented_since(
+    source: &ResolvedSource,
+    local: &super::local::LocalTasks,
+    page: Page<Task>,
+    since: DateTime<Utc>,
+) -> Result<Page<Task>, SourceError> {
+    if !source.source().capabilities().comments.is_native() {
+        return Ok(Page {
+            items: Vec::new(),
+            next: page.next,
+        });
+    }
+    let query = TaskQuery {
+        commented_since: Some(since),
+        ..TaskQuery::default()
+    };
+    let mut kept = Vec::new();
+    for task in page.items {
+        if local.keeps(&task) && any_comment_matches(source, &task.id, &query).await? {
+            kept.push(task);
+        }
+    }
+    Ok(Page {
+        items: kept,
+        next: page.next,
+    })
+}
+
+/// Whether one of `task`'s comments satisfies `query`'s comment activity, walking the source's
+/// comment pages only as far as the first that does.
+async fn any_comment_matches(
+    source: &ResolvedSource,
+    task: &NativeId,
+    query: &TaskQuery,
+) -> Result<bool, SourceError> {
+    let limit = source.source().capabilities().max_page_size.max(1);
+    let mut cursor: Option<Cursor> = None;
+    loop {
+        let request = PageRequest {
+            cursor: cursor.clone(),
+            limit,
+        };
+        let Some(page) = source.source().task_comments(task, &request).await? else {
+            return Ok(false);
+        };
+        fits(page.items.len(), limit)?;
+        unrepeated(
+            page.next.as_ref(),
+            cursor.as_ref(),
+            "walking a task's comments",
+        )?;
+        if query.comments_match(&page.items) {
+            return Ok(true);
+        }
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return Ok(false),
         }
     }
 }

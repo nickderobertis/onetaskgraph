@@ -3461,6 +3461,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             statuses,
             project: ProjectFilter::Any,
             priorities: Vec::new(),
+            commented_since: None,
         };
     let none = LabelFilter::default();
 
@@ -3550,6 +3551,7 @@ async fn every_predicate_a_task_query_carries_is_applied() {
                 statuses: vec![StatusCategory::Todo],
                 project: ProjectFilter::Orphans,
                 priorities: Vec::new(),
+                commented_since: None,
             },
         ),
     ] {
@@ -7068,6 +7070,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             comments: Support::Native,
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

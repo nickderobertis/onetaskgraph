@@ -1322,6 +1322,7 @@ impl Engine {
             filters: Filters::default(),
             project: ProjectSelector::Qualified(project.clone()),
             priorities: Vec::new(),
+            commented_since: None,
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,

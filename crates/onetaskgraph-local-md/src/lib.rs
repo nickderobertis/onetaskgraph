@@ -22,6 +22,7 @@
 //! | `comments` | **Supported and proven.** A task's comments are an optional trailing `## Comments` section of the task's own file — human-readable, full fidelity, never JSON — in exactly the shape [`COMMENTS_HEADING`] documents. The section is not the task's content, and nothing a copy writes into the file adds, changes or removes it. |
 //! | `priority` | **Supported,** and proven by this crate's `tests/priority.rs`. A task's optional `priority:` front-matter key holds `none`, `urgent`, `high`, `medium` or `low`; an absent key is `none`, `none` is never written, and any other value makes the file malformed naming the key. A project has no priority, so the key there is refused rather than ignored. |
 //! | `filter_by_priority` | **Supported,** and proven by this crate's `tests/priority.rs`, over that `priority:` key: a task is kept when its priority is any value asked for. |
+//! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -1084,6 +1085,7 @@ impl TaskSource for LocalMdSource {
             comments: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1131,6 +1133,7 @@ impl TaskSource for LocalMdSource {
                         .is_none_or(|x| text_match(&t.title, t.content.as_deref(), x))
             })
             .collect();
+        let items = self.commented_since(items, q)?;
         self.paginate(items, p)
     }
     async fn query_projects(
@@ -1846,6 +1849,28 @@ impl TaskFile {
 }
 
 impl LocalMdSource {
+    /// `tasks` narrowed to those one of whose comments was created or last edited at or after
+    /// the query's `commented_since`, read from each task file's own comments section — every
+    /// task, untouched, when the query carries no instant.
+    ///
+    /// A task here carries no `updated_at`, so its comments' own times are the only evidence
+    /// there is, and only the files every other predicate already kept are read for them.
+    fn commented_since(&self, tasks: Vec<Task>, q: &TaskQuery) -> Result<Vec<Task>, SourceError> {
+        if q.commented_since.is_none() {
+            return Ok(tasks);
+        }
+        let mut kept = Vec::new();
+        for task in tasks {
+            let commented = self
+                .task_file(&task.id)?
+                .is_some_and(|file| q.comments_match(&file.comments));
+            if commented {
+                kept.push(task);
+            }
+        }
+        Ok(kept)
+    }
+
     /// The task file `id` names, read for its comments, or `None` when there is no such task.
     ///
     /// The task is read exactly as [`get_task`](TaskSource::get_task) reads it first, so a

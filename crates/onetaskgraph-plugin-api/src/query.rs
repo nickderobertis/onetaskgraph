@@ -1,10 +1,11 @@
 //! What a caller asks a source for, and how a source hands back more than fits
 //! in one answer.
 
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-use crate::{NativeId, Priority, StatusCategory};
+use crate::{Comment, NativeId, Priority, StatusCategory};
 
 /// A filter over a source's tasks.
 ///
@@ -29,6 +30,43 @@ pub struct TaskQuery {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub priorities: Vec<Priority>,
+    /// Comment activity to keep: a task matches when **at least one of its comments** was
+    /// created, or last edited, at or after this instant — its
+    /// [`Comment::created_at`](crate::Comment::created_at) or
+    /// [`Comment::updated_at`](crate::Comment::updated_at) is at or after it. A task with no
+    /// comments never matches, and a comment deleted before the query is not a match. `None`
+    /// means unfiltered. An RFC 3339 string on the wire.
+    ///
+    /// Defaulted when absent and left out of the wire when `None`, so a plugin written before
+    /// there was comment activity reads exactly the query it read before — and, declaring no
+    /// [`Capabilities::filter_by_comment_activity`](crate::Capabilities::filter_by_comment_activity),
+    /// is never handed one it would have to ignore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commented_since: Option<DateTime<Utc>>,
+}
+
+impl TaskQuery {
+    /// Whether `comments` — one task's — satisfy [`commented_since`](Self::commented_since):
+    /// always when the query carries no instant, and otherwise exactly when one of them was
+    /// created or last edited at or after it.
+    ///
+    /// The one statement of the predicate's meaning, so a source applying it natively and the
+    /// engine narrowing for a source that does not cannot answer the same store differently.
+    #[must_use]
+    pub fn comments_match<'a>(&self, comments: impl IntoIterator<Item = &'a Comment>) -> bool {
+        let Some(since) = self.commented_since else {
+            return true;
+        };
+        comments.into_iter().any(|comment| commented_at_or_after(comment, since))
+    }
+}
+
+/// Whether one comment was created, or last edited, at or after `since`.
+///
+/// A comment whose source gave neither time is not evidence of activity, so it never matches.
+fn commented_at_or_after(comment: &Comment, since: DateTime<Utc>) -> bool {
+    comment.created_at.is_some_and(|at| at >= since)
+        || comment.updated_at.is_some_and(|at| at >= since)
 }
 
 /// A filter over a source's projects.

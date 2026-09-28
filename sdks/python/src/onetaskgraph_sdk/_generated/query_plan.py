@@ -14,6 +14,7 @@ class Predicate(StrEnum):
     PredicateLabel = "label"
     PredicateStatus = "status"
     PredicatePriority = "priority"
+    PredicateCommentedSince = "commented-since"
     PredicateSearchTitle = "search-title"
     PredicateSearchContent = "search-content"
     PredicateProject = "project"

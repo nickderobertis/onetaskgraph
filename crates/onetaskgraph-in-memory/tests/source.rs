@@ -1110,6 +1110,7 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
             comments: Support::Unsupported,
             priority: Support::Native,
             filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

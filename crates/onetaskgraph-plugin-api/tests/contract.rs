@@ -36,6 +36,7 @@ impl TaskSource for Silent {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Native,
@@ -1096,6 +1097,11 @@ fn a_query_round_trips_with_every_filter_populated() {
         statuses: vec![StatusCategory::Todo, StatusCategory::InProgress],
         project: ProjectFilter::Is(NativeId::from("P-1")),
         priorities: Vec::new(),
+        commented_since: Some(
+            "2026-09-28T12:00:00Z"
+                .parse()
+                .expect("an RFC 3339 instant"),
+        ),
     };
     let encoded = serde_json::to_string(&query).expect("encodes");
     assert_eq!(

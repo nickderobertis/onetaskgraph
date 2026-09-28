@@ -160,6 +160,9 @@ pub struct Declared {
     pub priority: Support,
     /// Whether the source keeps only the tasks whose priority a query lists, itself.
     pub filter_by_priority: Support,
+    /// Whether the source keeps only the tasks with a comment created or edited since an
+    /// instant, itself.
+    pub filter_by_comment_activity: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -191,6 +194,7 @@ impl Declared {
             comments: self.comments,
             priority: self.priority,
             filter_by_priority: self.filter_by_priority,
+            filter_by_comment_activity: self.filter_by_comment_activity,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -230,6 +234,11 @@ impl Declared {
                 "filter_by_priority",
                 claimed.filter_by_priority,
                 reported.filter_by_priority,
+            ),
+            support(
+                "filter_by_comment_activity",
+                claimed.filter_by_comment_activity,
+                reported.filter_by_comment_activity,
             ),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
@@ -436,6 +445,7 @@ pub const ROWS: &[Row] = &[
                 // filter this row leaves to the engine compares against.
                 priority: Support::Native,
                 filter_by_priority: Support::Unsupported,
+                filter_by_comment_activity: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -526,6 +536,9 @@ pub const ROWS: &[Row] = &[
                 // engine narrows: this row is the one that proves that against a real remote
                 // protocol.
                 filter_by_priority: Support::Unsupported,
+                // Not sent to Linear at all, and so narrowed by the engine over each kept
+                // issue's comments.
+                filter_by_comment_activity: Support::Unsupported,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
@@ -611,6 +624,7 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     // priority is not a predicate. Every row whose source holds one overrides it.
     priority: Support::Unsupported,
     filter_by_priority: Support::Native,
+    filter_by_comment_activity: Support::Native,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,
@@ -4168,6 +4182,7 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
         "filter_by_label": "unsupported",
         "filter_by_status": "unsupported",
         "filter_by_priority": "unsupported",
+        "filter_by_comment_activity": "unsupported",
         "search_title": "unsupported",
         "search_content": "unsupported",
         "orphan_tasks": "unsupported",

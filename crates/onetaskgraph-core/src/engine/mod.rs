@@ -31,6 +31,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
     MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
@@ -206,6 +207,13 @@ pub struct TaskRequest {
     /// Here rather than in [`Filters`], because a project has no priority: the filters a
     /// project list shares with a task list are the ones both kinds of item carry.
     pub priorities: Vec<Priority>,
+    /// Comment activity to keep: a task matches when one of its comments was created, or last
+    /// edited, at or after this instant. `None` means unfiltered.
+    ///
+    /// Here rather than in [`Filters`] for the reason [`priorities`](Self::priorities) is: a
+    /// project has no comments. A source that does not apply it natively is narrowed by a read
+    /// of its comments for every task its other predicates kept.
+    pub commented_since: Option<DateTime<Utc>>,
     /// Which page.
     pub paging: Paging,
 }
@@ -976,7 +984,12 @@ impl Engine {
         let query = shape(
             "task-list",
             &names,
-            &(&request.filters, &request.project, &request.priorities),
+            &(
+                &request.filters,
+                &request.project,
+                &request.priorities,
+                &request.commented_since,
+            ),
         );
         let states = resumption(
             self,
@@ -997,6 +1010,7 @@ impl Engine {
                     &request.filters,
                     &project_filter(&request.project),
                     &request.priorities,
+                    request.commented_since,
                 )
             })
             .collect();
@@ -2117,6 +2131,7 @@ fn shape_tasks(
     filters: &Filters,
     project: &ProjectFilter,
     priorities: &[Priority],
+    commented_since: Option<DateTime<Utc>>,
 ) -> TaskShape {
     let mut pushed = TaskQuery::default();
     let mut local = LocalTasks::default();
@@ -2147,6 +2162,15 @@ fn shape_tasks(
         } else {
             local.priorities = priorities.to_vec();
             outcomes.record(Predicate::Priority, Outcome::AppliedLocally);
+        }
+    }
+    if let Some(since) = commented_since {
+        if capabilities.filter_by_comment_activity.is_native() {
+            pushed.commented_since = Some(since);
+            outcomes.record(Predicate::CommentedSince, Outcome::PushedDown);
+        } else {
+            local.commented_since = Some(since);
+            outcomes.record(Predicate::CommentedSince, Outcome::AppliedLocally);
         }
     }
     if let Some(text) = &filters.text {
@@ -2306,7 +2330,7 @@ fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind
             }
         }
         StreamKind::Items | StreamKind::Tasks => {
-            let shaped = shape_tasks(capabilities, filters, &ProjectFilter::Any, &[]);
+            let shaped = shape_tasks(capabilities, filters, &ProjectFilter::Any, &[], None);
             HitShape {
                 stream,
                 tasks: shaped.pushed,
@@ -2355,7 +2379,11 @@ async fn fetch_tasks(
         |cursor, limit| async move {
             calls.fetch_add(1, Ordering::Relaxed);
             let request = PageRequest { cursor, limit };
-            source.source().query_tasks(&shape.pushed, &request).await
+            let page = source.source().query_tasks(&shape.pushed, &request).await?;
+            match shape.local.commented_since {
+                None => Ok(page),
+                Some(since) => comment::commented_since(source, &shape.local, page, since).await,
+            }
         },
     )
     .await

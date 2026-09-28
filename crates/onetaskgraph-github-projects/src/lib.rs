@@ -123,6 +123,7 @@
 //! | `comments` | **Supported and proven,** over the task issue's own comment connection, oldest first and paged by GitHub's own cursor; added, edited and removed through GitHub's comment mutations, paced as every other mutation is. A draft item has no comments on GitHub and is refused, and so is an author, because GitHub records the signed-in account as every comment's author. |
 //! | `priority` | **Supported and proven** by an instance configured with `priority_mapping`, and declared unsupported by one without it, which reports every task's priority as `none` and sends exactly the requests it sent before priorities existed. The priority is the board's single-select `Priority` field: no value is `none`, a mapped option is its level, matched case-insensitively, and an option the mapping does not name fails the read of that task, naming the option. A write selects the mapped option, or clears the value for `none`; a board without the field or the option is refused, pointing at `sources fields`, which is the one thing that creates either. |
 //! | `filter_by_priority` | **Supported and proven,** over the priority each task reads as — `none` for every task of an instance without `priority_mapping`. |
+//! | `filter_by_comment_activity` | **Supported, and exact** for comments created and for comments edited at or after `commented_since`, in every repository — of any owner — the board's items live in. Applied by asking a narrower question rather than by reading the board: GitHub's issue search scoped by `project:<owner>/<number>` alone, with an `updated:>=` qualifier, names the candidates, and each candidate's own comments confirm it, so neither `ProjectV2.items` nor any issue the search did not name is read. That rests on GitHub moving an issue's `updatedAt` when a comment on it is added **or edited**, which the credentialed journey `an_edited_comment_moves_its_issue_and_is_selected_since` re-takes on every run of this lane. The search is an index that lags a write by a second or two, so a caller asking again from its last instant should overlap the two by more than that. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
@@ -149,14 +150,15 @@
 //! item that query could keep before it filters anything. Filtering those items is
 //! in-process work over data already in hand.
 //!
-//! Third, no predicate but `projects` could be pushed into the API even if that were
-//! wanted, and `projects` is pushed down: `ProjectV2.items` takes `first` and `after` and
+//! Third, no predicate but `projects` and `filter_by_comment_activity` could be pushed into
+//! the API even if that were wanted, and both are — comment activity through the issue
+//! search's `updated:` qualifier, the row above says how: `ProjectV2.items` takes `first` and `after` and
 //! offers no filter argument of any kind, GitHub's issue search offers no qualifier for a
 //! label set, a status column or a substring of a body, and its title qualifier matches
 //! tokens where this source — and the local Markdown source beside it — match substrings,
 //! so pushing a search down would silently *narrow* the answer. What a project filter has
 //! instead is a relationship: a project's tasks are that issue's sub-issues, and asking
-//! the issue for them is both cheaper and exact. So there is one predicate this source
+//! the issue for them is both cheaper and exact. So there are two predicates this source
 //! applies by asking a narrower question, six it applies in process, and none it is unable
 //! to apply. Declaring one `Unsupported` would make the engine compensate for work this
 //! source has already done, and declaring `projects` native while ignoring the filter
@@ -176,6 +178,7 @@
 //! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` | the board's fields |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
+//! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
 //! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
@@ -3886,6 +3889,101 @@ impl GitHubProjectsSource {
         self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
     }
 
+    /// Every issue of this board GitHub's issue search reports updated at or after `since`,
+    /// completed with what this run wrote — the candidates a comment-activity read confirms.
+    ///
+    /// Scoped by the board and by nothing else: `project:<owner>/<number>` reaches every issue
+    /// on the board whatever repository, and whatever owner, it lives in, so no repository or
+    /// owner qualifier is added and none is needed. What makes the `updated:` qualifier
+    /// sufficient is a fact about GitHub rather than about this source: a comment written on an
+    /// issue **and a comment edited on it** both move that issue's `updatedAt`. The credentialed
+    /// journey `an_edited_comment_moves_its_issue_and_is_selected_since` in `tests/journey`
+    /// re-takes that fact on every run of the lane, so a change on GitHub's side fails there
+    /// rather than silently narrowing a caller's answer.
+    ///
+    /// The instant is written to the second, rounded down, which can only widen what the
+    /// search returns; confirmation against each candidate's own comments is what makes the
+    /// answer exact. The search is an index that lags a write by a second or two — the module
+    /// documentation records it — so a caller that asks again from its last instant should
+    /// overlap the two by more than that.
+    async fn updated_since(&self, since: DateTime<Utc>) -> Result<Vec<Resolved>, SourceError> {
+        let qualifier = format!("updated:>={}", since.format("%Y-%m-%dT%H:%M:%S+00:00"));
+        let search = self.board_search(Some(&qualifier));
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        loop {
+            let (page, next) = self
+                .search_page(&search, MAX_PAGE_SIZE, after.as_deref())
+                .await?;
+            found.extend(page);
+            match next {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        self.completed_with_written(found, |_| true)
+    }
+
+    /// Whether `item` has a comment created or last edited at or after `since` — always, when
+    /// there is no instant to hold it to.
+    ///
+    /// The candidate's own `updatedAt` is read first, because a comment written or edited at
+    /// or after the instant moved it there: an issue not updated since holds no such comment,
+    /// and its comments are never asked for. Otherwise its comments are walked, oldest first,
+    /// only as far as the first that matches. A board draft is not an issue and has no
+    /// comments, so it never matches.
+    async fn commented_since(
+        &self,
+        item: &Resolved,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<bool, SourceError> {
+        let Some(since) = since else {
+            return Ok(true);
+        };
+        if item.content_kind == ContentKind::DraftIssue
+            || item.updated_at.is_some_and(|updated| updated < since)
+        {
+            return Ok(false);
+        }
+        let query = TaskQuery {
+            commented_since: Some(since),
+            ..TaskQuery::default()
+        };
+        let mut after: Option<String> = None;
+        loop {
+            let data = self
+                .graphql(
+                    graphql::ISSUE_COMMENTS,
+                    json!({"id":item.id.0,"first":MAX_PAGE_SIZE,"after":after}),
+                )
+                .await?;
+            let Some(connection) = data
+                .get("node")
+                .filter(|value| !value.is_null())
+                .and_then(|node| node.get("comments"))
+                .filter(|value| !value.is_null())
+            else {
+                // Removed since the search reported it: no longer an issue with comments.
+                return Ok(false);
+            };
+            let comments = optional_nodes(Some(connection), "issue comments")?
+                .into_iter()
+                .flatten()
+                .map(comment_from)
+                .collect::<Result<Vec<_>, _>>()?;
+            if query.comments_match(&comments) {
+                return Ok(true);
+            }
+            match next_cursor(connection)? {
+                Some(next) => {
+                    validate_cursor_progress(after.as_deref(), &next.0)?;
+                    after = Some(next.0);
+                }
+                None => return Ok(false),
+            }
+        }
+    }
+
     /// Every item on the board: the union of both enumerations GitHub offers of one.
     ///
     /// Neither contains the other, so neither is dropped — only `ProjectV2.items` lists a
@@ -6829,6 +6927,7 @@ impl TaskSource for GitHubProjectsSource {
                 Support::Unsupported
             },
             filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -6872,15 +6971,20 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
         // A read narrowed to one project asks that project for its own tasks, so nothing
-        // about it costs what the rest of the board holds. Every other task read is a
-        // question about the whole board and is answered by reading it.
-        let (held, membership) = match &query.project {
-            ProjectFilter::Is(project) => (
+        // about it costs what the rest of the board holds. A read narrowed to comment
+        // activity asks the board's own issue search for the issues updated since, which is
+        // every issue a comment could have been written or edited on since. Every other task
+        // read is a question about the whole board and is answered by reading it.
+        let (held, membership) = match (&query.project, query.commented_since) {
+            (ProjectFilter::Is(project), _) => (
                 self.project_children(project).await?,
                 // Answered by where these items came from; see `task_matches`.
                 &ProjectFilter::Any,
             ),
-            ProjectFilter::Any | ProjectFilter::Orphans => {
+            (ProjectFilter::Any | ProjectFilter::Orphans, Some(since)) => {
+                (self.updated_since(since).await?, &query.project)
+            }
+            (ProjectFilter::Any | ProjectFilter::Orphans, None) => {
                 (self.board().await?.items, &query.project)
             }
         };
@@ -6892,7 +6996,9 @@ impl TaskSource for GitHubProjectsSource {
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         {
             let task = item.task()?;
-            if task_matches(&task, query, membership) {
+            if task_matches(&task, query, membership)
+                && self.commented_since(item, query.commented_since).await?
+            {
                 tasks.push(task);
             }
         }
