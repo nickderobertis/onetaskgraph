@@ -50,8 +50,9 @@ fn steps(task: &str) -> Value {
     ])
 }
 
-/// Every layout this source's writer gives a metadata value, each with a value that has it.
-fn layouts() -> Vec<(&'static str, Value)> {
+/// One value in each block scalar header this source's writer was seen to emit for a string —
+/// `|`, `|-`, `|+`, `|2+` and `|2` — and in each shape of collection it nests them in.
+fn writer_layouts() -> Vec<(&'static str, Value)> {
     let task = "## What\nWork.\n\n## Acceptance criteria\n\n- x\n";
     vec![
         ("a plain scalar", json!("plain")),
@@ -243,8 +244,8 @@ fn updates(arrangement: Arrangement, file: &str) -> Vec<(TaskUpdate, UpdatedFiel
 }
 
 #[tokio::test]
-async fn a_targeted_update_of_another_field_leaves_every_layout_the_writer_gives_byte_for_byte() {
-    for (layout, value) in layouts() {
+async fn a_targeted_update_of_another_field_leaves_each_writer_layout_byte_for_byte() {
+    for (layout, value) in writer_layouts() {
         for arrangement in ARRANGEMENTS {
             let (_, _, _, file) = written(arrangement, &value).await;
             for (update, field, expected) in updates(arrangement, &file) {
