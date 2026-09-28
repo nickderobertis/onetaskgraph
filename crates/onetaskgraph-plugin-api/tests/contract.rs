@@ -2240,6 +2240,112 @@ fn a_handshake_written_before_there_were_priorities_declares_neither_priority_ca
     );
 }
 
+/// A task query carrying every predicate but comment activity, exactly as a plugin written
+/// before `commented_since` existed was sent it, byte for byte.
+const A_QUERY_BEFORE_COMMENT_ACTIVITY: &str = r#"{"text":{"terms":"contract","fields":"title-or-content"},"labels":{"any_of":["infra"],"all_of":[],"none_of":["wontfix"]},"statuses":["todo"],"project":{"is":"P-1"},"priorities":["urgent"]}"#;
+
+#[test]
+fn a_query_without_comment_activity_is_the_byte_for_byte_query_an_older_plugin_read() {
+    let query = TaskQuery {
+        text: Some(TextQuery {
+            terms: "contract".to_owned(),
+            fields: TextFields::TitleOrContent,
+        }),
+        labels: LabelFilter {
+            any_of: vec!["infra".to_owned()],
+            all_of: Vec::new(),
+            none_of: vec!["wontfix".to_owned()],
+        },
+        statuses: vec![StatusCategory::Todo],
+        project: ProjectFilter::Is(NativeId::from("P-1")),
+        priorities: vec![Priority::Urgent],
+        commented_since: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&query).expect("encodes"),
+        A_QUERY_BEFORE_COMMENT_ACTIVITY
+    );
+    assert_eq!(
+        serde_json::from_str::<TaskQuery>(A_QUERY_BEFORE_COMMENT_ACTIVITY).expect("decodes"),
+        query,
+        "a query written before the member existed reads as unfiltered by it"
+    );
+    let unfiltered = serde_json::to_value(TaskQuery::default()).expect("encodes");
+    assert!(unfiltered.get("commented_since").is_none(), "{unfiltered}");
+}
+
+#[test]
+fn comment_activity_crosses_the_wire_as_an_rfc_3339_instant_and_round_trips() {
+    let since = Utc
+        .with_ymd_and_hms(2026, 9, 28, 12, 0, 0)
+        .single()
+        .expect("a real instant");
+    let query = TaskQuery {
+        commented_since: Some(since),
+        ..TaskQuery::default()
+    };
+    let encoded = serde_json::to_value(&query).expect("encodes");
+    assert_eq!(
+        encoded["commented_since"],
+        serde_json::json!("2026-09-28T12:00:00Z")
+    );
+    assert_eq!(
+        serde_json::from_value::<TaskQuery>(encoded).expect("decodes"),
+        query
+    );
+    // The same instant written with another offset is the same instant.
+    let offset: TaskQuery =
+        serde_json::from_str(r#"{"text":null,"labels":{"any_of":[],"all_of":[],"none_of":[]},"statuses":[],"project":"any","commented_since":"2026-09-28T08:00:00-04:00"}"#)
+            .expect("decodes an offset instant");
+    assert_eq!(offset.commented_since, Some(since));
+}
+
+#[test]
+fn comment_activity_matches_a_comment_created_or_edited_at_or_after_the_instant() {
+    let at = |day: u32| {
+        Utc.with_ymd_and_hms(2026, 9, day, 12, 0, 0)
+            .single()
+            .expect("a real instant")
+    };
+    let comment = |created: Option<u32>, updated: Option<u32>| Comment {
+        id: NativeId::from("c"),
+        author: None,
+        created_at: created.map(at),
+        updated_at: updated.map(at),
+        body: "a word".to_owned(),
+        url: None,
+    };
+    let query = TaskQuery {
+        commented_since: Some(at(20)),
+        ..TaskQuery::default()
+    };
+    assert!(query.comments_match(&[comment(Some(21), Some(21))]), "created after");
+    assert!(query.comments_match(&[comment(Some(20), Some(20))]), "created at");
+    assert!(query.comments_match(&[comment(Some(1), Some(25))]), "edited after");
+    assert!(
+        query.comments_match(&[comment(Some(1), Some(2)), comment(Some(22), None)]),
+        "any one of several"
+    );
+    assert!(!query.comments_match(&[comment(Some(1), Some(19))]), "all before");
+    assert!(!query.comments_match(&[comment(None, None)]), "no time at all");
+    assert!(!query.comments_match(&[]), "no comments");
+    assert!(
+        TaskQuery::default().comments_match(&[]),
+        "no instant is no filter"
+    );
+}
+
+#[test]
+fn a_handshake_written_before_comment_activity_declares_it_unsupported() {
+    let mut before = serde_json::to_value(Silent("older").capabilities()).expect("encodes");
+    before
+        .as_object_mut()
+        .expect("an object")
+        .remove("filter_by_comment_activity");
+    let read: Capabilities = serde_json::from_value(before).expect("an older handshake");
+    assert_eq!(read.filter_by_comment_activity, Support::Unsupported);
+}
+
 #[tokio::test]
 async fn a_source_that_writes_no_priority_or_content_refuses_both_by_name() {
     let source: Box<dyn TaskSource> = Box::new(Silent("read-only"));
