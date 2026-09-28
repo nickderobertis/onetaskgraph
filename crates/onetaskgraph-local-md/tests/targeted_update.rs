@@ -1,11 +1,14 @@
 //! A targeted update of a task this source wrote itself, whatever layout its writer gave the
 //! task's metadata values.
 //!
-//! Every test writes the task through the plugin's own `write_task`, so the file holds exactly
-//! the layout this source produces — block sequences, nested mappings, and every block scalar
-//! header its writer emits for a multi-line string — and then updates it through the plugin's
-//! own `update_task`, asserting on what a read answers and on the file's exact bytes: every
-//! field the update did not name reads back unchanged, and every byte of it is where it was.
+//! Most tests write the record through the plugin's own writer — `write_task`,
+//! `write_task_rendered`, `write_project` or `write_document` — so the file holds exactly the
+//! layout this source produces: block sequences, nested mappings, and the block scalar headers
+//! its writer emits for a multi-line string. The rest start from a hand-written file, to reach
+//! the edits and the refusal a writer's layout never needs. Each updates through the plugin's
+//! own `update_task` where it updates at all, asserting on what a read answers and on the
+//! file's exact bytes: every field the update did not name reads back unchanged, and every
+//! byte of it is where it was.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
