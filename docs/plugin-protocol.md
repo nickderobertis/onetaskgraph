@@ -445,18 +445,19 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `documents`, `comments`, `priority`, `filter_by_priority`, `orphan_tasks`,
-`filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
-`"native"` or `"unsupported"`.
+`projects`, `documents`, `comments`, `priority`, `filter_by_priority`,
+`filter_by_comment_activity`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
+`search_title` and `search_content` are each `"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents`, `comments`, `priority` and `filter_by_priority` are the four members of this
-object that are **optional**, and an absent one means `"unsupported"`. That is §2.1 doing its
-job, exactly as it does for the write-support member §3.3 specifies: a plugin written before
-there were documents, comments or priorities says nothing here and is read as the source
-without them it is, with no version bump on either side.
+`documents`, `comments`, `priority`, `filter_by_priority` and `filter_by_comment_activity` are
+the five members of this object that are **optional**, and an absent one means
+`"unsupported"`. That is §2.1 doing its job, exactly as it does for the write-support member
+§3.3 specifies: a plugin written before there were documents, comments, priorities or a
+comment-activity filter says nothing here and is read as the source without them it is, with
+no version bump on either side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
 this source has documents at all, in the shape `projects` uses, so there is no wider result
@@ -477,6 +478,15 @@ carrying a priority other than none — the engine refuses such a write before a
 naming the source and the field. `filter_by_priority` **is** a predicate, the priority filter a
 task query carries (§4.5), and the rules below reach it like any other.
 
+`filter_by_comment_activity` is a predicate too: the comment-activity instant a task query
+carries (§4.5), which keeps a task one of whose comments was created or last edited at or
+after it. A plugin that declared it `"native"` applies it; one that answered `"unsupported"`
+— or omitted it — is never sent the instant, returns the wider set, and the engine narrows
+that set by **reading the plugin's comments task by task** (§4.15) for every task the other
+predicates kept. That is correct and it is not cheap, so a plugin that can ask its store the
+narrower question should declare it. A plugin whose `comments` is `"unsupported"` holds no
+comment activity, and the engine keeps none of its tasks without asking it anything.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 
@@ -487,7 +497,7 @@ all three hold:
    a source can only *half* apply — a `title-or-content` search where only titles are
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
-3. This reaches the seven `"native"`/`"unsupported"` predicates alone — not `documents`,
+3. This reaches the eight `"native"`/`"unsupported"` predicates alone — not `documents`,
    `comments` or `priority`, which are not among them. A dependency read is never ignored
    and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
@@ -529,7 +539,8 @@ look like a failure of the source.
       "labels": { "any_of": ["bug"], "all_of": [], "none_of": ["wontfix"] },
       "statuses": ["todo", "in-progress"],
       "project": { "is": "PRJ-4" },
-      "priorities": ["urgent", "high"]
+      "priorities": ["urgent", "high"],
+      "commented_since": "2026-09-20T12:00:00Z"
     },
     "page": { "cursor": null, "limit": 50 }
   }
@@ -557,6 +568,12 @@ look like a failure of the source.
   of them, none included. It is **optional**: absent — which is how the engine sends an empty
   list — is not a filter, and the engine sends a non-empty one only to a plugin that declared
   `filter_by_priority` native (§4.2), so a plugin written before priorities never receives
+  one.
+- `commented_since` is an RFC 3339 instant. A task matches when **at least one of its
+  comments** (§4.15) has a `created_at`, or a last edit `updated_at`, at or after it; a task
+  with no comments never matches, and a comment deleted before the query is not a match. It is
+  **optional**: absent is not a filter, and the engine sends it only to a plugin that declared
+  `filter_by_comment_activity` native (§4.2), so a plugin written before it never receives
   one.
 
 ### 4.6 `query_projects`
@@ -1263,6 +1280,11 @@ engine refuses, by the source's name and the field's, every write that would car
 priority other than `"none"`. A `"none"` it already reports for every task, so a copy carrying
 one writes exactly as before. It likewise omits `filter_by_priority`, so it is never sent a
 `priorities` filter, and the engine narrows the wider set it returns.
+
+The `filter_by_comment_activity` member of §4.2 and the `commented_since` member of §4.5 were
+added **without** a bump, as `filter_by_priority` and `priorities` were: a plugin written
+before them omits the first, is read as not applying the filter, and is never sent the second
+— the engine narrows the wider set it returns over the plugin's own comments.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

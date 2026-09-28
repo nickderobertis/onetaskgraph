@@ -768,6 +768,11 @@ them do; this is the inventory of what is owed, not a status board.
     reserved key, an unqualified id and a missing task are each refused writing nothing.
 66. GitHub's "API rate limit already exceeded" answer is a transient rate limit carrying the
     reset GitHub states, never a refusal.
+67. `task list --commented-since` keeps exactly the tasks with a comment created or edited at
+    or after the instant — alone, with `--status` and with `--source` — over folders of
+    Markdown in process and over the stdio plugin protocol alike; both SDKs answer what the
+    command line answers; and an instant without an offset, or one that does not parse, is
+    refused naming the flag.
 
 ## What a copied document's references are pointed at
 
