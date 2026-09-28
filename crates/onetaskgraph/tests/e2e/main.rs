@@ -87,3 +87,11 @@ mod surface;
 // narrowest project that can own a journey driving it as a subprocess — the library half is
 // proven in `onetaskgraph-core`'s own `tests/templates.rs`, behind that crate's edge.
 mod templates;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against the shared rows — folders
+// of Markdown, in-memory sources, the loopback Linear workspace and GitHub board, and the stdio
+// host — with no credential and no network, in about a second. The targeted update is the
+// engine's (`Engine::update_task` decides what is reported and which delivered tasks move), so
+// it cannot sit behind one plugin crate's edge, which AGENTS.md forbids depending on the engine
+// at any depth; each plugin's own half is proven behind its own edge in its own tests.
+mod update;

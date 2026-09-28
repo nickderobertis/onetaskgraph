@@ -27,6 +27,7 @@ import type {
   TaskDetail,
   TaskPrioritySet,
   TaskStatusSet,
+  TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
 } from "./generated/models.ts";
@@ -97,6 +98,21 @@ export type TaskCreateOptions = CreateOptions & {
   delivers?: string[];
 };
 export type DocumentCreateOptions = CreateOptions & { id?: string };
+// A targeted update: every field named is written, and nothing else. `bodyFile` is read by the
+// binary byte for byte and replaces the content; `statusName` is the status's own word, for a
+// source that keeps one. A list given replaces that list, `[]` included — which is how a list is
+// cleared — and one left out is not named.
+export type TaskUpdateOptions = {
+  title?: string;
+  bodyFile?: string;
+  status?: StatusCategory;
+  statusName?: string;
+  priority?: Priority;
+  metadata?: Record<string, JsonValue>;
+  removeMetadata?: string[];
+  delivers?: string[];
+  dependsOn?: string[];
+};
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
 export type RenderOptions = TemplateSourceOptions & { unset?: string[]; dryRun?: boolean };
@@ -158,6 +174,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task priority set": "TaskPrioritySet",
   "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
+  "task update": "TaskUpdated",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -356,6 +373,87 @@ function pathOption(method: string, name: string, value: unknown): string {
     );
   }
   return value;
+}
+
+// Every member `TaskUpdateOptions` has, and the one flag each is sent as. `delivers` and
+// `dependsOn` are sent as their `--no-…` twin when empty, which is how a list is cleared. Exported
+// so tests/client.test.ts can reconcile it against the flags `task update --help` reports.
+export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, string>> = {
+  title: "--title",
+  bodyFile: "--body-file",
+  status: "--status",
+  statusName: "--status-name",
+  priority: "--priority",
+  metadata: "--metadata",
+  removeMetadata: "--remove-metadata",
+  delivers: "--delivers",
+  dependsOn: "--depends-on",
+};
+
+// A string option, refused unless it is one: anything else would reach the binary as its string
+// form, which is not the value the caller wrote.
+function stringOption(method: string, name: string, value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${method}: ${name} is not a string; next: pass it as a string`);
+  }
+  return value;
+}
+
+// The flags one targeted update is sent as, every member checked before the binary is started.
+export function taskUpdateFlags(options: unknown): string[] {
+  const method = "taskUpdate";
+  if (!isPlainObject(options)) {
+    throw new TypeError(
+      `${method}: options is not an object; next: pass the fields to write as a plain object`,
+    );
+  }
+  refuseUncarriedKey(options, "options", "option", method);
+  // Its own members only: `in` would also accept `toString` and `constructor`, which the table
+  // inherits, and such an option would then be dropped in silence.
+  const unknown = Object.keys(options).find((key) => !Object.hasOwn(taskUpdateOptionFlags, key));
+  if (unknown !== undefined) {
+    throw new TypeError(
+      `${method}: options has the member ${unknown}, which names no field; next: name only ` +
+        Object.keys(taskUpdateOptionFlags).join(", "),
+    );
+  }
+  const args: string[] = [];
+  const scalars: readonly ("title" | "status" | "statusName" | "priority")[] = [
+    "title",
+    "status",
+    "statusName",
+    "priority",
+  ];
+  for (const name of scalars) {
+    if (options[name] !== undefined) {
+      args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
+    }
+  }
+  if (options.bodyFile !== undefined) {
+    args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
+  }
+  if (options.metadata !== undefined) {
+    // Validated as one document before any flag is pushed, so a value JSON cannot carry
+    // refuses the call here rather than leaving a half-built argument list.
+    const checked: Record<string, JsonValue> = JSON.parse(
+      jsonDocument(options.metadata, method, "metadata"),
+    );
+    for (const [key, value] of Object.entries(checked)) {
+      args.push("--metadata", `${key}=${JSON.stringify(value)}`);
+    }
+  }
+  for (const key of stringList(method, "removeMetadata", options.removeMetadata)) {
+    args.push("--remove-metadata", key);
+  }
+  const lists: readonly ("delivers" | "dependsOn")[] = ["delivers", "dependsOn"];
+  for (const name of lists) {
+    if (options[name] === undefined) continue;
+    const flag = taskUpdateOptionFlags[name];
+    const ids = stringList(method, name, options[name]);
+    if (ids.length === 0) args.push(flag.replace("--", "--no-"));
+    for (const id of ids) args.push(flag, id);
+  }
+  return args;
 }
 
 // The flags naming a create's or a render's template and its answers, and what goes to
@@ -665,6 +763,10 @@ export class OnetaskgraphClient {
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
   taskMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
     return this.run("task metadata set", [id, key, value]);
+  }
+  // One targeted update of one task: at least one field has to be named.
+  taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated> {
+    return this.run("task update", [id, ...taskUpdateFlags(options)]);
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];

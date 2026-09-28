@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
     Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskSource,
+    TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -29,7 +29,7 @@ use super::wire::{
     EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
     LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
     ProjectWriteParams, Request, Response, StatusParams, TaskQueryParams, TaskWriteParams,
-    after_the_first_vocabulary, knows_every_category, vocabulary,
+    UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -263,6 +263,9 @@ async fn initialize(
                 // And again: every plugin of this build replaces a task's content or refuses
                 // to in the contract's own words.
                 content_updates: true,
+                // And the targeted update: every plugin of this build applies one, through its
+                // own override or the contract's default.
+                targeted_updates: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -456,6 +459,14 @@ async fn dispatch(
             let params: ContentParams = decode(method, params)?;
             let written = source.set_task_content(&params.id, &params.content).await?;
             encode(json!({ "id": written.map(|()| params.id) }))
+        }
+        "update_task" => {
+            let params: UpdateParams = decode(method, params)?;
+            let outcome = source.update_task(&params.id, &params.update).await?;
+            encode(json!({ "outcome": outcome.map(|outcome| TaskUpdateOutcome {
+                task: told_task(outcome.task, known),
+                ..outcome
+            }) }))
         }
         "set_task_metadata" => {
             let params: MetadataParams = decode(method, params)?;

@@ -18,7 +18,8 @@ use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
     ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
     PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskSource, WriteSupport, unwritable_field, unwritable_metadata,
+    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport,
+    unwritable_field, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -31,8 +32,8 @@ use super::wire::{
     EditCommentParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
     MetadataParams, MeteringResult, PROTOCOL_VERSION, PriorityParams, PriorityResult,
     ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams, StatusResult,
-    TaskQueryParams, TaskResult, TaskWriteParams, WriteResult, after_the_first_vocabulary,
-    knows_every_category, spelled, vocabulary,
+    TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
+    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -113,6 +114,9 @@ pub struct SubprocessSource {
     /// Whether the plugin said it answers the narrow content write (§3.9), read at the same
     /// handshake.
     content_updates: bool,
+    /// Whether the plugin said it answers the targeted update (§3.10), read at the same
+    /// handshake.
+    targeted_updates: bool,
     /// The live process.
     connection: Connection,
 }
@@ -349,6 +353,7 @@ impl SubprocessSource {
             task_updates,
             metadata_updates,
             content_updates,
+            targeted_updates,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -379,6 +384,7 @@ impl SubprocessSource {
             task_updates,
             metadata_updates,
             content_updates,
+            targeted_updates,
             connection: Connection::adopt(peer),
         })
     }
@@ -786,6 +792,71 @@ impl TaskSource for SubprocessSource {
                 ),
             }),
         }
+    }
+
+    /// §3.10: sent only to a plugin whose handshake sets `targeted_updates`. One that does not
+    /// is updated through the reads and the `write_task` it already answers — the contract's
+    /// own default — so a plugin written before the method is correct and merely not minimal.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        if !self.targeted_updates {
+            return update.rewrite(self, id).await;
+        }
+        // The same guards a `write_task` of the updated task would pass, before anything is
+        // sent: a plugin is never handed a category, a priority or a list it did not declare.
+        update.consistent()?;
+        if let Some(status) = &update.status {
+            self.knows(status.category)?;
+        }
+        if update
+            .priority
+            .is_some_and(|priority| priority != Priority::None)
+            && !self.capabilities.priority.is_native()
+        {
+            return Err(unwritable_field(self.kind, "priority"));
+        }
+        if update.delivers.is_some() {
+            self.updates("an update naming delivers")?;
+        }
+        let result: UpdateResult = self
+            .ask(
+                "update_task",
+                params(&UpdateParams {
+                    id: id.clone(),
+                    update: update.clone(),
+                }),
+            )
+            .await?;
+        let Some(outcome) = result.outcome else {
+            return Ok(None);
+        };
+        if outcome.task.id != *id {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered update_task for {id} with the task {}, which is not the \
+                     task it was asked to update",
+                    outcome.task.id
+                ),
+            });
+        }
+        // The engine reports what the plugin says it wrote, so a field the update never named
+        // is not an answer to this update.
+        if let Some(unnamed) = outcome.written.iter().find(|field| !update.names(**field)) {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "the plugin answered update_task for {id} saying it wrote {}, which the \
+                     update did not name",
+                    serde_json::to_value(unnamed)
+                        .ok()
+                        .and_then(|field| field.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| format!("{unnamed:?}"))
+                ),
+            });
+        }
+        Ok(Some(outcome))
     }
 
     async fn set_delivered_by(

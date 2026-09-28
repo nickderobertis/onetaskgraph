@@ -18,6 +18,7 @@ export const binaryCommands = [
   "task priority set",
   "task content set",
   "task metadata set",
+  "task update",
   "task create",
   "task render",
   "task answers",

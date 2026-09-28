@@ -269,7 +269,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 22
+    assert emitted_bundle["version"] == 23
+    # Version 23 published what `task update` is given and answers with, the field vocabulary
+    # it reports what it wrote in, and the outcome a plugin answers a targeted update with.
+    assert generate.RESPONSE_ROOTS["task_update"] == "TaskUpdated"
+    for root in ("TaskUpdate", "TaskUpdated", "UpdatedField", "TaskUpdateOutcome"):
+        assert root in bundle["roots"], root
+    assert "UpdatedField" in generate.CONTRACT_ROOTS
     # Version 22 published what the create, render and answers verbs answer with, and the
     # `onetaskgraph.template` provenance entry a rendered item's metadata holds.
     for verb, root in (

@@ -17,7 +17,8 @@ use std::path::Path;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
     Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, WriteSupport,
+    SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
+    WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -293,6 +294,13 @@ pub(crate) struct InitializeResult {
     /// content write naming it is refused by name before anything is sent.
     #[serde(default)]
     pub(crate) content_updates: bool,
+    /// Whether this plugin answers `update_task` (§3.10).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// targeted update naming it is carried out through the reads and `write_task` it already
+    /// answers — correct, and merely not minimal.
+    #[serde(default)]
+    pub(crate) targeted_updates: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -560,6 +568,24 @@ pub(crate) struct ContentResult {
     /// The task's id, or `null`. Required, for the reason [`PriorityResult::priority`] is.
     #[serde(deserialize_with = "present")]
     pub(crate) id: Option<NativeId>,
+}
+
+/// `update_task` parameters (§4.21).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UpdateParams {
+    /// The task updated.
+    pub(crate) id: NativeId,
+    /// Every field to write, and nothing else.
+    pub(crate) update: TaskUpdate,
+}
+
+/// The `update_task` result (§4.21): what the update came to, or `null` when there is no such
+/// task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UpdateResult {
+    /// The outcome, or `null`. Required, for the reason [`PriorityResult::priority`] is.
+    #[serde(deserialize_with = "present")]
+    pub(crate) outcome: Option<TaskUpdateOutcome>,
 }
 
 /// A member that may be `null` and may not be absent.

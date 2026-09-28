@@ -34,6 +34,7 @@ from .models import (
     TaskDetail,
     TaskPrioritySet,
     TaskStatusSet,
+    TaskUpdated,
     TemplateAnswers,
     TemplateVariables,
 )
@@ -66,6 +67,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "render"): ("id",),
     ("task", "show"): ("id",),
     ("task", "status", "set"): ("id", "category"),
+    ("task", "update"): ("id",),
     ("template", "render"): ("file",),
     ("template", "variables"): ("file",),
 }
@@ -1079,6 +1081,49 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+        )
+
+    async def task_update(
+        self,
+        id: GlobalId | str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_delivers: bool | None = None,
+        no_depends_on: bool | None = None,
+        page_size: int | None = None,
+        priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
+        remove_metadata: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        status_name: str | None = None,
+        title: str | None = None,
+    ) -> TaskUpdated:
+        """Run ``onetaskgraph task update``."""
+        return await self._invoke(
+            ["task", "update"],
+            TaskUpdated,
+            id=id,
+            body_file=body_file,
+            default_sources=default_sources,
+            delivers=delivers,
+            depends_on=depends_on,
+            metadata=_strings("task_update", "metadata", metadata),
+            no_delivers=no_delivers,
+            no_depends_on=no_depends_on,
+            page_size=page_size,
+            priority=priority,
+            remove_metadata=_strings("task_update", "remove_metadata", remove_metadata),
+            set=set,
+            status=status,
+            status_name=status_name,
+            title=title,
         )
 
     async def template_render(

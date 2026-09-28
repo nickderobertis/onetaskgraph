@@ -209,7 +209,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, WriteSupport,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -998,7 +999,18 @@ impl LinearSource {
         edges: &[DependencyEdge],
         kind: WriteKind,
     ) -> Result<Option<String>, SourceError> {
-        let recorded = edges
+        Self::long_form(
+            content,
+            metadata,
+            repositories,
+            self.recorded_ends(edges, kind),
+        )
+    }
+
+    /// The far ends of `edges` no relation of this workspace can name — another level, or
+    /// another source — as the reserved key records them.
+    fn recorded_ends(&self, edges: &[DependencyEdge], kind: WriteKind) -> Vec<Value> {
+        edges
             .iter()
             .filter(|edge| {
                 edge.to.kind
@@ -1013,8 +1025,183 @@ impl LinearSource {
                         .is_some_and(|(source, _)| source != self.name.as_str())
             })
             .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
-            .collect::<Vec<_>>();
-        Self::long_form(content, metadata, repositories, recorded)
+            .collect()
+    }
+
+    /// Every forward edge `id` holds, relations and recorded far ends alike, walked to
+    /// exhaustion.
+    async fn forward_edges(&self, id: &NativeId) -> Result<Vec<DependencyEdge>, SourceError> {
+        let mut edges = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = self
+                .dependencies(
+                    ISSUE_RELATIONS,
+                    DependencyRoot::Issue,
+                    id,
+                    Direction::DependsOn,
+                    &PageRequest {
+                        cursor,
+                        limit: MAX_PAGE_SIZE,
+                    },
+                )
+                .await?;
+            edges.extend(page.items);
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => return Ok(edges),
+            }
+        }
+    }
+
+    /// Apply one targeted update to one issue; see [`TaskSource::update_task`].
+    ///
+    /// One read of the issue, then one `issueUpdate` carrying only the members that differ
+    /// from it — `title`, `description` (content and metadata slot together), `stateId`,
+    /// `priority` — and, when the named edges differ from the ones the issue holds, its
+    /// relations replaced. Nothing is sent for a field already holding the requested value,
+    /// and nothing at all when nothing differs. A status is written by its category, exactly
+    /// as `set_task_status` writes one: an issue already in that category keeps the state it
+    /// is in, and one that is not moves to the team's first state of that type. `delivers` is
+    /// refused as a copy refuses it; see `NO_DELIVERY`.
+    ///
+    /// The task answered is read back after the write, so its status is Linear's.
+    async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        update.consistent()?;
+        if update
+            .delivers
+            .as_ref()
+            .is_some_and(|delivers| !delivers.is_empty())
+        {
+            return Err(self.undeliverable("delivers", "task"));
+        }
+        if let Some(status) = &update.status {
+            self.state_type(status.category)?;
+        }
+        let data = self.send(ISSUE, json!({"id":id.0})).await?;
+        let Some((before, description)) = optional(&data, "issue", |v| {
+            Ok((map_task(v, &self.name)?, optional_string(v, "description")?))
+        })?
+        else {
+            return Ok(None);
+        };
+        let (visible, held) = metadata_description(description)?;
+        let mut slot = held.clone();
+        for (key, value) in &update.metadata_set {
+            slot.insert(key.as_str().to_owned(), value.clone());
+        }
+        for key in &update.metadata_remove {
+            slot.remove(key.as_str());
+        }
+        let mut relations = None;
+        if let Some(wanted) = &update.depends_on {
+            let current = self.forward_edges(&before.id).await?;
+            let ends = |edges: &[DependencyEdge]| {
+                let mut ends: Vec<(String, String)> = edges
+                    .iter()
+                    .map(|edge| {
+                        (
+                            edge.to.id().to_owned(),
+                            format!("{:?}{:?}", edge.to.kind, edge.kind),
+                        )
+                    })
+                    .collect();
+                ends.sort();
+                ends
+            };
+            if ends(&current) != ends(wanted) {
+                let prepared = self.prepare_edges(wanted, WriteKind::Task).await?;
+                let recorded = self.recorded_ends(&prepared, WriteKind::Task);
+                if recorded.is_empty() {
+                    slot.remove(DependencyEdge::RECORDED_KEY);
+                } else {
+                    slot.insert(DependencyEdge::RECORDED_KEY.into(), Value::Array(recorded));
+                }
+                relations = Some(prepared);
+            }
+        }
+        let mut input = serde_json::Map::new();
+        if let Some(title) = update
+            .title
+            .as_ref()
+            .filter(|title| **title != before.title)
+        {
+            input.insert("title".into(), json!(title));
+        }
+        let content = update.content.as_deref().or(visible.as_deref());
+        if content != visible.as_deref() || slot != held {
+            let written = Self::described(content, &slot)?;
+            // Checked before anything is sent: content ending in what this source reads as
+            // its own slot would read back as metadata rather than as the content it was.
+            let (reads, read) = metadata_description(written.clone())?;
+            if reads.as_deref().unwrap_or_default() != content.unwrap_or_default() || read != slot {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "this content would read back from source {} as something other than \
+                         itself, or ends in what it reads as its own metadata slot; next: change \
+                         how the content ends",
+                        self.name
+                    ),
+                });
+            }
+            input.insert("description".into(), json!(written));
+        }
+        if let Some(status) = update
+            .status
+            .as_ref()
+            .filter(|status| status.category != before.status.category)
+        {
+            let (state, _) = self.state_of(status.category, &before.id).await?;
+            input.insert("stateId".into(), json!(state.0));
+        }
+        if let Some(priority) = update
+            .priority
+            .filter(|priority| *priority != before.priority)
+        {
+            input.insert("priority".into(), json!(linear_priority(priority)));
+        }
+        let sent = !input.is_empty();
+        if sent {
+            let data = self
+                .send(
+                    graphql::ISSUE_UPDATE,
+                    json!({"id":before.id.0,"input":Value::Object(input)}),
+                )
+                .await?;
+            let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
+                .get("issue")
+                .filter(|issue| !issue.is_null())
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing issueUpdate.issue".into(),
+                })?;
+            written_is(issue, &before.id)?;
+        }
+        if let Some(prepared) = &relations {
+            self.write_relations(&before.id, prepared, WriteKind::Task)
+                .await?;
+        }
+        let task = if sent || relations.is_some() {
+            self.get_task(&before.id)
+                .await?
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("task {id} was updated and then could not be read back"),
+                })?
+        } else {
+            before.clone()
+        };
+        let mut written = update.changed(&before, &task);
+        if relations.is_some() {
+            written.insert(UpdatedField::DependsOn);
+        }
+        Ok(Some(TaskUpdateOutcome {
+            task,
+            written,
+            delivers_before: before.delivers,
+        }))
     }
 
     /// The one long-form field a Linear item has, with this source's own slot at the end.
@@ -1039,11 +1226,21 @@ impl LinearSource {
         } else {
             metadata.insert(DependencyEdge::RECORDED_KEY.into(), Value::Array(recorded));
         }
+        Self::described(content, &metadata)
+    }
+
+    /// The long-form field holding `content` and a slot of exactly `metadata`, in the one
+    /// encoding [`long_form`](Self::long_form) writes: the content alone when there is no
+    /// metadata, and otherwise the slot after one blank line.
+    fn described(
+        content: Option<&str>,
+        metadata: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<Option<String>, SourceError> {
         let visible = content.unwrap_or_default();
         if metadata.is_empty() {
             return Ok((!visible.is_empty()).then(|| visible.to_owned()));
         }
-        let encoded = serde_json::to_string(&metadata).map_err(|error| SourceError::Malformed {
+        let encoded = serde_json::to_string(metadata).map_err(|error| SourceError::Malformed {
             message: error.to_string(),
         })?;
         Ok(Some(if visible.is_empty() {
@@ -1795,20 +1992,8 @@ impl TaskSource for LinearSource {
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         // Before any request: a category no workflow state has is not one Linear could
-        // answer differently for another issue. `workflow_state_types` is the same mapping
-        // the status filter narrows with, so a status this sets is one that filter finds.
-        let Some(state_type) = workflow_state_types(&category).first().copied() else {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} cannot set a task's status to {}: that category is disabled for \
-                     this source, because Linear has no workflow state of that kind — its \
-                     workflow states are triage, backlog, unstarted, started, completed and \
-                     canceled; choose backlog, todo, in-progress, done or cancelled",
-                    self.name,
-                    category_word(category)
-                ),
-            });
-        };
+        // answer differently for another issue.
+        self.state_type(category)?;
         let Some(task) = self.get_task(id).await? else {
             return Ok(None);
         };
@@ -1818,42 +2003,13 @@ impl TaskSource for LinearSource {
         if task.status.category == category {
             return Ok(Some(task.status));
         }
-        let team = self.team_id().await?;
-        let data = self
-            .send(
-                graphql::ISSUE_STATE_OF_TYPE,
-                json!({"type":state_type,"team":team.0}),
-            )
-            .await?;
-        let nodes = data
-            .get("workflowStates")
-            .and_then(|v| v.get("nodes"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "missing workflowStates.nodes".into(),
-            })?;
-        // The first node Linear lists, and deliberately no choice beyond that: every state of
-        // this type reads back as the category asked for, which is the whole of what a status
-        // write owes, and nothing a category carries says which of several the caller meant.
-        let Some(state) = nodes.first() else {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} cannot set task {} to {}: its configured team has no workflow \
-                     state of type {state_type}; add one to the team in Linear",
-                    self.name,
-                    id.0,
-                    category_word(category)
-                ),
-            });
-        };
-        let state_id = backend_id(state, "id")?;
-        let name = str_at(state, "name")?.to_owned();
+        let (state_id, name) = self.state_of(category, id).await?;
         // `stateId` alone, so nothing else about the issue can move: Linear's
         // `IssueUpdateInput` makes every member optional and leaves an absent one as it was.
         let data = self
             .send(
                 graphql::ISSUE_UPDATE,
-                json!({"id":task.id.0,"input":{"stateId":state_id}}),
+                json!({"id":task.id.0,"input":{"stateId":state_id.0}}),
             )
             .await?;
         let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
@@ -1968,6 +2124,15 @@ impl TaskSource for LinearSource {
         let _ = (id, delivered_by);
         Err(self.undeliverable("delivered_by", "task"))
     }
+    /// One read of the issue and one `issueUpdate` carrying only what differs; see
+    /// `targeted_update`.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        self.targeted_update(id, update).await
+    }
 }
 
 /// Refuse a narrow write's payload naming an issue other than the one it was sent for.
@@ -2011,6 +2176,66 @@ fn category_word(category: StatusCategory) -> String {
 }
 
 impl LinearSource {
+    /// The workflow state type a category is written as, or the refusal of a category no
+    /// workflow state has. `workflow_state_types` is the same mapping the status filter
+    /// narrows with, so a status this writes is one that filter finds.
+    fn state_type(&self, category: StatusCategory) -> Result<&'static str, SourceError> {
+        workflow_state_types(&category)
+            .first()
+            .copied()
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "source {} cannot set a task's status to {}: that category is disabled for \
+                     this source, because Linear has no workflow state of that kind — its \
+                     workflow states are triage, backlog, unstarted, started, completed and \
+                     canceled; choose backlog, todo, in-progress, done or cancelled",
+                    self.name,
+                    category_word(category)
+                ),
+            })
+    }
+
+    /// The team's workflow state a status of `category` is written as — the first Linear lists
+    /// of that type, and deliberately no choice beyond that: every state of this type reads
+    /// back as the category asked for, which is the whole of what a status write owes, and
+    /// nothing a category carries says which of several the caller meant — and its name.
+    async fn state_of(
+        &self,
+        category: StatusCategory,
+        task: &NativeId,
+    ) -> Result<(NativeId, String), SourceError> {
+        let state_type = self.state_type(category)?;
+        let team = self.team_id().await?;
+        let data = self
+            .send(
+                graphql::ISSUE_STATE_OF_TYPE,
+                json!({"type":state_type,"team":team.0}),
+            )
+            .await?;
+        let nodes = data
+            .get("workflowStates")
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing workflowStates.nodes".into(),
+            })?;
+        let Some(state) = nodes.first() else {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "source {} cannot set task {} to {}: its configured team has no workflow \
+                     state of type {state_type}; add one to the team in Linear",
+                    self.name,
+                    task.0,
+                    category_word(category)
+                ),
+            });
+        };
+        Ok((
+            NativeId(backend_id(state, "id")?.into()),
+            str_at(state, "name")?.to_owned(),
+        ))
+    }
+
     /// The refusal a write naming `named` — a field or a reserved key — on a `what` gets.
     fn undeliverable(&self, named: &str, what: &str) -> SourceError {
         SourceError::Refused {

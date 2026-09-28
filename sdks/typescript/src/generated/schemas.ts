@@ -12103,6 +12103,1234 @@ export const runtimeSchemas = {
     "title": "TaskStatusSet",
     "type": "object"
   },
+  "TaskUpdate": {
+    "$defs": {
+      "DependencyEdge": {
+        "description": "A dependency between two work items.\n\nAn endpoint may name another source. Keeping that far id on the near item is work data\nowned by its plugin, not an engine-side index or mirror; the engine reports it without\nresolving or fetching the far item.\n\nA source uses its backend's own relationship wherever that relationship can name the\nfar end, so the backend knows the graph and its own interface draws it. Where it\ncannot — a far end in another source, which no backend relates — the source reads\n[`Self::recorded`] from the near item instead. Only the forward direction is ever\nrecorded; the reverse of a recorded edge is derived, exactly as a\n[`ForwardOnly`](crate::DependencySupport::ForwardOnly) source's reverse is.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/DependencyEndpoint",
+            "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThis is the orientation every source reports in, whichever way its own backend\nspells the relationship: a GitHub `blockedBy` connection read for `ENG-1` yields\n`from: ENG-1`, because `ENG-1` is what depends."
+          },
+          "kind": {
+            "$ref": "#/$defs/DependencyKind",
+            "description": "What the edge means."
+          },
+          "to": {
+            "$ref": "#/$defs/DependencyEndpoint",
+            "description": "The item the edge points at, and the one that must finish first."
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "DependencyEndpoint": {
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+        "oneOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DependencyKind": {
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
+        "oneOf": [
+          {
+            "const": "blocks",
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
+            "type": "string"
+          },
+          {
+            "const": "related",
+            "description": "`from` and `to` are linked without an ordering.",
+            "type": "string"
+          }
+        ]
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A targeted update of one existing task. A member left `None` (or empty) leaves that field\nexactly as the source holds it.\n\nLabels, repositories and project membership are deliberately outside it — an existing\nitem is never moved, and no caller writes labels this way — and so is creation, which is a\ncopy's.",
+    "properties": {
+      "content": {
+        "description": "`Task::content` exactly as a read reports it; a metadata block the source keeps in the\nsame backend field is kept byte for byte.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "delivers": {
+        "description": "Replaces the list; the engine keeps each ticket's `delivered_by` in step.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "depends_on": {
+        "description": "Replaces the task's forward dependency edges (`from` is this task); the source sends\nonly the difference.",
+        "items": {
+          "$ref": "#/$defs/DependencyEdge"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "metadata_remove": {
+        "default": [],
+        "description": "Keys removed; a key the task does not hold is no write. Refused when it names a key\n`metadata_set` also names.",
+        "items": {
+          "$ref": "#/$defs/MetadataKey"
+        },
+        "type": "array",
+        "uniqueItems": true
+      },
+      "metadata_set": {
+        "additionalProperties": true,
+        "default": {},
+        "description": "Keys added or replaced; every other key is kept.",
+        "type": "object"
+      },
+      "priority": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Priority"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The task's priority; `none` clears it."
+      },
+      "status": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Status"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Name and category. A source that keeps status names stores the name; one that maps by\ncategory (GitHub Projects) writes its mapped option, exactly as `write_task` does, and\nrefuses a category it has disabled in the same words."
+      },
+      "title": {
+        "description": "The task's title.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "title": "TaskUpdate",
+    "type": "object"
+  },
+  "TaskUpdateOutcome": {
+    "$defs": {
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "Task": {
+        "description": "One unit of work as a source reports it.",
+        "properties": {
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says the task was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "key": {
+            "default": null,
+            "description": "The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "description": "Inline rather than by id: a source returning a task already knows them.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
+            "type": "object"
+          },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`None` is a first-class case — an orphan task — not an edge case."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this task concerns, in source order and without\nrepeats.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/$defs/Status",
+            "description": "The source's status, normalised and preserved."
+          },
+          "title": {
+            "description": "The one-line summary a user recognises the task by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says the task last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      },
+      "UpdatedField": {
+        "description": "One field of a task a [`TaskUpdate`] names, as the answer to it reports what was written.\n\nkebab-case on the wire. [`Metadata`](Self::Metadata) stands for every metadata key the\nupdate set or removed together; [`DependsOn`](Self::DependsOn) for the task's forward edges.",
+        "oneOf": [
+          {
+            "const": "title",
+            "description": "[`TaskUpdate::title`].",
+            "type": "string"
+          },
+          {
+            "const": "content",
+            "description": "[`TaskUpdate::content`].",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "description": "[`TaskUpdate::status`].",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "[`TaskUpdate::priority`].",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "[`TaskUpdate::metadata_set`] and [`TaskUpdate::metadata_remove`].",
+            "type": "string"
+          },
+          {
+            "const": "delivers",
+            "description": "[`TaskUpdate::delivers`].",
+            "type": "string"
+          },
+          {
+            "const": "depends-on",
+            "description": "[`TaskUpdate::depends_on`].",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a source answers a [`TaskUpdate`] of a task it holds with.\n\nEverything the engine reports about the call is read off this, so the engine sends no read\nof its own before or after it: `task` is what it answers with, `written` is what it says\nwas written, and `delivers_before` is what tells it which delivered tasks the update\ndropped.",
+    "properties": {
+      "delivers_before": {
+        "description": "The task's [`Task::delivers`] as this source held it before the update, which is the\nlist a named `delivers` replaced. Required on the wire, for the reason `written` is: an\nanswer leaving it out would hide every delivered task the update dropped.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": "array"
+      },
+      "task": {
+        "$ref": "#/$defs/Task",
+        "description": "The task as this source reads it once the update landed."
+      },
+      "written": {
+        "description": "The fields this source actually wrote — empty when nothing differed, and never a field\nthe update did not name. Required on the wire: an answer that leaves it out has not said\nwhat it wrote, which is not the same as having written nothing.",
+        "items": {
+          "$ref": "#/$defs/UpdatedField"
+        },
+        "type": "array",
+        "uniqueItems": true
+      }
+    },
+    "required": [
+      "task",
+      "written",
+      "delivers_before"
+    ],
+    "title": "TaskUpdateOutcome",
+    "type": "object"
+  },
+  "TaskUpdated": {
+    "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "Delivered": {
+        "description": "What keeping one delivered task in step with one deliverer came to.",
+        "oneOf": [
+          {
+            "description": "Its status was written.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "written",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category written."
+              }
+            },
+            "required": [
+              "outcome",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The rule asked for what it already holds, or for nothing at all.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "left",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StatusCategory"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The category it read, when it could be read."
+              },
+              "outcome": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "failure"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "deliverer": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+          },
+          "pruned": {
+            "default": [],
+            "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": "array"
+          },
+          "ticket": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The delivered task."
+          }
+        },
+        "required": [
+          "ticket",
+          "deliverer"
+        ],
+        "type": "object"
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "Task": {
+        "description": "One unit of work as a source reports it.",
+        "properties": {
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says the task was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "key": {
+            "default": null,
+            "description": "The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "description": "Inline rather than by id: a source returning a task already knows them.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
+            "type": "object"
+          },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`None` is a first-class case — an orphan task — not an edge case."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this task concerns, in source order and without\nrepeats.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/$defs/Status",
+            "description": "The source's status, normalised and preserved."
+          },
+          "title": {
+            "description": "The one-line summary a user recognises the task by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says the task last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      },
+      "UpdatedField": {
+        "description": "One field of a task a [`TaskUpdate`] names, as the answer to it reports what was written.\n\nkebab-case on the wire. [`Metadata`](Self::Metadata) stands for every metadata key the\nupdate set or removed together; [`DependsOn`](Self::DependsOn) for the task's forward edges.",
+        "oneOf": [
+          {
+            "const": "title",
+            "description": "[`TaskUpdate::title`].",
+            "type": "string"
+          },
+          {
+            "const": "content",
+            "description": "[`TaskUpdate::content`].",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "description": "[`TaskUpdate::status`].",
+            "type": "string"
+          },
+          {
+            "const": "priority",
+            "description": "[`TaskUpdate::priority`].",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "[`TaskUpdate::metadata_set`] and [`TaskUpdate::metadata_remove`].",
+            "type": "string"
+          },
+          {
+            "const": "delivers",
+            "description": "[`TaskUpdate::delivers`].",
+            "type": "string"
+          },
+          {
+            "const": "depends-on",
+            "description": "[`TaskUpdate::depends_on`].",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task update` answers with.",
+    "properties": {
+      "delivered": {
+        "description": "As `set_task_status` reports it; re-evaluated whenever `status` or `delivers` was\nnamed, empty otherwise.",
+        "items": {
+          "$ref": "#/$defs/Delivered"
+        },
+        "type": "array"
+      },
+      "id": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The task updated."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the source's meter says this call spent, as `CopyReport::spent` — and absent,\nnever zero, when the source does not meter its own requests."
+      },
+      "task": {
+        "$ref": "#/$defs/Task",
+        "description": "The task as its source reads it back, with every entry of its `delivers` and\n`delivered_by` qualified."
+      },
+      "written": {
+        "description": "The fields the source actually wrote — empty when nothing differed.",
+        "items": {
+          "$ref": "#/$defs/UpdatedField"
+        },
+        "type": "array",
+        "uniqueItems": true
+      }
+    },
+    "required": [
+      "id",
+      "task",
+      "written",
+      "delivered"
+    ],
+    "title": "TaskUpdated",
+    "type": "object"
+  },
   "TemplateAnswers": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": true,
@@ -12397,6 +13625,48 @@ export const runtimeSchemas = {
       }
     ],
     "title": "TextFields"
+  },
+  "UpdatedField": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One field of a task a [`TaskUpdate`] names, as the answer to it reports what was written.\n\nkebab-case on the wire. [`Metadata`](Self::Metadata) stands for every metadata key the\nupdate set or removed together; [`DependsOn`](Self::DependsOn) for the task's forward edges.",
+    "oneOf": [
+      {
+        "const": "title",
+        "description": "[`TaskUpdate::title`].",
+        "type": "string"
+      },
+      {
+        "const": "content",
+        "description": "[`TaskUpdate::content`].",
+        "type": "string"
+      },
+      {
+        "const": "status",
+        "description": "[`TaskUpdate::status`].",
+        "type": "string"
+      },
+      {
+        "const": "priority",
+        "description": "[`TaskUpdate::priority`].",
+        "type": "string"
+      },
+      {
+        "const": "metadata",
+        "description": "[`TaskUpdate::metadata_set`] and [`TaskUpdate::metadata_remove`].",
+        "type": "string"
+      },
+      {
+        "const": "delivers",
+        "description": "[`TaskUpdate::delivers`].",
+        "type": "string"
+      },
+      {
+        "const": "depends-on",
+        "description": "[`TaskUpdate::depends_on`].",
+        "type": "string"
+      }
+    ],
+    "title": "UpdatedField"
   },
   "VariableType": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

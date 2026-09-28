@@ -4,8 +4,8 @@ use onetaskgraph_plugin_api::{
     Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
     NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, SourcePlugin, StatusCategory, Task, TaskQuery,
-    TaskSource,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate,
 };
 use secrecy::SecretString;
 use std::{
@@ -862,6 +862,33 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
     );
     source
         .set_task_content(&"I".into(), "replaced")
+        .await
+        .unwrap()
+        .expect("the superset holds the issue");
+    // Every member a targeted update can send, and a relation replaced, in one call.
+    source
+        .update_task(
+            &"I".into(),
+            &TaskUpdate {
+                title: Some("renamed".into()),
+                content: Some("replaced".into()),
+                status: Some(Status {
+                    category: StatusCategory::InProgress,
+                    name: "In Progress".into(),
+                }),
+                priority: Some(Priority::High),
+                metadata_set: std::collections::BTreeMap::from([(
+                    MetadataKey::new("team.a").unwrap(),
+                    serde_json::json!(1),
+                )]),
+                depends_on: Some(vec![DependencyEdge {
+                    from: DependencyEndpoint::new("I".into(), ItemKind::Task).unwrap(),
+                    to: DependencyEndpoint::new("I-2".into(), ItemKind::Task).unwrap(),
+                    kind: DependencyKind::Blocks,
+                }]),
+                ..TaskUpdate::default()
+            },
+        )
         .await
         .unwrap()
         .expect("the superset holds the issue");
@@ -5949,4 +5976,114 @@ async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent()
         requests[1]["variables"]["input"]["description"],
         format!("{lookalike}\n\n{slot}")
     );
+}
+
+/// One issue as `issue(id:)` answers it: in `Todo`, with a slot of its own.
+fn slotted_issue(id: &str, state: &str, kind: &str) -> serde_json::Value {
+    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
+        "description":"The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.claim\":\"r-1\",\"team.kept\":[1]}\n-->",
+        "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
+        "state":{"name":state,"type":kind},"priority":0,"labels":{"nodes":[]},"project":null}})
+}
+
+#[tokio::test]
+async fn a_targeted_update_sends_one_issue_update_carrying_only_what_differs() {
+    use onetaskgraph_plugin_api::UpdatedField;
+    let (endpoint, wire) = response_server(vec![
+        slotted_issue("I-1", "Todo", "unstarted"),
+        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE-DONE","name":"Done"}]}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+        {
+            let mut read = slotted_issue("I-1", "Done", "completed");
+            read["issue"]["description"] = serde_json::json!(
+                "The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.kept\":[1],\"team.landing\":\"merged\"}\n-->"
+            );
+            read
+        },
+    ]);
+    let update = TaskUpdate {
+        title: Some("Fixture issue".into()),
+        status: Some(Status {
+            category: StatusCategory::Done,
+            name: "Done".into(),
+        }),
+        metadata_set: std::collections::BTreeMap::from([(
+            MetadataKey::new("team.landing").unwrap(),
+            serde_json::json!("merged"),
+        )]),
+        metadata_remove: std::collections::BTreeSet::from(
+            [MetadataKey::new("team.claim").unwrap()],
+        ),
+        ..TaskUpdate::default()
+    };
+    let outcome = writable_source(&endpoint)
+        .update_task(&"I-1".into(), &update)
+        .await
+        .expect("the update lands")
+        .expect("the issue is held");
+    let sent: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
+    assert_eq!(sent.len(), 5, "{sent:#?}");
+    assert_eq!(
+        sent[3]["variables"],
+        serde_json::json!({"id":"I-1","input":{
+            "description":"The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.kept\":[1],\"team.landing\":\"merged\"}\n-->",
+            "stateId":"STATE-DONE"}}),
+        "the unchanged title is not sent, and nothing else is"
+    );
+    assert_eq!(
+        outcome.written,
+        std::collections::BTreeSet::from([UpdatedField::Status, UpdatedField::Metadata])
+    );
+    assert_eq!(outcome.task.status.category, StatusCategory::Done);
+    assert!(!outcome.task.metadata.contains_key("team.claim"));
+}
+
+#[tokio::test]
+async fn a_targeted_update_naming_only_what_the_issue_holds_is_the_read_alone() {
+    let (endpoint, wire) = response_server(vec![slotted_issue("I-1", "Todo", "unstarted")]);
+    let update = TaskUpdate {
+        title: Some("Fixture issue".into()),
+        content: Some("The prose.".into()),
+        status: Some(Status {
+            category: StatusCategory::Todo,
+            name: "todo".into(),
+        }),
+        priority: Some(Priority::None),
+        metadata_set: std::collections::BTreeMap::from([(
+            MetadataKey::new("team.kept").unwrap(),
+            serde_json::json!([1]),
+        )]),
+        delivers: Some(Vec::new()),
+        ..TaskUpdate::default()
+    };
+    let outcome = writable_source(&endpoint)
+        .update_task(&"I-1".into(), &update)
+        .await
+        .expect("an answer")
+        .expect("the issue is held");
+    assert!(outcome.written.is_empty(), "{:?}", outcome.written);
+    assert_eq!(wire.iter().count(), 1, "the read alone");
+
+    // A task Linear does not hold is none, and a list Linear cannot carry is refused unread.
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"issue":null})]);
+    assert_eq!(
+        writable_source(&endpoint)
+            .update_task(&"I-9".into(), &update)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(wire.iter().count(), 1);
+    let refused = writable_source("http://127.0.0.1:9/graphql")
+        .update_task(
+            &"I-1".into(),
+            &TaskUpdate {
+                delivers: Some(vec![TaskRef::new("work:I-2".to_owned()).unwrap()]),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect_err("delivers");
+    assert!(refused.to_string().contains("delivers"), "{refused}");
 }

@@ -143,6 +143,18 @@ which is where GitHub documents the secondary limiter, the wordings it refuses w
 the "no more than 80 content-generating requests per minute and 500 per hour" ceilings.
 It is documentation-derived; it carries no captured response and no identifier.
 
+**One primary wording is observed rather than documented, and says so under
+`primary.observed`.** `api rate limit already exceeded` is what the GraphQL endpoint answers a
+request made once the hour's budget is already spent: an HTTP 200 whose `errors[].message` is
+"API rate limit already exceeded for user ID <id>." and which carries no `type`. Neither
+`api rate limit exceeded` nor `rate limit exceeded` is a substring of it, so before it was
+pinned that answer was reported as a refusal that will never lift rather than a rate limit a
+wait answers. It was read on 2026-09-27 twice over: in the planning spike of the
+`graphql-writeback-quota` plan, where `project show` against this repository's live test
+board answered it once another consumer had spent the token's budget, and in 20 write-back
+refusals the orchestration host recorded that day, every one carrying that sentence. No
+identifier is kept: the user id in the sentence is not part of the wording.
+
 `the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` in
 `../schema.rs` reconciles it against `SECONDARY_WORDINGS`, `PRIMARY_WORDINGS`,
 `CONTENT_CREATION_PER_MINUTE` and `CONTENT_CREATION_PER_HOUR` **both ways**, so neither a

@@ -10,7 +10,7 @@ use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
     DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Priority,
     Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskQuery, TaskRef, TextFields,
+    TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields, UpdatedField,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ use crate::{
     Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
     QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated, SearchHit, SearchKind,
     SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail, TaskPrioritySet,
-    TaskStatusSet, TemplateAnswers,
+    TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -43,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 22;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 23;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -157,6 +157,14 @@ pub fn schema_bundle() -> Value {
     // What `task priority set` and `task content set` answer with.
     roots.insert("TaskPrioritySet", schema_for!(TaskPrioritySet));
     roots.insert("TaskContentSet", schema_for!(TaskContentSet));
+
+    // The targeted update: what a caller names, what `task update` answers with and the
+    // field vocabulary both report in, and the outcome a source answers it with across the
+    // plugin protocol.
+    roots.insert("TaskUpdate", schema_for!(TaskUpdate));
+    roots.insert("TaskUpdated", schema_for!(TaskUpdated));
+    roots.insert("UpdatedField", schema_for!(UpdatedField));
+    roots.insert("TaskUpdateOutcome", schema_for!(TaskUpdateOutcome));
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", schema_for!(MetadataSet));

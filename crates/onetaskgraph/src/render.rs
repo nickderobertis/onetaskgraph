@@ -14,7 +14,7 @@
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
     Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing, SourceState,
-    TaskContentSet, TaskPrioritySet, TaskStatusSet, TemplateVariables,
+    TaskContentSet, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
@@ -178,6 +178,37 @@ pub fn status_set(set: &TaskStatusSet) -> String {
         rendered.push_str("delivered: none\n");
     } else {
         rendered.push_str(&delivered(&set.delivered));
+    }
+    rendered
+}
+
+/// What `task update` did: the task, which of its fields were written — or that none needed
+/// to be — the status it now reads as, and each task it delivers that was kept in step.
+pub fn task_updated(updated: &TaskUpdated) -> String {
+    let written = if updated.written.is_empty() {
+        "nothing: every field named already held that value".to_owned()
+    } else {
+        updated
+            .written
+            .iter()
+            .map(wire)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut rendered = columns(&[
+        vec!["id:".to_owned(), updated.id.to_string()],
+        vec!["written:".to_owned(), written],
+        vec![
+            "status:".to_owned(),
+            format!(
+                "{} ({})",
+                wire(&updated.task.status.category),
+                updated.task.status.name
+            ),
+        ],
+    ]);
+    if !updated.delivered.is_empty() {
+        rendered.push_str(&delivered(&updated.delivered));
     }
     rendered
 }

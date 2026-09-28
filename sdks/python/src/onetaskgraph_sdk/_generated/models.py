@@ -35,10 +35,12 @@ from .task_detail import TaskDetail as TaskDetail
 from .task_priority_set import TaskPrioritySet as TaskPrioritySet
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
+from .task_updated import TaskUpdated as TaskUpdated
 from .template_answers import TemplateAnswers as TemplateAnswers
 from .template_provenance import TemplateProvenance as TemplateProvenance
 from .template_variable import TemplateVariable as TemplateVariable
 from .template_variables import TemplateVariables as TemplateVariables
+from .updated_field import UpdatedField as UpdatedField
 from .variable_type import VariableType as VariableType
 
 # Every root is named here rather than left to the `import X as X` form alone: a
@@ -83,9 +85,11 @@ __all__ = [
     "TaskPrioritySet",
     "TaskRef",
     "TaskStatusSet",
+    "TaskUpdated",
     "TemplateAnswers",
     "TemplateProvenance",
     "TemplateVariable",
     "TemplateVariables",
+    "UpdatedField",
     "VariableType",
 ]
