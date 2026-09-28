@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.48](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.47...onetaskgraph-linear-v0.2.48) - 2026-09-28
+
+### Added
+
+- *(task)* add a targeted task update and classify budget exhaustion ([#2805](https://github.com/nickderobertis/onetaskgraph/pull/2805))
+
 ## [0.2.45](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.2.44...onetaskgraph-linear-v0.2.45) - 2026-09-26
 
 ### Added
