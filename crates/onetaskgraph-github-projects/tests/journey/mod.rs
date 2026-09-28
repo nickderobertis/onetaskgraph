@@ -2497,6 +2497,14 @@ async fn drive_every_declared_capability(
 /// The instant comes from GitHub's own clock — a second past the `updatedAt` the first
 /// comment left — and the edit waits two seconds past it, so no skew between this machine and
 /// GitHub can put the edit before the instant.
+///
+/// GitHub reports `updatedAt` to the whole second, so the assertion is held to what can only
+/// be GitHub's behaviour. The edit GitHub itself stamps — the edited comment's own
+/// `updatedAt` — must land at or past the instant, and is made again, a second later, until it
+/// does; only then is the issue's `updatedAt` asked for, and it is asked again for a bounded
+/// while, because a read made the moment a write returns can be answered from before it. So
+/// the assertion fails only when GitHub stamped an edit a whole second after the issue's last
+/// change and still left the issue where it was.
 async fn an_edited_comment_moves_its_issue_and_is_selected_since(
     writer: &dyn TaskSource,
     (first_id, first): (&NativeId, &str),
@@ -2531,20 +2539,51 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
          {unedited:?}"
     );
 
-    writer
-        .edit_comment(
-            first_id,
-            &written.id,
-            &body("temporary credentialed comment, edited; the live lane removes it")?,
-        )
-        .await
-        .map_err(|error| format!("live comment edit failed: {error}"))?
-        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
-    let after_edit = issue_updated_at(writer, first_id, "after its comment was edited").await?;
+    let mut edited_at = before_edit;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        let edited = writer
+            .edit_comment(
+                first_id,
+                &written.id,
+                &body(&format!(
+                    "temporary credentialed comment, edited ({attempt}); the live lane removes it"
+                ))?,
+            )
+            .await
+            .map_err(|error| format!("live comment edit failed: {error}"))?
+            .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+        edited_at = edited
+            .updated_at
+            .ok_or_else(|| "GitHub reported no updatedAt for the edited comment".to_owned())?;
+        if edited_at >= since {
+            break;
+        }
+    }
     ensure!(
-        after_edit > before_edit && after_edit >= since,
+        edited_at >= since,
+        "GitHub stamped every edit of the comment before {since}, the second after the issue's \
+         updatedAt of {before_edit}, the last at {edited_at}, so no edit could be told from the \
+         issue's previous change; next: re-run, since this is GitHub's clock rather than its \
+         behaviour"
+    );
+    let mut after_edit = before_edit;
+    for read in 0..10 {
+        if read > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        after_edit = issue_updated_at(writer, first_id, "after its comment was edited").await?;
+        if after_edit >= since {
+            break;
+        }
+    }
+    ensure!(
+        after_edit >= since,
         "GitHub did not move the issue's updatedAt when one of its comments was edited: it \
-         read {before_edit} before the edit and {after_edit} after it. \
+         read {before_edit} before the edit, GitHub stamped the edit {edited_at}, a whole \
+         second later, and the issue still read {after_edit} ten seconds after it. \
          filter_by_comment_activity's board-scoped `updated:` search is exact only while it \
          does; next: tell the owner of the github-projects plugin that GitHub's behaviour \
          changed, rather than re-running"

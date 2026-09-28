@@ -673,3 +673,11 @@ is on` that edit makes first; five `reading one issue` — the two `updatedAt` r
 task read each comment write makes; two `searching this board's issues`, the comment-activity
 read before the edit and after it; and two `reading a task's comments`, the confirmation of
 the two candidates the second search named. Every other row is what it was.
+
+GitHub reports `updatedAt` to the whole second, so on the credentialed lane that leg may
+spend a little more than the record says, and only to keep its assertion about GitHub's
+behaviour rather than its clock: an edit GitHub stamps before the instant is made again, at
+most four more times a second apart, and the issue's `updatedAt` is read again, at most nine
+more times a second apart, until it reaches the instant. The loopback board stamps each
+write a second after the last and answers the first read current, so the recorded session
+makes neither retry and the record is unchanged.
