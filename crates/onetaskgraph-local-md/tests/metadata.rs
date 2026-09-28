@@ -246,6 +246,59 @@ async fn blank_lines_inside_a_block_scalar_belong_to_its_entry() {
 }
 
 #[tokio::test]
+async fn the_blank_lines_a_kept_block_scalar_ends_in_stay_with_it() {
+    // `|+` keeps its trailing line breaks, so the blank line is the story's own: an entry added
+    // after the block goes below it, and the story reads back `text\n\n` as it was written.
+    let before = "---\nstatus: todo\nmetadata:\n  myapp.story: |+\n    text\n\ntitle: T\n---\n";
+    task_edit(
+        before,
+        "myapp.b",
+        json!(3),
+        "---\nstatus: todo\nmetadata:\n  myapp.story: |+\n    text\n\n  \"myapp.b\": 3\ntitle: T\n---\n",
+    )
+    .await;
+    task_edit(
+        before,
+        "myapp.story",
+        json!("short"),
+        "---\nstatus: todo\nmetadata:\n  \"myapp.story\": \"short\"\ntitle: T\n---\n",
+    )
+    .await;
+    // The kept blank lines run to the front matter's last line, which is one of them.
+    task_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a: |+\n    text\n\n\n---\n",
+        "myapp.b",
+        json!(3),
+        "---\nstatus: todo\nmetadata:\n  myapp.a: |+\n    text\n\n\n  \"myapp.b\": 3\n---\n",
+    )
+    .await;
+    // A clip scalar does not keep them, so they are whitespace the added entry goes above.
+    task_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a: |\n    text\n\n---\n",
+        "myapp.b",
+        json!(3),
+        "---\nstatus: todo\nmetadata:\n  myapp.a: |\n    text\n  \"myapp.b\": 3\n\n---\n",
+    )
+    .await;
+    // A folded scalar keeps them by the same header indicator.
+    task_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a: >+\n    folded\n    text\n\n---\n",
+        "myapp.b",
+        json!(3),
+        "---\nstatus: todo\nmetadata:\n  myapp.a: >+\n    folded\n    text\n\n  \"myapp.b\": 3\n---\n",
+    )
+    .await;
+    // A kept scalar inside a sequence item, the entry's last line, keeps its breaks too.
+    task_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a:\n  - k: 1\n    task: |+\n      text\n\n  myapp.z: 1\n---\n",
+        "myapp.z",
+        Value::Null,
+        "---\nstatus: todo\nmetadata:\n  myapp.a:\n  - k: 1\n    task: |+\n      text\n\n  \"myapp.z\": null\n---\n",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn an_indentless_sequence_belongs_to_the_key_above_it() {
     let before = "---\nstatus: todo\nmetadata:\n  myapp.list:\n  - a\n  - b\n  myapp.other:\n  - c\ntitle: T\n---\n";
     task_edit(
@@ -545,14 +598,6 @@ async fn metadata_that_cannot_be_edited_narrowly_is_refused_and_left_alone() {
     // A comment in column 0 ends the block this source can see, while YAML reads on past it.
     refused_edit(
         "---\nstatus: todo\nmetadata:\n  myapp.a: 1\n# a note\n  myapp.b: 2\n---\n",
-        "myapp.b",
-        json!(3),
-        "the edited file would read back as more than that one key changed",
-    )
-    .await;
-    // Kept trailing blank lines of a `|+` scalar would move below the added entry.
-    refused_edit(
-        "---\nstatus: todo\nmetadata:\n  myapp.story: |+\n    text\n\ntitle: T\n---\n",
         "myapp.b",
         json!(3),
         "the edited file would read back as more than that one key changed",

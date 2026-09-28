@@ -13069,6 +13069,80 @@ async fn a_slot_spelled_another_way_is_kept_byte_for_byte_by_an_update_that_chan
     assert_eq!(fixture.item("I_1").body.as_deref(), Some(body));
 }
 
+#[tokio::test]
+async fn a_slot_holding_steps_keeps_them_byte_for_byte_through_an_update_of_other_fields() {
+    // This source keeps metadata as one compact JSON object, which escapes every line break,
+    // so a value has no layout for an edit to move, and `-->` alone cannot close the slot.
+    let task = "## What\nWork.\n\n## Acceptance criteria\n\n- x <!-- a note -->\n\n";
+    let steps = json!([
+        {"id": "build", "persona": "engineer", "task": task},
+        {"id": "check", "persona": "reviewer", "deps": ["build"], "task": task},
+    ]);
+    let slot = BTreeMap::from([
+        ("onetaskgraph.item_kind".to_owned(), json!("task")),
+        ("onepipeline.steps".to_owned(), steps.clone()),
+        ("team.claim".to_owned(), json!("r-1")),
+    ]);
+    let encoded_steps = serde_json::to_string(&steps).unwrap();
+    let body = format!(
+        "The prose.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+        serde_json::to_string(&slot).unwrap()
+    );
+    let updates = [
+        TaskUpdate {
+            metadata_set: BTreeMap::from([(key("onepipeline.node"), json!("x"))]),
+            ..TaskUpdate::default()
+        },
+        TaskUpdate {
+            metadata_remove: BTreeSet::from([key("team.claim")]),
+            ..TaskUpdate::default()
+        },
+        TaskUpdate {
+            title: Some("renamed".to_owned()),
+            content: Some("Other prose.\n".to_owned()),
+            ..TaskUpdate::default()
+        },
+        TaskUpdate {
+            status: Some(status(StatusCategory::Done, "done")),
+            ..TaskUpdate::default()
+        },
+    ];
+    for update in updates {
+        let fixture = update_board(Item::issue("I_1", "a task").body(&body).status("Todo"));
+        let before = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.metadata["onepipeline.steps"], steps);
+        let outcome = source(&fixture)
+            .update_task(&id("I_1"), &update)
+            .await
+            .unwrap_or_else(|error| panic!("{update:?}: refused: {error:?}"))
+            .expect("a task of this board");
+        assert!(!outcome.written.is_empty(), "{update:?}");
+        let written = fixture.item("I_1").body.clone().unwrap_or_default();
+        assert!(
+            written.contains(&format!("\"onepipeline.steps\":{encoded_steps}")),
+            "{update:?}: the steps are the bytes they were: {written}"
+        );
+        let after = source_of(&fixture)
+            .get_task(&id("I_1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, outcome.task, "the answer is the read");
+        assert_eq!(after.metadata["onepipeline.steps"], steps, "{update:?}");
+        let mut wanted = update.applied_to(&before);
+        // The board reads a status back as its option's name.
+        if update.status.is_some() {
+            assert_eq!(after.status.category, StatusCategory::Done);
+            wanted.status = after.status.clone();
+        }
+        assert_eq!(after, wanted, "{update:?}: nothing unnamed moved");
+    }
+}
+
 /// The three endings a content write must keep, on content with interior structure a trim
 /// would also leave alone.
 const CONTENT_ENDINGS: [&str; 3] = [
