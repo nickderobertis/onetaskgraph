@@ -2117,6 +2117,158 @@ fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longer_hold
     assert_eq!(reported(&alone).len(), 1);
 }
 
+/// A folder of Markdown whose one project files its tasks in a folder of its own, so every
+/// task id is scoped to the project: `rule-scope/alpha` depends on `rule-scope/beta`. Answers
+/// the root.
+fn project_scoped_plans(sandbox: &Sandbox) -> std::path::PathBuf {
+    let root = sandbox.subdirectory("authoring");
+    for (path, front) in [
+        ("projects/rule-scope.md", "title: Rule scope\nstatus: doing"),
+        (
+            "tasks/rule-scope/alpha.md",
+            "title: Alpha\nstatus: todo\nproject: rule-scope\ndepends_on: [rule-scope/beta]",
+        ),
+        (
+            "tasks/rule-scope/beta.md",
+            "title: Beta\nstatus: todo\nproject: rule-scope",
+        ),
+    ] {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
+        std::fs::write(path, format!("---\n{front}\n---\nbody\n")).expect("the document");
+    }
+    sandbox.project_document(&document(&json!({
+        "authoring": {"plugin": "local-md", "config": {
+            "root": root,
+            "status_mapping": {"todo": "todo", "doing": "in-progress"},
+        }},
+    })));
+    root
+}
+
+#[test]
+fn a_project_copied_beside_itself_files_its_tasks_under_the_copy_and_links_them_there() {
+    // The defect: a project copied into the folder it came from landed as `rule-scope-2`,
+    // and each of its tasks kept its source id — so it was written under
+    // `tasks/rule-scope/`, as `rule-scope/alpha-2`, while its `project` named
+    // `rule-scope-2`. The next reader scoped to the copy refused every task as outside it.
+    let sandbox = Sandbox::new();
+    let root = project_scoped_plans(&sandbox);
+
+    let copied = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authoring:rule-scope",
+            "--to",
+            "authoring",
+            "--json",
+        ],
+    );
+    let landed = reported(&copied);
+    assert_eq!(
+        landed,
+        vec![
+            (
+                "authoring:rule-scope".to_owned(),
+                json!("authoring:rule-scope-2"),
+                "created".to_owned()
+            ),
+            (
+                "authoring:rule-scope/alpha".to_owned(),
+                json!("authoring:rule-scope-2/alpha"),
+                "created".to_owned()
+            ),
+            (
+                "authoring:rule-scope/beta".to_owned(),
+                json!("authoring:rule-scope-2/beta"),
+                "created".to_owned()
+            ),
+        ]
+    );
+    let project = landed[0].1.as_str().expect("the copied project's id");
+    for (_, task, _) in &landed[1..] {
+        let task = task.as_str().expect("a created task id");
+        assert!(
+            task.starts_with(&format!("{project}/")),
+            "{task} is scoped to the project it was copied into, {project}"
+        );
+        let shown = shown(&sandbox, "task", task);
+        assert_eq!(shown["project"], json!("rule-scope-2"), "{shown:#}");
+        let location = shown["location"]["path"]
+            .as_str()
+            .expect("a Markdown task reports its file");
+        let folder = std::fs::canonicalize(root.join("tasks/rule-scope-2"))
+            .expect("the copied project's task folder");
+        assert!(
+            std::path::Path::new(location).starts_with(&folder),
+            "{task} is stored under {}, not at {location}",
+            folder.display()
+        );
+    }
+
+    // The copied project's own dependency resolves inside it, rather than reaching back into
+    // the project it was copied from.
+    let dependencies: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "deps", "authoring:rule-scope-2/alpha", "--json"],
+    ))
+    .expect("task dependencies emit JSON");
+    assert_eq!(
+        dependencies["items"],
+        json!([{
+            "from": {"id": "authoring:rule-scope-2/alpha", "kind": "task"},
+            "to": {"id": "authoring:rule-scope-2/beta", "kind": "task"},
+            "kind": "blocks"
+        }]),
+        "{dependencies:#}"
+    );
+    // And the project it was copied from is exactly as it was.
+    assert_eq!(
+        std::fs::read_to_string(root.join("tasks/rule-scope/alpha.md")).expect("the original"),
+        "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
+         depends_on: [rule-scope/beta]\n---\nbody\n"
+    );
+
+    // Copied again onto the copy it made, each task is found where the first copy put it and
+    // nothing is created twice.
+    let again = ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "authoring:rule-scope",
+            "--to",
+            "authoring",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        reported(&again)
+            .into_iter()
+            .map(|(_, destination, _)| destination)
+            .collect::<Vec<_>>(),
+        landed
+            .iter()
+            .map(|(_, destination, _)| destination.clone())
+            .collect::<Vec<_>>(),
+        "{again}"
+    );
+    assert_eq!(
+        files(&root.join("tasks"))
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>(),
+        vec![
+            root.join("tasks/rule-scope/alpha.md"),
+            root.join("tasks/rule-scope/beta.md"),
+            root.join("tasks/rule-scope-2/alpha.md"),
+            root.join("tasks/rule-scope-2/beta.md"),
+        ]
+    );
+}
+
 /// Every file under `root`, with its bytes, in a stable order.
 ///
 /// What a destination folder holds is exactly these, so two of them compared equal is a
