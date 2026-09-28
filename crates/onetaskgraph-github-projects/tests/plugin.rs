@@ -222,6 +222,12 @@ struct Item {
     /// GitHub answers `fieldValues` with the values an item holds and nothing for a field
     /// it holds none of, so an item nobody ever copied carries no definition of that field.
     origin_value: bool,
+    /// When GitHub last saw this issue change, as `Issue.updatedAt` carries it — `None` for
+    /// the `null` every case that does not care about it is answered with.
+    ///
+    /// GitHub moves it when a comment on the issue is added **or edited**, which is what its
+    /// issue search's `updated:` qualifier is read against; see [`Item::updated`].
+    updated_at: Option<String>,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -271,6 +277,7 @@ impl Item {
             board_entry_id: "PVT_board",
             listed: true,
             origin_value: true,
+            updated_at: None,
             path_labels: BTreeMap::new(),
         }
     }
@@ -297,6 +304,12 @@ impl Item {
     }
     fn parent(mut self, parent: &str) -> Self {
         self.parent = Some(parent.to_owned());
+        self
+    }
+    /// Stamp this issue as last updated at `at`, as GitHub would after a comment on it was
+    /// added or edited then.
+    fn updated(mut self, at: &str) -> Self {
+        self.updated_at = Some(at.to_owned());
         self
     }
     fn number(mut self, number: u64) -> Self {
@@ -431,7 +444,7 @@ impl Item {
                 "title":self.title,
                 "body":self.body.clone().unwrap_or_default(),
                 "url":format!("https://github.example/{}", self.content_id),
-                "createdAt":null,"updatedAt":null,"state":self.state,
+                "createdAt":null,"updatedAt":self.updated_at,"state":self.state,
                 "stateReason":self.state_reason,
                 "repository":self.repository.as_ref().map(|r| json!({"nameWithOwner":r})),
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
@@ -557,6 +570,8 @@ struct State {
     documents: Vec<String>,
     /// The search string of every board-scoped search this board answered, in order.
     searches: Vec<String>,
+    /// The issue named by every read of an issue's comments this board answered, in order.
+    comment_reads: Vec<String>,
     /// The repository's own labels, as `(name, node id)`.
     ///
     /// A repository label is created and deleted over REST and attached over GraphQL, so
@@ -889,6 +904,23 @@ impl Fixture {
     fn searches(&self) -> Vec<String> {
         self.state.lock().unwrap().searches.clone()
     }
+    /// The issue named by every read of an issue's comments this board answered, in order.
+    fn comment_reads(&self) -> Vec<String> {
+        self.state.lock().unwrap().comment_reads.clone()
+    }
+    /// Put a comment on `issue` written at `created_at` and last edited at `updated_at`, the
+    /// way somebody writing on GitHub earlier would have left it.
+    fn commented_at(&self, issue: &str, created_at: &str, updated_at: &str) {
+        let mut state = self.state.lock().unwrap();
+        let held = state.comment(issue, Some("someone"), "a word\n");
+        let held = state
+            .comments
+            .iter_mut()
+            .find(|comment| comment.id == held.id)
+            .expect("just added");
+        held.created_at = created_at.to_owned();
+        held.updated_at = updated_at.to_owned();
+    }
     /// Which of the documents this board received selected its own item connection.
     ///
     /// The one read whose cost is the whole board, named by the selection that makes it
@@ -1040,6 +1072,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         seen: Vec::new(),
         documents: Vec::new(),
         searches: Vec::new(),
+        comment_reads: Vec::new(),
         labels: Vec::new(),
         next: 0,
         limits: Limits::default(),
@@ -1328,6 +1361,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     if query.contains("comments(first:$first,after:$after)") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
+        state.comment_reads.push(id.clone());
         let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
             return json!({ "node": null });
         };
@@ -1544,6 +1578,12 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let wanted = wanted.as_str();
         // The server side of `in:title "..."`, which is what makes naming a project by name
         // one bounded query rather than a walk of the board.
+        // The server side of `updated:>=<instant>`, which is how a read narrowed to comment
+        // activity asks for the issues changed since rather than for the board.
+        let updated_since = wanted.trim().strip_prefix("updated:>=").map(|instant| {
+            chrono::DateTime::parse_from_rfc3339(instant)
+                .unwrap_or_else(|error| panic!("an RFC 3339 instant in {search}: {error}"))
+        });
         let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
             quoted
                 .trim()
@@ -1568,6 +1608,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 title
                     .as_ref()
                     .is_none_or(|title| item.title.eq_ignore_ascii_case(title))
+            })
+            .filter(|item| {
+                updated_since.is_none_or(|since| {
+                    item.updated_at.as_deref().is_some_and(|at| {
+                        chrono::DateTime::parse_from_rfc3339(at).expect("an instant") >= since
+                    })
+                })
             })
             .collect::<Vec<_>>();
         let end = (offset + first).min(matched.len());
@@ -13374,4 +13421,116 @@ async fn every_document_and_project_content_write_stores_the_bytes_exactly() {
             );
         }
     }
+}
+
+/// The instant the comment-activity cases below ask about.
+const COMMENTED_SINCE: &str = "2026-09-20T12:00:00Z";
+
+/// Long before [`COMMENTED_SINCE`]: when every issue below was created and first commented on.
+const LONG_BEFORE: &str = "2026-06-01T09:00:00Z";
+
+/// A board whose items live in two owners' repositories, and one issue that is not on it.
+///
+/// - `I_fresh` — commented on after the instant, in the board owner's repository.
+/// - `I_foreign` — in **another owner's** repository; created and commented on long before
+///   the instant, and its only activity since is an edit to one of those old comments, which
+///   moved the issue's `updatedAt` as GitHub does.
+/// - `I_stale` — in the board owner's repository, every comment before the instant, and not
+///   updated since.
+/// - `I_retitled` — updated after the instant for another reason, with only old comments.
+/// - `I_elsewhere` — an edited comment after the instant, on an issue this board does not
+///   hold.
+fn comment_activity_board() -> Fixture {
+    let fixture = board(vec![
+        Item::issue("I_fresh", "Fresh")
+            .status("Todo")
+            .updated("2026-09-21T09:00:00Z"),
+        Item::issue("I_foreign", "Foreign")
+            .status("In Progress")
+            .in_repository("another-owner/elsewhere")
+            .updated("2026-09-25T09:00:00Z"),
+        Item::issue("I_stale", "Stale")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_retitled", "Retitled")
+            .status("Todo")
+            .updated("2026-09-26T09:00:00Z"),
+        Item::issue("I_elsewhere", "Elsewhere")
+            .only_on(&[3])
+            .updated("2026-09-27T09:00:00Z"),
+    ]);
+    fixture.commented_at("I_fresh", "2026-09-21T09:00:00Z", "2026-09-21T09:00:00Z");
+    fixture.commented_at("I_foreign", LONG_BEFORE, LONG_BEFORE);
+    fixture.commented_at("I_foreign", LONG_BEFORE, "2026-09-25T09:00:00Z");
+    fixture.commented_at("I_stale", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    fixture.commented_at("I_retitled", LONG_BEFORE, LONG_BEFORE);
+    fixture.commented_at("I_elsewhere", LONG_BEFORE, "2026-09-27T09:00:00Z");
+    fixture
+}
+
+fn commented_since(statuses: Vec<StatusCategory>) -> TaskQuery {
+    TaskQuery {
+        statuses,
+        commented_since: Some(COMMENTED_SINCE.parse().expect("an RFC 3339 instant")),
+        ..TaskQuery::default()
+    }
+}
+
+#[tokio::test]
+async fn comment_activity_is_answered_by_the_board_scoped_search_and_each_candidates_comments() {
+    let fixture = comment_activity_board();
+    let source = source(&fixture);
+    assert_eq!(
+        source.capabilities().filter_by_comment_activity,
+        Support::Native
+    );
+
+    assert_eq!(
+        selected_tasks(source.as_ref(), &commented_since(Vec::new())).await,
+        ["I_fresh", "I_foreign"],
+        "the new comment and the cross-owner edited one; not the stale issue, not the one \
+         updated for another reason, not the one on another board"
+    );
+    assert_eq!(
+        fixture.searches(),
+        ["project:octo-org/7 is:issue updated:>=2026-09-20T12:00:00+00:00"],
+        "one search, scoped by the board alone, with the updated qualifier"
+    );
+    for search in fixture.searches() {
+        for narrowing in ["repo:", "user:", "org:", "owner:"] {
+            assert!(
+                !search.contains(narrowing),
+                "the search narrows by {narrowing}: {search}"
+            );
+        }
+    }
+    assert_eq!(
+        fixture.board_item_reads(),
+        Vec::<String>::new(),
+        "the board's own item connection was read"
+    );
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_fresh", "I_foreign", "I_retitled"],
+        "comments read for the search's candidates on this board, and for no other issue"
+    );
+}
+
+#[tokio::test]
+async fn comment_activity_combined_with_a_status_filter_is_the_intersection() {
+    let fixture = comment_activity_board();
+    let source = source(&fixture);
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &commented_since(vec![StatusCategory::InProgress])
+        )
+        .await,
+        ["I_foreign"]
+    );
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_foreign"],
+        "a candidate the status filter drops has no comments read"
+    );
 }
