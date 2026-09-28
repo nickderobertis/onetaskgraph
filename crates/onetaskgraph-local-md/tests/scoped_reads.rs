@@ -207,6 +207,39 @@ async fn an_orphan_query_passes_over_every_record_filed_under_a_project() {
 }
 
 #[tokio::test]
+async fn a_scoped_query_reads_a_front_matter_ending_in_a_block_scalar_as_the_record_does() {
+    let (_root, source) = folder(&[
+        (
+            "tasks/kept.md",
+            "---\ntitle: Kept\nproject: P\nmetadata:\n  a.b: |+\n    text\n\n---\n",
+        ),
+        (
+            "tasks/block.md",
+            "---\ntitle: Block\nproject: |\n  P\n---\n",
+        ),
+    ]);
+    assert_eq!(task_ids(source.as_ref(), in_project("P")).await, ["kept"]);
+    let kept = source
+        .get_task(&NativeId("kept".to_owned()))
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(kept.metadata["a.b"], json!("text\n\n"));
+    // `|` keeps the line break the front matter's last line ends in, for the filter as for
+    // the read: the task is filed under `P\n`, and a query scoped there finds it.
+    let block = source
+        .get_task(&NativeId("block".to_owned()))
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(block.project, Some(NativeId("P\n".to_owned())));
+    assert_eq!(
+        task_ids(source.as_ref(), in_project("P\n")).await,
+        ["block"]
+    );
+}
+
+#[tokio::test]
 async fn a_document_query_scoped_to_a_project_is_read_on_the_same_terms() {
     let (_root, source) = folder(&[
         (

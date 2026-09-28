@@ -257,7 +257,6 @@ async fn the_blank_lines_a_kept_block_scalar_ends_in_stay_with_it() {
         "---\nstatus: todo\nmetadata:\n  myapp.story: |+\n    text\n\n  \"myapp.b\": 3\ntitle: T\n---\n",
     )
     .await;
-    // Replaced, the entry takes its blank lines with it.
     task_edit(
         before,
         "myapp.story",
@@ -279,6 +278,14 @@ async fn the_blank_lines_a_kept_block_scalar_ends_in_stay_with_it() {
         "myapp.b",
         json!(3),
         "---\nstatus: todo\nmetadata:\n  myapp.a: |\n    text\n  \"myapp.b\": 3\n\n---\n",
+    )
+    .await;
+    // A folded scalar keeps them by the same header indicator.
+    task_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a: >+\n    folded\n    text\n\n---\n",
+        "myapp.b",
+        json!(3),
+        "---\nstatus: todo\nmetadata:\n  myapp.a: >+\n    folded\n    text\n\n  \"myapp.b\": 3\n---\n",
     )
     .await;
     // A kept scalar inside a sequence item, the entry's last line, keeps its breaks too.
