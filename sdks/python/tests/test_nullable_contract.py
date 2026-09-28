@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,7 +54,8 @@ TASK: dict[str, JsonValue] = {
     "updated_at": None,
 }
 
-# The defaulted task members an explicit `null` is refused for, each with its default.
+# Each is left out of the wire when empty, so omitting it is what the binary does every day
+# rather than only what an old writer did.
 TASK_DEFAULTS: dict[str, JsonValue] = {
     "delivers": [],
     "delivered_by": [],
@@ -153,6 +156,13 @@ def emitted_bundle() -> generate.SchemaBundle:
 def test_no_generated_member_is_optional_that_the_schema_declares_non_nullable() -> None:
     """Over the whole generated package, every model agrees with the schema about `null`.
 
+    This is the decode test for every member the tests above do not name — the document,
+    project, delivery, copy-report and update models among them — rather than a structural
+    stand-in for one: the guard decodes an explicit `None` through every field of every
+    generated model, which is the `model_validate` a consumer's answer takes, and compares
+    what each accepts with what the schema the real binary emits declares. One decode test
+    per member would restate that rule a few dozen times and miss the next member added.
+
     And the pairing it rests on is not vacuous: the objects this test is about were found on
     both sides, so an agreement is not two empty sides agreeing.
     """
@@ -199,6 +209,48 @@ def test_the_guard_refuses_a_schema_member_the_models_do_not_let_be_null() -> No
     disagreements = generate.nullability_disagreements(bundle, GENERATED)
     assert len(disagreements) == 1
     assert "the schema admits null for [['comments']], the models for [[]]" in disagreements[0]
+
+
+def test_generation_fails_when_its_models_stop_following_the_schema(
+    binary: Path, tmp_path: Path
+) -> None:
+    """`generate.py --check` refuses a generator that no longer reads defaults as non-null.
+
+    The real generator runs from a scratch copy of this package with its strict nullable
+    option removed — the drift the guard exists for — against the real binary's schema, and
+    fails naming the members that went optional, before it compares anything.
+    """
+    workspace = Path(generate.ROOT).parent.parent
+    package = tmp_path / Path(generate.ROOT).relative_to(workspace)
+    shutil.copytree(GENERATED, package / GENERATED.relative_to(generate.ROOT))
+    source = Path(generate.__file__).read_text(encoding="utf-8")
+    option = '                    "--strict-nullable",\n'
+    assert option in source, "generate.py no longer passes the strict nullable option"
+    (package / "generate.py").write_text(source.replace(option, ""), encoding="utf-8")
+    staged = tmp_path / Path(generate.BINARY).relative_to(workspace)
+    staged.parent.mkdir(parents=True)
+    try:
+        os.link(binary, staged)
+    except OSError:
+        shutil.copy2(binary, staged)
+
+    result = subprocess.run(
+        [sys.executable, "generate.py", "--check"],
+        cwd=package,
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode != 0, result.stdout
+    assert "disagree about which members accept `null`" in result.stderr, result.stderr
+    refused = next(
+        line
+        for line in result.stderr.splitlines()
+        if line.strip().startswith("SourceListing object {comments, documents,")
+    )
+    assert "the schema admits null for [[]]" in refused
+    assert "['comments', 'documents', 'filter_by_priority', 'priority']" in refused
+    assert "generated Python SDK is stale" not in result.stderr
 
 
 def test_the_real_binary_writes_members_that_decode_and_refuses_null(
