@@ -656,3 +656,20 @@ deliver something adds the reads and writes of keeping each delivered task in st
 as `task status set` does. A terminal status adds its close to the same `updateIssue`, and an
 open status crossing from closed reopens in it; a priority that changes is one field write
 more; edges that differ cost the `blockedBy` difference and the reads that find it.
+
+## Re-taking the fact comment activity rests on, and what that costs
+
+`filter_by_comment_activity` is answered with the board-scoped issue search's `updated:`
+qualifier, which is exact only while GitHub moves an issue's `updatedAt` when one of its
+comments is edited. That is GitHub's behaviour rather than this repository's, so the journey
+re-takes it on every run: `an_edited_comment_moves_its_issue_and_is_selected_since` writes a
+comment, reads the issue's `updatedAt`, edits the comment, reads it again, comments on a
+second issue, and asks for the tasks commented on since an instant between the two.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As the section above: a difference between two committed states of `tests/fixtures/session-cost.txt`, held by the session-cost test, which fails on any change to that record and names this file as the place to say what moved. -->
+What it moves: **thirteen requests more over the whole session, and 42,015 worst-case nodes
+more.** Two `adding a comment`, one `editing a comment` and the `reading which issue a comment
+is on` that edit makes first; five `reading one issue` — the two `updatedAt` reads and the
+task read each comment write makes; two `searching this board's issues`, the comment-activity
+read before the edit and after it; and two `reading a task's comments`, the confirmation of
+the two candidates the second search named. Every other row is what it was.

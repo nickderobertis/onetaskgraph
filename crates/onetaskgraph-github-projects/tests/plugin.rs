@@ -1322,6 +1322,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // Signed as the token's account whatever the input said, because GitHub's input has
         // nowhere to say anything else.
         let added = state.comment(&subject, Some(COMMENTER), &body);
+        // GitHub moves the issue's `updatedAt` with every comment written on it.
+        state.find(&json!(subject)).updated_at = Some(added.updated_at.clone());
         return json!({"addComment":{"subject":{"id":subject},
                                     "commentEdge":{"node":added.as_node()}}});
     }
@@ -1333,8 +1335,12 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .find(|held| input["id"] == held.id.as_str())
             .expect("updateIssueComment names a comment this board holds");
         held.body = input["body"].as_str().expect("a comment body").to_owned();
-        held.updated_at = at;
-        return json!({"updateIssueComment":{"issueComment":held.as_node()}});
+        held.updated_at = at.clone();
+        let (issue, node) = (held.issue.clone(), held.as_node());
+        // And with every comment edited on it, which is what a comment-activity read's
+        // `updated:` search depends on.
+        state.find(&json!(issue)).updated_at = Some(at);
+        return json!({"updateIssueComment":{"issueComment":node}});
     }
     if query.contains("deleteIssueComment(input:$input)") {
         let id = input["id"].as_str().expect("a comment id").to_owned();

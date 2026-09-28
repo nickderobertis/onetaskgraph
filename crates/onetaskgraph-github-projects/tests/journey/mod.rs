@@ -32,10 +32,10 @@ use onetaskgraph_github_projects::{
     graphql, largest_page_sizes, worst_case_node_count, worst_case_point_cost,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, NativeId, PageRequest, Priority,
-    Project, ProjectFilter, ProjectQuery, SourceName, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery,
+    Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
+    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceName,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -1635,6 +1635,21 @@ fn sorted(mut titles: Vec<String>) -> Vec<String> {
     titles
 }
 
+/// When GitHub last saw the issue `id` change, read by its own node id — strongly consistent,
+/// unlike the search.
+async fn issue_updated_at(
+    source: &dyn TaskSource,
+    id: &NativeId,
+    when: &str,
+) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    source
+        .get_task(id)
+        .await
+        .map_err(|error| format!("live read of an issue {when} failed: {error}"))?
+        .and_then(|task| task.updated_at)
+        .ok_or_else(|| format!("GitHub reported no updatedAt for {} {when}", id.0))
+}
+
 async fn task_titles(
     source: &dyn TaskSource,
     query: &TaskQuery,
@@ -2461,7 +2476,106 @@ async fn drive_every_declared_capability(
             ),
         "cancelled did not read back as Status=Cancelled, state=CLOSED, reason=NOT_PLANNED"
     );
-    Ok(())
+    an_edited_comment_moves_its_issue_and_is_selected_since(
+        writer,
+        (&first_id, &first),
+        (&second_id, &second),
+        &by_prefix,
+    )
+    .await
+}
+
+/// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
+///
+/// The plugin narrows a comment-activity read with the board-scoped issue search's `updated:`
+/// qualifier, which is exact only while GitHub moves an issue's `updatedAt` when a comment on
+/// it is **edited** as well as when one is added. That is GitHub's behaviour rather than this
+/// repository's, so this leg asserts it pass-or-fail: a comment on `first` written before the
+/// instant, then edited after it, must move `first`'s `updatedAt` past the instant and select
+/// `first`; a comment newly added to `second` after the instant must select `second`.
+///
+/// The instant comes from GitHub's own clock — a second past the `updatedAt` the first
+/// comment left — and the edit waits two seconds past it, so no skew between this machine and
+/// GitHub can put the edit before the instant.
+async fn an_edited_comment_moves_its_issue_and_is_selected_since(
+    writer: &dyn TaskSource,
+    (first_id, first): (&NativeId, &str),
+    (second_id, second): (&NativeId, &str),
+    by_prefix: &dyn Fn() -> TaskQuery,
+) -> Result<(), String> {
+    let body = |text: &str| {
+        CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
+    };
+    let written = writer
+        .add_comment(
+            first_id,
+            &NewComment {
+                body: body("temporary credentialed comment; the live lane removes it")?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment write failed: {error}"))?
+        .ok_or_else(|| "the task to comment on was not there".to_owned())?;
+    let before_edit = issue_updated_at(writer, first_id, "after its comment was written").await?;
+    let since = before_edit + chrono::Duration::seconds(1);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let commented_since = || TaskQuery {
+        commented_since: Some(since),
+        ..by_prefix()
+    };
+    let unedited = task_titles(writer, &commented_since(), "comment-activity read").await?;
+    ensure!(
+        unedited.is_empty(),
+        "before any comment activity after {since}, a comment-activity read selected \
+         {unedited:?}"
+    );
+
+    writer
+        .edit_comment(
+            first_id,
+            &written.id,
+            &body("temporary credentialed comment, edited; the live lane removes it")?,
+        )
+        .await
+        .map_err(|error| format!("live comment edit failed: {error}"))?
+        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+    let after_edit = issue_updated_at(writer, first_id, "after its comment was edited").await?;
+    ensure!(
+        after_edit > before_edit && after_edit >= since,
+        "GitHub did not move the issue's updatedAt when one of its comments was edited: it \
+         read {before_edit} before the edit and {after_edit} after it. \
+         filter_by_comment_activity's board-scoped `updated:` search is exact only while it \
+         does; next: tell the owner of the github-projects plugin that GitHub's behaviour \
+         changed, rather than re-running"
+    );
+    writer
+        .add_comment(
+            second_id,
+            &NewComment {
+                body: body("temporary credentialed comment; the live lane removes it")?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment write failed: {error}"))?
+        .ok_or_else(|| "the second task to comment on was not there".to_owned())?;
+
+    // The search is an index that lags a write by a second or two, so the answer is waited
+    // for — and what is waited for is exactly the two issues, never a superset.
+    let expected = sorted(vec![first.to_owned(), second.to_owned()]);
+    let mut selected = Vec::new();
+    for _ in 0..30 {
+        selected = task_titles(writer, &commented_since(), "comment-activity read").await?;
+        if selected == expected {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Err(format!(
+        "a comment-activity read since {since} never selected the issue whose comment was \
+         edited and the issue newly commented on ({expected:?}); it last selected {selected:?}"
+    ))
 }
 
 /// Everything one run of this journey may reach, and the names it may write under.
