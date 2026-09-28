@@ -467,6 +467,76 @@ async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
     }
 }
 
+/// The task file `text`, updated by `update`: the file it leaves, and the task a read reports.
+async fn updated(text: &str, update: TaskUpdate) -> (String, Task) {
+    let (root, source) = folder();
+    let path = root.path().join("tasks/a.md");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, text).unwrap();
+    let id = NativeId::from("a");
+    source
+        .update_task(&id, &update)
+        .await
+        .unwrap_or_else(|error| panic!("{text:?}: refused: {error:?}"))
+        .expect("held");
+    let task = source.get_task(&id).await.unwrap().expect("held");
+    (fs::read_to_string(&path).unwrap(), task)
+}
+
+#[tokio::test]
+async fn a_top_level_entry_is_edited_around_a_block_scalar_and_as_one() {
+    // Removing the entry after a kept scalar leaves the scalar's blank line where it was.
+    let (file, task) = updated(
+        "---\ntitle: T\nmetadata:\n  a.b: |+\n    x\n\npriority: high\n---\n",
+        TaskUpdate {
+            priority: Some(Priority::None),
+            ..TaskUpdate::default()
+        },
+    )
+    .await;
+    assert_eq!(file, "---\ntitle: T\nmetadata:\n  a.b: |+\n    x\n\n---\n");
+    assert_eq!(task.metadata["a.b"], json!("x\n\n"));
+
+    // A title that is itself a block scalar, with a blank line inside it and the blank lines
+    // it keeps after it, is replaced whole.
+    for title in [
+        "---\ntitle: |\n  a\n\n  b\nstatus: todo\n---\n",
+        "---\ntitle: |+\n  a\n\nstatus: todo\n---\n",
+    ] {
+        let (file, task) = updated(
+            title,
+            TaskUpdate {
+                title: Some("Renamed".to_owned()),
+                ..TaskUpdate::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            file, "---\ntitle: Renamed\nstatus: todo\n---\n",
+            "{title:?}"
+        );
+        assert_eq!(task.title, "Renamed");
+    }
+
+    // A Windows file ending in a block scalar reads it with its line break, and an edit around
+    // it keeps every line ending the file has.
+    let crlf = "---\r\ntitle: T\r\nmetadata:\r\n  a.b: |\r\n    x\r\n---\r\n";
+    let (file, task) = updated(
+        crlf,
+        TaskUpdate {
+            title: Some("Renamed".to_owned()),
+            metadata_set: BTreeMap::from([(key("c.d"), json!(1))]),
+            ..TaskUpdate::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        file,
+        "---\r\ntitle: Renamed\r\nmetadata:\r\n  a.b: |\r\n    x\r\n  \"c.d\": 1\r\n---\r\n"
+    );
+    assert_eq!(task.metadata["a.b"], json!("x\n"));
+}
+
 #[tokio::test]
 async fn an_edit_that_cannot_be_made_in_place_is_still_refused_and_one_that_can_is_not() {
     // A comment in column 0 ends the `metadata:` block this source can see, while YAML reads on
