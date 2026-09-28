@@ -855,7 +855,6 @@ async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_
     let after = std::fs::read_to_string(&path).expect("the task file");
     assert_eq!(answer.task.metadata["onepipeline.node"], json!("x"));
     assert_eq!(answer.task.metadata["onepipeline.steps"], steps());
-    // The one line the update named is the only thing added; every other byte is as it was.
     let added = "  \"onepipeline.node\": \"x\"\n";
     let at = after.find(added).expect("the named key's line");
     assert_eq!(

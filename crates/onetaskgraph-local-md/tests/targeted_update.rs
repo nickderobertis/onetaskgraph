@@ -335,7 +335,6 @@ async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
         assert_eq!(source.get_task(&id).await.unwrap(), Some(wanted));
     }
 
-    // Removed straight from the layout the writer gave it, too.
     for arrangement in ARRANGEMENTS {
         let (_root, source, id, _) = written(arrangement, &held).await;
         let mut wanted = source.get_task(&id).await.unwrap().expect("held");

@@ -13071,11 +13071,8 @@ async fn a_slot_spelled_another_way_is_kept_byte_for_byte_by_an_update_that_chan
 
 #[tokio::test]
 async fn a_slot_holding_steps_keeps_them_byte_for_byte_through_an_update_of_other_fields() {
-    // The shape that `local-md` could not edit in place: step mappings each ending in a
-    // multi-line `task`, one of them holding what reads like the slot's own delimiters. This
-    // source keeps metadata as one compact JSON object, which escapes every line break, so the
-    // slot has no layout an edit could move: each update rewrites the object as JSON and the
-    // steps come through as the very bytes they were encoded as.
+    // This source keeps metadata as one compact JSON object, which escapes every line break,
+    // so a value has no layout for an edit to move, and `-->` alone cannot close the slot.
     let task = "## What\nWork.\n\n## Acceptance criteria\n\n- x <!-- a note -->\n\n";
     let steps = json!([
         {"id": "build", "persona": "engineer", "task": task},
