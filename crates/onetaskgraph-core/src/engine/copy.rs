@@ -2834,19 +2834,11 @@ fn outgoing(
 
 /// The id a created item is offered to the destination under.
 ///
-/// A task whose source id begins with its own project's id and a `/` — `<project>/<rest>` —
-/// is offered as the same `<rest>` under the destination project it is filed in. That is
-/// read off the two ids the source itself reported, not off any one plugin's layout: it is
-/// the shape a folder of Markdown gives a task filed in its project's folder, and the
-/// `a_project_copied_*` journeys in `crates/onetaskgraph/tests/e2e/copy.rs` hold that plugin
-/// to it through the binary, so a change to how it spells an id fails there. Offered its
-/// source id instead, a destination whose ids are paths files it under the *source*
-/// project's path while its `project` names the destination's, and the next reader scoped
-/// to that project refuses it as outside it. Every other id is offered as it was read: an id not scoped to its
-/// project says nothing about where the project is, and a destination that assigns its own
-/// ids — a GitHub board, Linear — never reads the offer at all.
-///
-/// Only a create is offered anything: an update keeps the id of the item it updates.
+/// A task whose id is `<its project's id>/<rest>` is offered as `<rest>` under the
+/// destination project it is filed in, so a destination whose ids are paths files it in that
+/// project rather than the source's. Any other id, and every update, is left as it is. The
+/// `a_project_copied_*` journeys in `crates/onetaskgraph/tests/e2e/copy.rs` hold the Markdown
+/// plugin's id shape to this rule.
 fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
     if let (Item::Task(task), Some(filed)) = (item, filed)
         && let Some(own) = &task.project
