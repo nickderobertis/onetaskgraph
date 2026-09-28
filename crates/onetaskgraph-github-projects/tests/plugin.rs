@@ -13540,3 +13540,45 @@ async fn comment_activity_combined_with_a_status_filter_is_the_intersection() {
         "a candidate the status filter drops has no comments read"
     );
 }
+
+#[tokio::test]
+async fn comment_activity_within_one_project_asks_that_project_and_reads_only_updated_candidates() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "the plan").sub_issues(2),
+        Item::issue("I_lively", "lively")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-09-23T09:00:00Z"),
+        Item::issue("I_quiet", "quiet")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_loose", "elsewhere on the board")
+            .status("Todo")
+            .updated("2026-09-24T09:00:00Z"),
+    ]);
+    fixture.commented_at("I_lively", "2026-09-23T09:00:00Z", "2026-09-23T09:00:00Z");
+    fixture.commented_at("I_quiet", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    fixture.commented_at("I_loose", "2026-09-24T09:00:00Z", "2026-09-24T09:00:00Z");
+    let source = source(&fixture);
+
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId("I_plan".to_owned())),
+                ..commented_since(Vec::new())
+            },
+        )
+        .await,
+        ["I_lively"],
+        "the project's own task commented on since, and no other project's or the board's"
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_lively"],
+        "a task whose issue was not updated since has no comments read"
+    );
+}
