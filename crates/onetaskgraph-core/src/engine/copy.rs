@@ -2834,12 +2834,15 @@ fn outgoing(
 
 /// The id a created item is offered to the destination under.
 ///
-/// A task whose source id is scoped to its own project — `<project>/<rest>`, the shape a
-/// folder of Markdown gives a task filed in a project's folder — is offered as the same
-/// `<rest>` under the destination project it is filed in. Offered its source id instead, a
-/// destination whose ids are paths files it under the *source* project's path while its
-/// `project` names the destination's, and the next reader scoped to that project refuses
-/// it as outside it. Every other id is offered as it was read: an id not scoped to its
+/// A task whose source id begins with its own project's id and a `/` — `<project>/<rest>` —
+/// is offered as the same `<rest>` under the destination project it is filed in. That is
+/// read off the two ids the source itself reported, not off any one plugin's layout: it is
+/// the shape a folder of Markdown gives a task filed in its project's folder, and the
+/// `a_project_copied_*` journeys in `crates/onetaskgraph/tests/e2e/copy.rs` hold that plugin
+/// to it through the binary, so a change to how it spells an id fails there. Offered its
+/// source id instead, a destination whose ids are paths files it under the *source*
+/// project's path while its `project` names the destination's, and the next reader scoped
+/// to that project refuses it as outside it. Every other id is offered as it was read: an id not scoped to its
 /// project says nothing about where the project is, and a destination that assigns its own
 /// ids — a GitHub board, Linear — never reads the offer at all.
 ///
