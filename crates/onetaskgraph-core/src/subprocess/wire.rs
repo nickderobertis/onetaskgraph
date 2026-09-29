@@ -625,10 +625,25 @@ pub(crate) struct DeliveredByResult {
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
     pub(crate) id: NativeId,
-    /// The key, a caller's own dotted key outside the `onetaskgraph.` namespace.
+    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
+    /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
+    #[serde(deserialize_with = "caller_or_copies")]
     pub(crate) key: MetadataKey,
     /// The value to hold under it: any JSON, `null` included.
     pub(crate) value: Value,
+}
+
+/// A narrow metadata write's key as §4.18 admits it: any key [`MetadataKey::new`] accepts,
+/// and [`MetadataKey::COPIES_KEY`], which the engine alone sends and nothing a caller types
+/// can name.
+fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<MetadataKey, D::Error> {
+    let key = String::deserialize(deserializer)?;
+    if key == MetadataKey::COPIES_KEY {
+        return Ok(MetadataKey::copies());
+    }
+    MetadataKey::new(key).map_err(serde::de::Error::custom)
 }
 
 /// The result of any write method (§4.9, §4.12): the id the destination holds the item

@@ -1,11 +1,19 @@
 //! The copy verb: one item out of one source and into another, by the rules that make a
 //! second copy an update rather than a duplicate.
 //!
-//! Correspondence lives on the item and never in a table. A copied item carries
+//! Correspondence lives on the items and never in a table. A copied item carries
 //! [`GlobalId::ORIGIN_KEY`], whose value is the qualified id it was copied from, and the
-//! two match rules below read exactly that — so nothing here is written down outside the
-//! plugin that owns the item, and the invariant this engine is built around is untouched.
+//! item it was copied from carries [`MetadataKey::COPIES_KEY`], an object naming its
+//! counterpart at each destination it was copied into. The rules below read exactly those —
+//! so nothing here is written down outside the plugin that owns the item, and the invariant
+//! this engine is built around is untouched.
 //!
+//! 0. **Follow the link.** An item whose `onetaskgraph.copies` names an item at the
+//!    destination has that item read by id, and when that item's own origin names this one
+//!    back it is the target: one read, and no scan. A link naming nothing there any more is
+//!    refused as `stale-link` unless `--recreate` is given, for the reason a stale origin
+//!    is; a link naming an item that no longer names this one back — somebody re-pointed it
+//!    — is ignored, and the rules below decide.
 //! 1. **Follow the origin.** An item already carrying an origin whose source half is the
 //!    destination names the destination item *directly*, and the copy updates it. This is
 //!    the half that makes an edit's copy-back an update: the local file came from the
@@ -20,6 +28,12 @@
 //! already holds, holding none included. Every other copy records the id it was copied
 //! from. See [`recorded`] for what stamping a copy-back's own id there costs.
 //!
+//! The same distinction decides the link. Once the whole copy has landed, every item whose
+//! target was found by any rule but rule 1 — or was created — has its link for this
+//! destination recorded or refreshed through its source's narrow metadata write, and that
+//! write joins the undo journal like every destination write. Rule 1 records nothing: that
+//! correspondence is already written down, on the destination item.
+//!
 //! A destination write is at the user's explicit request, names its destination, goes
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
@@ -28,8 +42,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, Metering, NativeId, Page, PageRequest, Project, ProjectQuery,
-    Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
+    ItemKind, ItemWrite, Location, MetadataKey, Metering, NativeId, Page, PageRequest, Project,
+    ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -297,6 +311,58 @@ pub struct CopyOutcome {
     /// What happened to it, and where.
     #[serde(flatten)]
     pub action: CopyAction,
+    /// Which rule found the destination item, or that none was found — for every item the
+    /// copy read and landed, a dry run's included.
+    ///
+    /// Absent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no
+    /// rule was asked where it goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<CopyVia>,
+    /// What the copy did to the link the copied item records for this destination at
+    /// `onetaskgraph.copies`.
+    ///
+    /// Absent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]
+    /// entry, which was not copied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<CopyLink>,
+}
+
+/// How a copy found the destination item it landed one item on.
+///
+/// Tried in this order, and the first that answers is the one reported: the link the item
+/// records, its own origin, a search of the destination for its id, the caller's
+/// `--match-by`, and otherwise nothing — see the module's own note on the rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopyVia {
+    /// The item's `onetaskgraph.copies` entry for the destination named an item whose own
+    /// origin names this one back. Found by one read by id, and no scan.
+    Link,
+    /// The item's own `onetaskgraph.origin` named the destination item: a copy-back.
+    Origin,
+    /// A search of the destination for an item recording this one as its origin.
+    Scan,
+    /// A search of the destination by the caller's `--match-by`.
+    Match,
+    /// No counterpart was found, so one was created — or, in a dry run, would have been.
+    Created,
+}
+
+/// What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
+/// destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopyLink {
+    /// The entry was written, because the item held none for this destination or held one
+    /// naming another item.
+    Recorded,
+    /// Nothing was written: the entry already named this destination item, or the item was
+    /// found by its own origin, where the correspondence is already recorded on the other
+    /// side.
+    Unchanged,
+    /// The item's source cannot hold the entry — it has no write side, or it refuses the
+    /// narrow metadata write — so the copy landed without recording it.
+    Unrecorded,
 }
 
 impl CopyOutcome {
@@ -388,15 +454,42 @@ enum Target {
 
 /// Which of the rules above found the destination item a copy is updating.
 ///
-/// The two are the same instruction — update that item — and a different answer about the
-/// origin, which is why the distinction is carried this far rather than dropped where it
-/// is made. See [`recorded`].
+/// Every one is the same instruction — update that item — and rule 1 is a different answer
+/// about the origin, which is why the distinction is carried this far rather than dropped
+/// where it is made. See [`recorded`]. It is also what the report's [`CopyVia`] says and
+/// what decides whether the copied item's link is written.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Found {
+    /// The item's own link named it, and it names the item back.
+    Link,
     /// Rule 1: the item being copied already named it, so this copy is a copy-back.
     Origin,
-    /// Rule 2 or the caller's matching escape: the destination was searched for it.
-    Search,
+    /// Rule 2: the destination was searched for an item recording this one as its origin.
+    Scan,
+    /// The caller's matching escape.
+    Match,
+}
+
+impl Found {
+    /// The word the report says it in.
+    fn via(self) -> CopyVia {
+        match self {
+            Self::Link => CopyVia::Link,
+            Self::Origin => CopyVia::Origin,
+            Self::Scan => CopyVia::Scan,
+            Self::Match => CopyVia::Match,
+        }
+    }
+}
+
+impl Target {
+    /// The word the report says this target was reached by.
+    fn via(&self) -> CopyVia {
+        match self {
+            Self::Update { found, .. } => found.via(),
+            Self::Create => CopyVia::Created,
+        }
+    }
 }
 
 /// What a scan of the destination is looking for.
@@ -507,6 +600,23 @@ impl Undo {
 struct Journal {
     /// One entry per destination item this copy first touched, in that order.
     entries: Vec<Undo>,
+    /// One entry per copied item whose `onetaskgraph.copies` link this copy wrote, in that
+    /// order.
+    ///
+    /// Kept apart from `entries` because these are the *sources'* items rather than the
+    /// destination's, and an id alone does not say which store it is in: a copy inside one
+    /// source can write a link on an item and land on another item with the same kind.
+    links: Vec<Unlink>,
+}
+
+/// How to take back one link this copy wrote on a copied item.
+struct Unlink {
+    /// The item, at its own source.
+    item: GlobalId,
+    /// Which of that source's interfaces holds it.
+    level: Level,
+    /// What it held at `onetaskgraph.copies` before, or `None` when it held nothing there.
+    before: Option<Value>,
 }
 
 impl Journal {
@@ -559,6 +669,23 @@ struct Running {
     delivers_rewritten: u64,
     /// Every task this copy landed, for the relation rule once the whole copy is complete.
     landed: Vec<LandedTask>,
+    /// Every item this copy landed, in the order it landed them, for the link each records
+    /// once the whole copy has landed.
+    linking: Vec<Linking>,
+}
+
+/// One item a copy landed, and what settling its `onetaskgraph.copies` link needs.
+struct Linking {
+    /// The item, at its own source.
+    item: GlobalId,
+    /// Which of that source's interfaces holds it.
+    level: Level,
+    /// Which rule found where it landed.
+    via: CopyVia,
+    /// Where it landed.
+    destination: GlobalId,
+    /// What it held at `onetaskgraph.copies` when it was read, if anything.
+    held: Option<Value>,
 }
 
 /// One task a copy landed, and what the relation rule reads of it once the copy is complete.
@@ -947,7 +1074,10 @@ impl Engine {
                 before: task.before.clone(),
             })
             .collect();
+        let linking = std::mem::take(&mut running.linking);
         self.repair(destination, request, running, journal).await?;
+        let mut items = items;
+        self.link(destination, linking, &mut items, journal).await?;
         Ok((
             CopyReport {
                 items,
@@ -1038,6 +1168,15 @@ impl Engine {
         // back, so the first refusal carries the first id and neither half can be
         // recorded without the other.
         let mut unrestored: Option<(LeftBehind, SourceError)> = None;
+        // The links first, because they were written last: once the whole copy had landed.
+        for entry in journal.links.iter().rev() {
+            if let Err(problem) = self.unlink(entry).await {
+                match &mut unrestored {
+                    Some((left_behind, _)) => left_behind.push(entry.item.clone()),
+                    None => unrestored = Some((LeftBehind::new(entry.item.clone()), problem)),
+                }
+            }
+        }
         for entry in journal.entries.iter().rev() {
             let outcome = match entry {
                 Undo::Created { kind, id } => remove(destination, *kind, id).await,
@@ -1062,6 +1201,122 @@ impl Engine {
                 refusal,
             },
         }
+    }
+
+    /// Record, on every item this copy landed, where it landed — once the whole copy has
+    /// landed, so a copy that fails before this point has written nothing on any source.
+    ///
+    /// Each outcome is told what happened to its item's link. The items landed are exactly
+    /// the outcomes that report a [`CopyVia`], in the order they landed: an orphan reports
+    /// none, and a dry run records nothing, so this is never asked about either.
+    async fn link(
+        &self,
+        destination: &ResolvedSource,
+        linking: Vec<Linking>,
+        items: &mut [CopyOutcome],
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        let mut landed = items.iter_mut().filter(|outcome| outcome.via.is_some());
+        for entry in linking {
+            let outcome = landed
+                .next()
+                .filter(|outcome| outcome.source == entry.item)
+                .expect("every item a copy landed is reported, in the order it landed");
+            outcome.link = Some(self.linked(destination, entry, journal).await?);
+        }
+        Ok(())
+    }
+
+    /// Write one landed item's `onetaskgraph.copies` entry for the destination, when it
+    /// does not already say this, and say what was done.
+    ///
+    /// An item found by its own origin records nothing: that correspondence is already
+    /// recorded, on the destination item. A source that cannot hold the entry — it has no
+    /// write side, or refuses the narrow metadata write — leaves the copy as it landed and
+    /// is reported so; any other failure fails the copy, which then undoes every write it
+    /// made, this one's journal entry included.
+    async fn linked(
+        &self,
+        destination: &ResolvedSource,
+        entry: Linking,
+        journal: &mut Journal,
+    ) -> Result<CopyLink, EngineError> {
+        if entry.via == CopyVia::Origin {
+            return Ok(CopyLink::Unchanged);
+        }
+        let wanted = Value::String(entry.destination.to_string());
+        let mut links = match &entry.held {
+            Some(Value::Object(held)) => held.clone(),
+            // Anything else under the key is not a link this can read, so it is replaced by
+            // one that is — exactly as an entry naming another item is rewritten.
+            _ => serde_json::Map::new(),
+        };
+        if links.get(destination.name().as_str()) == Some(&wanted) {
+            return Ok(CopyLink::Unchanged);
+        }
+        let source = self.readable(&entry.item.source)?;
+        if !source.source().writes().is_supported() {
+            return Ok(CopyLink::Unrecorded);
+        }
+        links.insert(destination.name().to_string(), wanted);
+        // Journalled before the write, for the reason a destination write is: a write that
+        // stopped part way is only put back by what this journal holds.
+        journal.links.push(Unlink {
+            item: entry.item.clone(),
+            level: entry.level,
+            before: entry.held,
+        });
+        match set_link(
+            source,
+            entry.level,
+            &entry.item.native,
+            &Value::Object(links),
+        )
+        .await
+        {
+            Ok(true) => Ok(CopyLink::Recorded),
+            // Nothing was written: the source no longer holds the item, or said it cannot
+            // hold the key.
+            Ok(false) | Err(SourceError::Refused { .. }) => {
+                journal.links.pop();
+                Ok(CopyLink::Unrecorded)
+            }
+            // §4.18 once let a plugin refuse any key in this namespace as malformed, and one
+            // written then still may. Its answer says nothing about whether it wrote, so the
+            // journal entry stays and a later failure puts the item back regardless.
+            Err(SourceError::Malformed { .. }) => Ok(CopyLink::Unrecorded),
+            Err(error) => Err(refused(source, error)),
+        }
+    }
+
+    /// Put one copied item's `onetaskgraph.copies` back to what it held before this copy.
+    ///
+    /// A key it held is written back through the same narrow write. A key it did not hold
+    /// cannot be removed through that write, so the item is read as it now is and written
+    /// back whole, without the key, through the source's own write interface — the same
+    /// way an overwritten destination item is restored.
+    async fn unlink(&self, entry: &Unlink) -> Result<(), SourceError> {
+        let as_source_error = |error: EngineError| match error {
+            EngineError::SourceRefused { error, .. } => error,
+            other => SourceError::Refused {
+                message: other.to_string(),
+            },
+        };
+        let source = self.readable(&entry.item.source).map_err(as_source_error)?;
+        if let Some(before) = &entry.before {
+            return set_link(source, entry.level, &entry.item.native, before)
+                .await
+                .map(|_| ());
+        }
+        let Some(mut held) = self
+            .prior(source, entry.level, &entry.item.native)
+            .await
+            .map_err(as_source_error)?
+        else {
+            return Ok(());
+        };
+        metadata_of(&mut held.item).remove(MetadataKey::COPIES_KEY);
+        restore(source, &entry.item.native, &held).await
     }
 
     /// The destination source, once it is established it exists and can be written.
@@ -1706,6 +1961,8 @@ impl Engine {
                     action: CopyAction::Orphaned {
                         destination: GlobalId::new(destination.name().clone(), task.id.clone()),
                     },
+                    via: None,
+                    link: None,
                 });
             }
             unrepeated(
@@ -1810,6 +2067,18 @@ impl Engine {
                 running
                     .counterparts
                     .insert(item.source.to_string(), id.native.clone());
+                if !request.dry_run {
+                    running.linking.push(Linking {
+                        item: item.source.clone(),
+                        level: item.item.level(),
+                        via: item.target.via(),
+                        destination: id.clone(),
+                        held: described(&item.item)
+                            .1
+                            .get(MetadataKey::COPIES_KEY)
+                            .cloned(),
+                    });
+                }
             }
             if !request.dry_run
                 && let (Item::Task(task), Some(landed)) = (&item.item, outcome.destination())
@@ -1902,8 +2171,8 @@ impl Engine {
         })
     }
 
-    /// Which destination item this one corresponds to, by the two origin rules and the
-    /// caller's escape, and what the destination holds there.
+    /// Which destination item this one corresponds to, by the link the item records, the
+    /// two origin rules and the caller's escape, and what the destination holds there.
     async fn target(
         &self,
         destination: &ResolvedSource,
@@ -1912,6 +2181,31 @@ impl Engine {
         item: &Item,
     ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
+        // The link first, and it is believed only when the item it names still names this
+        // one back: a person who re-pointed that item's origin has said it is not this
+        // one's counterpart any more, so the link is ignored and rewritten to whatever the
+        // rules below find.
+        if let Some(link) = link_of(metadata, destination.name()) {
+            match self.prior(destination, item.level(), &link.native).await? {
+                Some(held) if origin_of(described(&held.item).1).as_ref() == Some(id) => {
+                    return Ok((
+                        Target::Update {
+                            id: link.native,
+                            found: Found::Link,
+                        },
+                        Some(held),
+                    ));
+                }
+                Some(_) => {}
+                None if request.recreate => {}
+                None => {
+                    return Err(EngineError::StaleLink {
+                        item: id.to_string(),
+                        link: link.to_string(),
+                    });
+                }
+            }
+        }
         if let Some(origin) = origin_of(metadata)
             && &origin.source == destination.name()
         {
@@ -1944,7 +2238,7 @@ impl Engine {
             return Ok((
                 Target::Update {
                     id: found,
-                    found: Found::Search,
+                    found: Found::Scan,
                 },
                 held,
             ));
@@ -1963,7 +2257,7 @@ impl Engine {
             return Ok((
                 Target::Update {
                     id: found,
-                    found: Found::Search,
+                    found: Found::Match,
                 },
                 held,
             ));
@@ -2060,6 +2354,7 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let Pointing { edges, delivers } = pointing;
+        let via = item.target.via();
         let target = match &item.target {
             Target::Update { id, .. } => Some(id.clone()),
             Target::Create => None,
@@ -2087,6 +2382,9 @@ impl Engine {
                     action: CopyAction::Unchanged {
                         destination: qualified(id.clone()),
                     },
+                    via: Some(via),
+                    // Settled once the whole copy has landed, by `Engine::link`.
+                    link: None,
                 },
                 prior,
             ));
@@ -2102,6 +2400,8 @@ impl Engine {
                         // Null only here: nothing was created, so there is no id to report.
                         None => CopyAction::Created { destination: None },
                     },
+                    via: Some(via),
+                    link: None,
                 },
                 prior,
             ));
@@ -2132,6 +2432,8 @@ impl Engine {
                         destination: Some(written),
                     }
                 },
+                via: Some(via),
+                link: None,
             },
             prior,
         ))
@@ -2540,6 +2842,43 @@ async fn restore(
     }
 }
 
+/// Hold `value` at `onetaskgraph.copies` on one item, through its source's narrow metadata
+/// write — `false` when the source holds no such item.
+async fn set_link(
+    source: &ResolvedSource,
+    level: Level,
+    id: &NativeId,
+    value: &Value,
+) -> Result<bool, SourceError> {
+    let key = MetadataKey::copies();
+    Ok(match level {
+        Level::Task => source
+            .source()
+            .set_task_metadata(id, &key, value)
+            .await?
+            .is_some(),
+        Level::Project => source
+            .source()
+            .set_project_metadata(id, &key, value)
+            .await?
+            .is_some(),
+        Level::Document => source
+            .source()
+            .set_document_metadata(id, &key, value)
+            .await?
+            .is_some(),
+    })
+}
+
+/// The metadata of either kind of item, to edit.
+fn metadata_of(item: &mut Item) -> &mut BTreeMap<String, Value> {
+    match item {
+        Item::Task(task) => &mut task.metadata,
+        Item::Project(project) => &mut project.metadata,
+        Item::Document(document) => &mut document.metadata,
+    }
+}
+
 /// Refuse a document copy addressed to a source that declares it has none.
 ///
 /// Read off the declaration rather than by asking, which is what "not asked" means: the
@@ -2765,6 +3104,23 @@ fn origin_of(metadata: &BTreeMap<String, Value>) -> Option<GlobalId> {
         .ok()
 }
 
+/// The destination item one item's `onetaskgraph.copies` entry names at `destination`, when
+/// it holds a usable one.
+///
+/// An entry that is not a qualified id, or is one naming another source than the key it is
+/// filed under, is no link at all: the copy goes on by the rules that follow and rewrites
+/// it to what they find.
+fn link_of(metadata: &BTreeMap<String, Value>, destination: &SourceName) -> Option<GlobalId> {
+    let linked = metadata
+        .get(MetadataKey::COPIES_KEY)?
+        .as_object()?
+        .get(destination.as_str())?
+        .as_str()?
+        .parse::<GlobalId>()
+        .ok()?;
+    (&linked.source == destination).then_some(linked)
+}
+
 /// The title and metadata of either kind of item.
 fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
     match item {
@@ -2786,7 +3142,9 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
 ///
 /// A task's `delivers` is `delivers`, already resolved against the destination, and its
 /// `delivered_by` is the one the destination holds — never the source's, and empty for an
-/// item this copy creates: that list is the store's to keep, at the destination.
+/// item this copy creates: that list is the store's to keep, at the destination. The
+/// `onetaskgraph.copies` link is kept on the same terms: it says where the *destination*
+/// item was copied to, which is the destination's to hold, never the source's to send.
 fn outgoing(
     item: &Planned,
     id: NativeId,
@@ -2795,6 +3153,8 @@ fn outgoing(
     delivers: &[TaskRef],
     held: Option<&Prior>,
 ) -> Item {
+    let own = held.and_then(|held| described(&held.item).1.get(MetadataKey::COPIES_KEY));
+    let carried = |metadata: &BTreeMap<String, Value>| carried(metadata, origin, own);
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
@@ -2803,7 +3163,7 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&task.metadata, origin),
+            metadata: carried(&task.metadata),
             delivers: delivers.to_vec(),
             delivered_by: match held.map(|held| &held.item) {
                 Some(Item::Task(held)) => held.delivered_by.clone(),
@@ -2817,7 +3177,7 @@ fn outgoing(
             location: None,
             created_at: None,
             updated_at: None,
-            metadata: carried(&project.metadata, origin),
+            metadata: carried(&project.metadata),
             ..(**project).clone()
         })),
         Item::Document(document) => Item::Document(Box::new(Document {
@@ -2827,7 +3187,7 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&document.metadata, origin),
+            metadata: carried(&document.metadata),
             ..(**document).clone()
         })),
     }
@@ -2855,17 +3215,28 @@ fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
     item.id().clone()
 }
 
-/// The metadata a copy carries: the caller's own keys untouched, and the origin settled.
+/// The metadata a copy carries: the caller's own keys untouched, the origin settled, and the
+/// destination's own `onetaskgraph.copies` link — `own` — kept as it holds it.
 ///
 /// The key is removed before it is settled rather than overwritten, because the item being
-/// copied carries an origin of its own and [`Origin::Keeps`] must not let it through.
-fn carried(metadata: &BTreeMap<String, Value>, origin: &Origin) -> BTreeMap<String, Value> {
+/// copied carries an origin of its own and [`Origin::Keeps`] must not let it through. Its
+/// link is removed for the same reason: it names where *that* item was copied to, and on
+/// the destination it would name the destination item's own counterpart as itself.
+fn carried(
+    metadata: &BTreeMap<String, Value>,
+    origin: &Origin,
+    own: Option<&Value>,
+) -> BTreeMap<String, Value> {
     let mut carried = metadata.clone();
     carried.remove(Repository::METADATA_KEY);
     carried.remove(DependencyEdge::RECORDED_KEY);
     carried.remove(TaskRef::DELIVERS_KEY);
     carried.remove(TaskRef::DELIVERED_BY_KEY);
     carried.remove(GlobalId::ORIGIN_KEY);
+    carried.remove(MetadataKey::COPIES_KEY);
+    if let Some(own) = own {
+        carried.insert(MetadataKey::COPIES_KEY.to_owned(), own.clone());
+    }
     let held = match origin {
         Origin::Records(id) => Some(Value::String(id.to_string())),
         Origin::Keeps(held) => held.clone(),

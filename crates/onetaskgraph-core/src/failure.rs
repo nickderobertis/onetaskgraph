@@ -239,6 +239,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::TemplateNotAFile { .. } => ("template-not-a-file".to_owned(), None, None),
         EngineError::MalformedProvenance { .. } => ("malformed-provenance".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
+        EngineError::StaleLink { .. } => ("stale-link".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::DestinationUnavailable { name, error }

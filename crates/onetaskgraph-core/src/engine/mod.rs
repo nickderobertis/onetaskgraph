@@ -54,8 +54,8 @@ use resume::{Resume, StreamKind};
 
 pub use comment::{CommentList, DeletedComment, TaskDetail};
 pub use copy::{
-    BudgetSpent, CopyAction, CopyItems, CopyOutcome, CopyReport, CopyRequest, CopyScope, MatchBy,
-    Spent,
+    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest, CopyScope,
+    CopyVia, MatchBy, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
@@ -718,6 +718,23 @@ pub enum EngineError {
         origin: String,
     },
 
+    /// An item's recorded copy link names an item the destination no longer holds.
+    ///
+    /// Refused rather than created, for the reason [`Self::StaleOrigin`] is: the item the
+    /// last copy landed on was deleted at the destination, and creating another would
+    /// duplicate work somebody removed.
+    #[error(
+        "{item} was last copied to {link}, which that destination no longer holds\n\
+         next: re-run with --recreate to create a new item there instead, or restore \
+         {link}."
+    )]
+    StaleLink {
+        /// The item being copied.
+        item: String,
+        /// The destination item its `onetaskgraph.copies` entry names.
+        link: String,
+    },
+
     /// A member copy named a task that is not a member of the project being copied.
     ///
     /// Refused before anything is written, because a copy that names members names the
@@ -786,8 +803,8 @@ pub enum EngineError {
         "the copy failed and could not be undone.\n\
          it failed because: {error}\n\
          it could not be undone because: {refusal}\n\
-         so the destination still holds: {left_behind}\n\
-         next: remove those items at the destination, then copy again."
+         so these still hold what it wrote: {left_behind}\n\
+         next: remove or put back those items, then copy again."
     )]
     CopyNotUndone {
         /// Why the copy failed in the first place.

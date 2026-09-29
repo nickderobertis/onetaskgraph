@@ -28,8 +28,9 @@ impl MetadataKey {
     ///
     /// Every key the contract reserves lives under it — `onetaskgraph.origin`,
     /// `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`,
-    /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind` and `onetaskgraph.template`
-    /// ([`Self::TEMPLATE_KEY`]) — and so does any key it
+    /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind`, `onetaskgraph.template`
+    /// ([`Self::TEMPLATE_KEY`]) and `onetaskgraph.copies` ([`Self::COPIES_KEY`]) — and so
+    /// does any key it
     /// reserves later, which is why the whole namespace is refused rather than a list.
     pub const RESERVED_NAMESPACE: &'static str = "onetaskgraph";
 
@@ -43,6 +44,31 @@ impl MetadataKey {
     /// document siblings — ever sets it, and a copy carries it like any other entry. The
     /// engine builds and reads the value; a plugin only puts it where its metadata lives.
     pub const TEMPLATE_KEY: &'static str = "onetaskgraph.template";
+
+    /// The reserved key a copied item records where it landed under: a JSON object mapping a
+    /// destination source name to the qualified id of that item's counterpart there, at
+    /// most one entry per destination.
+    ///
+    /// A key of this product's own, so [`Self::new`] refuses it like every other key in the
+    /// namespace: only the engine's copy writes it, through the narrow metadata write, and
+    /// [`Self::copies`] is how it names the key there. A plugin only puts it where its
+    /// metadata lives.
+    pub const COPIES_KEY: &'static str = "onetaskgraph.copies";
+
+    /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
+    ///
+    /// Not a way round [`Self::new`] for a caller: nothing a person types reaches this, and
+    /// the one write that sends it is the copy recording where an item landed.
+    #[must_use]
+    pub fn copies() -> Self {
+        Self(Self::COPIES_KEY.to_owned())
+    }
+
+    /// Whether this is [`Self::COPIES_KEY`].
+    #[must_use]
+    pub fn is_copies(&self) -> bool {
+        self.0 == Self::COPIES_KEY
+    }
 
     /// One key, once it is established it is a caller's own dotted key.
     ///

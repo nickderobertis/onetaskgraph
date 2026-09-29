@@ -23,11 +23,11 @@ use crate::template::{
     VariableType,
 };
 use crate::{
-    CommentList, CopyAction, CopyOutcome, CopyReport, DeletedComment, Delivered, DeliveryOutcome,
-    Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, Qualified,
-    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated, SearchHit, SearchKind,
-    SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail, TaskPrioritySet,
-    TaskStatusSet, TaskUpdated, TemplateAnswers,
+    CommentList, CopyAction, CopyLink, CopyOutcome, CopyReport, CopyVia, DeletedComment, Delivered,
+    DeliveryOutcome, Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken,
+    Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated,
+    SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail,
+    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -43,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 24;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 25;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -172,6 +172,10 @@ pub fn schema_bundle() -> Value {
     roots.insert("CopyReport", schema_for!(CopyReport));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));
     roots.insert("CopyAction", schema_for!(CopyAction));
+    // Roots of their own although `CopyOutcome` reaches both, for the reason `CopyAction` is
+    // one: a caller branches on which rule found an item and on what became of its link.
+    roots.insert("CopyVia", schema_for!(CopyVia));
+    roots.insert("CopyLink", schema_for!(CopyLink));
 
     // What `template variables` and `template render` answer with, and the declaration and
     // the two vocabularies inside the first, which a caller branches on by name.
