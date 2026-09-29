@@ -659,6 +659,7 @@ STRUCT_SECTIONS = {
     "TaskQuery": "### 4.5 `query_tasks`",
     "TextQuery": "### 4.5 `query_tasks`",
     "LabelFilter": "### 4.5 `query_tasks`",
+    "MetadataMatch": "### 4.5 `query_tasks`",
     "ProjectQuery": "### 4.6 `query_projects`",
     "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
     "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
@@ -752,6 +753,11 @@ for struct, heading in STRUCT_SECTIONS.items():
             "document specifies cannot go unreconciled.",
         )
     members = re.findall(r"^    pub (\w+):", declaration.group(1), re.MULTILINE)
+    if not members:
+        # A struct that keeps every member private behind a validating constructor —
+        # `MetadataMatch` does, so no empty location can be built — still derives
+        # `Serialize`, and its private fields are exactly what it puts on the wire.
+        members = re.findall(r"^    (\w+):", declaration.group(1), re.MULTILINE)
     members += wire_members(struct)
     if not members:
         refuse(

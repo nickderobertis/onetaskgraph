@@ -492,7 +492,7 @@ comment activity, and the engine keeps none of its tasks without asking it anyth
 `filter_by_metadata` and `filter_by_origin` are predicates too: the metadata matches and the
 copy origin a task query carries (§4.5). A plugin that declared one `"native"` applies it; one
 that answered `"unsupported"` — or omitted it — is never sent it, returns the wider set, and
-the engine narrows that set over each task's own `metadata`, which every task read already
+the engine narrows that set over each task's own metadata, which every task read already
 carries. They are two members rather than one because a store may be able to ask one question
 and not the other: a board keeps a copy's origin in a field of its own and caller metadata in
 the issue body.

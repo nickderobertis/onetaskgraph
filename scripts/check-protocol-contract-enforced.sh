@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Watch scripts/check-protocol-contract.sh refuse a drifted list of the methods the protocol
-# does not carry.
+# does not carry, and a wire member of a struct whose fields are private that the document
+# stops naming.
 #
 # That guard exempts the template operations from §4's method table, and holds the exemption
 # to the list docs/plugin-protocol.md gives of them, both ways. An exemption is exactly the
@@ -100,3 +101,12 @@ run_case "the list gone" \
   's/^The template operations are not carried\./The template operations are elsewhere./' \
   refuse
 names "the list gone" 'no longer says "The template operations are not carried."'
+
+# `MetadataMatch` keeps every field private behind a validating constructor, so the guard
+# reads its members from the private fields; were it to stop, a member dropped from §4.5
+# would pass in silence.
+run_case "a private wire member the document stops naming" \
+  's/"path": \["root_cause"\], //; s/— `path`, zero or more nested object keys/— a path, zero or more nested object keys/' \
+  refuse
+names "a private wire member the document stops naming" \
+  '`MetadataMatch` carries the field "path"'
