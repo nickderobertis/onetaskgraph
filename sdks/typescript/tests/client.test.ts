@@ -481,6 +481,8 @@ test("a document copy drives the real binary and is refused by a source with non
     // own API rather than for a file call of this runtime — and only ahead of a drive letter,
     // the one form a temporary tree takes, so the `UNC\\` spelling this test never produces
     // is left whole rather than turned into a bad path.
+    // The cast holds because this destination is a folder of Markdown, which reports every
+    // document's location as a path; were it anything else, the read below fails outright.
     const located = document?.location as { path: string };
     const openable = located.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
     const sentinel = "read back through the location this source reported";

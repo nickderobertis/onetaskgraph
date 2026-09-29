@@ -391,6 +391,13 @@ pub enum CopyAction {
         /// What the copy did to the link the copied item records for this destination at
         /// `onetaskgraph.copies`; absent for a dry run, which writes nothing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        // llmlint: ignore[invalid_states_unrepresentable] Whether a copy is a dry run is a
+        // property of the request, which the report does not carry, and the contract this
+        // lands — shared with the follow-up tooling built against it — says a dry run leaves
+        // `link` out rather than naming a sixth word for it. What holds it is `Engine::link`:
+        // the one writer of this field, run for every item a copy that writes has landed and
+        // for none of a dry run's, which `a_dry_run_says_which_rule_would_answer_and_records_no_link`
+        // and every `link` assertion in tests/copy_link.rs drive.
         link: Option<CopyLink>,
     },
     /// The destination held a counterpart and it now reads as the source does.
@@ -401,6 +408,7 @@ pub enum CopyAction {
         via: CopyVia,
         /// What the copy did to the copied item's link; absent for a dry run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        // llmlint: ignore[invalid_states_unrepresentable] As `link` on `Created` above.
         link: Option<CopyLink>,
     },
     /// The destination held a counterpart that already read that way; nothing was written.
@@ -411,6 +419,7 @@ pub enum CopyAction {
         via: CopyVia,
         /// What the copy did to the copied item's link; absent for a dry run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        // llmlint: ignore[invalid_states_unrepresentable] As `link` on `Created` above.
         link: Option<CopyLink>,
     },
     /// The destination holds a counterpart the source no longer does. A copy never
