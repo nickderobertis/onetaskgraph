@@ -9632,19 +9632,17 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     fixture.read_behind(1);
 
     // The catch-up, from a thread of its own so that when it happens is this board's
-    // business and not the wait's: the search is the second of the two reads one attempt
-    // makes, so answering one means the first attempt is over.
+    // business and not the wait's. One attempt is two searches — the task listing narrowed to
+    // the run's prefix, then the board-scoped search that lists projects — and this board
+    // records a search as it answers it, so two recorded searches mean the first attempt has
+    // been answered whole, behind.
     let catching_up = Arc::clone(&fixture.state);
     let caught_up = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             {
                 let mut state = catching_up.lock().unwrap();
-                if state
-                    .documents
-                    .iter()
-                    .any(|document| document.contains("search(query:$search"))
-                {
+                if state.searches.len() >= 2 {
                     state.lagging_reads = 0;
                     return true;
                 }
