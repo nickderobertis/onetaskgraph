@@ -156,9 +156,10 @@ def test_no_generated_member_accepts_null_that_the_schema_declares_non_nullable(
 
     This is the decode test for every member the tests above do not name — the document,
     project, delivery, copy-report and update models among them — rather than a structural
-    stand-in for one: the guard decodes an explicit `None` through every field of every
-    generated model, which is the `model_validate` a consumer's answer takes, and compares
-    what each accepts with what the schema the real binary emits declares. One decode test
+    stand-in for one: for every member of every generated model, the guard puts a document
+    carrying an explicit `null` for it through that model's own `model_validate`, the call a
+    consumer's answer takes, and compares which members that refuses with what the schema the
+    real binary emits declares. One decode test
     per member would restate that rule a few dozen times and miss the next member added.
 
     And the pairing it rests on is not vacuous: the objects this test is about were found on

@@ -1106,7 +1106,9 @@ def schema_objects(value: JsonValue, root: JsonValue, inherited: Members) -> lis
         )
     members = dict(inherited)
     reference = value.get("$ref")
-    if isinstance(reference, str):
+    if reference is not None and not isinstance(reference, str):
+        raise SystemExit(f"binary emitted a schema `$ref` of {json.dumps(reference)}")
+    if reference is not None:
         referenced = resolve_reference(reference, root)
         beside = referenced.get("properties") if isinstance(referenced, dict) else None
         members |= beside if isinstance(beside, dict) else {}
@@ -1167,21 +1169,23 @@ def model_nullability(module: Path) -> Nullability:
             ):
                 continue
             fields = {field.alias or key: field for key, field in model.model_fields.items()}
-            nullable = frozenset(
-                wire for wire, field in fields.items() if accepts_none(field.annotation)
-            )
+            nullable = frozenset(wire for wire in fields if accepts_none(model, wire))
             generated.setdefault(frozenset(fields), set()).add(nullable)
         return generated
     finally:
         del sys.modules[name]
 
 
-def accepts_none(annotation: object) -> bool:
-    """Whether a field annotated `annotation` decodes an explicit `null`."""
+def accepts_none(model: type[BaseModel], wire: str) -> bool:
+    """Whether `model` decodes a document carrying an explicit `null` for its member `wire`.
+
+    The document holds that member alone, so the members it leaves out may be refused as
+    missing; only a refusal located at `wire` itself says the `null` was refused.
+    """
     try:
-        TypeAdapter(annotation).validate_python(None)
-    except ValidationError:
-        return False
+        model.model_validate({wire: None})
+    except ValidationError as refused:
+        return not any(error["loc"][:1] == (wire,) for error in refused.errors())
     return True
 
 
