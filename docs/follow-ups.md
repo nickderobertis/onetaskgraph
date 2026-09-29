@@ -83,6 +83,30 @@ Closing it means: sending that predicate, pinning it, flipping the field to
 and the fake Linear server there so it applies the predicate, and deleting this entry and the
 verdict's wording in `onetaskgraph-linear`'s module documentation.
 
+## Linear: the metadata and origin filters are unimplemented
+
+Unsupported fields: `onetaskgraph-linear` `filter_by_metadata`, `filter_by_origin`
+
+`onetaskgraph-linear` keeps a task's caller metadata, `onetaskgraph.origin` among it, in a
+comment at the end of the issue description, and declares `filter_by_metadata` and
+`filter_by_origin` as `Support::Unsupported`. So it ignores a query's metadata matches and
+origin and returns the wider page, and the engine narrows it exactly over each issue's parsed
+metadata — correct under capability rule 2, and one read of every issue the query's other
+predicates kept, which on a large workspace is the cost these predicates exist to avoid.
+
+It is a gap rather than a limit. Linear's published `IssueFilter` carries a `description`
+comparator with `contains`, so a candidate narrowing on the value as a phrase of the
+description, confirmed in process against the parsed comment — the shape the GitHub Projects
+plugin uses over its board-scoped issue search — is not ruled out by the remote service. What
+is missing is the plugin sending one, pinned in
+`crates/onetaskgraph-linear/tests/fixtures/schema.graphql` against the published schema and a
+live observation that the description comparator sees the metadata comment.
+
+Closing it means: sending that narrowing from `issue_filter`, pinning it, flipping both fields
+to `Support::Native`, updating this plugin's row in `crates/onetaskgraph/tests/e2e/fixtures.rs`
+and the fake Linear server there so it applies the predicates, and deleting this entry and the
+verdicts' wording in `onetaskgraph-linear`'s module documentation.
+
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On
