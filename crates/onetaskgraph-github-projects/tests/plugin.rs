@@ -14719,6 +14719,70 @@ async fn a_metadata_value_json_escapes_is_found_by_the_escape_the_body_holds() {
 }
 
 #[tokio::test]
+async fn a_project_scoped_query_confirms_metadata_and_origin_over_that_projects_own_tasks() {
+    // A read narrowed to one project asks that project for its own tasks, whatever else the
+    // query carries, and confirms the metadata and origin predicates over them in process:
+    // no issue search, no origin lookup and no board read, and nothing outside the project,
+    // however well it matches.
+    let fixture = board(vec![
+        Item::issue("I_p1", "Plan")
+            .status("Todo")
+            .sub_issues(3)
+            .body("<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->"),
+        Item::issue("I_tagged", "tagged")
+            .status("Todo")
+            .parent("I_p1")
+            .carrying("work:ENG-1")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+        Item::issue("I_other", "other")
+            .status("Todo")
+            .parent("I_p1")
+            .carrying("work:ENG-10")
+            .body(&slotted("", &json!({"team.owner": "bob"}))),
+        Item::issue("I_plain", "plain")
+            .status("Todo")
+            .parent("I_p1"),
+        Item::issue("I_elsewhere", "elsewhere")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+    ]);
+    let source = source(&fixture);
+    let in_plan = |mut query: TaskQuery| {
+        query.project = ProjectFilter::Is(NativeId("I_p1".to_owned()));
+        query
+    };
+    let mut both = metadata_query("team.owner", &[], "ada");
+    both.origin = Some("work:ENG-1".to_owned());
+    let mut crossed = metadata_query("team.owner", &[], "ada");
+    crossed.origin = Some("work:ENG-10".to_owned());
+    for (what, query, expected) in [
+        (
+            "metadata",
+            metadata_query("team.owner", &[], "ada"),
+            vec!["I_tagged"],
+        ),
+        ("origin", origin_query("work:ENG-1"), vec!["I_tagged"]),
+        (
+            "an origin a suffix longer",
+            origin_query("work:ENG-10"),
+            vec!["I_other"],
+        ),
+        ("both, held by one task", both, vec!["I_tagged"]),
+        ("both, held by different tasks", crossed, vec![]),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &in_plan(query)).await,
+            expected,
+            "{what}"
+        );
+    }
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(fixture.origin_filters(), Vec::<String>::new());
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
 async fn a_value_or_text_with_no_searchable_words_is_refused_before_any_request() {
     // GitHub's index holds words, so an empty value, one of whitespace or punctuation alone,
     // and a text of punctuation alone name none to find, and no bounded query answers them.

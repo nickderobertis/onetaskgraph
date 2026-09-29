@@ -103,7 +103,7 @@ OPTION_TYPES = {
     "author": "str",
     "body_file": "str",
     "commented_since": "str",
-    "origin": "str",
+    "origin": "GlobalId | str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",

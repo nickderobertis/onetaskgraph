@@ -924,7 +924,7 @@ class GeneratedClient:
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
-        origin: str | None = None,
+        origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
         priority: list[Literal["none", "urgent", "high", "medium", "low"]]

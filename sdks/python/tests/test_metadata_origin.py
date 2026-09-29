@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from onetaskgraph_sdk import Client, OnetaskgraphError
+from onetaskgraph_sdk import Client, GlobalId, OnetaskgraphError
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 
 
@@ -95,7 +95,10 @@ async def cli(binary: Path, store: Path, arguments: list[str]) -> list[str]:
 
 
 async def sdk(
-    binary: Path, store: Path, metadata: tuple[str, ...] = (), origin: str | None = None
+    binary: Path,
+    store: Path,
+    metadata: tuple[str, ...] = (),
+    origin: GlobalId | str | None = None,
 ) -> list[str]:
     """The qualified ids `task_list` answers with, sorted."""
     client = Client(binary, cwd=store)
@@ -128,6 +131,14 @@ def test_task_list_metadata_and_origin_answer_what_the_command_line_answers(
     assert (
         asyncio.run(sdk(binary, store, metadata=case.metadata, origin=case.origin)) == case.expected
     )
+
+
+def test_an_origin_given_as_a_global_id_selects_what_its_string_selects(
+    binary: Path, store: Path
+) -> None:
+    """`origin` takes the `GlobalId` the SDK's own models carry, as an id positional does."""
+    assert asyncio.run(sdk(binary, store, origin=GlobalId(root="work:ENG-1"))) == ["home:copied"]
+    assert asyncio.run(sdk(binary, store, origin=GlobalId(root="work:ENG"))) == []
 
 
 def test_an_origin_that_is_not_a_qualified_id_is_refused_naming_the_flag(
