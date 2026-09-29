@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.50](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.49...onetaskgraph-core-v0.2.50) - 2026-09-29
+
+### Added
+
+- *(query)* filter tasks by comment activity with --commented-since ([#2916](https://github.com/nickderobertis/onetaskgraph/pull/2916))
+
+### Fixed
+
+- *(copy)* give a copied project's tasks ids scoped to the destination project ([#2929](https://github.com/nickderobertis/onetaskgraph/pull/2929))
+
 ## [0.2.49](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.48...onetaskgraph-core-v0.2.49) - 2026-09-28
 
 ### Fixed
