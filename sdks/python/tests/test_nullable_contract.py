@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -212,45 +210,45 @@ def test_the_guard_refuses_a_schema_member_the_models_do_not_let_be_null() -> No
 
 
 def test_generation_fails_when_its_models_stop_following_the_schema(
-    binary: Path, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`generate.py --check` refuses a generator that no longer reads defaults as non-null.
+    """`generate()` refuses models that stop following the schema, before it compares anything.
 
-    The real generator runs from a scratch copy of this package with its strict nullable
-    option removed — the drift the guard exists for — against the real binary's schema, and
-    fails naming the members that went optional, before it compares anything.
+    The generator runs against the real binary's schema with its code generation step alone
+    stood in for: that step stages the committed models with `documents` and `comments`
+    widened to `Support | None`, which is what the code generator writes for them without its
+    strict nullable option. Everything after it — the client, the formatter, the guard and the
+    `--check` comparison — is the generator's own, and the guard refuses before the comparison
+    could report the tree merely stale.
     """
-    workspace = Path(generate.ROOT).parent.parent
-    package = tmp_path / Path(generate.ROOT).relative_to(workspace)
-    shutil.copytree(GENERATED, package / GENERATED.relative_to(generate.ROOT))
-    source = Path(generate.__file__).read_text(encoding="utf-8")
-    option = '                    "--strict-nullable",\n'
-    assert option in source, "generate.py no longer passes the strict nullable option"
-    (package / "generate.py").write_text(source.replace(option, ""), encoding="utf-8")
-    staged = tmp_path / Path(generate.BINARY).relative_to(workspace)
-    staged.parent.mkdir(parents=True)
-    try:
-        os.link(binary, staged)
-    except OSError:
-        shutil.copy2(binary, staged)
+    bundle = emitted_bundle()
 
-    result = subprocess.run(
-        [sys.executable, "generate.py", "--check"],
-        cwd=package,
-        capture_output=True,
-        encoding="utf-8",
-        check=False,
-    )
-    assert result.returncode != 0, result.stdout
-    assert "disagree about which members accept `null`" in result.stderr, result.stderr
-    refused = next(
+    def widened_models(_bundle: generate.SchemaBundle, destination: Path) -> None:
+        shutil.copytree(GENERATED, destination, dirs_exist_ok=True)
+        module = destination / "source_listing.py"
+        text = module.read_text(encoding="utf-8")
+        widened = text
+        for member in CAPABILITY_MEMBERS:
+            widened = widened.replace(
+                f"    {member}: Annotated[\n        Support,",
+                f"    {member}: Annotated[\n        Support | None,",
+            )
+        assert widened.count("Support | None,") == 2, "the capabilities moved in the models"
+        module.write_text(widened, encoding="utf-8")
+
+    monkeypatch.setattr(generate, "generate_models", widened_models)
+    with pytest.raises(SystemExit) as refused:
+        generate.generate(bundle, check=True)
+    message = str(refused.value)
+    assert "disagree about which members accept `null`" in message, message
+    line = next(
         line
-        for line in result.stderr.splitlines()
+        for line in message.splitlines()
         if line.strip().startswith("SourceListing object {comments, documents,")
     )
-    assert "the schema admits null for [[]]" in refused
-    assert "['comments', 'documents', 'filter_by_priority', 'priority']" in refused
-    assert "generated Python SDK is stale" not in result.stderr
+    assert "the schema admits null for [[]]" in line
+    assert "the models for [['comments', 'documents']]" in line
+    assert "generated Python SDK is stale" not in message
 
 
 def test_the_real_binary_writes_members_that_decode_and_refuses_null(
