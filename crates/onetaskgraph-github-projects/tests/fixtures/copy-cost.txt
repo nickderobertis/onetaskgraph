@@ -1,13 +1,13 @@
 (a) a whole copy of a project of 10 tasks
-requests 68
-node count 32750
+requests 67
+node count 29600
 
 requests per call
    11       0  adding an issue to the board
    11       0  creating an issue
    10       0  filing an issue under its project
-   11    2200  reading an issue's dependencies
-    1   10150  reading the board
+   10    9150  looking up the items copied from one origin
+    1      50  reading the board's fields
     1       0  reading the destination repository
     1   20400  searching this board's issues
    22       0  writing a board field
@@ -68,14 +68,36 @@ requests per call
     1       0  updating an issue
     2       0  writing a board field
 
-(h) the same task copy with every link removed, found by searching the board
+(h) the same task copy with every link removed, found by asking the board for its origin
 requests 9
-node count 31356
+node count 22121
 
 requests per call
+    1     915  looking up the items copied from one origin
     2     400  reading an issue's dependencies
     2     406  reading one issue
-    1   10150  reading the board
     1   20400  searching this board's issues
     1       0  updating an issue
+    2       0  writing a board field
+
+(i) a task copy into a board holding its counterpart, its origin in the board field alone
+requests 4
+node count 21718
+
+requests per call
+    1     915  looking up the items copied from one origin
+    1     200  reading an issue's dependencies
+    1     203  reading one issue
+    1   20400  searching this board's issues
+
+(j) a task copy into a board holding no counterpart
+requests 7
+node count 965
+
+requests per call
+    1       0  adding an issue to the board
+    1       0  creating an issue
+    1     915  looking up the items copied from one origin
+    1      50  reading the board's fields
+    1       0  reading the destination repository
     2       0  writing a board field

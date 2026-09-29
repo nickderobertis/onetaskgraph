@@ -163,6 +163,11 @@ pub struct Declared {
     /// Whether the source keeps only the tasks with a comment created or edited since an
     /// instant, itself.
     pub filter_by_comment_activity: Support,
+    /// Whether the source keeps only the tasks holding every metadata value a query names,
+    /// itself.
+    pub filter_by_metadata: Support,
+    /// Whether the source keeps only the tasks copied from the origin a query names, itself.
+    pub filter_by_origin: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -195,6 +200,8 @@ impl Declared {
             priority: self.priority,
             filter_by_priority: self.filter_by_priority,
             filter_by_comment_activity: self.filter_by_comment_activity,
+            filter_by_metadata: self.filter_by_metadata,
+            filter_by_origin: self.filter_by_origin,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -239,6 +246,16 @@ impl Declared {
                 "filter_by_comment_activity",
                 claimed.filter_by_comment_activity,
                 reported.filter_by_comment_activity,
+            ),
+            support(
+                "filter_by_metadata",
+                claimed.filter_by_metadata,
+                reported.filter_by_metadata,
+            ),
+            support(
+                "filter_by_origin",
+                claimed.filter_by_origin,
+                reported.filter_by_origin,
             ),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
@@ -446,6 +463,8 @@ pub const ROWS: &[Row] = &[
                 priority: Support::Native,
                 filter_by_priority: Support::Unsupported,
                 filter_by_comment_activity: Support::Unsupported,
+                filter_by_metadata: Support::Unsupported,
+                filter_by_origin: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -539,6 +558,8 @@ pub const ROWS: &[Row] = &[
                 // Not sent to Linear at all, and so narrowed by the engine over each kept
                 // issue's comments.
                 filter_by_comment_activity: Support::Unsupported,
+                filter_by_metadata: Support::Unsupported,
+                filter_by_origin: Support::Unsupported,
                 search_title: Support::Unsupported,
                 search_content: Support::Unsupported,
                 max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
@@ -625,6 +646,8 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     priority: Support::Unsupported,
     filter_by_priority: Support::Native,
     filter_by_comment_activity: Support::Native,
+    filter_by_metadata: Support::Native,
+    filter_by_origin: Support::Native,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,
@@ -684,6 +707,11 @@ fn github_item(
     labels: Value,
     slot: Value,
 ) -> Value {
+    // The board field is where an origin lives; the slot's copy is the mirror a write keeps.
+    let origin = slot
+        .get("onetaskgraph.origin")
+        .cloned()
+        .unwrap_or_else(|| json!(""));
     let body = if slot.as_object().is_some_and(serde_json::Map::is_empty) {
         body.to_owned()
     } else {
@@ -692,7 +720,7 @@ fn github_item(
     json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,"body":body,
            "state":at.state.0,"reason":at.state.1,
            "parent":at.parent.map_or(Value::Null, |id| json!(id)),
-           "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":"",
+           "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":origin,
            "priority":at.priority,"labels":labels})
 }
 
@@ -773,7 +801,10 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 priority: Some("Low"),
             },
             json!([["L-3", "core"]]),
-            json!({}),
+            // A copy's origin, in the board field every release reads it from and mirrored in
+            // the slot the way this release writes it.
+            json!({"onetaskgraph.origin":"elsewhere:ORIG-4",
+                   "orchestrator.follow-up":{"root_cause":"stale-cache"}}),
         ),
         github_item(
             "P-1",
@@ -1163,6 +1194,37 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().status_board_accessible = false;
     }
 
+    /// Take the origin out of one issue's metadata slot and leave it in the board's origin
+    /// field alone — which is how the release before the slot mirrored it wrote every copy.
+    pub fn written_before_the_origin_mirror(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        let body = item["body"].as_str().expect("a body").to_owned();
+        let open = "<!-- onetaskgraph.metadata\n";
+        let start = body.rfind(open).expect("a metadata slot") + open.len();
+        let end = start + body[start..].find("\n-->").expect("a closed slot");
+        let mut slot: serde_json::Map<String, Value> =
+            serde_json::from_str(&body[start..end]).expect("the slot is JSON");
+        assert!(
+            slot.remove("onetaskgraph.origin").is_some(),
+            "this release mirrors the origin into the slot: {body}"
+        );
+        let rewritten = format!("{}{}{}", &body[..start], Value::Object(slot), &body[end..]);
+        item["body"] = json!(rewritten);
+    }
+
+    /// The origin field this board holds for one issue.
+    #[must_use]
+    pub fn origin(&self, id: &str) -> Value {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .map_or(Value::Null, |item| item["origin"].clone())
+    }
+
     /// The body this board holds for one issue, byte for byte.
     #[must_use]
     pub fn body(&self, id: &str) -> Value {
@@ -1333,6 +1395,65 @@ impl GitHubBoard {
                "labels":{"nodes":item["labels"].as_array().unwrap().iter()
                    .map(|pair| json!({"id":pair[0],"name":pair[1],"color":null}))
                    .collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})
+    }
+
+    /// The two halves of an origin lookup, answered the way GitHub answers each: the board's
+    /// own item connection under its field filter — an exact match on the origin field, over
+    /// what a board read can see — and the board-scoped issue search for the value as a
+    /// phrase in the body, by token, over what the search index can see.
+    fn origin_lookup(&self, variables: &Value) -> Value {
+        assert_eq!(variables["type"], "ISSUE");
+        let filter = variables["filter"].as_str().expect("a field filter");
+        let quoted = filter
+            .strip_prefix("onetaskgraph.origin:\"")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("an origin field filter: {filter}"));
+        let mut wanted = String::new();
+        let mut chars = quoted.chars();
+        while let Some(character) = chars.next() {
+            match character {
+                '\\' => wanted.extend(chars.next()),
+                other => wanted.push(other),
+            }
+        }
+        let search = variables["search"].as_str().expect("a search query");
+        let phrase = IssueSearch::parse(
+            search
+                .strip_prefix("project:fixture-owner/7 is:issue")
+                .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}")),
+        );
+        let first = usize::try_from(variables["originFirst"].as_u64().expect("originFirst"))
+            .expect("originFirst fits usize");
+        let visible = self.items.len().saturating_sub(self.lagging_reads);
+        let carriers = self.items[..visible]
+            .iter()
+            .filter(|item| item["origin"] == json!(wanted))
+            .map(|item| self.rendered(item))
+            .collect();
+        let found = self.items[..visible]
+            .iter()
+            .filter(|item| !Self::is_draft(item))
+            .filter(|item| {
+                phrase.admits(
+                    item["title"].as_str().unwrap_or_default(),
+                    item["body"].as_str().unwrap_or_default(),
+                )
+            })
+            .map(|item| self.as_issue(item))
+            .collect();
+        let page = |rows: Vec<Value>, after: &Value| {
+            let offset = match after {
+                Value::Null => 0,
+                Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+                other => panic!("GraphQL after must be null or a numeric string: {other}"),
+            };
+            let end = (offset + first).min(rows.len());
+            json!({"totalCount":rows.len(),"nodes":rows[offset.min(end)..end].to_vec(),
+                   "pageInfo":{"hasNextPage":end < rows.len(),
+                               "endCursor":(end > 0).then(|| end.to_string())}})
+        };
+        json!({"originItems":{"projectV2":{"items":page(carriers, &variables["itemsAfter"])}},
+               "search":page(found, &variables["searchAfter"])})
     }
 
     /// One issue as a board-scoped search, a node read or a sub-issue read returns it:
@@ -2245,21 +2366,19 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         assert_eq!(variables["id"], "PVT-board");
         return json!({ "node": board.own.clone() });
     }
+    if query.contains("originItems:repositoryOwner(") {
+        return board.origin_lookup(variables);
+    }
     if query.contains("search(query:$search") {
         assert_eq!(variables["type"], "ISSUE");
         let search = variables["search"].as_str().expect("a search query");
         let wanted = search
             .strip_prefix("project:fixture-owner/7 is:issue")
             .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"));
-        // The server side of `in:title "..."`, which is what a project named by name is
-        // discovered through.
-        let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
-            quoted
-                .trim()
-                .trim_matches('"')
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\")
-        });
+        // The server side of every qualifier the source sends — `in:title "..."`, which is what
+        // a project named by name is discovered through, and the phrases a text, metadata or
+        // origin read asks for — matched by token, the way GitHub matches them.
+        let wanted = IssueSearch::parse(wanted);
         let offset = match &variables["after"] {
             Value::Null => 0,
             Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
@@ -2280,9 +2399,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             // An issue search returns issues, and a draft is not one.
             .filter(|item| !GitHubBoard::is_draft(item))
             .filter(|item| {
-                title
-                    .as_ref()
-                    .is_none_or(|title| item["title"] == json!(title))
+                wanted.admits(
+                    item["title"].as_str().unwrap_or_default(),
+                    item["body"].as_str().unwrap_or_default(),
+                )
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -2428,6 +2548,92 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         "fields":board.fields(),
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,
                                            "endCursor":end.to_string()}}}}})
+}
+
+/// GitHub's issue search, as far as this board models it: the qualifiers the source sends,
+/// and the phrases it searches for, matched **by token** the way GitHub matches them — every
+/// run of letters and digits a word, case-insensitively, the whole body indexed, its metadata
+/// comment included.
+struct IssueSearch {
+    /// Whether a phrase may hold of the title.
+    in_title: bool,
+    /// Whether a phrase may hold of the body.
+    in_body: bool,
+    /// Every phrase, as its words; each must hold of one of the fields above.
+    phrases: Vec<Vec<String>>,
+}
+
+impl IssueSearch {
+    /// The search after its `project:… is:issue` scope.
+    fn parse(wanted: &str) -> Self {
+        let mut parsed = Self {
+            in_title: true,
+            in_body: true,
+            phrases: Vec::new(),
+        };
+        let mut chars = wanted.chars().peekable();
+        while let Some(&next) = chars.peek() {
+            if next.is_whitespace() {
+                chars.next();
+                continue;
+            }
+            if next == '"' {
+                chars.next();
+                let mut phrase = String::new();
+                loop {
+                    match chars.next() {
+                        Some('\\') => phrase.extend(chars.next()),
+                        Some('"') | None => break,
+                        Some(other) => phrase.push(other),
+                    }
+                }
+                parsed.phrases.push(search_words(&phrase));
+                continue;
+            }
+            let mut word = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_whitespace() {
+                    break;
+                }
+                word.push(next);
+                chars.next();
+            }
+            match word.strip_prefix("in:") {
+                Some(fields) => {
+                    let fields: Vec<&str> = fields.split(',').collect();
+                    parsed.in_title = fields.contains(&"title");
+                    parsed.in_body = fields.contains(&"body");
+                }
+                None => {
+                    assert!(
+                        !word.starts_with("updated:"),
+                        "this board does not model `updated:`: {wanted}"
+                    );
+                    parsed.phrases.push(search_words(&word));
+                }
+            }
+        }
+        parsed
+    }
+
+    /// Whether an issue holding this title and body is in the answer.
+    fn admits(&self, title: &str, body: &str) -> bool {
+        let (title, body) = (search_words(title), search_words(body));
+        let holds = |field: &[String], phrase: &[String]| {
+            phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+        };
+        self.phrases.iter().all(|phrase| {
+            (self.in_title && holds(&title, phrase)) || (self.in_body && holds(&body, phrase))
+        })
+    }
+}
+
+/// The words GitHub's index holds of `text`: every run of letters and digits, lower-cased.
+fn search_words(text: &str) -> Vec<String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
@@ -4077,7 +4283,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-4",
-            "title: Delta docs\nstatus: Doing\npriority: low\nlabels: [{id: L-3, name: core}]\nproject: P-2\ndepends_on:\n  - id: T-2\n    kind: related",
+            "title: Delta docs\nstatus: Doing\npriority: low\nlabels: [{id: L-3, name: core}]\nproject: P-2\nmetadata: {onetaskgraph.origin: \"elsewhere:ORIG-4\", orchestrator.follow-up: {root_cause: stale-cache}}\ndepends_on:\n  - id: T-2\n    kind: related",
             "documentation",
         ),
         (
@@ -4183,6 +4389,8 @@ fn compensated_block(_sandbox: &Sandbox) -> Value {
         "filter_by_status": "unsupported",
         "filter_by_priority": "unsupported",
         "filter_by_comment_activity": "unsupported",
+        "filter_by_metadata": "unsupported",
+        "filter_by_origin": "unsupported",
         "search_title": "unsupported",
         "search_content": "unsupported",
         "orphan_tasks": "unsupported",
@@ -4240,7 +4448,9 @@ pub fn dataset() -> Value {
              "labels": [{"id": "L-1", "name": "bug"}]},
             {"id": "T-4", "title": "Delta docs", "content": "documentation",
              "status": {"category": "in-progress", "name": "Doing"}, "priority": "low",
-             "labels": [{"id": "L-3", "name": "core"}], "project": "P-2"}
+             "labels": [{"id": "L-3", "name": "core"}], "project": "P-2",
+             "metadata": {"onetaskgraph.origin": "elsewhere:ORIG-4",
+                          "orchestrator.follow-up": {"root_cause": "stale-cache"}}}
         ],
         "projects": [
             {"id": "P-1", "title": "Engine", "content": "the engine",

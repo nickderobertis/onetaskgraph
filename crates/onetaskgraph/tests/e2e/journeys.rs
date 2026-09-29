@@ -516,6 +516,26 @@ fn probes(declared: &Declared) -> Vec<Probe> {
             "search-content",
             declared.search_content.is_native(),
         ),
+        filter(
+            "filter_by_metadata",
+            &[
+                "task",
+                "list",
+                "--metadata",
+                "orchestrator.follow-up/root_cause=stale-cache",
+                "--explain",
+            ],
+            &["T-4"],
+            "metadata",
+            declared.filter_by_metadata.is_native(),
+        ),
+        filter(
+            "filter_by_origin",
+            &["task", "list", "--origin", "elsewhere:ORIG-4", "--explain"],
+            &["T-4"],
+            "origin",
+            declared.filter_by_origin.is_native(),
+        ),
         reverse(
             "task_dependencies",
             "task",
@@ -626,6 +646,115 @@ fn every_row_drives_every_capability_field_and_the_plan_says_who_applied_it() {
             row.name
         );
     }
+}
+
+#[test]
+fn every_row_keeps_exactly_the_metadata_value_and_the_origin_asked_for() {
+    // `T-4` holds `orchestrator.follow-up: {root_cause: stale-cache}` and was copied from
+    // `elsewhere:ORIG-4`; nothing else in the dataset holds either. Every question below is
+    // one a filter that matched loosely — a prefix, a suffix, the wrong depth, one match of
+    // two — would answer with `T-4`, and none of them may.
+    for row in complete_dataset_rows() {
+        let sandbox = host(row);
+        let asked = |arguments: &[&str]| {
+            let mut all = vec!["task", "list"];
+            all.extend_from_slice(arguments);
+            listed(&ok(row, &sandbox, &all))
+        };
+        let none: Vec<String> = Vec::new();
+        for (arguments, expected) in [
+            (
+                vec![
+                    "--metadata",
+                    "orchestrator.follow-up/root_cause=stale-cache",
+                ],
+                ours(&["T-4"]),
+            ),
+            (
+                vec!["--metadata", "orchestrator.follow-up/root_cause=stale"],
+                none.clone(),
+            ),
+            (
+                vec![
+                    "--metadata",
+                    "orchestrator.follow-up/root_cause=Stale-Cache",
+                ],
+                none.clone(),
+            ),
+            (
+                vec!["--metadata", "orchestrator.follow-up=stale-cache"],
+                none.clone(),
+            ),
+            (vec!["--origin", "elsewhere:ORIG-4"], ours(&["T-4"])),
+            (vec!["--origin", "elsewhere:ORIG"], none.clone()),
+            (vec!["--origin", "elsewhere:ORIG-40"], none.clone()),
+            (
+                vec![
+                    "--metadata",
+                    "orchestrator.follow-up/root_cause=stale-cache",
+                    "--origin",
+                    "elsewhere:ORIG-4",
+                    "--status",
+                    "in-progress",
+                ],
+                ours(&["T-4"]),
+            ),
+            (
+                vec![
+                    "--metadata",
+                    "orchestrator.follow-up/root_cause=stale-cache",
+                    "--metadata",
+                    "orchestrator.follow-up/root_cause=other",
+                ],
+                none.clone(),
+            ),
+            (
+                vec!["--origin", "elsewhere:ORIG-4", "--status", "todo"],
+                none.clone(),
+            ),
+        ] {
+            assert_eq!(
+                asked(&arguments),
+                expected,
+                "{}: task list {}",
+                row.name,
+                arguments.join(" ")
+            );
+        }
+    }
+}
+
+#[test]
+fn a_malformed_metadata_match_or_origin_is_refused_naming_the_flag() {
+    let row = &ROWS[0];
+    let sandbox = host(row);
+    for (flag, value) in [
+        ("--metadata", "orchestrator.follow-up"),
+        ("--metadata", "=stale-cache"),
+        ("--metadata", "orchestrator.follow-up//root_cause=x"),
+        ("--metadata", "orchestrator.follow-up/=x"),
+        ("--origin", "ORIG-4"),
+        ("--origin", "elsewhere:"),
+    ] {
+        let output = run(&sandbox, &["task", "list", flag, value]);
+        let said = stderr(&output);
+        assert_eq!(output.status.code(), Some(2), "{flag} {value}: {said}");
+        assert!(
+            said.contains(flag) && said.contains(value),
+            "{flag} {value}: the refusal names the flag and the value: {said}"
+        );
+        assert!(
+            stdout(&output).is_empty(),
+            "{flag} {value}: nothing was listed"
+        );
+    }
+    // A value may hold `=` and `/` freely: only the first `=` ends the location.
+    let listing = ok(
+        row,
+        &sandbox,
+        &["task", "list", "--metadata", "team.note=a=b/c"],
+    );
+    assert_eq!(listed(&listing), Vec::<String>::new());
 }
 
 #[test]

@@ -81,6 +81,9 @@ class Client(GeneratedClient):
                         # A repeated id option takes a `GlobalId` as its positional does.
                         text = item.root if isinstance(item, RootModel) else item
                         arguments.extend((flag, str(text)))
+                case RootModel():
+                    # A single id option — `origin` — takes a `GlobalId` as a positional does.
+                    arguments.extend((flag, str(value.root)))
                 case _:
                     arguments.extend((flag, str(value)))
         # Every call is non-interactive: a library caller has no terminal to be asked on, and a

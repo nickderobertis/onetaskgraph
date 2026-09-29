@@ -294,7 +294,7 @@ fn one_targeted_update(tasks: usize, changed: usize) -> [Measured; 2] {
 /// A plan of `tasks` tasks the board holds, landed by one whole copy that recorded every
 /// item's link, and two re-copies of the task at `changed` with its status changed: first by
 /// the link the whole copy recorded, then — every link removed, as every item was before
-/// there were links — by searching the board.
+/// there were links — by asking the board for the task's origin.
 fn one_task_recopy(tasks: usize, changed: usize) -> [Measured; 2] {
     let plan = Plan::of(tasks);
     plan.copy(&[]);
@@ -311,8 +311,87 @@ fn one_task_recopy(tasks: usize, changed: usize) -> [Measured; 2] {
     std::fs::write(&path, linked.replace("status: Todo", "status: Doing")).expect("an edit");
     let by_link = plan.measure(&recopy);
     plan.author(&[], None);
-    let by_scan = plan.measure(&recopy);
-    [by_link, by_scan]
+    let by_origin = plan.measure(&recopy);
+    [by_link, by_origin]
+}
+
+/// A task copy into a board that already holds the task's counterpart, written the way the
+/// release before this one writes a copy — its origin in the board field and not in the
+/// body, and no link on the task it was copied from — so the copy's second rule can only
+/// find it by the board's own field filter.
+fn a_task_copy_finding_a_counterpart_written_before_this_release() -> Measured {
+    let plan = Plan::of(1);
+    let (_, _, first) = plan.copy(&[]);
+    // That release recorded no link either, and `author` writes every file afresh without one.
+    plan.author(&[], None);
+    let (_, counterpart) = landed(&first)
+        .into_iter()
+        .find(|(source, _)| source == "plans:T-0")
+        .expect("the first copy landed the task");
+    let counterpart = native(&counterpart);
+    plan.board.written_before_the_origin_mirror(&counterpart);
+    assert_eq!(plan.board.origin(&counterpart), json!("plans:T-0"));
+    let measured = plan.measure(&["task", "copy", "plans:T-0", "--to", "board", "--json"]);
+    assert_eq!(
+        measured.2["items"]
+            .as_array()
+            .expect("a copy report carries items")
+            .iter()
+            .map(|item| (item["action"].clone(), native(&item["destination"])))
+            .collect::<Vec<_>>(),
+        [(json!("unchanged"), counterpart)],
+        "the copy found the counterpart rather than creating a second one: {:#}",
+        measured.2
+    );
+    measured
+}
+
+/// A task copy into a board that holds no counterpart of it: a task filed in no project, so
+/// the copy has no project to find either.
+fn a_task_copy_finding_no_counterpart() -> Measured {
+    let plan = Plan::of(0);
+    std::fs::write(
+        plan.root.join("tasks/L.md"),
+        "---\ntitle: A loose step\nstatus: Todo\n---\na step in no project\n",
+    )
+    .expect("a task");
+    let measured = plan.measure(&["task", "copy", "plans:L", "--to", "board", "--json"]);
+    assert_eq!(
+        measured.2["items"]
+            .as_array()
+            .expect("a copy report carries items")
+            .iter()
+            .map(|item| item["action"].clone())
+            .collect::<Vec<_>>(),
+        [json!("created")],
+        "{:#}",
+        measured.2
+    );
+    measured
+}
+
+/// Hold a task copy to its second rule's one question: the board is asked for the origin of
+/// `task` once, and its items are never walked.
+fn asks_for_the_origin_and_never_walks_the_board(
+    what: &str,
+    task: &str,
+    served: &[(String, Value)],
+) {
+    let lookups = served
+        .iter()
+        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP)
+        .map(|(_, variables)| variables["filter"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lookups,
+        [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
+        "{what} asks the board for that origin once: {served:#?}"
+    );
+    let whole: Vec<&(String, Value)> = served
+        .iter()
+        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::BOARD)
+        .collect();
+    assert!(whole.is_empty(), "{what} read the whole board: {whole:#?}");
 }
 
 #[test]
@@ -441,11 +520,11 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     }
 
     // (g) and (h): one task re-copied on its own. By its link, the copy reads its board item
-    // and its project's by id and never walks or searches the board; without one, it does
-    // both, which is what every re-copy cost before a copy recorded where it landed.
+    // and its project's by id and never walks or searches the board; without one, it asks
+    // the board for the task's origin, and never walks it either.
     let [
         (by_link, by_link_served, by_link_report),
-        (by_scan, _, by_scan_report),
+        (by_origin, by_origin_served, by_origin_report),
     ] = one_task_recopy(10, 3);
     assert_eq!(
         (
@@ -457,11 +536,11 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     );
     assert_eq!(
         (
-            &by_scan_report["items"][0]["via"],
-            &by_scan_report["items"][0]["action"]
+            &by_origin_report["items"][0]["via"],
+            &by_origin_report["items"][0]["action"]
         ),
         (&json!("scan"), &json!("updated")),
-        "{by_scan_report:#}"
+        "{by_origin_report:#}"
     );
     {
         use onetaskgraph_github_projects::graphql;
@@ -476,11 +555,12 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
             "(g) read the board or searched its issues: {walked:#?}"
         );
     }
+    asks_for_the_origin_and_never_walks_the_board("(h)", "T-3", &by_origin_served);
     assert!(
-        by_link.total_node_count() < by_scan.total_node_count(),
+        by_link.total_node_count() < by_origin.total_node_count(),
         "(g) cost {} worst-case nodes and (h) {}",
         by_link.total_node_count(),
-        by_scan.total_node_count()
+        by_origin.total_node_count()
     );
 
     // The comparison `session-cost.md` draws between the two is the same two figures, so it
@@ -488,12 +568,12 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     for (row, searching, linked) in [
         (
             "**requests**",
-            by_scan.total_requests(),
+            by_origin.total_requests(),
             by_link.total_requests(),
         ),
         (
             "**node count**",
-            usize::try_from(by_scan.total_node_count()).expect("a node count fits"),
+            usize::try_from(by_origin.total_node_count()).expect("a node count fits"),
             usize::try_from(by_link.total_node_count()).expect("a node count fits"),
         ),
     ] {
@@ -504,6 +584,16 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
              row should read:\n{line}"
         );
     }
+
+    // (i) and (j): a task copy finds its counterpart by asking the board for its origin, and
+    // never by walking the board — one written the way the release before this one wrote it,
+    // with its origin in the board field alone, included — and creates when there is none.
+    // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two more rows of a record this test already takes, against the same loopback fixture board every journey in this crate drives: no credential, no socket beyond 127.0.0.1, no third party, and well under a second for the whole test. A copy is the engine's, so this lives in the binary crate for the reason the module documentation gives, and it is held to `copy-cost.txt`, which the board's own crate records beside its session cost.
+    let (found, found_served, _) = a_task_copy_finding_a_counterpart_written_before_this_release();
+    asks_for_the_origin_and_never_walks_the_board("(i)", "T-0", &found_served);
+    let (created, created_served, _) = a_task_copy_finding_no_counterpart();
+    asks_for_the_origin_and_never_walks_the_board("(j)", "L", &created_served);
+    // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
@@ -532,9 +622,14 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
             &by_link,
         ),
         rendered(
-            "(h) the same task copy with every link removed, found by searching the board",
-            &by_scan,
+            "(h) the same task copy with every link removed, found by asking the board for its origin",
+            &by_origin,
         ),
+        rendered(
+            "(i) a task copy into a board holding its counterpart, its origin in the board field alone",
+            &found,
+        ),
+        rendered("(j) a task copy into a board holding no counterpart", &created),
     ]
     .join("\n");
     assert_eq!(

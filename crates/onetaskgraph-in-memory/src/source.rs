@@ -190,6 +190,12 @@ impl InMemorySource {
         {
             return false;
         }
+        if declared.filter_by_metadata.is_native() && !query.metadata_matches(&task.metadata) {
+            return false;
+        }
+        if declared.filter_by_origin.is_native() && !query.origin_matches(&task.metadata) {
+            return false;
+        }
         if !self.project_matches(task, &query.project) {
             return false;
         }

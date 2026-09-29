@@ -56,6 +56,16 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/Support",
         "description": "Whether the source filters by label itself."
       },
+      "filter_by_metadata": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source keeps only the tasks every one of a query's\n[`TaskQuery::metadata`](crate::TaskQuery::metadata) matches holds of, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the matches and returns the wider set, and the engine narrows it\nover each task's own metadata, which every read already carries.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+      },
+      "filter_by_origin": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source keeps only the tasks whose copy origin is a query's\n[`TaskQuery::origin`](crate::TaskQuery::origin), itself.\n\nA predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and\nits own member because a source may be able to ask its store one question and not the\nother: a board keeps a copy's origin in a field of its own and caller metadata in the\nissue body.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+      },
       "filter_by_priority": {
         "$ref": "#/$defs/Support",
         "default": "unsupported",
@@ -4099,6 +4109,16 @@ export const runtimeSchemas = {
         "type": "string"
       },
       {
+        "const": "metadata",
+        "description": "Filter by a caller-defined metadata value.",
+        "type": "string"
+      },
+      {
+        "const": "origin",
+        "description": "Filter by copy origin: the qualified id an item was copied from.",
+        "type": "string"
+      },
+      {
         "const": "search-title",
         "description": "Search titles.",
         "type": "string"
@@ -5465,6 +5485,16 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -5770,6 +5800,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -6164,6 +6204,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -6576,6 +6626,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -6996,6 +7056,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -7570,6 +7640,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -8218,6 +8298,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -9978,6 +10068,16 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by label itself."
           },
+          "filter_by_metadata": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks every one of a query's\n[`TaskQuery::metadata`](crate::TaskQuery::metadata) matches holds of, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the matches and returns the wider set, and the engine narrows it\nover each task's own metadata, which every read already carries.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+          },
+          "filter_by_origin": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks whose copy origin is a query's\n[`TaskQuery::origin`](crate::TaskQuery::origin), itself.\n\nA predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and\nits own member because a source may be able to ask its store one question and not the\nother: a board keeps a copy's origin in a field of its own and caller metadata in the\nissue body.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+          },
           "filter_by_priority": {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
@@ -10276,6 +10376,16 @@ export const runtimeSchemas = {
           "filter_by_label": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by label itself."
+          },
+          "filter_by_metadata": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks every one of a query's\n[`TaskQuery::metadata`](crate::TaskQuery::metadata) matches holds of, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the matches and returns the wider set, and the engine narrows it\nover each task's own metadata, which every read already carries.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+          },
+          "filter_by_origin": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks whose copy origin is a query's\n[`TaskQuery::origin`](crate::TaskQuery::origin), itself.\n\nA predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and\nits own member because a source may be able to ask its store one question and not the\nother: a board keeps a copy's origin in a field of its own and caller metadata in the\nissue body.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
           },
           "filter_by_priority": {
             "$ref": "#/$defs/Support",
@@ -10588,6 +10698,16 @@ export const runtimeSchemas = {
           {
             "const": "commented-since",
             "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
             "type": "string"
           },
           {
@@ -11411,6 +11531,16 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "metadata",
+            "description": "Filter by a caller-defined metadata value.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "Filter by copy origin: the qualified id an item was copied from.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -12050,6 +12180,32 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "MetadataMatch": {
+        "description": "One caller-defined metadata value a task must hold.\n\nThe location is a top-level metadata key — which may itself contain dots, such as\n`orchestrator.follow-up` — and zero or more nested object keys below it. The match holds\nwhen the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;\na number, a boolean, an array, an object, a missing key and a path through a non-object\nall fail it.\n\nNeither the key nor a nested segment may be empty, which is checked wherever one is built,\ndeserialized included, so a source handed one never has to ask what an empty location\nmeans.",
+        "properties": {
+          "key": {
+            "description": "The top-level metadata key.",
+            "type": "string"
+          },
+          "path": {
+            "default": [],
+            "description": "Nested object keys under [`key`](Self::key), outermost first. Empty names the\ntop-level value itself.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "value": {
+            "description": "The string the value there must equal.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
@@ -12210,6 +12366,21 @@ export const runtimeSchemas = {
       "labels": {
         "$ref": "#/$defs/LabelFilter",
         "description": "Label membership."
+      },
+      "metadata": {
+        "default": [],
+        "description": "Caller-defined metadata values to keep: a task matches when **every** one of these\nholds of its [`Task::metadata`](crate::Task::metadata). Empty means unfiltered.\n\nDefaulted when absent and left out of the wire when empty, so a plugin written before\nthere were metadata matches reads exactly the query it read before — and, declaring no\n[`Capabilities::filter_by_metadata`](crate::Capabilities::filter_by_metadata), is never\nhanded one it would have to ignore.",
+        "items": {
+          "$ref": "#/$defs/MetadataMatch"
+        },
+        "type": "array"
+      },
+      "origin": {
+        "description": "The copy origin to keep: a task matches when its\n[`ORIGIN_KEY`](Self::ORIGIN_KEY) metadata entry is a string equal to this, exactly.\n`None` means unfiltered.\n\nA **qualified id** — `<source>:<native>` — spelled exactly as a copy stores it. A\nplugin never constructs or interprets one: it compares this string with the one it\nholds, byte for byte, and nothing else, which is why it is a string here rather than\nthe engine's own qualified-id type.\n\nDefaulted when absent and left out of the wire when `None`, on the terms\n[`metadata`](Self::metadata) gives, with\n[`Capabilities::filter_by_origin`](crate::Capabilities::filter_by_origin).",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "priorities": {
         "default": [],

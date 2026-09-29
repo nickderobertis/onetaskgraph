@@ -192,6 +192,16 @@ NOT_A_STORE = {
         "`tests/plugin.rs` drives the plugin's own comment walk over a two-page board whose "
         "comments differ in author, times and body."
     ),
+    "crates/onetaskgraph-github-projects/tests/fixtures/origin-lookup.json": (
+        "Not a store: no query is answered from it. It pins the shape GitHub answers the origin "
+        "lookup in — `ProjectV2.items` under the board's field filter, aliased `originItems`, "
+        "beside the board-scoped issue search — and `tests/schema.rs` validates it against the "
+        "pinned schema with every other response this plugin reads. What an origin query "
+        "selects is discriminated in `tests/plugin.rs`, where "
+        "`an_origin_lookup_finds_every_carrier_without_enumerating_the_board` drives the "
+        "plugin's own lookup over a loopback board holding carriers whose origin differs from "
+        "the one asked for by a suffix and by a prefix, and has to leave both out."
+    ),
     "crates/onetaskgraph-linear/tests/fixtures/comments.json": (
         "Not a store: no query filters or titles what it holds. It pins the shape Linear answers "
         "an issue's `comments` connection in — a comment has an id and a body and no title, and "

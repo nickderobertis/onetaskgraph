@@ -126,6 +126,18 @@ class Capabilities(BaseModel):
     filter_by_label: Annotated[
         Support, Field(description="Whether the source filters by label itself.")
     ]
+    filter_by_metadata: Annotated[
+        Support,
+        Field(
+            description="Whether the source keeps only the tasks every one of a query's\n[`TaskQuery::metadata`](crate::TaskQuery::metadata) matches holds of, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the matches and returns the wider set, and the engine narrows it\nover each task's own metadata, which every read already carries.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+        ),
+    ] = Support.SupportUnsupported
+    filter_by_origin: Annotated[
+        Support,
+        Field(
+            description="Whether the source keeps only the tasks whose copy origin is a query's\n[`TaskQuery::origin`](crate::TaskQuery::origin), itself.\n\nA predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and\nits own member because a source may be able to ask its store one question and not the\nother: a board keeps a copy's origin in a field of its own and caller metadata in the\nissue body.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+        ),
+    ] = Support.SupportUnsupported
     filter_by_priority: Annotated[
         Support,
         Field(

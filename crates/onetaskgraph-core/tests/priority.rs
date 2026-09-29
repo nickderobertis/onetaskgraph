@@ -53,6 +53,8 @@ fn request(priorities: Vec<Priority>) -> TaskRequest {
         project: ProjectSelector::Any,
         priorities,
         commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
         paging: Paging {
             limit: std::num::NonZeroU32::new(50).expect("not zero"),
             token: None,

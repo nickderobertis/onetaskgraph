@@ -269,7 +269,18 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 25
+    assert emitted_bundle["version"] == 26
+    # Version 26 published the metadata values and the copy origin a task list may be narrowed
+    # by: the query's `metadata` and `origin`, the `MetadataMatch` one of the first is, and the
+    # two capabilities a source declares them with.
+    task_query = bundle["roots"]["TaskQuery"]
+    assert isinstance(task_query, dict)
+    for member in ("metadata", "origin"):
+        assert member in task_query["properties"], member
+        assert member not in task_query.get("required", []), member
+    listing = json.dumps(bundle["roots"]["SourceListing"])
+    assert "filter_by_metadata" in listing
+    assert "filter_by_origin" in listing
     # Version 25 published what a copy says about each item it landed beyond its action:
     # which rule found where it landed, and what became of the link it records at
     # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.

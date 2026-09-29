@@ -27,6 +27,8 @@
 //! | `priority` | **Supported and proven** — the hosted source's own, forwarded; absent from a handshake written before priorities, and then read as unsupported, so such a plugin is never handed a priority it would drop. `set_task_priority` is carried over the pipe as §4.19 specifies. |
 //! | `filter_by_priority` | **Supported and proven** — the hosted source's own, forwarded; absent from an older handshake, and then read as unsupported, so the engine narrows. |
 //! | `filter_by_comment_activity` | **Supported and proven** — the hosted source's own, forwarded, and a query's `commented_since` carried over the pipe as §4.5 specifies; absent from an older handshake, and then read as unsupported, so the engine narrows over the plugin's comments. |
+//! | `filter_by_metadata` | **Supported and proven** — the hosted source's own, forwarded, and a query's `metadata` matches carried over the pipe as §4.5 specifies; absent from an older handshake, and then read as unsupported, so the engine narrows over each task's metadata. |
+//! | `filter_by_origin` | **Supported and proven** — the hosted source's own, forwarded, and a query's `origin` carried over the pipe as §4.5 specifies, on the same terms. |
 //! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |

@@ -23,6 +23,8 @@
 //! | `priority` | **Supported,** and proven by this crate's `tests/priority.rs`. A task's optional `priority:` front-matter key holds `none`, `urgent`, `high`, `medium` or `low`; an absent key is `none`, `none` is never written, and any other value makes the file malformed naming the key. A project has no priority, so the key there is refused rather than ignored. |
 //! | `filter_by_priority` | **Supported,** and proven by this crate's `tests/priority.rs`, over that `priority:` key: a task is kept when its priority is any value asked for. |
 //! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
+//! | `filter_by_metadata` | **Supported,** and proven by this crate's `tests/metadata_origin.rs`, over the `metadata:` front-matter map each task file already holds: a task is kept when every value the query names is a string equal to it at that key and nested path. Applied in process over the files a task read parses anyway. |
+//! | `filter_by_origin` | **Supported,** and proven by the same tests, over the `onetaskgraph.origin` entry of that map: a task is kept when it is exactly the query's qualified id. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -1086,6 +1088,8 @@ impl TaskSource for LocalMdSource {
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1123,6 +1127,8 @@ impl TaskSource for LocalMdSource {
                 labels_match(&t.labels, &q.labels)
                     && (q.statuses.is_empty() || q.statuses.contains(&t.status.category))
                     && (q.priorities.is_empty() || q.priorities.contains(&t.priority))
+                    && q.metadata_matches(&t.metadata)
+                    && q.origin_matches(&t.metadata)
                     && match &q.project {
                         ProjectFilter::Any => true,
                         ProjectFilter::Orphans => t.project.is_none(),

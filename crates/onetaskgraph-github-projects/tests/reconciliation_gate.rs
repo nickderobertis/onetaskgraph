@@ -72,7 +72,11 @@ fn serving(pricing: Pricing, asked: &Arc<Mutex<Vec<String>>>) -> journey::Endpoi
                     let query = request["query"].as_str().expect("a GraphQL document");
                     graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
                     recorded.lock().unwrap().push(query.to_owned());
-                    let answered = board::answer_a_stateless_session_call(query, pricing);
+                    let answered = board::answer_a_stateless_session_call(
+                        query,
+                        &request["variables"],
+                        pricing,
+                    );
                     let body = match answered {
                         Some(data) => json!({ "data": data }),
                         None => json!({"errors":[{"message":
@@ -207,4 +211,27 @@ fn the_same_board_answers_that_document_as_this_workspace_prices_it() {
         overstated.pointer("/rateLimit/nodeCount"),
         "only the price is what a mispricing board changes"
     );
+}
+
+#[test]
+fn every_query_the_reconciliation_probes_binds_every_non_null_variable_it_declares() {
+    // GitHub validates a document's variables before `dryRun: true` computes anything, so a
+    // probe leaving a non-null variable unbound is refused rather than priced — which is how
+    // the credentialed lane met the origin lookup sent without its `$filter`. Every query
+    // document is held here to what the reconciliation really sends it, with no credential.
+    let mut probed = 0;
+    for (document, doing) in graphql::DOCUMENTS {
+        if Mode::of_document(document) == Mode::Write {
+            continue;
+        }
+        let unbound =
+            board::unbound_required_variables(document, &journey::dry_run_variables(document));
+        assert!(
+            unbound.is_empty(),
+            "the reconciliation probe while {doing} leaves {unbound:?} unbound, and GitHub \
+             refuses it: give each a value in `journey::dry_run_variables`"
+        );
+        probed += 1;
+    }
+    assert!(probed > 0, "no query document was probed at all");
 }

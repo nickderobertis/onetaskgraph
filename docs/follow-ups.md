@@ -83,6 +83,30 @@ Closing it means: sending that predicate, pinning it, flipping the field to
 and the fake Linear server there so it applies the predicate, and deleting this entry and the
 verdict's wording in `onetaskgraph-linear`'s module documentation.
 
+## Linear: the metadata and origin filters are unimplemented
+
+Unsupported fields: `onetaskgraph-linear` `filter_by_metadata`, `filter_by_origin`
+
+`onetaskgraph-linear` keeps a task's caller metadata, `onetaskgraph.origin` among it, in a
+comment at the end of the issue description, and declares `filter_by_metadata` and
+`filter_by_origin` as `Support::Unsupported`. So it ignores a query's metadata matches and
+origin and returns the wider page, and the engine narrows it exactly over each issue's parsed
+metadata — correct under capability rule 2, and one read of every issue the query's other
+predicates kept, which on a large workspace is the cost these predicates exist to avoid.
+
+It is a gap rather than a limit. Linear's published `IssueFilter` carries a `description`
+comparator with `contains`, so a candidate narrowing on the value as a phrase of the
+description, confirmed in process against the parsed comment — the shape the GitHub Projects
+plugin uses over its board-scoped issue search — is not ruled out by the remote service. What
+is missing is the plugin sending one, pinned in
+`crates/onetaskgraph-linear/tests/fixtures/schema.graphql` against the published schema and a
+live observation that the description comparator sees the metadata comment.
+
+Closing it means: sending that narrowing from `issue_filter`, pinning it, flipping both fields
+to `Support::Native`, updating this plugin's row in `crates/onetaskgraph/tests/e2e/fixtures.rs`
+and the fake Linear server there so it applies the predicates, and deleting this entry and the
+verdicts' wording in `onetaskgraph-linear`'s module documentation.
+
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On
@@ -128,7 +152,12 @@ to a source that has already read the board — which is the thing this entry sa
 long-lived caller has no verb for, for the reads where the question is about one item. What
 is left is the reads whose cost is the board's size anyway: an unconstrained task list, a
 document list, the label list, and every write. Those still answer from the one board read,
-and that is what the rest of this entry is about.
+and that is what the rest of this entry is about. A task list narrowed by a text, a metadata
+value or a copy origin is held on the same terms — each distinct narrowed question is asked
+of GitHub once per source and its answer kept, completed with the source's own writes every
+time — so it is part of what is left too, and
+`a_carrier_filed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` pins it
+beside the board read's own test.
 
 The proxy for "one command" is the source object's lifetime, and for the binary that proxy
 is exact: one invocation is one process, one source and one read. It is not exact for a

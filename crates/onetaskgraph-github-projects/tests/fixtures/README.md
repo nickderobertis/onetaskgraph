@@ -190,3 +190,16 @@ that prove the precondition build their answers from those same names through
 GitHub's own wording changes are why this is a list rather than one phrase: `abuse
 detection` is what the limiter was called before it was renamed and is still what some
 endpoints return, and a refusal carrying it has to keep classifying as a secondary limit.
+
+`origin-lookup.json` is the answer to the origin lookup, the one document that asks two
+connections at once: `ProjectV2.items` under the board's own field filter on the
+`onetaskgraph.origin` text field, aliased `originItems`, holding a carrier written the way the
+release before this one wrote a copy — its origin in that field and not in the body — and the
+board-scoped issue search for the same id in the body, holding a carrier this release wrote,
+whose metadata slot mirrors the field. The `query: String` argument of `ProjectV2.items` in
+`schema.graphql` — "Search query for filtering items" — was read from GitHub.com's own
+published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
+2026-09-29, and the filter's behaviour was observed that day against a 394-item board: the
+quoted, the unquoted and the bare-value spellings of an origin each returned exactly its one
+carrier, and a prefix of the value returned none. The values are synthetic; it is
+documentation-derived and carries no captured response.

@@ -415,6 +415,8 @@ async fn every_verb_reports_both_lists_qualified() {
             project: ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: Paging {
                 limit: NonZeroU32::new(10).unwrap(),
                 token: None,

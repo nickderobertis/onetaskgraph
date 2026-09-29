@@ -107,6 +107,8 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             project: onetaskgraph_core::ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1065,6 +1067,8 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             project: onetaskgraph_core::ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: paging(),
         })
         .await
@@ -2336,6 +2340,8 @@ impl TaskSource for Misbehaving {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -2512,6 +2518,29 @@ fn into_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
     )
 }
 
+/// The same, over a source whose `P-1` records the destination's own `P-1` as its origin, into
+/// a destination holding that project — so a project copy updates it rather than creating
+/// one, which is the only kind of copy that walks for what it left behind: a project a copy
+/// creates holds nothing it did not file itself.
+fn into_misbehaving_holding_the_project(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
+    into_misbehaving_over(
+        json!({
+            "projects": [{"id": "P-1", "title": "Engine",
+                          "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                          "metadata": {"onetaskgraph.origin": "into:P-1"}}],
+            "tasks": [{"id": "T-1", "title": "Alpha engine",
+                       "status": {"category": "todo", "name": "Todo"},
+                       "labels": [], "project": "P-1"}],
+        }),
+        // Holding the project, at the source's own two-row pages rather than the larger ones
+        // `holding_a_project` gives a member walk.
+        Misbehaving {
+            project: true,
+            ..source
+        },
+    )
+}
+
 /// An engine whose source misbehaves, copying into an ordinary `in-memory` destination.
 fn from_misbehaving(source: Misbehaving) -> (Engine, Arc<AtomicU32>) {
     from_misbehaving_into(source, json!({}))
@@ -2594,7 +2623,7 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_counterpart()
 async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_what_a_copy_left_behind() {
     // The scan for each counterpart has to succeed for the orphan walk to be reached at
     // all, which is why this destination behaves until the copy has written to it.
-    let (engine, _) = into_misbehaving(Misbehaving::new(
+    let (engine, _) = into_misbehaving_holding_the_project(Misbehaving::new(
         At::Tasks,
         Fault::RepeatsTheCursor,
         Onset::FirstWrite,
@@ -2620,7 +2649,7 @@ async fn a_destination_that_overruns_its_page_stops_the_walk_for_what_a_copy_lef
     // The other fault at the same loop as the test above: the scan for each counterpart
     // succeeds, and the walk that reports what the copy left behind is handed three rows
     // for a page of two.
-    let (engine, _) = into_misbehaving(Misbehaving::new(
+    let (engine, _) = into_misbehaving_holding_the_project(Misbehaving::new(
         At::Tasks,
         Fault::OverrunsThePage,
         Onset::FirstWrite,

@@ -257,7 +257,12 @@ type ProjectV2 implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   fields(first: Int, after: String): ProjectV2FieldConfigurationConnection!
-  items(first: Int, after: String): ProjectV2ItemConnection!
+  items(
+    first: Int
+    after: String
+    "Search query for filtering items"
+    query: String
+  ): ProjectV2ItemConnection!
 }
 type ProjectV2FieldConfigurationConnection {
   nodes: [ProjectV2FieldConfiguration]

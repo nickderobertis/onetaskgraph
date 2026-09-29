@@ -419,7 +419,7 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
 /// this source can drive a document to, which is what the offline bound is computed under.
 /// Every other variable takes a value of the right type and no meaning at all, because
 /// `dryRun: true` computes the count without resolving one of them.
-fn dry_run_variables(document: &str) -> Value {
+pub fn dry_run_variables(document: &str) -> Value {
     let mut variables = serde_json::Map::new();
     let mut bind = |name: &str, value: Value| {
         if document.contains(&format!("${name}:")) {
@@ -432,6 +432,10 @@ fn dry_run_variables(document: &str) -> Value {
     bind("after", Value::Null);
     bind("id", json!("node-count-reconciliation"));
     bind("search", json!("repo:github/docs is:issue"));
+    bind(
+        "filter",
+        json!(format!("{ORIGIN_FIELD}:\"node-count-reconciliation\"")),
+    );
     bind("type", json!("ISSUE"));
     bind("duplicates", json!(true));
     bind("owner", json!("github"));
@@ -2705,6 +2709,8 @@ pub async fn run(nomination: Nomination) {
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
