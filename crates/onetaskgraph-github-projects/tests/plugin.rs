@@ -5985,6 +5985,49 @@ fn metadata_board() -> Fixture {
 }
 
 #[tokio::test]
+async fn the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind() {
+    // `onetaskgraph.copies` is the one reserved key a copy writes through the narrow
+    // metadata write, and it is small, so it rides in the body's slot beside the caller's
+    // keys rather than in a field of its own.
+    let fixture = metadata_board();
+    let source = source(&fixture);
+    let link = json!({"notes": "notes:T-1"});
+
+    let task = source
+        .set_task_metadata(&id("I_task"), &MetadataKey::copies(), &link)
+        .await
+        .expect("a task's link is writable")
+        .expect("a task of this board");
+    let project = source
+        .set_project_metadata(&id("I_plan"), &MetadataKey::copies(), &link)
+        .await
+        .expect("a project's link is writable")
+        .expect("a project of this board");
+    let document = source
+        .set_document_metadata(&id("I_doc"), &MetadataKey::copies(), &link)
+        .await
+        .expect("a document's link is writable")
+        .expect("a document of this board");
+    for metadata in [&task.metadata, &project.metadata, &document.metadata] {
+        assert_eq!(metadata.get(MetadataKey::COPIES_KEY), Some(&link));
+    }
+    assert!(
+        fixture
+            .item("I_doc")
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains(r#""onetaskgraph.copies":{"notes":"notes:T-1"}"#)),
+        "the link is in the body's slot"
+    );
+
+    // And a later read — a fresh source, so nothing it wrote is remembered — reads it back.
+    let reader = source_of(&fixture);
+    let read = reader.get_task(&id("I_task")).await.unwrap().unwrap();
+    assert_eq!(read.metadata.get(MetadataKey::COPIES_KEY), Some(&link));
+    assert_eq!(read.metadata.get("caller.x"), Some(&json!(1)));
+}
+
+#[tokio::test]
 async fn a_metadata_key_is_set_by_one_body_update_that_changes_only_the_slot() {
     let fixture = metadata_board();
     let before = source_of(&fixture);

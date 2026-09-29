@@ -1105,8 +1105,14 @@ ever sent any of these, and `set_document_metadata` only to one that also declar
 
 `id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
 `MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
-not `onetaskgraph`, which the engine never sends otherwise and a plugin may refuse with
-`{"kind": "malformed"}` if it is ever handed one. `value` is any JSON value, `null` included.
+not `onetaskgraph` — or exactly `onetaskgraph.copies`, the one reserved key the engine sends
+here, when a copy records on an item it read from this plugin where that item landed (see
+`docs/metadata.md`). Its `value` is a JSON object of destination source names to qualified
+ids, and the plugin holds it wherever it holds the item's metadata. The engine sends no other
+key in that namespace, and a plugin may refuse one with `{"kind": "malformed"}` if it is ever
+handed one. A plugin that cannot hold `onetaskgraph.copies` refuses it with
+`{"kind": "refused"}`; the copy then goes on without the link and says so, rather than
+failing. `value` is any JSON value, `null` included.
 
 The plugin holds `value` under `key` — adding the key when the record does not hold it and
 replacing what it holds when it does — and changes **nothing else**: every other metadata key,
@@ -1317,6 +1323,11 @@ The `metadata_updates` member of §3.7 and the three methods of §4.18 were adde
 bump, for the reason the methods of §4.17 were: they reach only a plugin that answered
 `metadata_updates: true`, which a plugin written before them cannot have done, so such a plugin
 is refused by name before anything is sent.
+
+`onetaskgraph.copies` as a §4.18 key was added **without** a bump: it reaches only a plugin
+that answered `metadata_updates: true`, and one written when §4.18 let a plugin refuse every
+key in that namespace as malformed may go on doing so — the engine reads either refusal of
+that one key as the plugin not holding the link, and the copy completes without it.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional

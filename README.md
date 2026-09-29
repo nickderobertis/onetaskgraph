@@ -323,13 +323,34 @@ $ onetaskgraph task copy notes:T-1 --to work
 ```
 
 The copy back **updates** rather than duplicating because the copied file carries the id
-it came from, under the reserved metadata key `onetaskgraph.origin`. Nothing anywhere
-holds a mapping: the correspondence lives on the item, inside the plugin that owns it.
+it came from, under the reserved metadata key `onetaskgraph.origin`. The item it was copied
+*from* records where it landed too, under `onetaskgraph.copies` — an object naming the
+counterpart at each destination it was copied into, such as
+`{"notes": "notes:T-1"}`. Nothing anywhere holds a mapping: the correspondence lives on the
+two items, inside the plugins that own them.
 
-Two rules find the counterpart, in this order. If the item's origin names the destination,
-that origin *is* the destination item and the copy updates it. Otherwise the destination
-is searched for an item whose origin is the id being copied; found, it is updated, and not
-found, one is created carrying that origin.
+These rules find the counterpart, in this order:
+
+1. **The link.** If the item's `onetaskgraph.copies` names an item at the destination, that
+   item is read by id, and when its own origin names the item being copied it is the
+   counterpart and the copy updates it — one read, and no search of the destination. If it
+   names an item the destination no longer holds, the copy refuses with the failure kind
+   `stale-link`, naming both ids, because creating there would duplicate work somebody
+   deleted; `--recreate` goes on to the rules below instead, and then creates. If it names an
+   item whose origin somebody re-pointed at something else, the link is ignored.
+2. **The origin.** If the item's origin names the destination, that origin *is* the
+   destination item and the copy updates it.
+3. **The search.** Otherwise the destination is searched for an item whose origin is the id
+   being copied; found, it is updated, and not found, one is created carrying that origin.
+
+Once the whole copy has landed, every item found by the link, the search or `--match-by`, or
+created, has its link for that destination recorded or refreshed — one metadata write at its
+own source, undone with everything else if the copy cannot finish. An item found by its own
+origin records nothing: that correspondence is already written down, on the destination
+item. A source that cannot hold the link — it has no write side, or will not make the narrow
+metadata write — is copied from exactly as before, and the report says the link was not
+recorded. So after one copy the pair is found from either side by one read by id: forward
+by the link, back by the origin.
 
 Which rule found it decides what the copy records there. A copy that got its counterpart
 from the first rule is a copy **back**: the destination is the original, and the item being
@@ -342,7 +363,7 @@ copied from, which is what makes the next copy of it an update.
 | Flag | What it is for |
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |
-| `--recreate` | An origin naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
+| `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default (`stale-origin`, `stale-link`), because creating there would duplicate work somebody deleted. This says create instead. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
@@ -375,14 +396,19 @@ refusal says so and names what is still there rather than leaving you to find it
 `--json` gives one entry per item for a script to read:
 
 ```json
-{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142"}]}
+{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142",
+            "via": "link", "link": "unchanged"}]}
 ```
 
 `action` says which of the four things above happened to that item, and `destination` is
-`null` only for a dry run that would have created something. The vocabulary itself is
-published rather than restated here: it is the `CopyAction` root of `onetaskgraph schema`,
-which is what both SDKs are generated from and what the journeys validate this output
-against.
+`null` only for a dry run that would have created something. `via` says which rule found
+the counterpart — `link`, `origin`, `scan`, `match` for `--match-by`, or `created` when none
+was found — and `link` says what became of the item's own link: `recorded`, `unchanged`, or
+`unrecorded` where its source cannot hold one. A dry run reports `via` and leaves `link`
+out, and an `orphaned` entry carries neither. The vocabularies themselves are published
+rather than restated here: they are the `CopyAction`, `CopyVia` and `CopyLink` roots of
+`onetaskgraph schema`, which is what both SDKs are generated from and what the journeys
+validate this output against.
 
 A copy that reaches a source which counts its own requests — `github-projects` does — also
 says what it **spent**: the requests those sources sent for the command, and what that cost

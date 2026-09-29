@@ -77,7 +77,11 @@ of another source entirely. The engine reports that far end without fetching it;
 it is a command of your own against that qualified id.
 
 `metadata` keys beginning `onetaskgraph.` and `onepipeline.` are reserved; see
-[`metadata.md`](./metadata.md).
+[`metadata.md`](./metadata.md). Two of them are written into this block by a copy:
+`onetaskgraph.origin` on an item a copy wrote here, and `onetaskgraph.copies` on an item a
+copy read from here, naming where it landed. The second is written the way `metadata set`
+writes one key, so a file whose `metadata:` is written on one line is copied from without it
+and the copy reports the link `unrecorded`.
 
 `delivers` names the tasks this one delivers: finishing it finishes them. A bare entry is a
 task of this folder — `security/review` above — and `<source>:<id>` is a task of any source,
