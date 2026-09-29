@@ -5377,7 +5377,9 @@ impl GitHubProjectsSource {
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
         {
-            blocked_by_moved = self.reconcile_blocked_by(&item.id, native, false).await?;
+            blocked_by_moved = self
+                .reconcile_blocked_by(&item.id, native, Issue::Existing)
+                .await?;
         }
 
         if let Some(title) = &update.title {
@@ -6230,8 +6232,11 @@ impl GitHubProjectsSource {
             // relationships a person had made on that issue, which is a write nobody
             // asked for.
             if incoming.written.kind() != BoardKind::Document {
-                self.reconcile_blocked_by(content_id, native, existing.is_none())
-                    .await?;
+                let issue = match existing {
+                    Some(_) => Issue::Existing,
+                    None => Issue::Created,
+                };
+                self.reconcile_blocked_by(content_id, native, issue).await?;
             }
         }
         Ok(())
@@ -6621,18 +6626,17 @@ impl GitHubProjectsSource {
     /// Bring one issue's `blockedBy` to exactly `native`, sending only the difference, and say
     /// whether there was one.
     ///
-    /// `created` says the issue was created by this very write, so it is blocked by nothing
-    /// yet and its relationships are not read: there is nothing a read of them could find.
+    /// An issue [`Issue::Created`] by this very write is blocked by nothing yet, so its
+    /// relationships are not read: there is nothing a read of them could find.
     async fn reconcile_blocked_by(
         &self,
         content_id: &NativeId,
         native: &[String],
-        created: bool,
+        issue: Issue,
     ) -> Result<bool, SourceError> {
-        let current = if created {
-            Vec::new()
-        } else {
-            self.native_dependency_ids(content_id).await?
+        let current = match issue {
+            Issue::Created => Vec::new(),
+            Issue::Existing => self.native_dependency_ids(content_id).await?,
         };
         let mut changed = false;
         for (operation, far_id) in current
@@ -6677,6 +6681,15 @@ impl GitHubProjectsSource {
         }
         Ok(changed)
     }
+}
+
+/// Whether the issue one write reconciles was created by that write or was already there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Issue {
+    /// Created by this write, so it holds no relationships yet.
+    Created,
+    /// On the board before this write, holding whatever relationships it holds.
+    Existing,
 }
 
 /// What resolving one node id reached; see [`GitHubProjectsSource::reach`].

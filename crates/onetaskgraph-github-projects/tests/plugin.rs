@@ -14394,3 +14394,42 @@ async fn an_item_this_process_wrote_out_of_a_predicate_is_not_returned_from_a_st
         ["I_moved"]
     );
 }
+
+#[tokio::test]
+async fn an_origin_lookup_walks_each_of_its_connections_past_its_first_page() {
+    // More carriers than one page of either connection holds: five in the board field alone,
+    // which only the field filter finds, and four this release wrote, which both find. Both
+    // connections have to be walked on from their own cursors for all nine to come back.
+    let mut items = (0..5)
+        .map(|index| {
+            Item::issue(&format!("I_field_{index}"), "field alone")
+                .status("Todo")
+                .carrying("work:ENG-1")
+        })
+        .collect::<Vec<_>>();
+    items.extend((0..4).map(|index| {
+        Item::issue(&format!("I_mirrored_{index}"), "mirrored")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-1"})))
+    }));
+    items.push(
+        Item::issue("I_other", "other")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+    );
+    let fixture = board(items);
+    let source = source(&fixture);
+    let mut found = selected_tasks(source.as_ref(), &origin_query("work:ENG-1")).await;
+    found.sort();
+    let mut expected = (0..5)
+        .map(|index| format!("I_field_{index}"))
+        .chain((0..4).map(|index| format!("I_mirrored_{index}")))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(found, expected);
+    // Nine carriers at three a page is three pages of the field filter; the four the search
+    // finds are two pages of it, walked alongside.
+    assert_eq!(fixture.requests("originItems"), 3);
+    assert_eq!(fixture.requests("board"), 0);
+}
