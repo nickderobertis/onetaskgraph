@@ -1027,8 +1027,7 @@ def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = froze
     if isinstance(enumerated, list) and None in enumerated:
         return True
     for combinator in ("anyOf", "oneOf"):
-        variants = schema.get(combinator)
-        if isinstance(variants, list) and any(admits_null(v, root, seen) for v in variants):
+        if any(admits_null(v, root, seen) for v in schema_variants(schema, combinator)):
             return True
     reference = schema.get("$ref")
     if isinstance(reference, str):
@@ -1037,6 +1036,17 @@ def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = froze
         )
     # A schema that constrains nothing, as an arbitrary JSON value's does, admits `null` too.
     return not set(schema) - {"description", "title", "default", "examples"}
+
+
+def schema_variants(schema: dict[str, JsonValue], combinator: str) -> list[JsonValue]:
+    """The variants `schema` lists under `combinator`, refusing one that is not a list."""
+    variants = schema.get(combinator, [])
+    if not isinstance(variants, list):
+        raise SystemExit(
+            f"binary emitted a schema whose `{combinator}` is not a list; next: emit every "
+            "combinator as an array of schemas, as JSON Schema defines it"
+        )
+    return variants
 
 
 def resolve_reference(reference: str, root: JsonValue) -> JsonValue:
@@ -1082,7 +1092,7 @@ def schema_objects(value: JsonValue, root: JsonValue, inherited: Members) -> lis
     variants = [
         variant
         for combinator in ("oneOf", "anyOf")
-        for variant in (value.get(combinator) or [])
+        for variant in schema_variants(value, combinator)
         if isinstance(variant, dict) and isinstance(variant.get("properties"), dict)
     ]
     for variant in variants:
@@ -1158,6 +1168,11 @@ def nullability_disagreements(bundle: SchemaBundle, destination: Path) -> list[s
     Or the other way round, over every root generated into `destination`. A schema object with
     no model holding exactly its members is a disagreement too: a pairing this cannot make is
     a member this cannot vouch for.
+
+    Objects are paired by the names of their members, not by the model names the generator
+    chose, so two objects of one root holding the same member names are compared as one set of
+    nullability patterns: a pattern present on one side and absent on the other is reported,
+    and two such objects trading patterns with each other is not.
     """
     disagreements: list[str] = []
     for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):

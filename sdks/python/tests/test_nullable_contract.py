@@ -221,6 +221,18 @@ def test_the_guard_refuses_a_schema_reference_it_cannot_follow() -> None:
     assert "'#/$defs/Vanished' that is not a definition of its own root" in str(refused.value)
 
 
+def test_the_guard_refuses_a_combinator_that_is_not_a_list() -> None:
+    """A `oneOf` the guard cannot read as variants is refused rather than iterated as a map."""
+    emitted = json.loads(generate.run_workspace_binary("schema"))
+    capabilities = emitted["roots"]["SourceListing"]["$defs"]["Capabilities"]["properties"]
+    capabilities["comments"] = {"oneOf": {"type": "null"}}
+
+    bundle = generate.validate_schema_bundle(emitted)
+    with pytest.raises(SystemExit) as refused:
+        generate.nullability_disagreements(bundle, GENERATED)
+    assert "schema whose `oneOf` is not a list" in str(refused.value)
+
+
 def test_generation_fails_when_its_models_stop_following_the_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
