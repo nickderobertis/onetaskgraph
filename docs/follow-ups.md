@@ -128,7 +128,12 @@ to a source that has already read the board — which is the thing this entry sa
 long-lived caller has no verb for, for the reads where the question is about one item. What
 is left is the reads whose cost is the board's size anyway: an unconstrained task list, a
 document list, the label list, and every write. Those still answer from the one board read,
-and that is what the rest of this entry is about.
+and that is what the rest of this entry is about. A task list narrowed by a text, a metadata
+value or a copy origin is held on the same terms — each distinct narrowed question is asked
+of GitHub once per source and its answer kept, completed with the source's own writes every
+time — so it is part of what is left too, and
+`a_carrier_filed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one` pins it
+beside the board read's own test.
 
 The proxy for "one command" is the source object's lifetime, and for the binary that proxy
 is exact: one invocation is one process, one source and one read. It is not exact for a

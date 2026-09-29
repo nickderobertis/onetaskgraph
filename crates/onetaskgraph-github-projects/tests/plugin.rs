@@ -14633,3 +14633,42 @@ async fn a_draft_this_process_wrote_is_not_an_answer_to_a_narrowed_read() {
         Some("Ship it".to_owned())
     );
 }
+
+#[tokio::test]
+async fn a_carrier_filed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one() {
+    // The narrowed counterpart of the board read's own bargain, pinned beside it for the same
+    // reason: a source keeps each narrowed answer for as long as it lives, completed with its
+    // own writes every time, so what another process files after the first ask is not an
+    // answer this source gives — and one invocation of the binary is one source. A source
+    // built the way the next command builds one asks again and sees it once GitHub's index
+    // has it.
+    let fixture = board(vec![
+        Item::issue("I_first", "first")
+            .status("Todo")
+            .carrying("work:ENG-5")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-5"}))),
+    ]);
+    let held = source(&fixture);
+    assert_eq!(
+        selected_tasks(held.as_ref(), &origin_query("work:ENG-5")).await,
+        ["I_first"]
+    );
+    fixture.filed_by_something_else(
+        Item::issue("I_later", "later")
+            .status("Todo")
+            .carrying("work:ENG-5")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-5"}))),
+    );
+    assert_eq!(
+        selected_tasks(held.as_ref(), &origin_query("work:ENG-5")).await,
+        ["I_first"],
+        "this source asked a second time, which is the request its one answer buys"
+    );
+    assert_eq!(fixture.requests("originItems"), 1);
+
+    let next = source(&fixture);
+    let mut found = selected_tasks(next.as_ref(), &origin_query("work:ENG-5")).await;
+    found.sort();
+    assert_eq!(found, ["I_first", "I_later"]);
+    assert_eq!(fixture.requests("originItems"), 2);
+}
