@@ -401,13 +401,23 @@ refusal says so and names what is still there rather than leaving you to find it
 ```
 
 `action` says which of the four things above happened to that item, and `destination` is
-`null` only for a dry run that would have created something. `via` says which of the rules
-above found the counterpart, or that none did and the item was created, and `link` says what
-became of the item's own link — including that its source could not hold one. A dry run
-reports `via` and leaves `link` out, and an `orphaned` entry carries neither. The
-vocabularies themselves are published rather than restated here: they are the `CopyAction`,
-`CopyVia` and `CopyLink` roots of `onetaskgraph schema`, which is what both SDKs are
-generated from and what the journeys validate this output against.
+`null` only for a dry run that would have created something. The vocabulary itself is the
+`CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
+what the journeys validate this output against.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
+     `crates/onetaskgraph/tests/e2e/surface.rs` reads this paragraph and fails unless the words
+     it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
+`via` is one field with five words, on every `created`, `updated` and `unchanged` item. On
+`updated` and `unchanged` it names the rule above that found the counterpart: `link`,
+`origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
+none did. `link` says what became of the item's own link, on those same three actions of a
+copy that writes: `recorded`, `unchanged`, or `unrecorded` where its source could not hold
+one. A dry run reports `via` and leaves `link` out, and an `orphaned` item carries neither.
+In the generated SDKs the four rule words are the type `CopyVia` and `created` is
+`NoCounterpart`, and the link words are `CopyLink`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 A copy that reaches a source which counts its own requests — `github-projects` does — also
 says what it **spent**: the requests those sources sent for the command, and what that cost

@@ -1143,3 +1143,73 @@ fn every_value_the_help_advertises_is_one_the_command_line_actually_takes() {
         }
     }
 }
+
+#[test]
+fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
+    // The README lists `via` as one field of five words and `link` as one of three, because
+    // a reader of a copy report sees one field rather than the two types the SDKs generate
+    // for `via`. That list is held here to the words the binary's own schema emits for both,
+    // so a word added to either vocabulary, or dropped from it, fails until the README says
+    // so too.
+    let output = onetaskgraph()
+        .arg("schema")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let bundle: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
+    let action = &bundle["roots"]["CopyAction"];
+    let words = |schema: &serde_json::Value| -> Vec<String> {
+        schema["oneOf"]
+            .as_array()
+            .expect("a vocabulary is a oneOf of words")
+            .iter()
+            .map(|word| word["const"].as_str().expect("a word").to_owned())
+            .collect()
+    };
+    let mut via = words(&action["$defs"]["CopyVia"]);
+    via.extend(words(&action["$defs"]["NoCounterpart"]));
+    let link = words(&action["$defs"]["CopyLink"]);
+    let actions: Vec<String> = action["oneOf"]
+        .as_array()
+        .expect("the actions are a oneOf")
+        .iter()
+        .map(|variant| {
+            variant["properties"]["action"]["const"]
+                .as_str()
+                .expect("an action")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(via.len(), 5, "{via:?}");
+    assert_eq!(link.len(), 3, "{link:?}");
+
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
+    )
+    .expect("README.md is readable");
+    let start = readme
+        .find("`via` is one field with five words")
+        .expect("the README's paragraph on `via` and `link`");
+    let paragraph = &readme[start..start + readme[start..].find("\n<!--").unwrap()];
+    let named: std::collections::BTreeSet<&str> = paragraph.split('`').skip(1).step_by(2).collect();
+    // Every word of both vocabularies, the four actions the paragraph names them on, and the
+    // five names it uses for the fields, the flag and the three generated types — and
+    // nothing else, so a word this schema no longer emits cannot linger there either.
+    let mut expected: std::collections::BTreeSet<&str> = via
+        .iter()
+        .chain(&link)
+        .chain(&actions)
+        .map(String::as_str)
+        .collect();
+    expected.extend([
+        "via",
+        "link",
+        "--match-by",
+        "CopyVia",
+        "NoCounterpart",
+        "CopyLink",
+    ]);
+    assert_eq!(named, expected, "the README's paragraph:\n{paragraph}");
+}
