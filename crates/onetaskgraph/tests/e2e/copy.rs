@@ -898,6 +898,69 @@ fn board_with_plans(sandbox: &Sandbox, folder: &str) -> crate::fixtures::GitHubB
 }
 
 #[test]
+fn a_title_with_no_letter_or_digit_is_matched_on_a_board_without_asking_its_search() {
+    // A board refuses to search for a text with no letter or digit, since GitHub's index holds
+    // words. So a copy matching by such a title does not ask the board's search for it: it
+    // looks the way it always did, and finds the issue an earlier copy filed.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("authored");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    for id in ["A", "B"] {
+        std::fs::write(
+            root.join(format!("tasks/{id}.md")),
+            format!("---\ntitle: '---'\nstatus: Todo\n---\nplan {id}\n"),
+        )
+        .unwrap();
+    }
+    board_with_plans(&sandbox, "authored");
+
+    let first = ok(
+        &sandbox,
+        &["task", "copy", "authored:A", "--to", "board", "--json"],
+    );
+    let first = reported(&first);
+    assert_eq!(first[0].2, "created", "{first:?}");
+
+    let again = ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "authored:B",
+            "--to",
+            "board",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let again = reported(&again);
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert_eq!(
+        (again[0].1.clone(), again[0].2.as_str()),
+        (first[0].1.clone(), "updated"),
+        "the issue the first copy filed is found by its title and updated"
+    );
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "list", "--source", "board", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(
+        listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|task| task["item"]["title"] == "---")
+            .count(),
+        1,
+        "two plans matched by title are one issue: {listed}"
+    );
+    let shown = shown(&sandbox, "task", first[0].1.as_str().expect("an id"));
+    assert_eq!(shown["content"], "plan B");
+}
+
+#[test]
 fn a_project_and_its_tasks_copy_into_a_board_without_touching_the_board_itself() {
     // The defect this replaces: the source resolved to one board id and treated it as the
     // project, so copying a project into it renamed a real user's board. A board is a

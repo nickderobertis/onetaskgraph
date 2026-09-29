@@ -14719,39 +14719,28 @@ async fn a_metadata_value_json_escapes_is_found_by_the_escape_the_body_holds() {
 }
 
 #[tokio::test]
-async fn a_value_or_text_with_no_searchable_words_is_not_sent_and_is_confirmed_exactly() {
-    // GitHub's index holds words, so an empty value, or one of punctuation alone, names none
-    // to find. The phrase is left out of the search rather than trusted to GitHub — whatever
-    // it answers for a phrase with no words — so the search can only be wider, and the answer
-    // is exactly the items holding that string, confirmed in process.
-    let items = || {
-        vec![
-            Item::issue("I_empty", "empty")
-                .status("Todo")
-                .body(&slotted("", &json!({"team.note": ""}))),
-            Item::issue("I_dashes", "--- divider")
-                .status("Todo")
-                .body(&slotted("", &json!({"team.note": "---"}))),
-            Item::issue("I_words", "words")
-                .status("Todo")
-                .body(&slotted("", &json!({"team.note": "stale"}))),
-            Item::issue("I_bare", "Plain").status("Todo"),
-        ]
-    };
-    let mut titled_with_value = metadata_query("team.note", &[], "---");
-    titled_with_value.text = text("divider", TextFields::Title);
+async fn a_value_or_text_with_no_searchable_words_is_refused_before_any_request() {
+    // GitHub's index holds words, so an empty value, one of whitespace or punctuation alone,
+    // and a text of punctuation alone name none to find, and no bounded query answers them.
+    // The source says so, naming what it was asked, rather than reading the whole board or
+    // answering nothing.
+    let mut beside_a_text = metadata_query("team.note", &["kind"], "---");
+    beside_a_text.text = text("divider", TextFields::Title);
     let cases = [
         (
             "an empty value",
             metadata_query("team.note", &[], ""),
-            vec!["I_empty"],
-            "project:octo-org/7 is:issue in:body",
+            "the metadata value \"\" at \"team.note\"",
         ),
         (
-            "a punctuation value",
-            metadata_query("team.note", &[], "---"),
-            vec!["I_dashes"],
-            "project:octo-org/7 is:issue in:body",
+            "a whitespace value",
+            metadata_query("team.note", &[], "  "),
+            "the metadata value \"  \" at \"team.note\"",
+        ),
+        (
+            "a punctuation value beside a text with words",
+            beside_a_text,
+            "the metadata value \"---\" at \"team.note/kind\"",
         ),
         (
             "a punctuation text",
@@ -14759,32 +14748,55 @@ async fn a_value_or_text_with_no_searchable_words_is_not_sent_and_is_confirmed_e
                 text: text("--", TextFields::Title),
                 ..TaskQuery::default()
             },
-            vec!["I_dashes"],
-            "project:octo-org/7 is:issue in:title",
-        ),
-        (
-            "a punctuation value beside a text with words",
-            titled_with_value,
-            vec!["I_dashes"],
-            "project:octo-org/7 is:issue in:title,body \"divider\"",
+            "the text \"--\"",
         ),
     ];
-    for (what, query, expected, search) in cases {
-        let fixture = board(items());
+    for (what, query, named) in cases {
+        let fixture = board(vec![
+            Item::issue("I_empty", "--")
+                .status("Todo")
+                .body(&slotted("", &json!({"team.note": ""}))),
+        ]);
         let source = source(&fixture);
-        assert_eq!(
-            selected_tasks(source.as_ref(), &query).await,
-            expected,
-            "{what}"
+        let error = source.query_tasks(&query, &page(10)).await.expect_err(what);
+        assert!(
+            matches!(error, SourceError::Refused { .. }),
+            "{what}: {error:?}"
         );
-        assert_eq!(fixture.searches(), [search], "{what}");
-        assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+        let message = refusal(error);
+        assert!(message.contains(named), "{what}: {message}");
+        assert!(
+            message.contains("GitHub's issue search indexes words")
+                && message.contains("holding a letter or a digit"),
+            "{what} says why and what to ask instead: {message}"
+        );
         assert_eq!(
-            fixture.board_item_reads(),
+            fixture.operations(),
             Vec::<String>::new(),
-            "{what} walked the board's items"
+            "{what} asked GitHub something"
         );
     }
+
+    // A blank text is not refused: it keeps the board read it always had, confirmed by the
+    // same substring rule.
+    let fixture = board(vec![
+        Item::issue("I_gap", "a   gap").status("Todo"),
+        Item::issue("I_two", "Two").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                text: text("   ", TextFields::Title),
+                ..TaskQuery::default()
+            }
+        )
+        .await,
+        ["I_gap"]
+    );
+    assert_eq!(fixture.requests("board"), 1);
+    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
 }
 
 #[tokio::test]

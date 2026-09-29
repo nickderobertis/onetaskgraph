@@ -497,6 +497,18 @@ carries. They are two members rather than one because a store may be able to ask
 and not the other: a board keeps a copy's origin in a field of its own and caller metadata in
 the issue body.
 
+A plugin that declared a predicate `"native"` may still answer `{"kind": "refused"}`, naming
+the value, for one value its store cannot search — never a narrower set in its place. The
+built-in `github-projects` source does that for two, both before it sends GitHub anything,
+because GitHub's issue search indexes words and so no bounded query finds a string with no
+letter or digit in it: a metadata `value` with no letter or digit — the empty string,
+whitespace or punctuation alone — and a task-query `text` that is not blank and has no letter
+or digit, such as `--`. It neither reads its whole board for either nor answers either as
+empty. A blank text is not refused; it keeps the read that source always gave it. A copy
+matching by title or by a metadata value (`--match-by`) never asks a native source for such a
+title or value, and reads the destination's tasks instead, as it did before either predicate
+could be pushed down.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 

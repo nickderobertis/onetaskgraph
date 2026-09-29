@@ -128,9 +128,9 @@
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
-//! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. A value with no letter or digit — the empty string, or punctuation alone — names no word GitHub's index holds, so it is not sent as a phrase and is confirmed in process alone, over every issue the search then returns. |
+//! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. **A value with no letter or digit is refused** — the empty string, whitespace or punctuation alone — before any request, naming the value: GitHub's index holds words, so no bounded query can find such a value, and this source neither reads the whole board for it nor answers it as empty. |
 //! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
-//! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. A text with no letter or digit names no word to search for, so it is not sent as a phrase: the search is then every issue of the board, confirmed by the same rule. A project or document query's text is applied by that same substring rule over the issues its read already holds, and narrows nothing. |
+//! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. **A text with no letter or digit that is not blank is refused** — `--` for one — before any request, naming the text, for the reason a metadata value like it is; a blank text is not refused, and keeps the board read it always had, confirmed by the same substring rule. A project or document query's text is applied by that same substring rule over the issues its read already holds, and narrows nothing. |
 //! | `search_content` | **Supported,** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
@@ -6766,13 +6766,6 @@ fn updated_qualifier(since: DateTime<Utc>) -> String {
 /// matches whole tokens where a substring rule would match inside a word, so an item holding
 /// the text only inside a longer word is not returned. A text of nothing but whitespace
 /// matches every item, so it narrows nothing and is not sent.
-///
-/// **A phrase with no letter or digit in it is not sent either.** GitHub's index holds words,
-/// so an empty value or one of punctuation alone names no word to find, and what GitHub
-/// answers for such a phrase is not something this source may rely on: were it to answer
-/// nothing, rows would be dropped for a predicate this source applies. Leaving it out can only
-/// widen the search — to every issue of the board, when it was the only phrase — and the
-/// in-process confirmation then applies the predicate exactly.
 fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
     let text = query
         .text
@@ -6801,15 +6794,50 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
                 .iter()
                 .map(|wanted| as_stored(wanted.value())),
         )
-        .filter(|phrase| has_words(phrase))
         .map(|phrase| quoted(&phrase))
         .collect::<Vec<_>>();
-    Some(
-        std::iter::once(fields.to_owned())
-            .chain(phrases)
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
+    Some(format!("{fields} {}", phrases.join(" ")))
+}
+
+/// Refuses a task query naming a text or a metadata value GitHub's issue search cannot find,
+/// before anything is asked of GitHub.
+///
+/// GitHub's index holds words, so a phrase with no letter or digit names none to find, and no
+/// bounded query answers it: sent, GitHub's answer to it is nothing this source may rely on;
+/// left out, the search is every issue of the board. So this source says it cannot answer
+/// rather than reading the board or answering nothing. A blank text is not refused: it narrows
+/// nothing GitHub could search for, and keeps the board read it always had.
+fn refuse_unsearchable(query: &TaskQuery) -> Result<(), SourceError> {
+    const WHY: &str = "GitHub's issue search indexes words, so it cannot answer a value with no \
+                       letter or digit with a bounded query";
+    if let Some(text) = &query.text
+        && !text.terms.trim().is_empty()
+        && !has_words(&text.terms)
+    {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot search for the text {:?}: {WHY}; search for a text holding a letter or a digit",
+                text.terms
+            ),
+        });
+    }
+    if let Some(wanted) = query
+        .metadata
+        .iter()
+        .find(|wanted| !has_words(wanted.value()))
+    {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot filter by the metadata value {:?} at {:?}: {WHY}; filter by a value holding a letter or a digit",
+                wanted.value(),
+                std::iter::once(wanted.key())
+                    .chain(wanted.path().iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Whether GitHub's index could hold a word of `phrase`: whether it has a letter or a digit.
@@ -7492,6 +7520,7 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
+        refuse_unsearchable(query)?;
         // A read narrowed to one project asks that project for its own tasks, so nothing
         // about it costs what the rest of the board holds. A read carrying a text, metadata
         // or origin predicate asks GitHub the narrower question those predicates are, and a

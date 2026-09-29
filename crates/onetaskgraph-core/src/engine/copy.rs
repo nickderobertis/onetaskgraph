@@ -581,21 +581,27 @@ impl Wanted {
     /// [`found`](Self::found) still confirms each row. A text search is wider than an equal
     /// title, and a source may answer a match it cannot yet see as absent — which is the
     /// same answer the whole-store walk gave for an item its own listing was behind on.
+    ///
+    /// A title or a value with no letter or digit is never pushed down: a source whose search
+    /// indexes words cannot answer it and may refuse it, and the walk it replaces answered it
+    /// already, so it is asked for everything as it always was.
     fn task_query(&self, capabilities: &Capabilities) -> TaskQuery {
         match self {
             Self::Origin(id) if capabilities.filter_by_origin.is_native() => TaskQuery {
                 origin: Some(id.clone()),
                 ..TaskQuery::default()
             },
-            Self::Title(title) if capabilities.search_title.is_native() => TaskQuery {
-                text: Some(TextQuery {
-                    terms: title.clone(),
-                    fields: TextFields::Title,
-                }),
-                ..TaskQuery::default()
-            },
+            Self::Title(title) if capabilities.search_title.is_native() && has_words(title) => {
+                TaskQuery {
+                    text: Some(TextQuery {
+                        terms: title.clone(),
+                        fields: TextFields::Title,
+                    }),
+                    ..TaskQuery::default()
+                }
+            }
             Self::Metadata(key, Value::String(value))
-                if capabilities.filter_by_metadata.is_native() =>
+                if capabilities.filter_by_metadata.is_native() && has_words(value) =>
             {
                 MetadataMatch::new(key.clone(), Vec::new(), value.clone())
                     .map(|wanted| TaskQuery {
@@ -607,6 +613,11 @@ impl Wanted {
             _ => TaskQuery::default(),
         }
     }
+}
+
+/// Whether `terms` holds a letter or a digit — a word a search that indexes words can find.
+fn has_words(terms: &str) -> bool {
+    terms.chars().any(char::is_alphanumeric)
 }
 
 /// What the destination held before this copy touched one item.
