@@ -135,6 +135,8 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         project,
         priorities: Vec::new(),
         commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
         paging,
     }
 }
@@ -422,6 +424,8 @@ async fn a_request_naming_a_source_nothing_configures_is_refused_with_the_names_
             project: ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: page(10),
         })
         .await
@@ -596,6 +600,8 @@ impl TaskSource for Rendezvous {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -735,6 +741,8 @@ impl TaskSource for Stuck {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -861,6 +869,8 @@ impl TaskSource for StuckEdges {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1342,6 +1352,8 @@ impl TaskSource for Recording {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

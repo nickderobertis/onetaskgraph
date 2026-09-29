@@ -263,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 25);
+    assert_eq!(bundle["version"], 26);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -637,6 +637,9 @@ fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
     let readme = readme();
     let mut missing = Vec::new();
     for command in [
+        // The one list verb whose entry spells out its flags: its filters grew one at a time,
+        // and each has to reach the entry a reader looks for it in.
+        "task list",
         "task create",
         "task render",
         "task answers",

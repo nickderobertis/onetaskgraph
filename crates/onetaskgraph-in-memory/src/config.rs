@@ -365,6 +365,12 @@ pub struct CapabilityConfig {
     /// Whether this source keeps only the tasks with a comment created or edited at or after
     /// a query's `commented_since`, itself, over the comments it holds beside each task.
     pub filter_by_comment_activity: Support,
+    /// Whether this source keeps only the tasks holding every metadata value a query names,
+    /// itself.
+    pub filter_by_metadata: Support,
+    /// Whether this source keeps only the tasks whose copy origin is the one a query names,
+    /// itself.
+    pub filter_by_origin: Support,
     /// Whether this source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether this source filters by label itself.
@@ -464,6 +470,8 @@ impl Default for CapabilityConfig {
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -490,6 +498,8 @@ impl From<&CapabilityConfig> for Capabilities {
             priority: value.priority,
             filter_by_priority: value.filter_by_priority,
             filter_by_comment_activity: value.filter_by_comment_activity,
+            filter_by_metadata: value.filter_by_metadata,
+            filter_by_origin: value.filter_by_origin,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

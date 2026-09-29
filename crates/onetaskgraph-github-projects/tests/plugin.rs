@@ -16,9 +16,9 @@ use std::{
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, MetadataKey, NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields,
+    Location, MetadataKey, MetadataMatch, NativeId, NewComment, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields,
     TextQuery, UpdatedField, WriteSupport,
 };
 use secrecy::SecretString;
@@ -358,6 +358,12 @@ impl Item {
         self.listed = false;
         self
     }
+    /// Put `origin` in this item's origin field — and nowhere else, which is how the release
+    /// before this one wrote a copy's origin.
+    fn carrying(mut self, origin: &str) -> Self {
+        self.origin = Some(origin.to_owned());
+        self
+    }
     /// Give this item no value of the origin field. See [`Item::origin_value`].
     fn holding_no_origin_value(mut self) -> Self {
         self.origin_value = false;
@@ -570,6 +576,14 @@ struct State {
     documents: Vec<String>,
     /// The search string of every board-scoped search this board answered, in order.
     searches: Vec<String>,
+    /// The field filter of every origin lookup this board answered, in order.
+    origin_filters: Vec<String>,
+    /// Items this board's indexes — its issue search and its item connection's field filter —
+    /// still answer as they were before a write, by content id.
+    ///
+    /// GitHub's indexes lag a write, so a search can still name an item under what it held a
+    /// moment ago, and answer with that. A read of the item by its own id is current.
+    indexed_as: BTreeMap<String, Item>,
     /// The issue named by every read of an issue's comments this board answered, in order.
     comment_reads: Vec<String>,
     /// The repository's own labels, as `(name, node id)`.
@@ -699,6 +713,13 @@ impl Limits {
 }
 
 impl State {
+    /// `item` as this board's indexes answer it: as it was when its index was last current.
+    fn indexed(&self, item: &Item) -> Item {
+        self.indexed_as
+            .get(&item.content_id)
+            .cloned()
+            .unwrap_or_else(|| item.clone())
+    }
     fn options(&self) -> Value {
         Value::Array(
             self.options
@@ -947,6 +968,18 @@ impl Fixture {
             .filter(|(_, seen, _)| seen == operation)
             .count()
     }
+    /// The operation every request this board received carried, in order, refused ones
+    /// included.
+    fn operations(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .limits
+            .arrivals
+            .iter()
+            .map(|(_, seen, _)| seen.clone())
+            .collect()
+    }
     /// The gaps between consecutive arrivals of any content-creating mutation.
     fn mutation_gaps(&self) -> Vec<Duration> {
         let state = self.state.lock().unwrap();
@@ -985,6 +1018,27 @@ impl Fixture {
     /// for is residue from runs long since projected — a board that hid a run's own
     /// artifacts from that run's own cleanup would model a board nothing can ever sweep,
     /// which is not what was observed and would fail the journey somewhere it is not about.
+    /// File `item` on this board the way another process writing to it would, after
+    /// anything this board already holds.
+    fn filed_by_something_else(&self, item: Item) {
+        self.state.lock().unwrap().items.push(item);
+    }
+    /// Hold this board's indexes on `content_id` as it is now, whatever is written to it
+    /// later. See [`State::indexed_as`].
+    fn indexes_behind(&self, content_id: &str) {
+        let mut state = self.state.lock().unwrap();
+        let held = state
+            .items
+            .iter()
+            .find(|item| item.content_id == content_id)
+            .expect("this board holds the item")
+            .clone();
+        state.indexed_as.insert(content_id.to_owned(), held);
+    }
+    /// The field filter of every origin lookup this board answered, in order.
+    fn origin_filters(&self) -> Vec<String> {
+        self.state.lock().unwrap().origin_filters.clone()
+    }
     fn items_connection_falls_behind(&self) {
         let mut state = self.state.lock().unwrap();
         state.items_connection_behind_from = Some(state.items.len());
@@ -1072,6 +1126,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         seen: Vec::new(),
         documents: Vec::new(),
         searches: Vec::new(),
+        origin_filters: Vec::new(),
+        indexed_as: BTreeMap::new(),
         comment_reads: Vec::new(),
         labels: Vec::new(),
         next: 0,
@@ -1573,6 +1629,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         };
         return json!({root:{"issue":{"id":issue},"blockingIssue":{"id":blocker}}});
     }
+    if query.contains("originItems:repositoryOwner(") {
+        return answer_an_origin_lookup(&mut state, variables, asked);
+    }
     if query.contains("search(query:$search") {
         assert_eq!(variables["type"], "ISSUE");
         let search = variables["search"].as_str().expect("a search query");
@@ -1581,22 +1640,12 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}"))
             .to_owned();
         state.searches.push(search.to_owned());
-        let wanted = wanted.as_str();
-        // The server side of `in:title "..."`, which is what makes naming a project by name
-        // one bounded query rather than a walk of the board.
-        // The server side of `updated:>=<instant>`, which is how a read narrowed to comment
-        // activity asks for the issues changed since rather than for the board.
-        let updated_since = wanted.trim().strip_prefix("updated:>=").map(|instant| {
-            chrono::DateTime::parse_from_rfc3339(instant)
-                .unwrap_or_else(|error| panic!("an RFC 3339 instant in {search}: {error}"))
-        });
-        let title = wanted.trim().strip_prefix("in:title ").map(|quoted| {
-            quoted
-                .trim()
-                .trim_matches('"')
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\")
-        });
+        // The server side of every qualifier this source sends: `in:title "..."`, which is
+        // what makes naming a project by name one bounded query rather than a walk of the
+        // board; `updated:>=<instant>`, which is how a read narrowed to comment activity asks
+        // for the issues changed since; and the quoted phrases a text or metadata read asks
+        // for, matched by token the way GitHub matches them.
+        let wanted = IssueSearch::parse(&wanted);
         let offset = match &variables["after"] {
             Value::Null => 0,
             Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
@@ -1607,20 +1656,19 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // which is what a read taken straight after a write has to answer through anyway.
         let visible = state.items.len().saturating_sub(state.lagging_reads);
         let options = state.options();
-        let matched = state.items[..visible]
+        let indexed: Vec<Item> = state.items[..visible]
+            .iter()
+            .map(|item| state.indexed(item))
+            .collect();
+        let matched = indexed
             .iter()
             .filter(|item| item.listed && item.typename == "Issue")
             .filter(|item| {
-                title
-                    .as_ref()
-                    .is_none_or(|title| item.title.eq_ignore_ascii_case(title))
-            })
-            .filter(|item| {
-                updated_since.is_none_or(|since| {
-                    item.updated_at.as_deref().is_some_and(|at| {
-                        chrono::DateTime::parse_from_rfc3339(at).expect("an instant") >= since
-                    })
-                })
+                wanted.admits(
+                    &item.title,
+                    item.body.as_deref().unwrap_or_default(),
+                    item.updated_at.as_deref(),
+                )
             })
             .collect::<Vec<_>>();
         let end = (offset + first).min(matched.len());
@@ -1898,6 +1946,189 @@ fn answer_a_session_call(
     None
 }
 
+/// GitHub's issue search, as far as this board models it: the qualifiers this source sends,
+/// and the phrases it searches for, matched **by token** the way GitHub matches them.
+///
+/// A phrase holds of a field when its words appear there, one after another, as whole
+/// words — case-insensitively, with every character that is not a letter or a digit a
+/// separator. So `"Ship"` finds `Ship it` and never `Shipment`, which is the narrowing a
+/// source that matches substrings has to state rather than hide; and GitHub's index covers
+/// the whole body, the metadata comment at its end included.
+struct IssueSearch {
+    /// `updated:>=`, when the search carries it.
+    updated_since: Option<chrono::DateTime<chrono::FixedOffset>>,
+    /// Whether a phrase may hold of the title.
+    in_title: bool,
+    /// Whether a phrase may hold of the body.
+    in_body: bool,
+    /// Every phrase, as its tokens; each must hold of one of the fields above.
+    phrases: Vec<Vec<String>>,
+}
+
+impl IssueSearch {
+    /// The search after its `project:… is:issue` scope.
+    fn parse(wanted: &str) -> Self {
+        let mut parsed = Self {
+            updated_since: None,
+            in_title: true,
+            in_body: true,
+            phrases: Vec::new(),
+        };
+        let mut chars = wanted.chars().peekable();
+        while let Some(&next) = chars.peek() {
+            if next.is_whitespace() {
+                chars.next();
+                continue;
+            }
+            if next == '"' {
+                chars.next();
+                let mut phrase = String::new();
+                loop {
+                    match chars.next() {
+                        Some('\\') => phrase.extend(chars.next()),
+                        Some('"') | None => break,
+                        Some(other) => phrase.push(other),
+                    }
+                }
+                parsed.phrases.push(search_tokens(&phrase));
+                continue;
+            }
+            let mut word = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_whitespace() {
+                    break;
+                }
+                word.push(next);
+                chars.next();
+            }
+            if let Some(fields) = word.strip_prefix("in:") {
+                let fields: Vec<&str> = fields.split(',').collect();
+                parsed.in_title = fields.contains(&"title");
+                parsed.in_body = fields.contains(&"body");
+            } else if let Some(instant) = word.strip_prefix("updated:>=") {
+                parsed.updated_since = Some(
+                    chrono::DateTime::parse_from_rfc3339(instant)
+                        .unwrap_or_else(|error| panic!("an RFC 3339 instant in {wanted}: {error}")),
+                );
+            } else {
+                parsed.phrases.push(search_tokens(&word));
+            }
+        }
+        parsed
+    }
+
+    /// Whether an issue holding this title, body and `updatedAt` is in the answer.
+    fn admits(&self, title: &str, body: &str, updated_at: Option<&str>) -> bool {
+        let updated = self.updated_since.is_none_or(|since| {
+            updated_at.is_some_and(|at| {
+                chrono::DateTime::parse_from_rfc3339(at).expect("an instant") >= since
+            })
+        });
+        let (title, body) = (search_tokens(title), search_tokens(body));
+        let holds = |field: &[String], phrase: &[String]| {
+            phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+        };
+        updated
+            && self.phrases.iter().all(|phrase| {
+                (self.in_title && holds(&title, phrase)) || (self.in_body && holds(&body, phrase))
+            })
+    }
+}
+
+/// The words GitHub's index holds of `text`: every run of letters and digits, lower-cased.
+fn search_tokens(text: &str) -> Vec<String> {
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// The board's own field filter over its origin field, read out of the `query:` a
+/// `ProjectV2.items` read carries: `onetaskgraph.origin:"<value>"`, quoted and escaped.
+fn origin_filter(filter: &str) -> String {
+    let quoted = filter
+        .strip_prefix("onetaskgraph.origin:\"")
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("an origin field filter: {filter}"));
+    let mut value = String::new();
+    let mut chars = quoted.chars();
+    while let Some(character) = chars.next() {
+        match character {
+            '\\' => value.extend(chars.next()),
+            other => value.push(other),
+        }
+    }
+    value
+}
+
+/// One page of `rows` from `after`, `first` at a time, as a connection with its own
+/// `totalCount`.
+fn connection_page(rows: Vec<Value>, after: &Value, first: usize) -> Value {
+    let offset = match after {
+        Value::Null => 0,
+        Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
+        other => panic!("after must be null or a string: {other}"),
+    };
+    let end = (offset + first).min(rows.len());
+    let nodes = rows[offset.min(end)..end].to_vec();
+    json!({"totalCount":rows.len(),"nodes":nodes,
+           "pageInfo":{"hasNextPage":end < rows.len(),
+                       "endCursor":(end > 0).then(|| end.to_string())}})
+}
+
+/// The two halves of an origin lookup, answered the way GitHub answers each.
+///
+/// `originItems` is the board's own item connection under its field filter: an **exact**
+/// match on the origin field's value, over the items that connection lists — so it lags a
+/// fresh item exactly as the board's own item read does, which is
+/// [`Fixture::items_connection_falls_behind`]. `search` is the board-scoped issue search for
+/// the value as a phrase in the body, by token, over what the search index lists.
+fn answer_an_origin_lookup(state: &mut State, variables: &Value, asked: Asked) -> Value {
+    assert_eq!(variables["type"], "ISSUE");
+    let filter = variables["filter"].as_str().expect("a field filter");
+    let wanted = origin_filter(filter);
+    state.origin_filters.push(filter.to_owned());
+    let search = variables["search"].as_str().expect("a search query");
+    state.searches.push(search.to_owned());
+    let phrase = IssueSearch::parse(
+        search
+            .strip_prefix("project:octo-org/7 is:issue")
+            .unwrap_or_else(|| panic!("a search scoped to the configured board: {search}")),
+    );
+    let first = variables["originFirst"].as_u64().expect("originFirst") as usize;
+    let options = state.options();
+    let listed = state
+        .items_connection_behind_from
+        .unwrap_or(state.items.len())
+        .min(state.items.len());
+    let carriers = state.items[..listed.saturating_sub(state.lagging_reads)]
+        .iter()
+        .map(|item| state.indexed(item))
+        .filter(|item| item.listed && item.origin.as_deref() == Some(wanted.as_str()))
+        .map(|item| {
+            json!({"id":item.item_id,"fieldValues":item.field_values(&options),
+                   "content":item.content(asked)})
+        })
+        .collect();
+    let visible = state.items.len().saturating_sub(state.lagging_reads);
+    let found = state.items[..visible]
+        .iter()
+        .map(|item| state.indexed(item))
+        .filter(|item| item.listed && item.typename == "Issue")
+        .filter(|item| {
+            phrase.admits(
+                &item.title,
+                item.body.as_deref().unwrap_or_default(),
+                item.updated_at.as_deref(),
+            )
+        })
+        .map(|item| item.as_issue(&options, asked))
+        .collect();
+    json!({"originItems":{"projectV2":{
+               "items":connection_page(carriers, &variables["itemsAfter"], first)}},
+           "search":connection_page(found, &variables["searchAfter"], first)})
+}
+
 /// A name this board has to hand back with a `'static` lifetime it did not have.
 ///
 /// The fixture's label sets are `&'static str` because every other test in this file spells
@@ -2015,7 +2246,9 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
 fn empty_board_search(request: &Value) -> Option<String> {
     request["query"]
         .as_str()
-        .filter(|query| query.contains("search(query:$search"))
+        // An origin lookup carries a search too, beside the board's own filtered items, and
+        // is a request a case scripts rather than one this answers.
+        .filter(|query| query.contains("search(query:$search") && !query.contains("originItems:"))
         .map(|_| {
             json!({"data":{"search":{"nodes":[],
                 "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
@@ -2339,18 +2572,19 @@ fn committed_server() -> String {
                 .unwrap();
             let body = if query.contains("search(query:$search") {
                 let search = variables["search"].as_str().expect("a search query");
-                let title = search
-                    .strip_prefix("project:octo-org/7 is:issue")
-                    .expect("a search scoped to the configured board")
-                    .trim()
-                    .strip_prefix("in:title ")
-                    .map(|quoted| quoted.trim().trim_matches('"').to_owned());
+                let wanted = IssueSearch::parse(
+                    search
+                        .strip_prefix("project:octo-org/7 is:issue")
+                        .expect("a search scoped to the configured board"),
+                );
                 let matched = recorded
                     .iter()
                     .filter(|node| {
-                        title.as_ref().is_none_or(|title| {
-                            node["title"].as_str().is_some_and(|held| held == title)
-                        })
+                        wanted.admits(
+                            node["title"].as_str().unwrap_or_default(),
+                            node["body"].as_str().unwrap_or_default(),
+                            node["updatedAt"].as_str(),
+                        )
                     })
                     .cloned()
                     .collect::<Vec<_>>();
@@ -3515,6 +3749,8 @@ async fn every_predicate_a_task_query_carries_is_applied() {
             project: ProjectFilter::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
         };
     let none = LabelFilter::default();
 
@@ -3605,6 +3841,8 @@ async fn every_predicate_a_task_query_carries_is_applied() {
                 project: ProjectFilter::Orphans,
                 priorities: Vec::new(),
                 commented_since: None,
+                metadata: Vec::new(),
+                origin: None,
             },
         ),
     ] {
@@ -6473,25 +6711,98 @@ async fn a_second_copy_of_the_same_item_updates_it_rather_than_duplicating_it() 
 }
 
 #[tokio::test]
-async fn the_copy_origin_is_kept_in_the_boards_own_text_field() {
+async fn the_copy_origin_is_kept_in_the_boards_own_text_field_and_mirrored_in_the_slot() {
     let fixture = board(vec![]);
     let source = source(&fixture);
     let mut item = task("T-1", "Publish", status(StatusCategory::Todo, "Todo"));
-    item.metadata = BTreeMap::from([("onetaskgraph.origin".to_owned(), json!("notes:T-1"))]);
+    item.content = Some("the prose a person wrote".to_owned());
+    item.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("notes:T-1")),
+        ("team.owner".to_owned(), json!("ada")),
+    ]);
     let id = source.write_task(&write(item)).await.unwrap();
-    assert_eq!(fixture.item(&id.0).origin.as_deref(), Some("notes:T-1"));
-    assert!(
-        !fixture
-            .item(&id.0)
-            .body
-            .unwrap_or_default()
-            .contains("origin"),
-        "a short typed value belongs in a typed field, not in the caller's own prose"
-    );
+    let held = fixture.item(&id.0);
     assert_eq!(
-        source.get_task(&id).await.unwrap().unwrap().metadata["onetaskgraph.origin"],
-        json!("notes:T-1")
+        held.origin.as_deref(),
+        Some("notes:T-1"),
+        "the field holds it"
     );
+    let body = held.body.clone().unwrap_or_default();
+    let slot = raw_slot(&body);
+    assert_eq!(
+        slot["onetaskgraph.origin"],
+        json!("notes:T-1"),
+        "the slot mirrors exactly the field's value, so the issue search can find it: {body}"
+    );
+    assert!(
+        body.starts_with("the prose a person wrote\n\n<!-- onetaskgraph.metadata\n"),
+        "the mirror is in the slot and never in the caller's own prose: {body}"
+    );
+    let read = source.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(read.content.as_deref(), Some("the prose a person wrote"));
+    assert_eq!(read.metadata["onetaskgraph.origin"], json!("notes:T-1"));
+    assert_eq!(read.metadata["team.owner"], json!("ada"));
+
+    // The release before this one reads the slot, drops the keys it treats as an encoding,
+    // and puts the field's origin over whatever the slot held under that key — so it sees
+    // one origin, the field's.
+    let before = read_as_the_release_before(&held);
+    assert_eq!(before["onetaskgraph.origin"], json!("notes:T-1"));
+    assert_eq!(before.get("team.owner"), Some(&json!("ada")));
+    assert_eq!(
+        before
+            .keys()
+            .filter(|key| key.contains("origin"))
+            .collect::<Vec<_>>(),
+        ["onetaskgraph.origin"],
+        "exactly one origin: {before:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_origin_field_is_the_origin_whatever_the_slot_says() {
+    // A slot that disagrees with the field — a hand edit, or a field someone cleared — is
+    // never read as a second origin: the field decides, and an item whose field holds none
+    // has none.
+    let fixture = board(vec![
+        Item::issue("I_edited", "edited")
+            .carrying("notes:T-1")
+            .body(&slotted(
+                "prose",
+                &json!({"onetaskgraph.origin": "notes:T-2"}),
+            )),
+        Item::issue("I_cleared", "cleared")
+            .holding_no_origin_value()
+            .body(&slotted(
+                "prose",
+                &json!({"onetaskgraph.origin": "notes:T-3"}),
+            )),
+    ]);
+    let source = source(&fixture);
+    let origin = |id: &str| {
+        let source = &source;
+        let id = NativeId(id.to_owned());
+        async move {
+            source
+                .get_task(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata
+                .get("onetaskgraph.origin")
+                .cloned()
+        }
+    };
+    assert_eq!(origin("I_edited").await, Some(json!("notes:T-1")));
+    assert_eq!(origin("I_cleared").await, None);
+    // And neither is answered by an origin query naming what the slot holds.
+    for mirrored in ["notes:T-2", "notes:T-3"] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &origin_query(mirrored)).await,
+            Vec::<String>::new(),
+            "{mirrored}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -7167,6 +7478,8 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -9350,7 +9663,7 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     // One run's five artifacts, titled the way a run titles them: two projects — an issue
     // with sub-issues and no parent — and three tasks. The one this board holds back is
     // last, because `read_behind` holds back what a board took most recently, and it is a
-    // task on purpose: a task list is answered from the board read a source keeps, so the
+    // task on purpose: a task list is answered from the read a source keeps, so the
     // half held back is the half a kept source could never recover.
     let prefix = "onetaskgraph live cleanup 4242-909-";
     let titles = (1..=5)
@@ -9374,19 +9687,17 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     fixture.read_behind(1);
 
     // The catch-up, from a thread of its own so that when it happens is this board's
-    // business and not the wait's: the search is the second of the two reads one attempt
-    // makes, so answering one means the first attempt is over.
+    // business and not the wait's. One attempt is two searches — the task listing narrowed to
+    // the run's prefix, then the board-scoped search that lists projects — and this board
+    // records a search as it answers it, so two recorded searches mean the first attempt has
+    // been answered whole, behind.
     let catching_up = Arc::clone(&fixture.state);
     let caught_up = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             {
                 let mut state = catching_up.lock().unwrap();
-                if state
-                    .documents
-                    .iter()
-                    .any(|document| document.contains("search(query:$search"))
-                {
+                if state.searches.len() >= 2 {
                     state.lagging_reads = 0;
                     return true;
                 }
@@ -9421,10 +9732,11 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
         "the task the board was holding back was not reported once it caught up"
     );
     assert_eq!(settled.projects, vec![titles[0].clone(), titles[1].clone()]);
-    // Two attempts, each one board read and one search: the second pair is the request the
-    // rebuild buys, and it is the whole cost of being able to wait at all.
-    assert_eq!(fixture.requests("board"), 2);
-    assert_eq!(fixture.requests("search"), 2);
+    // Two attempts, each two searches and no board read: the task listing narrowed to the
+    // run's prefix and the board-scoped search that lists projects. The second pair is the
+    // request the rebuild buys, and it is the whole cost of being able to wait at all.
+    assert_eq!(fixture.requests("board"), 0);
+    assert_eq!(fixture.requests("search"), 4);
 }
 
 #[test]
@@ -13624,4 +13936,865 @@ async fn comment_activity_within_one_project_asks_that_project_and_reads_only_up
         ["I_lively"],
         "a task whose issue was not updated since has no comments read"
     );
+}
+
+/// The metadata slot at the end of `body`, parsed, or an empty object when it has none.
+fn raw_slot(body: &str) -> Value {
+    let Some(start) = body.rfind("<!-- onetaskgraph.metadata\n") else {
+        return json!({});
+    };
+    let encoded = &body[start + "<!-- onetaskgraph.metadata\n".len()..];
+    let end = encoded.find("\n-->").expect("a terminated slot");
+    serde_json::from_str(&encoded[..end]).expect("the slot is JSON")
+}
+
+/// What the release before this one — onetaskgraph 0.2.51 — reports as an item's caller
+/// metadata, restated from its `Resolved::metadata`: the slot less the five keys it treats as
+/// an encoding, with the origin field's value put over the slot's own entry under that key.
+///
+/// Restated rather than run, because that release is not a dependency of this one; pinned to
+/// its text so a reader can check it against the tag.
+fn read_as_the_release_before(item: &Item) -> BTreeMap<String, Value> {
+    let mut metadata: BTreeMap<String, Value> =
+        serde_json::from_value(raw_slot(item.body.as_deref().unwrap_or_default()))
+            .expect("a metadata map");
+    for encoding in [
+        "onetaskgraph.repositories",
+        "onetaskgraph.depends_on",
+        "onetaskgraph.item_kind",
+        "onetaskgraph.delivers",
+        "onetaskgraph.delivered_by",
+    ] {
+        metadata.remove(encoding);
+    }
+    if let Some(origin) = item.origin.as_ref().filter(|origin| !origin.is_empty()) {
+        metadata.insert("onetaskgraph.origin".to_owned(), json!(origin));
+    }
+    metadata
+}
+
+fn origin_query(origin: &str) -> TaskQuery {
+    TaskQuery {
+        origin: Some(origin.to_owned()),
+        ..TaskQuery::default()
+    }
+}
+
+fn metadata_query(key: &str, path: &[&str], value: &str) -> TaskQuery {
+    TaskQuery {
+        metadata: vec![
+            MetadataMatch::new(
+                key.to_owned(),
+                path.iter().map(|segment| (*segment).to_owned()).collect(),
+                value.to_owned(),
+            )
+            .expect("a metadata location"),
+        ],
+        ..TaskQuery::default()
+    }
+}
+
+/// A board of plain tasks, one carrying caller metadata and one a copy origin, for the reads
+/// below to narrow.
+fn narrowing_board() -> Fixture {
+    board(vec![
+        Item::issue("I_ship", "Ship it")
+            .status("Todo")
+            .body("the release notes"),
+        Item::issue("I_shipment", "Shipment plan").status("Todo"),
+        Item::issue("I_owned", "Owned")
+            .status("Todo")
+            .body(&slotted(
+                "stale-cache is mentioned here",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}}),
+            )),
+        Item::issue("I_copied", "Copied")
+            .status("Todo")
+            .carrying("work:ENG-1"),
+        Item::draft("D_ship", "Ship it too").status("Todo"),
+    ])
+}
+
+#[tokio::test]
+async fn a_text_metadata_or_origin_query_asks_a_narrower_question_than_the_board() {
+    let cases = [
+        (
+            "text",
+            TaskQuery {
+                text: text("Ship it", TextFields::Title),
+                ..TaskQuery::default()
+            },
+            vec!["I_ship"],
+            "in:title \"Ship it\"",
+        ),
+        (
+            "metadata",
+            metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache"),
+            vec!["I_owned"],
+            "in:body \"stale-cache\"",
+        ),
+        (
+            "origin",
+            origin_query("work:ENG-1"),
+            vec!["I_copied"],
+            "in:body \"work:ENG-1\"",
+        ),
+    ];
+    for (what, query, expected, qualifier) in cases {
+        let fixture = narrowing_board();
+        let source = source(&fixture);
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            expected,
+            "{what}"
+        );
+        assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+        assert_eq!(
+            fixture.board_item_reads(),
+            Vec::<String>::new(),
+            "{what} walked the board's items"
+        );
+        let searches = fixture.searches();
+        assert!(!searches.is_empty(), "{what} sent no search at all");
+        for search in &searches {
+            assert_eq!(
+                search,
+                &format!("project:octo-org/7 is:issue {qualifier}"),
+                "{what} sent a board-scoped search without its own qualifier"
+            );
+        }
+        if what == "origin" {
+            assert_eq!(
+                fixture.origin_filters(),
+                ["onetaskgraph.origin:\"work:ENG-1\""],
+                "the origin is asked of the board's own field filter, quoted"
+            );
+        } else {
+            assert_eq!(fixture.origin_filters(), Vec::<String>::new());
+        }
+    }
+
+    // And a query carrying none of the three still reads the board as before: its items and
+    // its board-scoped search, and no narrowed search.
+    let fixture = narrowing_board();
+    let source = source(&fixture);
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &TaskQuery {
+                statuses: vec![StatusCategory::Todo],
+                ..TaskQuery::default()
+            }
+        )
+        .await,
+        ["I_ship", "I_shipment", "I_owned", "I_copied", "D_ship"]
+    );
+    assert_eq!(fixture.requests("board"), 1);
+    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
+    assert_eq!(fixture.origin_filters(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_text_answer_is_what_githubs_tokens_find_confirmed_by_the_substring_rule() {
+    let fixture = narrowing_board();
+    let source = source(&fixture);
+    let titled = |terms: &str, fields| TaskQuery {
+        text: text(terms, fields),
+        ..TaskQuery::default()
+    };
+    // `Shipment plan` holds "ship" as a substring and not as a word, so GitHub's token match
+    // does not return it — the narrowing this source declares — and the substring rule is
+    // never asked about it.
+    assert_eq!(
+        selected_tasks(source.as_ref(), &titled("ship", TextFields::Title)).await,
+        ["I_ship"]
+    );
+    // Tokens GitHub matches that the substring rule does not: `ship-it` is the words `ship
+    // it`, which `Ship it` holds, but the text `ship-it` is in no title, so nothing returned
+    // fails to contain what was asked for.
+    assert_eq!(
+        selected_tasks(source.as_ref(), &titled("ship-it", TextFields::Title)).await,
+        Vec::<String>::new()
+    );
+    // Content and either field are the same search in the body, and in both.
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &titled("release notes", TextFields::Content)
+        )
+        .await,
+        ["I_ship"]
+    );
+    assert_eq!(
+        selected_tasks(source.as_ref(), &titled("release notes", TextFields::Title)).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &titled("RELEASE NOTES", TextFields::TitleOrContent)
+        )
+        .await,
+        ["I_ship"]
+    );
+    // A board draft is not an issue, so no search lists it, whatever its title holds.
+    assert!(
+        !selected_tasks(source.as_ref(), &titled("too", TextFields::Title))
+            .await
+            .contains(&"D_ship".to_owned())
+    );
+    assert_eq!(
+        fixture.searches(),
+        [
+            "project:octo-org/7 is:issue in:title \"ship\"",
+            "project:octo-org/7 is:issue in:title \"ship-it\"",
+            "project:octo-org/7 is:issue in:body \"release notes\"",
+            "project:octo-org/7 is:issue in:title \"release notes\"",
+            "project:octo-org/7 is:issue in:title,body \"RELEASE NOTES\"",
+            "project:octo-org/7 is:issue in:title \"too\"",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_metadata_answer_is_confirmed_against_the_parsed_metadata_comment() {
+    let fixture = board(vec![
+        Item::issue("I_held", "held").status("Todo").body(&slotted(
+            "prose",
+            &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}, "team.owner": "ada"}),
+        )),
+        // The value in the prose and a different one in the slot: GitHub's index finds the
+        // words, and the slot says no.
+        Item::issue("I_prose", "prose")
+            .status("Todo")
+            .body(&slotted(
+                "caused by stale-cache",
+                &json!({"orchestrator.follow-up": {"root_cause": "other"}}),
+            )),
+        // A value whose words hold the ones asked for, which GitHub's token match returns and
+        // an exact comparison does not.
+        Item::issue("I_longer", "longer")
+            .status("Todo")
+            .body(&slotted(
+                "",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache-2"}}),
+            )),
+        // The right value at the wrong depth.
+        Item::issue("I_shallow", "shallow")
+            .status("Todo")
+            .body(&slotted(
+                "",
+                &json!({"orchestrator.follow-up": "stale-cache"}),
+            )),
+    ]);
+    let source = source(&fixture);
+    assert_eq!(
+        selected_tasks(
+            source.as_ref(),
+            &metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache")
+        )
+        .await,
+        ["I_held"]
+    );
+    // Several matches are ANDed, and every value is one more phrase of the same search.
+    let mut both = metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache");
+    both.metadata.push(
+        MetadataMatch::new("team.owner".to_owned(), Vec::new(), "ada".to_owned())
+            .expect("a metadata location"),
+    );
+    assert_eq!(selected_tasks(source.as_ref(), &both).await, ["I_held"]);
+    both.metadata[1] =
+        MetadataMatch::new("team.owner", Vec::new(), "bob").expect("a metadata location");
+    assert_eq!(
+        selected_tasks(source.as_ref(), &both).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        fixture.searches(),
+        [
+            "project:octo-org/7 is:issue in:body \"stale-cache\"",
+            "project:octo-org/7 is:issue in:body \"stale-cache\" \"ada\"",
+            "project:octo-org/7 is:issue in:body \"stale-cache\" \"bob\"",
+        ]
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn an_origin_lookup_finds_every_carrier_without_enumerating_the_board() {
+    let fixture = board(vec![
+        // Written the way the release before this one writes a copy: the origin in the board
+        // field and nowhere in the body.
+        Item::issue("I_before", "copied before")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted(
+                "prose",
+                &json!({"onetaskgraph.item_kind": "task"}),
+            )),
+        // A suffix and a prefix of the id, in the field and in the mirror both: the body
+        // search's tokens find the first, and neither is the origin asked for.
+        Item::issue("I_suffix", "suffix")
+            .status("Todo")
+            .carrying("work:ENG-1-copy")
+            .body(&slotted(
+                "",
+                &json!({"onetaskgraph.origin": "work:ENG-1-copy"}),
+            )),
+        Item::issue("I_prefix", "prefix")
+            .status("Todo")
+            .carrying("otherwork:ENG-1")
+            .body(&slotted(
+                "",
+                &json!({"onetaskgraph.origin": "otherwork:ENG-1"}),
+            )),
+        Item::issue("I_unrelated", "unrelated").status("Todo"),
+    ]);
+    // Written by this release, from another process.
+    let writer = source(&fixture);
+    let mut carried = task("T-2", "copied now", status(StatusCategory::Todo, "Todo"));
+    carried.metadata = BTreeMap::from([("onetaskgraph.origin".to_owned(), json!("work:ENG-1"))]);
+    let now = writer.write_task(&write(carried)).await.unwrap();
+    let written = fixture.item(&now.0);
+    assert_eq!(written.origin.as_deref(), Some("work:ENG-1"));
+    assert_eq!(
+        raw_slot(written.body.as_deref().unwrap_or_default())["onetaskgraph.origin"],
+        json!("work:ENG-1")
+    );
+
+    let before = fixture.documents().len();
+    let reader = source(&fixture);
+    let mut found = selected_tasks(reader.as_ref(), &origin_query("work:ENG-1")).await;
+    found.sort();
+    let mut expected = vec!["I_before".to_owned(), now.0.clone()];
+    expected.sort();
+    assert_eq!(found, expected);
+    let sent = fixture.documents()[before..].to_vec();
+    assert!(
+        sent.iter()
+            .all(|document| document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP),
+        "the lookup sent something other than the origin lookup: {sent:#?}"
+    );
+    assert_eq!(fixture.requests("board"), 0);
+    assert_eq!(fixture.board_item_reads(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_carrier_another_process_just_wrote_is_found_through_the_body_mirror() {
+    let fixture = board(vec![Item::issue("I_other", "other").status("Todo")]);
+    // From here on the board's own item connection — and so its field filter — lists
+    // nothing new, while its issue search is current.
+    fixture.items_connection_falls_behind();
+    let writer = source(&fixture);
+    let mut carried = task("T-3", "fresh copy", status(StatusCategory::Todo, "Todo"));
+    carried.metadata = BTreeMap::from([("onetaskgraph.origin".to_owned(), json!("work:ENG-7"))]);
+    let fresh = writer.write_task(&write(carried)).await.unwrap();
+    // And one the release before this one wrote in the same moment, with no mirror to find.
+    fixture.filed_by_something_else(
+        Item::issue("I_unmirrored", "unmirrored")
+            .status("Todo")
+            .carrying("work:ENG-7"),
+    );
+
+    let reader = source(&fixture);
+    assert_eq!(
+        selected_tasks(reader.as_ref(), &origin_query("work:ENG-7")).await,
+        std::slice::from_ref(&fresh.0),
+        "the mirror is found while the field filter is behind; an item carrying the origin \
+         only in its field is in the window the contract states until that filter catches up"
+    );
+
+    // Once the board's own connection catches up, the field filter finds both.
+    fixture.state.lock().unwrap().items_connection_behind_from = None;
+    let caught_up = source(&fixture);
+    let mut found = selected_tasks(caught_up.as_ref(), &origin_query("work:ENG-7")).await;
+    found.sort();
+    let mut expected = vec!["I_unmirrored".to_owned(), fresh.0.clone()];
+    expected.sort();
+    assert_eq!(found, expected);
+}
+
+#[tokio::test]
+async fn what_this_process_wrote_is_returned_while_the_index_is_behind_it() {
+    let fixture = board(vec![Item::issue("I_other", "other").status("Todo")]);
+    let source = source(&fixture);
+    let mut written = task("T-4", "Fresh ship", status(StatusCategory::Todo, "Todo"));
+    written.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("work:ENG-9")),
+        (
+            "orchestrator.follow-up".to_owned(),
+            json!({"root_cause": "fresh-cause"}),
+        ),
+    ]);
+    let id = source.write_task(&write(written)).await.unwrap();
+    // Every enumeration of the board — its items, its field filter, its issue search — is
+    // held behind the write.
+    fixture.read_behind(1);
+    fixture.items_connection_falls_behind();
+
+    let queries = [
+        TaskQuery {
+            text: text("fresh ship", TextFields::Title),
+            ..TaskQuery::default()
+        },
+        metadata_query("orchestrator.follow-up", &["root_cause"], "fresh-cause"),
+        origin_query("work:ENG-9"),
+    ];
+    for query in &queries {
+        assert_eq!(
+            selected_tasks(source.as_ref(), query).await,
+            std::slice::from_ref(&id.0),
+            "{query:?}"
+        );
+        // A source that did not write it cannot see it yet, which is what makes the answer
+        // above this process's own record rather than GitHub's.
+        let stranger = self::source(&fixture);
+        assert_eq!(
+            selected_tasks(stranger.as_ref(), query).await,
+            Vec::<String>::new(),
+            "{query:?}"
+        );
+    }
+    // And its own record never adds an item a query does not match.
+    assert_eq!(
+        selected_tasks(source.as_ref(), &origin_query("work:ENG-99")).await,
+        Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
+async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on() {
+    let items = (0..130)
+        .map(|index| {
+            Item::issue(&format!("I_{index:03}"), &format!("widget {index}")).status("Todo")
+        })
+        .collect::<Vec<_>>();
+    let fixture = board(items);
+    let source = source(&fixture);
+    let query = TaskQuery {
+        text: text("widget", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let first = source.query_tasks(&query, &page(100)).await.unwrap();
+    assert_eq!(first.items.len(), 100);
+    let next = first.next.expect("a cursor to the rest");
+    let rest = source
+        .query_tasks(&query, &resume(&next.0, 100))
+        .await
+        .unwrap();
+    assert_eq!(rest.items.len(), 30);
+    assert_eq!(rest.next, None);
+    assert_eq!(
+        fixture.requests("search"),
+        2,
+        "the search walks GitHub's pages of 100 once, and the second page of the answer is \
+         read from what this command already asked"
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pages() {
+    // The one-page board is `narrowing_board`; the other is the same board with 350 more
+    // items that none of the three questions matches — four pages of `ProjectV2.items` and of
+    // an unqualified board search at GitHub's 100. Each question, asked of a fresh source,
+    // sends the same requests to both, so what it costs is the size of its answer and never
+    // the size of the board.
+    let several_pages = || {
+        let fixture = narrowing_board();
+        for index in 0..350 {
+            fixture.filed_by_something_else(
+                Item::issue(&format!("I_filler_{index:03}"), &format!("filler {index}"))
+                    .status("Todo")
+                    .carrying(&format!("work:OTHER-{index}"))
+                    .body(&slotted(
+                        "unrelated prose",
+                        &json!({"orchestrator.follow-up": {"root_cause": format!("cause-{index}")}}),
+                    )),
+            );
+        }
+        fixture
+    };
+    for (what, query, expected) in [
+        (
+            "text",
+            TaskQuery {
+                text: text("Ship it", TextFields::Title),
+                ..TaskQuery::default()
+            },
+            vec!["I_ship"],
+        ),
+        (
+            "metadata",
+            metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache"),
+            vec!["I_owned"],
+        ),
+        ("origin", origin_query("work:ENG-1"), vec!["I_copied"]),
+    ] {
+        let mut sent = Vec::new();
+        for fixture in [narrowing_board(), several_pages()] {
+            let source = source(&fixture);
+            assert_eq!(
+                selected_tasks(source.as_ref(), &query).await,
+                expected,
+                "{what}"
+            );
+            assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+            sent.push(fixture.operations());
+        }
+        assert!(!sent[0].is_empty(), "{what} sent nothing at all");
+        assert_eq!(
+            sent[0], sent[1],
+            "{what} sent more to a board of several pages than to a board of one"
+        );
+    }
+
+    // The unnarrowed read beside them does grow with the board, which is what makes the
+    // equality above a property of the three questions rather than of this fixture.
+    let unnarrowed = TaskQuery {
+        statuses: vec![StatusCategory::Todo],
+        ..TaskQuery::default()
+    };
+    let mut sent = Vec::new();
+    for fixture in [narrowing_board(), several_pages()] {
+        let source = source(&fixture);
+        selected_tasks(source.as_ref(), &unnarrowed).await;
+        sent.push(fixture.operations().len());
+    }
+    assert!(sent[1] > sent[0], "{sent:?}");
+}
+
+#[tokio::test]
+async fn an_item_this_process_wrote_out_of_a_predicate_is_not_returned_from_a_stale_index() {
+    let fixture = board(vec![
+        Item::issue("I_moved", "Ship it")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted(
+                "prose",
+                &json!({"onetaskgraph.origin": "work:ENG-1", "team.owner": "ada"}),
+            )),
+    ]);
+    // Every index this board keeps still answers the item as it is now, after the write below.
+    fixture.indexes_behind("I_moved");
+    let source = source(&fixture);
+    let mut moved = task("I_moved", "Parked", status(StatusCategory::Todo, "Todo"));
+    moved.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("work:ENG-2")),
+        ("team.owner".to_owned(), json!("bob")),
+    ]);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_moved".to_owned())),
+            item: moved,
+            depends_on: vec![],
+        })
+        .await
+        .expect("the update lands");
+    assert_eq!(fixture.item("I_moved").title, "Parked");
+
+    let titled = |terms: &str| TaskQuery {
+        text: text(terms, TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let none = Vec::<String>::new();
+    for (query, expected) in [
+        (titled("ship"), none.clone()),
+        (metadata_query("team.owner", &[], "ada"), none.clone()),
+        (origin_query("work:ENG-1"), none.clone()),
+        (titled("parked"), vec!["I_moved".to_owned()]),
+        (
+            metadata_query("team.owner", &[], "bob"),
+            vec!["I_moved".to_owned()],
+        ),
+        (origin_query("work:ENG-2"), vec!["I_moved".to_owned()]),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            expected,
+            "{query:?}"
+        );
+    }
+    // A source that did not write it still reads the index's answer, which is what makes the
+    // answers above this process's own record rather than GitHub's.
+    let stranger = self::source(&fixture);
+    assert_eq!(
+        selected_tasks(stranger.as_ref(), &origin_query("work:ENG-1")).await,
+        ["I_moved"]
+    );
+}
+
+#[tokio::test]
+async fn an_origin_lookup_walks_each_of_its_connections_past_its_first_page() {
+    // More carriers than one page of either connection holds: five in the board field alone,
+    // which only the field filter finds, and four this release wrote, which both find. Both
+    // connections have to be walked on from their own cursors for all nine to come back.
+    let mut items = (0..5)
+        .map(|index| {
+            Item::issue(&format!("I_field_{index}"), "field alone")
+                .status("Todo")
+                .carrying("work:ENG-1")
+        })
+        .collect::<Vec<_>>();
+    items.extend((0..4).map(|index| {
+        Item::issue(&format!("I_mirrored_{index}"), "mirrored")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-1"})))
+    }));
+    items.push(
+        Item::issue("I_other", "other")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+    );
+    let fixture = board(items);
+    let source = source(&fixture);
+    let mut found = selected_tasks(source.as_ref(), &origin_query("work:ENG-1")).await;
+    found.sort();
+    let mut expected = (0..5)
+        .map(|index| format!("I_field_{index}"))
+        .chain((0..4).map(|index| format!("I_mirrored_{index}")))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(found, expected);
+    // Nine carriers at three a page is three pages of the field filter; the four the search
+    // finds are two pages of it, walked alongside.
+    assert_eq!(fixture.requests("originItems"), 3);
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn an_origin_lookup_answer_this_source_cannot_read_is_refused_by_what_is_wrong() {
+    let empty = |more: bool, cursor: Value| json!({"nodes":[],"pageInfo":{"hasNextPage":more,"endCursor":cursor}});
+    let answer = |items: Value, search: Value| json!({"data":{"originItems":{"projectV2":{"items":items}},"search":search}});
+    for (what, bodies, expected) in [
+        (
+            "a board the token cannot see",
+            vec![json!({"data":{"originItems":{"projectV2":null},
+                                "search":empty(false, Value::Null)}})],
+            "was not found or is not visible to the token",
+        ),
+        (
+            "no search connection",
+            vec![json!({"data":{"originItems":{"projectV2":{"items":empty(false, Value::Null)}}}})],
+            "has no search connection",
+        ),
+        (
+            "a connection without pageInfo",
+            vec![answer(json!({"nodes":[]}), empty(false, Value::Null))],
+            "connection has no pageInfo",
+        ),
+        (
+            "another page and no cursor to it",
+            vec![answer(empty(true, Value::Null), empty(false, Value::Null))],
+            "reports another page and no endCursor",
+        ),
+        (
+            "a cursor that does not advance",
+            vec![
+                answer(empty(true, json!("c1")), empty(false, Value::Null)),
+                answer(empty(true, json!("c1")), empty(false, Value::Null)),
+            ],
+            "cursor is empty or did not advance",
+        ),
+    ] {
+        let endpoint = sequence_server(bodies);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .query_tasks(&origin_query("work:ENG-1"), &page(10))
+                .await
+                .expect_err(what),
+        );
+        assert!(message.contains(expected), "{what}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn a_title_search_with_metadata_searches_both_fields_and_confirms_each_predicate() {
+    let fixture = board(vec![
+        Item::issue("I_both", "Ship it")
+            .status("Todo")
+            .body(&slotted(
+                "prose",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}}),
+            )),
+        // The title's words are in the body and the value is in the slot: GitHub finds it,
+        // because the phrases are searched in both fields, and the title rule refuses it.
+        Item::issue("I_body_title", "Parked")
+            .status("Todo")
+            .body(&slotted(
+                "ship it later",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}}),
+            )),
+        Item::issue("I_title_only", "Ship it too").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    let mut query = metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache");
+    query.text = text("ship it", TextFields::Title);
+    assert_eq!(selected_tasks(source.as_ref(), &query).await, ["I_both"]);
+    assert_eq!(
+        fixture.searches(),
+        ["project:octo-org/7 is:issue in:title,body \"ship it\" \"stale-cache\""]
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn comment_activity_with_a_narrowed_search_asks_for_both_qualifiers_at_once() {
+    let fixture = board(vec![
+        Item::issue("I_tagged_fresh", "Tagged fresh")
+            .status("Todo")
+            .updated("2026-09-21T09:00:00Z")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+        Item::issue("I_tagged_stale", "Tagged stale")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+        Item::issue("I_untagged_fresh", "Untagged fresh")
+            .status("Todo")
+            .updated("2026-09-22T09:00:00Z"),
+    ]);
+    fixture.commented_at(
+        "I_tagged_fresh",
+        "2026-09-21T09:00:00Z",
+        "2026-09-21T09:00:00Z",
+    );
+    fixture.commented_at("I_tagged_stale", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    fixture.commented_at(
+        "I_untagged_fresh",
+        "2026-09-22T09:00:00Z",
+        "2026-09-22T09:00:00Z",
+    );
+    let source = source(&fixture);
+    let mut query = metadata_query("team.owner", &[], "ada");
+    query.commented_since = Some(COMMENTED_SINCE.parse().expect("an RFC 3339 instant"));
+    assert_eq!(
+        selected_tasks(source.as_ref(), &query).await,
+        ["I_tagged_fresh"]
+    );
+    let searches = fixture.searches();
+    assert_eq!(searches.len(), 1, "{searches:?}");
+    assert!(
+        searches[0].starts_with("project:octo-org/7 is:issue updated:>=")
+            && searches[0].ends_with(" in:body \"ada\""),
+        "one search carrying both qualifiers: {searches:?}"
+    );
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_tagged_fresh"],
+        "only the candidate both qualifiers kept has its comments read"
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn a_metadata_value_json_escapes_is_found_by_the_escape_the_body_holds() {
+    // The slot is JSON, so a newline, a tab and a quote are held as their escapes, and GitHub
+    // reads `\n` beside a word as part of that word. Searching for the raw characters would
+    // ask for different words than the body holds and miss the item.
+    let values = [
+        "line one\nline two",
+        "column\tvalue",
+        "said \"stale\" twice",
+    ];
+    let fixture = board(
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                Item::issue(&format!("I_{index}"), "escaped")
+                    .status("Todo")
+                    .body(&slotted("", &json!({"team.note": value})))
+            })
+            .collect(),
+    );
+    let source = source(&fixture);
+    for (index, value) in values.iter().enumerate() {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &metadata_query("team.note", &[], value)).await,
+            [format!("I_{index}")],
+            "{value:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_draft_this_process_wrote_is_not_an_answer_to_a_narrowed_read() {
+    let fixture = board(vec![Item::draft("D_1", "Draft").status("Todo")]);
+    let source = source(&fixture);
+    let mut written = task("D_1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    written.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("work:ENG-3")),
+        ("team.owner".to_owned(), json!("ada")),
+    ]);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("D_1".to_owned())),
+            item: written,
+            depends_on: vec![],
+        })
+        .await
+        .expect("the draft is updated");
+    for query in [
+        TaskQuery {
+            text: text("ship", TextFields::Title),
+            ..TaskQuery::default()
+        },
+        metadata_query("team.owner", &[], "ada"),
+        origin_query("work:ENG-3"),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "a board draft is not an issue, so no narrowed read returns one: {query:?}"
+        );
+    }
+    // It is still the board's, and still read by its id.
+    assert_eq!(
+        source
+            .get_task(&NativeId("D_1".to_owned()))
+            .await
+            .expect("a read by id")
+            .map(|task| task.title),
+        Some("Ship it".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn a_carrier_filed_by_something_else_is_seen_by_the_next_source_and_not_by_this_one() {
+    // The narrowed counterpart of the board read's own bargain, pinned beside it for the same
+    // reason: a source keeps each narrowed answer for as long as it lives, completed with its
+    // own writes every time, so what another process files after the first ask is not an
+    // answer this source gives — and one invocation of the binary is one source. A source
+    // built the way the next command builds one asks again and sees it once GitHub's index
+    // has it.
+    let fixture = board(vec![
+        Item::issue("I_first", "first")
+            .status("Todo")
+            .carrying("work:ENG-5")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-5"}))),
+    ]);
+    let held = source(&fixture);
+    assert_eq!(
+        selected_tasks(held.as_ref(), &origin_query("work:ENG-5")).await,
+        ["I_first"]
+    );
+    fixture.filed_by_something_else(
+        Item::issue("I_later", "later")
+            .status("Todo")
+            .carrying("work:ENG-5")
+            .body(&slotted("", &json!({"onetaskgraph.origin": "work:ENG-5"}))),
+    );
+    assert_eq!(
+        selected_tasks(held.as_ref(), &origin_query("work:ENG-5")).await,
+        ["I_first"],
+        "this source asked a second time, which is the request its one answer buys"
+    );
+    assert_eq!(fixture.requests("originItems"), 1);
+
+    let next = source(&fixture);
+    let mut found = selected_tasks(next.as_ref(), &origin_query("work:ENG-5")).await;
+    found.sort();
+    assert_eq!(found, ["I_first", "I_later"]);
+    assert_eq!(fixture.requests("originItems"), 2);
 }

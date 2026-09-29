@@ -103,6 +103,7 @@ OPTION_TYPES = {
     "author": "str",
     "body_file": "str",
     "commented_since": "str",
+    "origin": "str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
@@ -150,6 +151,7 @@ OPTION_PLACEHOLDERS = {
     "author": "NAME",
     "body_file": "PATH",
     "commented_since": "RFC3339",
+    "origin": "SOURCE:ID",
     "dry_run": None,
     "default_sources": "NAMES",
     "delivers": "ID",
@@ -204,6 +206,13 @@ class OptionShape(NamedTuple):
 # takes several to filter by.
 COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "create"): {"status": OptionShape(type="choices", placeholder="CATEGORY")},
+    # `task list` keeps the tasks holding a metadata string at a key and nested path, where every
+    # write verb sets a key to a JSON value.
+    ("task", "list"): {
+        "metadata": OptionShape(
+            type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
+        )
+    },
     # `task update` names one status and one priority, the ones it writes.
     ("task", "update"): {
         "status": OptionShape(type="choices", placeholder="CATEGORY"),

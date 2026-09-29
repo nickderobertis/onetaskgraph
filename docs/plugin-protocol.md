@@ -446,18 +446,20 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 ### 4.2 `Capabilities`
 
 `projects`, `documents`, `comments`, `priority`, `filter_by_priority`,
-`filter_by_comment_activity`, `orphan_tasks`, `filter_by_label`, `filter_by_status`,
-`search_title` and `search_content` are each `"native"` or `"unsupported"`.
+`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `orphan_tasks`,
+`filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
+`"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents`, `comments`, `priority`, `filter_by_priority` and `filter_by_comment_activity` are
-the five members of this object that are **optional**, and an absent one means
-`"unsupported"`. That is §2.1 doing its job, exactly as it does for the write-support member
-§3.3 specifies: a plugin written before there were documents, comments, priorities or a
-comment-activity filter says nothing here and is read as the source without them it is, with
-no version bump on either side.
+`documents`, `comments`, `priority`, `filter_by_priority`, `filter_by_comment_activity`,
+`filter_by_metadata` and `filter_by_origin` are the seven members of this object that are
+**optional**, and an absent one means `"unsupported"`. That is §2.1 doing its job, exactly as
+it does for the write-support member §3.3 specifies: a plugin written before there were
+documents, comments, priorities, a comment-activity filter or a metadata or origin filter says
+nothing here and is read as the source without them it is, with no version bump on either
+side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
 this source has documents at all, in the shape `projects` uses, so there is no wider result
@@ -487,6 +489,14 @@ predicates kept. That is correct and it is not cheap, so a plugin that can ask i
 narrower question should declare it. A plugin whose `comments` is `"unsupported"` holds no
 comment activity, and the engine keeps none of its tasks without asking it anything.
 
+`filter_by_metadata` and `filter_by_origin` are predicates too: the metadata matches and the
+copy origin a task query carries (§4.5). A plugin that declared one `"native"` applies it; one
+that answered `"unsupported"` — or omitted it — is never sent it, returns the wider set, and
+the engine narrows that set over each task's own metadata, which every task read already
+carries. They are two members rather than one because a store may be able to ask one question
+and not the other: a board keeps a copy's origin in a field of its own and caller metadata in
+the issue body.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 
@@ -497,7 +507,7 @@ all three hold:
    a source can only *half* apply — a `title-or-content` search where only titles are
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
-3. This reaches the eight `"native"`/`"unsupported"` predicates alone — not `documents`,
+3. This reaches the ten `"native"`/`"unsupported"` predicates alone — not `documents`,
    `comments` or `priority`, which are not among them. A dependency read is never ignored
    and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
@@ -540,7 +550,11 @@ look like a failure of the source.
       "statuses": ["todo", "in-progress"],
       "project": { "is": "PRJ-4" },
       "priorities": ["urgent", "high"],
-      "commented_since": "2026-09-20T12:00:00Z"
+      "commented_since": "2026-09-20T12:00:00Z",
+      "metadata": [
+        { "key": "orchestrator.follow-up", "path": ["root_cause"], "value": "stale-cache" }
+      ],
+      "origin": "notes:N-12"
     },
     "page": { "cursor": null, "limit": 50 }
   }
@@ -575,6 +589,20 @@ look like a failure of the source.
   **optional**: absent is not a filter, and the engine sends it only to a plugin that declared
   `filter_by_comment_activity` native (§4.2), so a plugin written before it never receives
   one.
+- `metadata` is a list of matches over a task's caller-defined `metadata` (§4.13), **every**
+  one of which must hold. A match is `key` — one top-level metadata key, which may itself
+  contain dots, such as `orchestrator.follow-up` — `path`, zero or more nested object keys
+  under it (absent means none), and `value`, a string. It holds when the value at that
+  location is a JSON **string** equal to `value`, case-sensitively; a number, a boolean, an
+  array, an object, a missing key and a path through anything that is not an object all fail
+  it. It is **optional**: absent — how the engine sends an empty list — is not a filter, and the
+  engine sends it only to a plugin that declared `filter_by_metadata` native (§4.2).
+- `origin` is the qualified id a copy records under `onetaskgraph.origin` — `<source>:<id>`,
+  spelled exactly as the copy stored it. A task matches when its `metadata` holds that key as
+  a string equal to it, byte for byte: a plugin compares the string and never parses it. It is
+  **optional**: absent is not a filter, and the engine sends it only to a plugin that declared
+  `filter_by_origin` native (§4.2). On the command line these two are `task list --metadata
+  <KEY>[/<SEGMENT>…]=<VALUE>` (repeatable) and `task list --origin <SOURCE>:<ID>`.
 
 ### 4.6 `query_projects`
 
@@ -1298,6 +1326,11 @@ The `filter_by_comment_activity` member of §4.2 and the `commented_since` membe
 added **without** a bump, as `filter_by_priority` and `priorities` were: a plugin written
 before them omits the first, is read as not applying the filter, and is never sent the second
 — the engine narrows the wider set it returns over the plugin's own comments.
+
+The `filter_by_metadata` and `filter_by_origin` members of §4.2 and the `metadata` and
+`origin` members of §4.5 were added **without** a bump on the same terms: a plugin written
+before them omits both capabilities, is read as applying neither, and is never sent either
+member — the engine narrows the wider set it returns over each task's own `metadata`.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

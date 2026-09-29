@@ -659,6 +659,7 @@ STRUCT_SECTIONS = {
     "TaskQuery": "### 4.5 `query_tasks`",
     "TextQuery": "### 4.5 `query_tasks`",
     "LabelFilter": "### 4.5 `query_tasks`",
+    "MetadataMatch": "### 4.5 `query_tasks`",
     "ProjectQuery": "### 4.6 `query_projects`",
     "DependencyEdge": "### 4.8 `task_dependencies` and `project_dependencies`",
     "DependencyEndpoint": "### 4.8 `task_dependencies` and `project_dependencies`",
@@ -751,7 +752,10 @@ for struct, heading in STRUCT_SECTIONS.items():
             "restore it, or teach this script the shape it has now — a struct this "
             "document specifies cannot go unreconciled.",
         )
-    members = re.findall(r"^    pub (\w+):", declaration.group(1), re.MULTILINE)
+    # Private fields as well as public ones: a struct that keeps its members private behind a
+    # validating constructor — `MetadataMatch` does, so no empty location can be built — still
+    # derives `Serialize`, and its private fields are exactly what it puts on the wire.
+    members = re.findall(r"^    (?:pub )?(\w+):", declaration.group(1), re.MULTILINE)
     members += wire_members(struct)
     if not members:
         refuse(

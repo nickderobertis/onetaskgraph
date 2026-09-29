@@ -137,6 +137,8 @@ fn everything() -> TaskQuery {
         project: ProjectFilter::Any,
         priorities: Vec::new(),
         commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
     }
 }
 
@@ -538,6 +540,8 @@ async fn a_predicate_crosses_the_wire_and_the_hosted_source_applies_it() {
         project: ProjectFilter::Any,
         priorities: Vec::new(),
         commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
     };
 
     let kept: Vec<String> = there

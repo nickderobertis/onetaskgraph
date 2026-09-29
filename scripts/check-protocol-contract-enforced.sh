@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Watch scripts/check-protocol-contract.sh refuse a drifted list of the methods the protocol
-# does not carry.
+# does not carry, and a wire member of a struct whose fields are private that the document
+# stops naming.
 #
 # That guard exempts the template operations from §4's method table, and holds the exemption
 # to the list docs/plugin-protocol.md gives of them, both ways. An exemption is exactly the
@@ -51,6 +52,10 @@ done
 # it wrote to standard error, failing unless it exited as `expected` says.
 run_case() {
   local name="$1" edit="$2" expected="$3"
+  local remedy="${4:-}"
+  if [ -z "$remedy" ]; then
+    remedy="restore the reconciliation of NOT_CARRIED_REASON against §4's list in $GUARD"
+  fi
   sed "$edit" "$scratch/$DOCUMENT.held" >"$scratch/$DOCUMENT" || fatal \
     "case '$name': could not write the edited document" \
     "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
@@ -65,8 +70,7 @@ run_case() {
       "run 'bash $GUARD' in the working tree and fix what it names first"
   fi
   if [ "$expected" = refuse ] && [ "$status" -eq 0 ]; then
-    fatal "case '$name': the guard passed a drifted list" \
-      "restore the reconciliation of NOT_CARRIED_REASON against §4's list in $GUARD"
+    fatal "case '$name': the guard passed a drifted document" "$remedy"
   fi
 }
 
@@ -74,10 +78,10 @@ run_case() {
 # stand in for the one this case is about.
 names() {
   local name="$1" needle="$2"
+  local remedy="${3:-make $GUARD name the method and the side it is missing from}"
   case "$said" in
     *"$needle"*) ;;
-    *) fatal "case '$name': the refusal did not say \"$needle\": $said" \
-      "make $GUARD name the method and the side it is missing from" ;;
+    *) fatal "case '$name': the refusal did not say \"$needle\": $said" "$remedy" ;;
   esac
 }
 
@@ -100,3 +104,14 @@ run_case "the list gone" \
   's/^The template operations are not carried\./The template operations are elsewhere./' \
   refuse
 names "the list gone" 'no longer says "The template operations are not carried."'
+
+# `MetadataMatch` keeps every field private behind a validating constructor, so the guard
+# reads its members from the private fields; were it to stop, a member dropped from §4.5
+# would pass in silence.
+run_case "a private wire member the document stops naming" \
+  's/"path": \["root_cause"\], //; s/— `path`, zero or more nested object keys/— a path, zero or more nested object keys/' \
+  refuse \
+  "restore the reading of private as well as public members in STRUCT_SECTIONS' loop in $GUARD"
+names "a private wire member the document stops naming" \
+  '`MetadataMatch` carries the field "path"' \
+  "make $GUARD name the struct and the member the section no longer specifies"

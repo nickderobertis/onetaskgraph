@@ -34,9 +34,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
-    MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery, TextFields,
-    TextQuery,
+    MetadataMatch, MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery,
+    TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -215,6 +215,15 @@ pub struct TaskRequest {
     /// project has no comments. A source that does not apply it natively is narrowed by a read
     /// of its comments for every task its other predicates kept.
     pub commented_since: Option<DateTime<Utc>>,
+    /// Caller-defined metadata values to keep: a task matches when it holds every one.
+    /// Empty means unfiltered.
+    ///
+    /// Here rather than in [`Filters`] for the reason [`priorities`](Self::priorities) is:
+    /// the predicate is a task query's alone.
+    pub metadata: Vec<MetadataMatch>,
+    /// The copy origin to keep: a task matches when it was copied from this item. `None`
+    /// means unfiltered.
+    pub origin: Option<GlobalId>,
     /// Which page.
     pub paging: Paging,
 }
@@ -1007,6 +1016,8 @@ impl Engine {
                 &request.project,
                 &request.priorities,
                 &request.commented_since,
+                &request.metadata,
+                &request.origin,
             ),
         );
         let states = resumption(
@@ -1029,6 +1040,8 @@ impl Engine {
                     &project_filter(&request.project),
                     &request.priorities,
                     request.commented_since,
+                    &request.metadata,
+                    request.origin.as_ref(),
                 )
             })
             .collect();
@@ -2150,6 +2163,8 @@ fn shape_tasks(
     project: &ProjectFilter,
     priorities: &[Priority],
     commented_since: Option<DateTime<Utc>>,
+    metadata: &[MetadataMatch],
+    origin: Option<&GlobalId>,
 ) -> TaskShape {
     let mut pushed = TaskQuery::default();
     let mut local = LocalTasks::default();
@@ -2189,6 +2204,26 @@ fn shape_tasks(
         } else {
             local.commented_since = Some(since);
             outcomes.record(Predicate::CommentedSince, Outcome::AppliedLocally);
+        }
+    }
+    if !metadata.is_empty() {
+        if capabilities.filter_by_metadata.is_native() {
+            pushed.metadata = metadata.to_vec();
+            outcomes.record(Predicate::Metadata, Outcome::PushedDown);
+        } else {
+            local.metadata = metadata.to_vec();
+            outcomes.record(Predicate::Metadata, Outcome::AppliedLocally);
+        }
+    }
+    if let Some(origin) = origin {
+        if capabilities.filter_by_origin.is_native() {
+            // The qualified id as a copy stores it: a source compares the string and never
+            // parses it.
+            pushed.origin = Some(origin.to_string());
+            outcomes.record(Predicate::Origin, Outcome::PushedDown);
+        } else {
+            local.origin = Some(origin.clone());
+            outcomes.record(Predicate::Origin, Outcome::AppliedLocally);
         }
     }
     if let Some(text) = &filters.text {
@@ -2348,7 +2383,15 @@ fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind
             }
         }
         StreamKind::Items | StreamKind::Tasks => {
-            let shaped = shape_tasks(capabilities, filters, &ProjectFilter::Any, &[], None);
+            let shaped = shape_tasks(
+                capabilities,
+                filters,
+                &ProjectFilter::Any,
+                &[],
+                None,
+                &[],
+                None,
+            );
             HitShape {
                 stream,
                 tasks: shaped.pushed,

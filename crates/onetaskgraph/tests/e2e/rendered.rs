@@ -901,6 +901,7 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
         slot["onetaskgraph.template"],
         authored["metadata"]["onetaskgraph.template"]
     );
+    assert_eq!(slot["onetaskgraph.origin"], json!(id));
     assert_eq!(
         slot.as_object()
             .unwrap()
@@ -910,9 +911,11 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
         vec![
             "myapp.estimate",
             "onetaskgraph.item_kind",
+            "onetaskgraph.origin",
             "onetaskgraph.template"
         ],
-        "the caller's keys and the provenance, besides the board's own kind marker"
+        "the caller's keys and the provenance, besides the board's own kind marker and the \
+         mirror of the origin its board field holds"
     );
     assert!(
         !body.as_str().unwrap().contains("BACKGROUND-"),

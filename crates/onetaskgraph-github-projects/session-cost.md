@@ -675,14 +675,16 @@ node count, **not points**:
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
 | **requests**       |                      9 |                     8 |
-| **node count**     |                  31356 |                  1009 |
+| **node count**     |                  22121 |                  1009 |
 
-(h) reads the board once to find the project the task is filed under (`reading the board`)
-and searches the board's issues once to find the task (`searching this board's issues`), and
-both of those grow with the board. (g) sends neither: it
+(h) asks the board once for the item whose origin is the task (`looking up the items copied
+from one origin`, the lookup described under *Asking GitHub the narrower question* below)
+and searches the board's issues once to find the project the task is filed under (`searching
+this board's issues`), and that search grows with the board. (g) sends neither: it
 reads the task's issue and its project's issue by their node ids — one `reading one issue`
 more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
-sends no board read and no board-scoped search, and that both copies update the one item.
+sends no board read and no board-scoped search, that (h) sends the one origin lookup and no
+board read, and that both copies update the one item.
 
 Rows (a) to (f) do not move. The link a whole copy records is written to the Markdown
 folder the plan lives in, which sends the board nothing, and every copy in (b) to (f) is of
@@ -713,3 +715,51 @@ reaches the instant; the bounds are in
 `an_edited_comment_moves_its_issue_and_is_selected_since`. The loopback board stamps each
 write a second after the last and answers the first read current, so the recorded session
 makes neither retry and the record is unchanged.
+
+## Asking GitHub the narrower question, and what that moves
+
+A task read carrying a text, metadata or origin predicate no longer reads the board: text and
+metadata are one board-scoped issue search carrying the phrases, and an origin is
+`graphql::ORIGIN_LOOKUP` — the board's own field filter and the body-mirror search in one
+request. A copy's second rule asks the destination that origin lookup instead of walking it.
+Two writes stopped reading what they already knew: an issue this write created is blocked by
+nothing, so its `blockedBy` is not read before it is reconciled, and a project this copy
+created holds nothing it did not file, so the copy does not walk the destination for orphans
+under it.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As the sections above: a difference between two committed states of `tests/fixtures/copy-cost.txt` and `tests/fixtures/session-cost.txt`, each held by its own test, which fails on any change to that record and names this file as the place to say what moved. -->
+**`copy-cost.txt`.** (a), the first whole copy of a project of ten tasks, goes from 68
+requests and 32,750 worst-case nodes to **67 and 29,600**: ten origin lookups at 915 nodes
+each replace the board read, the eleven dependency reads of issues the copy had just created,
+and the orphan walk under a project it had just created, and one read of the board's fields
+replaces what the board read used to answer for the writes. (b) to (g) do not move. (h), the
+task copy found without a link, keeps its 9 requests and goes from 31,356 worst-case nodes to
+**22,121**: the one origin lookup, at 915, replaces the whole-board read at 10,150. Two rows
+are new: (i), a `task copy` finding its counterpart written the way the release before this
+one wrote it — its origin in the board field and not in the body, and no link on the task it
+came from — in 4 requests, and (j), a `task copy` finding none and creating, in 7. Neither
+reads the board.
+
+**`session-cost.txt`.** The session goes from 126 requests and 280,490 worst-case nodes to
+**128 and 352,105**, and this is the one record that grows. The journey lists its own
+artifacts by title and searches for a body marker many times over from one long-lived
+source, and every one of those listings used to be answered from one whole-board read the
+source kept; each distinct question is now one search of its own. The loopback board is one
+page, so a whole-board read costs it one request and the per-question search looks dear
+beside it; on a board of hundreds of items a whole read is a page of `ProjectV2.items` and a
+page of search per hundred items, paid again by every fresh source, and the narrowed search
+stays one page. `a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pages`
+in `tests/plugin.rs` holds that: each of the three questions sends the same requests to a
+board of four pages as to a board of one, while the unnarrowed read beside them does not.
+
+Every line of the record that moved, and nothing else moved:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 6 → 10 (+4) | 122,400 → 204,000 (+81,600) | each distinct title or marker listing is its own narrowed search rather than a share of one kept board read |
+| `reading the board` | 4 → 3 (−1) | 30,601 → 20,451 (−10,150) | the listings those searches answer no longer read the board |
+| `reading the board's fields` | 1 → 2 (+1) | 50 → 100 (+50) | a write that used to take the fields from the kept board read now reads them on their own |
+| `reading an issue's dependencies` | 9 → 4 (−5) | 1,400 → 400 (−1,000) | an issue this write just created is blocked by nothing, so its `blockedBy` is not read |
+| `reading a task's comments` | 2 → 4 (+2) | 200 → 400 (+200) | the comment-activity read now also considers the existing items this source wrote; the loopback board reports no `updatedAt` for an issue nobody commented on, so neither is ruled out without reading its comments. GitHub always reports one, and an item written before the instant is ruled out without a read |
+| `node-count and point-cost reconciliation while looking up the items copied from one origin` | 0 → 1 (+1) | 0 → 915 (+915) | a new line: the one reconciliation of the new `graphql::ORIGIN_LOOKUP` document, as every other document has one |
+| **total** | **126 → 128 (+2)** | **280,490 → 352,105 (+71,615)** | |

@@ -63,7 +63,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
-  `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
+  `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
@@ -779,6 +779,12 @@ them do; this is the inventory of what is owed, not a status board.
     cannot edit narrowly is copied and reported as not having recorded it; a link naming a
     deleted copy is refused until `--recreate`; and a task re-copied into a GitHub board by
     its link sends no board read and no board-scoped search.
+69. `task list --metadata` keeps exactly the tasks holding every string it names at its key
+    and nested path, and `task list --origin` exactly the tasks copied from that qualified id
+    and never one it only begins or ends with — on every source kind, with the plan naming
+    each predicate pushed down or applied locally; both SDKs answer what the command
+    line answers; and a location with an empty key or segment, a value with no `=`, and an
+    origin that is not a qualified id are each refused naming the flag.
 
 ## What a copied document's references are pointed at
 
