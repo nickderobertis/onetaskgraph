@@ -2258,7 +2258,9 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.level();
-        let suggested = target.clone().unwrap_or_else(|| item.item.id().clone());
+        let suggested = target
+            .clone()
+            .unwrap_or_else(|| created_id(&item.item, project.as_ref()));
         // Settled before the journal takes `prior`, and from that same read: what the
         // destination holds at the origin key is what a copy-back leaves there, and what it
         // holds as `delivered_by` is what the item keeps.
@@ -2831,6 +2833,28 @@ fn outgoing(
     }
 }
 
+/// The id a created item is offered to the destination under.
+///
+/// A task whose id is `<its project's id>/<rest>` is offered as `<rest>` under the
+/// destination project it is filed in, so a destination whose ids are paths files it in that
+/// project rather than the source's. Any other id, and every update, is left as it is. The
+/// `a_project_copied_*` journeys in `crates/onetaskgraph/tests/e2e/copy.rs` hold the Markdown
+/// plugin's id shape to this rule.
+fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
+    if let (Item::Task(task), Some(filed)) = (item, filed)
+        && let Some(own) = &task.project
+        && let Some(rest) = task
+            .id
+            .as_str()
+            .strip_prefix(own.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+        && !rest.is_empty()
+    {
+        return NativeId(format!("{}/{rest}", filed.as_str()));
+    }
+    item.id().clone()
+}
+
 /// The metadata a copy carries: the caller's own keys untouched, and the origin settled.
 ///
 /// The key is removed before it is settled rather than overwritten, because the item being
@@ -2967,12 +2991,15 @@ fn mapped_edges(
                 // edge into itself written as if it left, which is the one spelling the
                 // reserved key exists to keep for edges that really do.
                 Some(native)
+            } else if !edge.to.is_qualified() && copied.contains(&far) {
+                // A member of this copy, inside one source included: a copy there lands
+                // beside the item it was read from, so the edge names the copy rather than
+                // the original the copy's own project does not hold.
+                written.get(&far.to_string()).map(|native| native.0.clone())
             } else if edge.to.is_qualified() || origin == destination.name() {
                 // Already naming a source of its own, or a copy inside one source where
                 // the far end's own id is the destination's id.
                 Some(edge.to.id().to_owned())
-            } else if copied.contains(&far) {
-                written.get(&far.to_string()).map(|native| native.0.clone())
             } else {
                 Some(far.to_string())
             }?;
