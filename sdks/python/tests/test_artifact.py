@@ -269,7 +269,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 23
+    assert emitted_bundle["version"] == 24
+    # Version 24 published the comment activity a task list may be narrowed by: the query's
+    # `commented_since`, the capability a source declares it with, and the plan's predicate.
+    task_query = bundle["roots"]["TaskQuery"]
+    assert isinstance(task_query, dict)
+    assert "commented_since" in task_query["properties"]
+    assert "commented_since" not in task_query.get("required", [])
     # Version 23 published what `task update` is given and answers with, the field vocabulary
     # it reports what it wrote in, and the outcome a plugin answers a targeted update with.
     assert generate.RESPONSE_ROOTS["task_update"] == "TaskUpdated"

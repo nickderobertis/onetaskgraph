@@ -1461,6 +1461,7 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             comments: onetaskgraph_plugin_api::Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,

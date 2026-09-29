@@ -414,6 +414,7 @@ async fn every_verb_reports_both_lists_qualified() {
             filters: Filters::default(),
             project: ProjectSelector::Any,
             priorities: Vec::new(),
+            commented_since: None,
             paging: Paging {
                 limit: NonZeroU32::new(10).unwrap(),
                 token: None,

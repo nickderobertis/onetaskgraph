@@ -326,6 +326,13 @@ hand. The rules, all of which the plugin enforces:
 `--author` is recorded here as given — this folder has no signed-in account to record
 instead — and must be one line with no control characters.
 
+`task list --commented-since <INSTANT>` is answered from this section: a task is kept when one
+of its markers carries a `created_at` or an `updated_at` at or after the instant. A task file
+carries no time of its own, so those two attributes are the only evidence read — a task with
+no section never matches, and editing a marker's `updated_at` by hand is an edit as far as the
+filter is concerned. Only the files every other filter of the query already kept are read for
+their sections.
+
 ## Stored template answers
 
 A task or a document created or regenerated from a template keeps the answers it was rendered

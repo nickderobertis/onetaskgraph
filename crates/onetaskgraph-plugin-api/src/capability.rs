@@ -67,6 +67,22 @@ pub struct Capabilities {
     /// predates priorities is narrowed by the engine rather than trusted to have filtered.
     #[serde(default = "no_priority_filter")]
     pub filter_by_priority: Support,
+    /// Whether the source keeps only the tasks a query's
+    /// [`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a
+    /// task one of whose comments was created or last edited at or after the instant.
+    ///
+    /// A predicate, and so one the second capability rule reaches: a source declaring
+    /// `Unsupported` ignores the instant and returns the wider set, and the engine narrows it
+    /// — by reading **that source's comments, task by task**, for every task the source's
+    /// other predicates kept. That is correct and it is not cheap, which is why a source that
+    /// can ask its store the narrower question declares `Native`. A source whose tasks have no
+    /// [`comments`](Self::comments) at all holds no comment activity, so the engine keeps none
+    /// of its tasks without asking it anything.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates the predicate is narrowed by the engine rather than trusted to have filtered.
+    #[serde(default = "no_comment_activity_filter")]
+    pub filter_by_comment_activity: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -113,6 +129,13 @@ fn no_priority() -> Support {
 /// plugin that has never heard of the predicate, and so ignores it — which rule 2 already
 /// makes the one safe reading.
 fn no_priority_filter() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::filter_by_comment_activity`] means when a wire value does not carry
+/// it: a plugin that has never heard of the predicate, on the terms [`no_priority_filter`]
+/// gives.
+fn no_comment_activity_filter() -> Support {
     Support::Unsupported
 }
 

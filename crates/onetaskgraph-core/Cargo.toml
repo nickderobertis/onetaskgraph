@@ -25,6 +25,7 @@ linear = ["dep:onetaskgraph-linear"]
 # attribute macro a plugin does. It brings no runtime with it: this crate is still written
 # against `std::future` alone and runs on whatever runtime its caller starts.
 async-trait.workspace = true
+chrono.workspace = true
 onetaskgraph-github-projects = { workspace = true, optional = true }
 onetaskgraph-in-memory.workspace = true
 onetaskgraph-linear = { workspace = true, optional = true }

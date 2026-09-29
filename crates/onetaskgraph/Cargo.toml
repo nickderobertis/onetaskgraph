@@ -24,6 +24,7 @@ path = "src/bin/onetaskgraph-source.rs"
 
 # The one crate permitted to depend on the engine; deny.toml names it as such.
 [dependencies]
+chrono.workspace = true
 schemars.workspace = true
 clap.workspace = true
 # The per-variable prompts of `template render`. This crate alone: nothing below the command

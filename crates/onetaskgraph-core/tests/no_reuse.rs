@@ -121,6 +121,7 @@ impl TaskSource for Counting {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -211,6 +212,7 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
         filters: Filters::default(),
         project: ProjectSelector::Any,
         priorities: Vec::new(),
+        commented_since: None,
         paging: one_page(),
     };
     let projects = ProjectRequest {
@@ -312,6 +314,7 @@ async fn paging_re_asks_rather_than_serving_a_page_it_kept() {
         filters: Filters::default(),
         project: ProjectSelector::Any,
         priorities: Vec::new(),
+        commented_since: None,
         paging: Paging {
             limit: NonZeroU32::new(1).expect("1 is not zero"),
             token: None,

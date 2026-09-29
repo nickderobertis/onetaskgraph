@@ -24,6 +24,13 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against two folders of Markdown,
+// in process and over the stdio plugin protocol, with no credential and no network, in about a
+// second. The flag and the engine's narrowing are the binary's and the engine's, so they cannot
+// sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
+// depth.
+mod commented_since;
 mod comments;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
