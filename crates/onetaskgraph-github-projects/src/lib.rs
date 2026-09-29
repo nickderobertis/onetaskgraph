@@ -4065,7 +4065,7 @@ impl GitHubProjectsSource {
     /// without enumerating the board — or `None` for a query carrying none of the three, which
     /// keeps the reads it always had.
     ///
-    /// An origin is answered by [`Self::origin_carriers`], whatever else the query carries,
+    /// An origin is answered by [`Self::origin_candidates`], whatever else the query carries,
     /// because it names at most a handful of items. Text and metadata are answered by one
     /// board-scoped issue search carrying every term — see [`narrowing_qualifiers`] — narrowed
     /// further by `updated:>=` when the query also asks for comment activity, since both
@@ -4095,7 +4095,7 @@ impl GitHubProjectsSource {
             Some(found) => found,
             None => {
                 let found = match &asked {
-                    Narrowing::Origin(origin) => self.origin_carriers(origin).await?,
+                    Narrowing::Origin(origin) => self.origin_candidates(origin).await?,
                     Narrowing::Search(also) => self.searched(also).await?,
                 };
                 if let Some(key) = key {
@@ -4107,8 +4107,8 @@ impl GitHubProjectsSource {
         self.with_own_writes(found).map(Some)
     }
 
-    /// Every item of this board that carries `origin`, found by [`graphql::ORIGIN_LOOKUP`]
-    /// and never by enumerating the board.
+    /// Every item of this board that may carry `origin` — a superset of those that do — found
+    /// by [`graphql::ORIGIN_LOOKUP`] and never by enumerating the board.
     ///
     /// The union of the board's own field filter over the `onetaskgraph.origin` text field —
     /// which reads the field every carrier holds, whichever release wrote it — and the
@@ -4122,7 +4122,7 @@ impl GitHubProjectsSource {
     /// document serves every page of either. What the two leave is stated in the module
     /// documentation: a carrier another process added within the last second or two, before
     /// either index has it.
-    async fn origin_carriers(&self, origin: &str) -> Result<Vec<Resolved>, SourceError> {
+    async fn origin_candidates(&self, origin: &str) -> Result<Vec<Resolved>, SourceError> {
         let filter = format!("{ORIGIN_FIELD}:{}", quoted(origin));
         let search = self.board_search(Some(&format!("in:body {}", quoted(origin))));
         let mut items_after: Option<String> = None;

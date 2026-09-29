@@ -14484,3 +14484,81 @@ async fn an_origin_lookup_answer_this_source_cannot_read_is_refused_by_what_is_w
         assert!(message.contains(expected), "{what}: {message}");
     }
 }
+
+#[tokio::test]
+async fn a_title_search_with_metadata_searches_both_fields_and_confirms_each_predicate() {
+    let fixture = board(vec![
+        Item::issue("I_both", "Ship it")
+            .status("Todo")
+            .body(&slotted(
+                "prose",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}}),
+            )),
+        // The title's words are in the body and the value is in the slot: GitHub finds it,
+        // because the phrases are searched in both fields, and the title rule refuses it.
+        Item::issue("I_body_title", "Parked")
+            .status("Todo")
+            .body(&slotted(
+                "ship it later",
+                &json!({"orchestrator.follow-up": {"root_cause": "stale-cache"}}),
+            )),
+        Item::issue("I_title_only", "Ship it too").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    let mut query = metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache");
+    query.text = text("ship it", TextFields::Title);
+    assert_eq!(selected_tasks(source.as_ref(), &query).await, ["I_both"]);
+    assert_eq!(
+        fixture.searches(),
+        ["project:octo-org/7 is:issue in:title,body \"ship it\" \"stale-cache\""]
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn comment_activity_with_a_narrowed_search_asks_for_both_qualifiers_at_once() {
+    let fixture = board(vec![
+        Item::issue("I_tagged_fresh", "Tagged fresh")
+            .status("Todo")
+            .updated("2026-09-21T09:00:00Z")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+        Item::issue("I_tagged_stale", "Tagged stale")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z")
+            .body(&slotted("", &json!({"team.owner": "ada"}))),
+        Item::issue("I_untagged_fresh", "Untagged fresh")
+            .status("Todo")
+            .updated("2026-09-22T09:00:00Z"),
+    ]);
+    fixture.commented_at(
+        "I_tagged_fresh",
+        "2026-09-21T09:00:00Z",
+        "2026-09-21T09:00:00Z",
+    );
+    fixture.commented_at("I_tagged_stale", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    fixture.commented_at(
+        "I_untagged_fresh",
+        "2026-09-22T09:00:00Z",
+        "2026-09-22T09:00:00Z",
+    );
+    let source = source(&fixture);
+    let mut query = metadata_query("team.owner", &[], "ada");
+    query.commented_since = Some(COMMENTED_SINCE.parse().expect("an RFC 3339 instant"));
+    assert_eq!(
+        selected_tasks(source.as_ref(), &query).await,
+        ["I_tagged_fresh"]
+    );
+    let searches = fixture.searches();
+    assert_eq!(searches.len(), 1, "{searches:?}");
+    assert!(
+        searches[0].starts_with("project:octo-org/7 is:issue updated:>=")
+            && searches[0].ends_with(" in:body \"ada\""),
+        "one search carrying both qualifiers: {searches:?}"
+    );
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_tagged_fresh"],
+        "only the candidate both qualifiers kept has its comments read"
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
