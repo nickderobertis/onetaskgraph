@@ -129,8 +129,8 @@
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
 //! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. |
 //! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
-//! | `search_title` | **Supported, and asked of GitHub,** over `Issue.title`: one board-scoped issue search for the text as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so an item holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. |
-//! | `search_content` | **Supported, and asked of GitHub** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
+//! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. A project or document query's text is applied by that same substring rule over the issues its read already holds, and narrows nothing. |
+//! | `search_content` | **Supported,** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
@@ -152,8 +152,8 @@
 //! candidate that query will return before it filters anything. Filtering those items is
 //! in-process work over data already in hand.
 //!
-//! Third, six predicates are asked of GitHub as a narrower question and the rest are applied
-//! in process over what that question returned. A project filter has a relationship — a
+//! Third, six task predicates are asked of GitHub as a narrower question and the rest are
+//! applied in process over what that question returned. A project filter has a relationship — a
 //! project's tasks are that issue's sub-issues, and asking the issue for them is both cheaper
 //! and exact. Comment activity is the issue search's `updated:` qualifier. A text search, and
 //! a search for metadata values, is the board-scoped issue search carrying the text and each

@@ -142,6 +142,13 @@ followed, and one that resolves outside `root` is refused as a configuration err
 other entry is named by the folder it was listed in, so a record being replaced in place by
 another process at that moment is never mistaken for one outside `root`.
 
+`task list --metadata <KEY>[/<SEGMENT>…]=<VALUE>` and `task list --origin <SOURCE>:<ID>` are
+unscoped reads like any other, answered in process from each task file's `metadata:` block: a
+task is kept when every value the first names is a string equal to it at that key and nested
+path, and when the block's `onetaskgraph.origin` is exactly the qualified id the second names.
+A copy writes that entry into the file it lands, so a task copied in is found by its origin as
+soon as the copy returns.
+
 ## Setting a status on its own
 
 `onetaskgraph task status set <source>:<id> <category>` rewrites the one `status:` line of
