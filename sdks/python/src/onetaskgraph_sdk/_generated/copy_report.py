@@ -25,6 +25,20 @@ class BudgetSpent(BaseModel):
     unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
+class CopyLink(StrEnum):
+    CopyLinkRecorded = "recorded"
+    CopyLinkUnchanged = "unchanged"
+    CopyLinkUnrecorded = "unrecorded"
+
+
+class CopyVia(StrEnum):
+    CopyViaLink = "link"
+    CopyViaOrigin = "origin"
+    CopyViaScan = "scan"
+    CopyViaMatch = "match"
+    CopyViaCreated = "created"
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -77,7 +91,19 @@ class StatusCategory(StrEnum):
 
 
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    via: Annotated[
+        CopyVia | None,
+        Field(
+            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
+        ),
+    ] = None
     action: Literal["created"]
     destination: Annotated[
         GlobalId | None,
@@ -88,19 +114,55 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
 
 
 class CopyOutcomeUpdated(BaseModel):
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    via: Annotated[
+        CopyVia | None,
+        Field(
+            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
+        ),
+    ] = None
     action: Literal["updated"]
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
 
 
 class CopyOutcomeUnchanged(BaseModel):
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    via: Annotated[
+        CopyVia | None,
+        Field(
+            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
+        ),
+    ] = None
     action: Literal["unchanged"]
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
 
 
 class CopyOutcomeOrphaned(BaseModel):
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    via: Annotated[
+        CopyVia | None,
+        Field(
+            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
+        ),
+    ] = None
     action: Literal["orphaned"]
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
 

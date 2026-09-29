@@ -334,8 +334,80 @@ export const runtimeSchemas = {
     ],
     "title": "CopyAction"
   },
+  "CopyLink": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
+    "oneOf": [
+      {
+        "const": "recorded",
+        "description": "The entry was written, because the item held none for this destination or held one\nnaming another item.",
+        "type": "string"
+      },
+      {
+        "const": "unchanged",
+        "description": "Nothing was written: the entry already named this destination item, or the item was\nfound by its own origin, where the correspondence is already recorded on the other\nside.",
+        "type": "string"
+      },
+      {
+        "const": "unrecorded",
+        "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+        "type": "string"
+      }
+    ],
+    "title": "CopyLink"
+  },
   "CopyOutcome": {
     "$defs": {
+      "CopyLink": {
+        "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
+        "oneOf": [
+          {
+            "const": "recorded",
+            "description": "The entry was written, because the item held none for this destination or held one\nnaming another item.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "Nothing was written: the entry already named this destination item, or the item was\nfound by its own origin, where the correspondence is already recorded on the other\nside.",
+            "type": "string"
+          },
+          {
+            "const": "unrecorded",
+            "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+            "type": "string"
+          }
+        ]
+      },
+      "CopyVia": {
+        "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+            "type": "string"
+          },
+          {
+            "const": "scan",
+            "description": "A search of the destination for an item recording this one as its origin.",
+            "type": "string"
+          },
+          {
+            "const": "match",
+            "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          },
+          {
+            "const": "created",
+            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -424,9 +496,31 @@ export const runtimeSchemas = {
       }
     ],
     "properties": {
+      "link": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CopyLink"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+      },
       "source": {
         "$ref": "#/$defs/GlobalId",
         "description": "The qualified id the item was read from."
+      },
+      "via": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CopyVia"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
       }
     },
     "required": [
@@ -466,6 +560,26 @@ export const runtimeSchemas = {
           "lower_bound"
         ],
         "type": "object"
+      },
+      "CopyLink": {
+        "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
+        "oneOf": [
+          {
+            "const": "recorded",
+            "description": "The entry was written, because the item held none for this destination or held one\nnaming another item.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "Nothing was written: the entry already named this destination item, or the item was\nfound by its own origin, where the correspondence is already recorded on the other\nside.",
+            "type": "string"
+          },
+          {
+            "const": "unrecorded",
+            "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+            "type": "string"
+          }
+        ]
       },
       "CopyOutcome": {
         "description": "What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report.",
@@ -550,15 +664,67 @@ export const runtimeSchemas = {
           }
         ],
         "properties": {
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
+          },
           "source": {
             "$ref": "#/$defs/GlobalId",
             "description": "The qualified id the item was read from."
+          },
+          "via": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyVia"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
           }
         },
         "required": [
           "source"
         ],
         "type": "object"
+      },
+      "CopyVia": {
+        "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+            "type": "string"
+          },
+          {
+            "const": "scan",
+            "description": "A search of the destination for an item recording this one as its origin.",
+            "type": "string"
+          },
+          {
+            "const": "match",
+            "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          },
+          {
+            "const": "created",
+            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+            "type": "string"
+          }
+        ]
       },
       "Delivered": {
         "description": "What keeping one delivered task in step with one deliverer came to.",
@@ -877,6 +1043,38 @@ export const runtimeSchemas = {
     ],
     "title": "CopyReport",
     "type": "object"
+  },
+  "CopyVia": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+    "oneOf": [
+      {
+        "const": "link",
+        "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+        "type": "string"
+      },
+      {
+        "const": "origin",
+        "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+        "type": "string"
+      },
+      {
+        "const": "scan",
+        "description": "A search of the destination for an item recording this one as its origin.",
+        "type": "string"
+      },
+      {
+        "const": "match",
+        "description": "A search of the destination by the caller's `--match-by`.",
+        "type": "string"
+      },
+      {
+        "const": "created",
+        "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+        "type": "string"
+      }
+    ],
+    "title": "CopyVia"
   },
   "CredentialLayer": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

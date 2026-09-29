@@ -330,8 +330,8 @@ pub struct CopyOutcome {
 /// How a copy found the destination item it landed one item on.
 ///
 /// Tried in this order, and the first that answers is the one reported: the link the item
-/// records, its own origin, a search of the destination for its id, the caller's
-/// `--match-by`, and otherwise nothing — see the module's own note on the rules.
+/// records, its own origin, a search of the destination for an item recording it as its
+/// origin, the caller's `--match-by`, and otherwise nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum CopyVia {
