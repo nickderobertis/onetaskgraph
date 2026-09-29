@@ -72,7 +72,11 @@ fn serving(pricing: Pricing, asked: &Arc<Mutex<Vec<String>>>) -> journey::Endpoi
                     let query = request["query"].as_str().expect("a GraphQL document");
                     graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
                     recorded.lock().unwrap().push(query.to_owned());
-                    let answered = board::answer_a_stateless_session_call(query, pricing);
+                    let answered = board::answer_a_stateless_session_call(
+                        query,
+                        &request["variables"],
+                        pricing,
+                    );
                     let body = match answered {
                         Some(data) => json!({ "data": data }),
                         None => json!({"errors":[{"message":

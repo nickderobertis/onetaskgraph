@@ -432,6 +432,10 @@ fn dry_run_variables(document: &str) -> Value {
     bind("after", Value::Null);
     bind("id", json!("node-count-reconciliation"));
     bind("search", json!("repo:github/docs is:issue"));
+    bind(
+        "filter",
+        json!(format!("{ORIGIN_FIELD}:\"node-count-reconciliation\"")),
+    );
     bind("type", json!("ISSUE"));
     bind("duplicates", json!(true));
     bind("owner", json!("github"));

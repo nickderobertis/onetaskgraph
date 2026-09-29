@@ -81,8 +81,25 @@ impl Pricing {
 ///
 /// The probe is checked first: the production document it was joined to is still in the
 /// text, and answering that would run a query GitHub would not have.
-pub fn answer_a_stateless_session_call(query: &str, pricing: Pricing) -> Option<Value> {
+///
+/// A probe is refused, as GitHub refuses it, when `variables` leaves a variable the document
+/// declares non-null without a default unbound: `dryRun: true` computes the count without
+/// resolving a variable, but GitHub validates them first. A board that priced such a probe
+/// anyway would pass a reconciliation the real API rejects outright.
+pub fn answer_a_stateless_session_call(
+    query: &str,
+    variables: &Value,
+    pricing: Pricing,
+) -> Option<Value> {
     if let Some(production) = strip_probe(query) {
+        let unbound = unbound_required_variables(&production, variables);
+        assert!(
+            unbound.is_empty(),
+            "Variable ${} of type {} was provided invalid value — GitHub refuses a document \
+             whose non-null variable is not given, dry run or not: {production}",
+            unbound.first().map_or("", |(name, _)| name.as_str()),
+            unbound.first().map_or("", |(_, ty)| ty.as_str()),
+        );
         return Some(probe_answer(&production, pricing));
     }
     if query.contains("__type(name:") {
@@ -93,6 +110,32 @@ pub fn answer_a_stateless_session_call(query: &str, pricing: Pricing) -> Option<
             "remaining":FIXTURE_BUDGET_LIMIT,"resetAt":"2026-01-01T00:00:00Z"}}));
     }
     None
+}
+
+/// Every variable `document` declares non-null and without a default that `variables` does
+/// not bind to a value, with its declared type, in declaration order.
+pub fn unbound_required_variables(document: &str, variables: &Value) -> Vec<(String, String)> {
+    use graphql_parser::query::{Definition, OperationDefinition, Type};
+    let parsed = graphql_parser::parse_query::<String>(document).expect("a valid GraphQL document");
+    parsed
+        .definitions
+        .iter()
+        .flat_map(|definition| match definition {
+            Definition::Operation(OperationDefinition::Query(query)) => {
+                query.variable_definitions.as_slice()
+            }
+            Definition::Operation(OperationDefinition::Mutation(mutation)) => {
+                mutation.variable_definitions.as_slice()
+            }
+            _ => &[],
+        })
+        .filter(|declared| {
+            matches!(declared.var_type, Type::NonNullType(_))
+                && declared.default_value.is_none()
+                && variables.get(&declared.name).is_none_or(Value::is_null)
+        })
+        .map(|declared| (declared.name.clone(), declared.var_type.to_string()))
+        .collect()
 }
 
 /// What a board answers a `rateLimit(dryRun: true)` probe about `production` with.

@@ -1873,7 +1873,9 @@ fn answer_a_session_call(
     // the production document a probe was joined to is still in the text and answering that
     // would run a query GitHub would not have. This board prices as this workspace computes;
     // `tests/reconciliation_gate.rs` is the same code answering something else.
-    if let Some(answered) = board::answer_a_stateless_session_call(query, Pricing::AsComputed) {
+    if let Some(answered) =
+        board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
+    {
         return Some(answered);
     }
     // Narrowed to the lane's own board lookup, which selects the id and nothing else:
