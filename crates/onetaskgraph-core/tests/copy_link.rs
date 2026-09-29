@@ -605,7 +605,6 @@ async fn a_link_to_an_item_somebody_repointed_is_ignored_and_rewritten_to_what_t
         "the re-pointed item is not touched"
     );
 
-    // And from then on it is the link that finds it.
     pages.store(0, Ordering::Relaxed);
     let again = copied(&engine, &one("from:T-1")).await;
     assert_eq!(

@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{SOURCE, document, empty_folder, qualified};
 
-/// The folder every journey here copies into.
 const NOTES: &str = "notes";
 
 fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
@@ -165,7 +164,6 @@ fn every_kind_copied_out_of_a_folder_records_its_link_and_the_next_copy_follows_
                     "the README's example of a link is not what a copy records: {example}"
                 );
             }
-            // Every other key the source held reads back as it did.
             if verb != "project" {
                 assert_eq!(
                     metadata(&sandbox, verb, &from)["caller.flags"],
@@ -193,7 +191,6 @@ fn every_kind_copied_out_of_a_folder_records_its_link_and_the_next_copy_follows_
             );
         }
 
-        // An edit at the source is carried by the link too.
         let path = source_file(&sandbox, "task", "T-1");
         let edited = std::fs::read_to_string(&path)
             .expect("the source task")

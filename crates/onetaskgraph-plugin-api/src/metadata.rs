@@ -60,6 +60,11 @@ impl MetadataKey {
     /// Not a way round [`Self::new`] for a caller: nothing a person types reaches this, and
     /// the one write that sends it is the copy recording where an item landed.
     #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] A key type of its own would change the
+    // signature of the three narrow metadata writes on `TaskSource`, which every plugin
+    // implements and this crate keeps still (AGENTS.md); the reserved key reaches that seam
+    // only through this one named constructor, while `new`, deserialization, the command line
+    // and both SDKs refuse it, and the stdio boundary admits it only with a value that is links.
     pub fn copies() -> Self {
         Self(Self::COPIES_KEY.to_owned())
     }
