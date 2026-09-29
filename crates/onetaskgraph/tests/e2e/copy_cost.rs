@@ -288,11 +288,6 @@ fn one_targeted_update(tasks: usize, changed: usize) -> [Measured; 2] {
     [plan.measure(&settlement), plan.measure(&settlement)]
 }
 
-/// Whether a document is the board's own whole read of its items.
-fn reads_the_board(document: &str) -> bool {
-    document == onetaskgraph_github_projects::graphql::BOARD
-}
-
 /// A task copy into a board that already holds the task's counterpart, written the way the
 /// release before this one writes a copy — its origin in the board field and not in the
 /// body — so the copy's second rule can only find it by the board's own field filter.
@@ -364,7 +359,7 @@ fn asks_for_the_origin_and_never_walks_the_board(
     );
     let whole: Vec<&(String, Value)> = served
         .iter()
-        .filter(|(document, _)| reads_the_board(document))
+        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::BOARD)
         .collect();
     assert!(whole.is_empty(), "{what} read the whole board: {whole:#?}");
 }

@@ -52,6 +52,10 @@ done
 # it wrote to standard error, failing unless it exited as `expected` says.
 run_case() {
   local name="$1" edit="$2" expected="$3"
+  local remedy="${4:-}"
+  if [ -z "$remedy" ]; then
+    remedy="restore the reconciliation of NOT_CARRIED_REASON against §4's list in $GUARD"
+  fi
   sed "$edit" "$scratch/$DOCUMENT.held" >"$scratch/$DOCUMENT" || fatal \
     "case '$name': could not write the edited document" \
     "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
@@ -66,8 +70,7 @@ run_case() {
       "run 'bash $GUARD' in the working tree and fix what it names first"
   fi
   if [ "$expected" = refuse ] && [ "$status" -eq 0 ]; then
-    fatal "case '$name': the guard passed a drifted list" \
-      "restore the reconciliation of NOT_CARRIED_REASON against §4's list in $GUARD"
+    fatal "case '$name': the guard passed a drifted document" "$remedy"
   fi
 }
 
@@ -75,10 +78,10 @@ run_case() {
 # stand in for the one this case is about.
 names() {
   local name="$1" needle="$2"
+  local remedy="${3:-make $GUARD name the method and the side it is missing from}"
   case "$said" in
     *"$needle"*) ;;
-    *) fatal "case '$name': the refusal did not say \"$needle\": $said" \
-      "make $GUARD name the method and the side it is missing from" ;;
+    *) fatal "case '$name': the refusal did not say \"$needle\": $said" "$remedy" ;;
   esac
 }
 
@@ -107,6 +110,8 @@ names "the list gone" 'no longer says "The template operations are not carried."
 # would pass in silence.
 run_case "a private wire member the document stops naming" \
   's/"path": \["root_cause"\], //; s/— `path`, zero or more nested object keys/— a path, zero or more nested object keys/' \
-  refuse
+  refuse \
+  "restore the reading of a private-field struct's members in STRUCT_SECTIONS' loop in $GUARD"
 names "a private wire member the document stops naming" \
-  '`MetadataMatch` carries the field "path"'
+  '`MetadataMatch` carries the field "path"' \
+  "make $GUARD name the struct and the member the section no longer specifies"

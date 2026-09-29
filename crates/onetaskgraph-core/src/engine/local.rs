@@ -47,9 +47,8 @@ pub(crate) struct LocalTasks {
     pub commented_since: Option<DateTime<Utc>>,
     /// Metadata values every kept task holds, when the source does not filter by them.
     pub metadata: Vec<MetadataMatch>,
-    /// The copy origin every kept task records, when the source does not filter by it —
-    /// the qualified id spelled as a copy stores it.
-    pub origin: Option<String>,
+    /// The copy origin every kept task records, when the source does not filter by it.
+    pub origin: Option<GlobalId>,
 }
 
 impl LocalTasks {
@@ -85,7 +84,7 @@ impl LocalTasks {
                 .metadata
                 .get(GlobalId::ORIGIN_KEY)
                 .and_then(Value::as_str)
-                != Some(origin.as_str())
+                != Some(origin.to_string().as_str())
         {
             return false;
         }

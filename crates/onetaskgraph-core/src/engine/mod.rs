@@ -2198,14 +2198,13 @@ fn shape_tasks(
         }
     }
     if let Some(origin) = origin {
-        // The qualified id as a copy stores it: a source compares the string and never
-        // parses it.
-        let origin = origin.to_string();
         if capabilities.filter_by_origin.is_native() {
-            pushed.origin = Some(origin);
+            // The qualified id as a copy stores it: a source compares the string and never
+            // parses it.
+            pushed.origin = Some(origin.to_string());
             outcomes.record(Predicate::Origin, Outcome::PushedDown);
         } else {
-            local.origin = Some(origin);
+            local.origin = Some(origin.clone());
             outcomes.record(Predicate::Origin, Outcome::AppliedLocally);
         }
     }
