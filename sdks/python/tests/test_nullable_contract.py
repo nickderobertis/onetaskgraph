@@ -10,6 +10,7 @@ schema declares nullable — an `Option` on the Rust side — keeps accepting `n
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import shutil
 import sys
@@ -19,23 +20,22 @@ import pytest
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from onetaskgraph_sdk import Client
-from onetaskgraph_sdk._generated import (
-    query_response_of_qualified_task,
-    query_response_of_search_hit,
-    source_listing,
-    task_detail,
-)
+from onetaskgraph_sdk._generated import source_listing, task_detail
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 import generate  # noqa: E402  # The generator lives beside the package, not inside it.
 
 GENERATED = Path(generate.__file__).parent / "src" / "onetaskgraph_sdk" / "_generated"
 
-# Every generated model a task is decoded through, since each root carries its own copy.
+# Every generated model a task is decoded through, since each root carries its own copy:
+# found in the package rather than listed, so a root that gains one is covered by it.
 TASK_MODELS: list[type[BaseModel]] = [
-    query_response_of_qualified_task.Task,
-    query_response_of_search_hit.Task,
-    task_detail.Task,
+    module.Task
+    for module in (
+        importlib.import_module(f"onetaskgraph_sdk._generated.{path.stem}")
+        for path in sorted(GENERATED.glob("*.py"))
+    )
+    if isinstance(getattr(module, "Task", None), type) and issubclass(module.Task, BaseModel)
 ]
 
 # A task as a source wrote one before `delivers` and `delivered_by` existed, with its other
