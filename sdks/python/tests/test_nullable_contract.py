@@ -151,7 +151,7 @@ def emitted_bundle() -> generate.SchemaBundle:
     return generate.validate_schema_bundle(json.loads(generate.run_workspace_binary("schema")))
 
 
-def test_no_generated_member_is_optional_that_the_schema_declares_non_nullable() -> None:
+def test_no_generated_member_accepts_null_that_the_schema_declares_non_nullable() -> None:
     """Over the whole generated package, every model agrees with the schema about `null`.
 
     This is the decode test for every member the tests above do not name — the document,
@@ -207,6 +207,18 @@ def test_the_guard_refuses_a_schema_member_the_models_do_not_let_be_null() -> No
     disagreements = generate.nullability_disagreements(bundle, GENERATED)
     assert len(disagreements) == 1
     assert "the schema admits null for [['comments']], the models for [[]]" in disagreements[0]
+
+
+def test_the_guard_refuses_a_schema_reference_it_cannot_follow() -> None:
+    """A member referring to a definition its root lacks is refused, not read as admitting null."""
+    emitted = json.loads(generate.run_workspace_binary("schema"))
+    capabilities = emitted["roots"]["SourceListing"]["$defs"]["Capabilities"]["properties"]
+    capabilities["comments"] = {"$ref": "#/$defs/Vanished"}
+
+    bundle = generate.validate_schema_bundle(emitted)
+    with pytest.raises(SystemExit) as refused:
+        generate.nullability_disagreements(bundle, GENERATED)
+    assert "'#/$defs/Vanished' that is not a definition of its own root" in str(refused.value)
 
 
 def test_generation_fails_when_its_models_stop_following_the_schema(

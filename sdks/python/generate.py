@@ -970,9 +970,9 @@ def format_generated(destination: Path) -> None:
         ["ruff", "check", "--fix", "--select", "F401,I001", str(destination)],
         check=True,
     )
-    # After formatting rather than before it: the shape a field is written in is the
-    # formatter's, and reading it back is what lets this be one rule rather than a guess
-    # at what the code generator happened to emit on one line or several.
+    # After formatting rather than before it: [`enum_defaults`] reads each field in the shape
+    # the formatter writes it, which is what lets it be one rule rather than a guess at what
+    # the code generator happened to emit on one line or several.
     for module in sorted(destination.glob("*.py")):
         lines = module.read_text(encoding="utf-8").splitlines()
         rewritten = enum_defaults(lines)
@@ -1040,11 +1040,20 @@ def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = froze
 
 
 def resolve_reference(reference: str, root: JsonValue) -> JsonValue:
-    """The local definition `reference` names, or an empty schema for one it cannot find."""
+    """The local definition `reference` names, refusing one the root does not define.
+
+    Refused rather than read as an empty schema, which admits anything: a reference the guard
+    cannot follow is a member whose nullability it cannot vouch for.
+    """
     definitions = root.get("$defs") if isinstance(root, dict) else None
     name = reference.removeprefix("#/$defs/")
     found = definitions.get(name) if isinstance(definitions, dict) else None
-    return found if found is not None else {}
+    if name == reference or found is None:
+        raise SystemExit(
+            f"binary emitted a schema reference {reference!r} that is not a definition of its "
+            "own root; next: emit every root with its definitions under `$defs`"
+        )
+    return found
 
 
 def schema_objects(value: JsonValue, root: JsonValue, inherited: Members) -> list[Members]:
