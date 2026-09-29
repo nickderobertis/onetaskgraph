@@ -75,11 +75,12 @@ async fn listed(source: &dyn TaskSource, query: &TaskQuery) -> Vec<String> {
 }
 
 fn at(key: &str, path: &[&str], value: &str) -> MetadataMatch {
-    MetadataMatch {
-        key: key.to_owned(),
-        path: path.iter().map(|segment| (*segment).to_owned()).collect(),
-        value: value.to_owned(),
-    }
+    MetadataMatch::new(
+        key.to_owned(),
+        path.iter().map(|segment| (*segment).to_owned()).collect(),
+        value.to_owned(),
+    )
+    .expect("a metadata location")
 }
 
 #[test]

@@ -69,6 +69,7 @@ pub struct TaskQuery {
     /// [`metadata`](Self::metadata) gives, with
     /// [`Capabilities::filter_by_origin`](crate::Capabilities::filter_by_origin).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // llmlint: ignore[boundary_inputs_validated, invalid_states_unrepresentable] The contract's owner ruled this an opaque string (planner reply c-9fa2fba58e652a06127c709c738311f9): a plugin never constructs or interprets a qualified id, which is why `GlobalId` is absent from this crate (AGENTS.md, "The plugin contract"), so this crate cannot check the syntax without interpreting it. Every source compares it byte for byte with the string it holds, so a value naming no qualified id matches nothing rather than something wrong, and the one boundary a person types it at — `task list --origin` — parses it as a `GlobalId` and refuses a malformed one before any source is asked.
     pub origin: Option<String>,
 }
 
@@ -136,20 +137,71 @@ fn commented_at_or_after(comment: &Comment, since: DateTime<Utc>) -> bool {
 /// when the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;
 /// a number, a boolean, an array, an object, a missing key and a path through a non-object
 /// all fail it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// Neither the key nor a nested segment may be empty, which is checked wherever one is built,
+/// deserialized included, so a source handed one never has to ask what an empty location
+/// means.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct MetadataMatch {
     /// The top-level metadata key.
-    pub key: String,
+    key: String,
     /// Nested object keys under [`key`](Self::key), outermost first. Empty names the
     /// top-level value itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
-    pub path: Vec<String>,
+    path: Vec<String>,
     /// The string the value there must equal.
-    pub value: String,
+    value: String,
 }
 
 impl MetadataMatch {
+    /// A match for `value` at `key` and the nested `path` under it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the location and what to write instead when the key or one
+    /// of the segments is empty.
+    pub fn new(
+        key: impl Into<String>,
+        path: Vec<String>,
+        value: impl Into<String>,
+    ) -> Result<Self, String> {
+        let key = key.into();
+        if key.is_empty() || path.iter().any(String::is_empty) {
+            return Err(format!(
+                "the metadata location {:?} has an empty key or segment; next: name a key, and \
+                 a non-empty object key for each nested segment",
+                std::iter::once(key.as_str())
+                    .chain(path.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join("/")
+            ));
+        }
+        Ok(Self {
+            key,
+            path,
+            value: value.into(),
+        })
+    }
+
+    /// The top-level metadata key.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The nested object keys under [`key`](Self::key), outermost first.
+    #[must_use]
+    pub fn path(&self) -> &[String] {
+        &self.path
+    }
+
+    /// The string the value at this location must equal.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
     /// Whether `metadata` holds [`value`](Self::value) as a string at this location.
     #[must_use]
     pub fn holds(&self, metadata: &BTreeMap<String, Value>) -> bool {
@@ -160,6 +212,21 @@ impl MetadataMatch {
                 .and_then(|object| object.get(segment));
         }
         held.and_then(Value::as_str) == Some(self.value.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MetadataMatch {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// The wire shape, before its location is checked.
+        #[derive(Deserialize)]
+        struct Wire {
+            key: String,
+            #[serde(default)]
+            path: Vec<String>,
+            value: String,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.key, wire.path, wire.value).map_err(D::Error::custom)
     }
 }
 

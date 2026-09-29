@@ -446,14 +446,12 @@ impl Wanted {
             Self::Metadata(key, Value::String(value))
                 if capabilities.filter_by_metadata.is_native() =>
             {
-                TaskQuery {
-                    metadata: vec![MetadataMatch {
-                        key: key.clone(),
-                        path: Vec::new(),
-                        value: value.clone(),
-                    }],
-                    ..TaskQuery::default()
-                }
+                MetadataMatch::new(key.clone(), Vec::new(), value.clone())
+                    .map(|wanted| TaskQuery {
+                        metadata: vec![wanted],
+                        ..TaskQuery::default()
+                    })
+                    .unwrap_or_default()
             }
             _ => TaskQuery::default(),
         }

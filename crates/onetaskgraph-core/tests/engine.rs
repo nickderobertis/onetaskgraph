@@ -1041,7 +1041,7 @@ const TWENTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 88] = [
     ("TaskContentSet", 0x7f9ab07c60d6f804),
     ("TaskDetail", 0x7d525c2c7ca470a1),
     ("TaskPrioritySet", 0x228f13d5a4b468b0),
-    ("TaskQuery", 0xa4bb4b02358c095c),
+    ("TaskQuery", 0x0efc24a7b89f2422),
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xbe06dc239bf5eeb0),
     ("TaskUpdate", 0xea0b0cb53c32ab8f),

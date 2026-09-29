@@ -11823,7 +11823,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "MetadataMatch": {
-        "description": "One caller-defined metadata value a task must hold.\n\nThe location is a top-level metadata key — which may itself contain dots, such as\n`orchestrator.follow-up` — and zero or more nested object keys below it. The match holds\nwhen the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;\na number, a boolean, an array, an object, a missing key and a path through a non-object\nall fail it.",
+        "description": "One caller-defined metadata value a task must hold.\n\nThe location is a top-level metadata key — which may itself contain dots, such as\n`orchestrator.follow-up` — and zero or more nested object keys below it. The match holds\nwhen the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;\na number, a boolean, an array, an object, a missing key and a path through a non-object\nall fail it.\n\nNeither the key nor a nested segment may be empty, which is checked wherever one is built,\ndeserialized included, so a source handed one never has to ask what an empty location\nmeans.",
         "properties": {
           "key": {
             "description": "The top-level metadata key.",

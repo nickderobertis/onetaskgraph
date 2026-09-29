@@ -6433,6 +6433,10 @@ none_of: string[]
  * when the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;
  * a number, a boolean, an array, an object, a missing key and a path through a non-object
  * all fail it.
+ *
+ * Neither the key nor a nested segment may be empty, which is checked wherever one is built,
+ * deserialized included, so a source handed one never has to ask what an empty location
+ * means.
  */
 export interface MetadataMatch {
 /**

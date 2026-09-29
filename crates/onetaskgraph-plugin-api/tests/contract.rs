@@ -1100,11 +1100,14 @@ fn a_query_round_trips_with_every_filter_populated() {
         project: ProjectFilter::Is(NativeId::from("P-1")),
         priorities: Vec::new(),
         commented_since: Some("2026-09-28T12:00:00Z".parse().expect("an RFC 3339 instant")),
-        metadata: vec![MetadataMatch {
-            key: "orchestrator.follow-up".to_owned(),
-            path: vec!["root_cause".to_owned()],
-            value: "stale-cache".to_owned(),
-        }],
+        metadata: vec![
+            MetadataMatch::new(
+                "orchestrator.follow-up".to_owned(),
+                vec!["root_cause".to_owned()],
+                "stale-cache".to_owned(),
+            )
+            .expect("a metadata location"),
+        ],
         origin: Some("work:ENG-1".to_owned()),
     };
     let encoded = serde_json::to_string(&query).expect("encodes");
@@ -2420,11 +2423,10 @@ fn a_query_without_metadata_or_origin_carries_neither_member_on_the_wire() {
     assert!(unfiltered.get("metadata").is_none(), "{unfiltered}");
     assert!(unfiltered.get("origin").is_none(), "{unfiltered}");
     let query = TaskQuery {
-        metadata: vec![MetadataMatch {
-            key: "team.owner".to_owned(),
-            path: Vec::new(),
-            value: "ada".to_owned(),
-        }],
+        metadata: vec![
+            MetadataMatch::new("team.owner".to_owned(), Vec::new(), "ada".to_owned())
+                .expect("a metadata location"),
+        ],
         origin: Some("work:ENG-1".to_owned()),
         ..TaskQuery::default()
     };
@@ -2449,10 +2451,13 @@ fn a_metadata_match_holds_only_a_string_equal_to_its_value_at_its_location() {
         "team.flag": true
     }))
     .expect("a metadata map");
-    let at = |key: &str, path: &[&str], value: &str| MetadataMatch {
-        key: key.to_owned(),
-        path: path.iter().map(|segment| (*segment).to_owned()).collect(),
-        value: value.to_owned(),
+    let at = |key: &str, path: &[&str], value: &str| {
+        MetadataMatch::new(
+            key.to_owned(),
+            path.iter().map(|segment| (*segment).to_owned()).collect(),
+            value.to_owned(),
+        )
+        .expect("a metadata location")
     };
     assert!(at("orchestrator.follow-up", &["root_cause"], "stale-cache").holds(&metadata));
     assert!(at("orchestrator.follow-up", &["nested", "deep"], "x").holds(&metadata));
@@ -2501,4 +2506,21 @@ fn an_origin_matches_only_the_exact_qualified_id_recorded() {
     assert!(!query.origin_matches(&recorded(serde_json::json!("xwork:ENG-1"))));
     assert!(!query.origin_matches(&std::collections::BTreeMap::new()));
     assert!(TaskQuery::default().origin_matches(&std::collections::BTreeMap::new()));
+}
+
+#[test]
+fn a_metadata_match_naming_no_location_is_refused_wherever_it_is_built() {
+    for (key, path) in [("", vec![]), ("team.owner", vec![String::new()])] {
+        let refused = MetadataMatch::new(key, path.clone(), "ada")
+            .expect_err("an empty key or segment names no location");
+        assert!(refused.contains("empty key or segment"), "{refused}");
+        let wire = serde_json::json!({"key": key, "path": path, "value": "ada"});
+        let decoded = serde_json::from_value::<MetadataMatch>(wire);
+        assert!(decoded.is_err(), "{key:?} {path:?} decoded as {decoded:?}");
+    }
+    let read: MetadataMatch =
+        serde_json::from_str(r#"{"key":"team.owner","value":"ada"}"#).expect("an absent path");
+    assert_eq!(read.key(), "team.owner");
+    assert!(read.path().is_empty());
+    assert_eq!(read.value(), "ada");
 }

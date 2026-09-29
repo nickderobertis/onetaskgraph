@@ -2234,7 +2234,9 @@ fn raw_server_with_headers(status: &str, body: &str, headers: &str) -> String {
 fn empty_board_search(request: &Value) -> Option<String> {
     request["query"]
         .as_str()
-        .filter(|query| query.contains("search(query:$search"))
+        // An origin lookup carries a search too, beside the board's own filtered items, and
+        // is a request a case scripts rather than one this answers.
+        .filter(|query| query.contains("search(query:$search") && !query.contains("originItems:"))
         .map(|_| {
             json!({"data":{"search":{"nodes":[],
                 "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
@@ -13927,11 +13929,14 @@ fn origin_query(origin: &str) -> TaskQuery {
 
 fn metadata_query(key: &str, path: &[&str], value: &str) -> TaskQuery {
     TaskQuery {
-        metadata: vec![MetadataMatch {
-            key: key.to_owned(),
-            path: path.iter().map(|segment| (*segment).to_owned()).collect(),
-            value: value.to_owned(),
-        }],
+        metadata: vec![
+            MetadataMatch::new(
+                key.to_owned(),
+                path.iter().map(|segment| (*segment).to_owned()).collect(),
+                value.to_owned(),
+            )
+            .expect("a metadata location"),
+        ],
         ..TaskQuery::default()
     }
 }
@@ -14140,13 +14145,13 @@ async fn a_metadata_answer_is_confirmed_against_the_parsed_metadata_comment() {
     );
     // Several matches are ANDed, and every value is one more phrase of the same search.
     let mut both = metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache");
-    both.metadata.push(MetadataMatch {
-        key: "team.owner".to_owned(),
-        path: Vec::new(),
-        value: "ada".to_owned(),
-    });
+    both.metadata.push(
+        MetadataMatch::new("team.owner".to_owned(), Vec::new(), "ada".to_owned())
+            .expect("a metadata location"),
+    );
     assert_eq!(selected_tasks(source.as_ref(), &both).await, ["I_held"]);
-    both.metadata[1].value = "bob".to_owned();
+    both.metadata[1] =
+        MetadataMatch::new("team.owner", Vec::new(), "bob").expect("a metadata location");
     assert_eq!(
         selected_tasks(source.as_ref(), &both).await,
         Vec::<String>::new()
@@ -14432,4 +14437,50 @@ async fn an_origin_lookup_walks_each_of_its_connections_past_its_first_page() {
     // finds are two pages of it, walked alongside.
     assert_eq!(fixture.requests("originItems"), 3);
     assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn an_origin_lookup_answer_this_source_cannot_read_is_refused_by_what_is_wrong() {
+    let empty = |more: bool, cursor: Value| json!({"nodes":[],"pageInfo":{"hasNextPage":more,"endCursor":cursor}});
+    let answer = |items: Value, search: Value| json!({"data":{"originItems":{"projectV2":{"items":items}},"search":search}});
+    for (what, bodies, expected) in [
+        (
+            "a board the token cannot see",
+            vec![json!({"data":{"originItems":{"projectV2":null},
+                                "search":empty(false, Value::Null)}})],
+            "was not found or is not visible to the token",
+        ),
+        (
+            "no search connection",
+            vec![json!({"data":{"originItems":{"projectV2":{"items":empty(false, Value::Null)}}}})],
+            "has no search connection",
+        ),
+        (
+            "a connection without pageInfo",
+            vec![answer(json!({"nodes":[]}), empty(false, Value::Null))],
+            "connection has no pageInfo",
+        ),
+        (
+            "another page and no cursor to it",
+            vec![answer(empty(true, Value::Null), empty(false, Value::Null))],
+            "reports another page and no endCursor",
+        ),
+        (
+            "a cursor that does not advance",
+            vec![
+                answer(empty(true, json!("c1")), empty(false, Value::Null)),
+                answer(empty(true, json!("c1")), empty(false, Value::Null)),
+            ],
+            "cursor is empty or did not advance",
+        ),
+    ] {
+        let endpoint = sequence_server(bodies);
+        let message = refusal(
+            configured(&endpoint, json!({}))
+                .query_tasks(&origin_query("work:ENG-1"), &page(10))
+                .await
+                .expect_err(what),
+        );
+        assert!(message.contains(expected), "{what}: {message}");
+    }
 }

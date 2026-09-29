@@ -1012,17 +1012,11 @@ fn metadata_match(value: &str) -> Result<MetadataMatch, String> {
     };
     let mut segments = location.split('/').map(str::to_owned);
     let key = segments.next().unwrap_or_default();
-    let path: Vec<String> = segments.collect();
-    if key.is_empty() || path.iter().any(String::is_empty) {
-        return Err(format!(
-            "{location:?} has an empty key or segment; expected <KEY>[/<SEGMENT>...]=<VALUE>, \
-             such as orchestrator.follow-up/root_cause=stale-cache"
-        ));
-    }
-    Ok(MetadataMatch {
-        key,
-        path,
-        value: wanted.to_owned(),
+    MetadataMatch::new(key, segments.collect(), wanted).map_err(|refused| {
+        format!(
+            "{refused}; expected <KEY>[/<SEGMENT>...]=<VALUE>, such as \
+             orchestrator.follow-up/root_cause=stale-cache"
+        )
     })
 }
 

@@ -63,22 +63,28 @@ fn narrowed() -> [(TaskQuery, Vec<&'static str>); 3] {
     [
         (
             TaskQuery {
-                metadata: vec![MetadataMatch {
-                    key: "orchestrator.follow-up".to_owned(),
-                    path: vec!["root_cause".to_owned()],
-                    value: "stale-cache".to_owned(),
-                }],
+                metadata: vec![
+                    MetadataMatch::new(
+                        "orchestrator.follow-up".to_owned(),
+                        vec!["root_cause".to_owned()],
+                        "stale-cache".to_owned(),
+                    )
+                    .expect("a metadata location"),
+                ],
                 ..TaskQuery::default()
             },
             vec!["T-tagged"],
         ),
         (
             TaskQuery {
-                metadata: vec![MetadataMatch {
-                    key: "orchestrator.follow-up".to_owned(),
-                    path: vec!["root_cause".to_owned()],
-                    value: "3".to_owned(),
-                }],
+                metadata: vec![
+                    MetadataMatch::new(
+                        "orchestrator.follow-up".to_owned(),
+                        vec!["root_cause".to_owned()],
+                        "3".to_owned(),
+                    )
+                    .expect("a metadata location"),
+                ],
                 ..TaskQuery::default()
             },
             vec![],

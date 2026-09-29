@@ -497,10 +497,12 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     // (g) and (h): a task copy finds its counterpart by asking the board for its origin, and
     // never by walking the board — one written the way the release before this one wrote it,
     // with its origin in the board field alone, included — and creates when there is none.
+    // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two more rows of a record this test already takes, against the same loopback fixture board every journey in this crate drives: no credential, no socket beyond 127.0.0.1, no third party, and well under a second for the whole test. A copy is the engine's, so this lives in the binary crate for the reason the module documentation gives, and it is held to `copy-cost.txt`, which the board's own crate records beside its session cost.
     let (found, found_served, _) = a_task_copy_finding_a_counterpart_written_before_this_release();
     asks_for_the_origin_and_never_walks_the_board("(g)", "T-0", &found_served);
     let (created, created_served, _) = a_task_copy_finding_no_counterpart();
     asks_for_the_origin_and_never_walks_the_board("(h)", "L", &created_served);
+    // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),

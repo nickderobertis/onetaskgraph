@@ -466,10 +466,11 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    LabelFilter, Location, MetadataKey, MetadataMatch, Metering, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
+    WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -6779,7 +6780,7 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
     let phrases = text
         .map(|text| text.terms.as_str())
         .into_iter()
-        .chain(query.metadata.iter().map(|wanted| wanted.value.as_str()))
+        .chain(query.metadata.iter().map(MetadataMatch::value))
         .map(quoted)
         .collect::<Vec<_>>();
     Some(format!("{fields} {}", phrases.join(" ")))
