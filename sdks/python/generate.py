@@ -1013,29 +1013,47 @@ Nullability = dict[frozenset[str], set[frozenset[str]]]
 
 
 def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = frozenset()) -> bool:
-    """Whether a value `schema` describes may be JSON `null`, following local references."""
-    if schema is True:
-        return True
+    """Whether JSON `null` validates against `schema`, following local references.
+
+    A schema is the conjunction of its keywords, so `null` validates only where every keyword
+    that can refuse it accepts it; a keyword that constrains another type — `properties`,
+    `items`, `format`, `minimum` — accepts `null` by JSON Schema's own rule. A keyword this
+    reads in a shape JSON Schema does not define is refused rather than guessed at.
+    """
+    if isinstance(schema, bool):
+        return schema
     if not isinstance(schema, dict):
-        return False
-    declared = schema.get("type")
-    if declared == "null" or (isinstance(declared, list) and "null" in declared):
-        return True
-    if "const" in schema and schema["const"] is None:
-        return True
-    enumerated = schema.get("enum")
-    if isinstance(enumerated, list) and None in enumerated:
-        return True
-    for combinator in ("anyOf", "oneOf"):
-        if any(admits_null(v, root, seen) for v in schema_variants(schema, combinator)):
-            return True
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        return reference not in seen and admits_null(
-            resolve_reference(reference, root), root, seen | {reference}
+        raise SystemExit(
+            f"binary emitted {json.dumps(schema)} where a schema belongs; next: emit every "
+            "member as a JSON Schema object or boolean"
         )
-    # A schema that constrains nothing, as an arbitrary JSON value's does, admits `null` too.
-    return not set(schema) - {"description", "title", "default", "examples"}
+    declared = schema.get("type", "null")
+    if not (
+        isinstance(declared, str)
+        or (isinstance(declared, list) and all(isinstance(kind, str) for kind in declared))
+    ):
+        raise SystemExit(f"binary emitted a schema `type` of {json.dumps(declared)}")
+    enumerated = schema.get("enum", [None])
+    if not isinstance(enumerated, list):
+        raise SystemExit(f"binary emitted a schema `enum` of {json.dumps(enumerated)}")
+    reference = schema.get("$ref")
+    if reference is not None and not isinstance(reference, str):
+        raise SystemExit(f"binary emitted a schema `$ref` of {json.dumps(reference)}")
+    refusals = [
+        "null" not in ([declared] if isinstance(declared, str) else declared),
+        "const" in schema and schema["const"] is not None,
+        None not in enumerated,
+        any(not admits_null(v, root, seen) for v in schema_variants(schema, "allOf")),
+        "anyOf" in schema
+        and not any(admits_null(v, root, seen) for v in schema_variants(schema, "anyOf")),
+        "oneOf" in schema
+        and sum(admits_null(v, root, seen) for v in schema_variants(schema, "oneOf")) != 1,
+        "not" in schema and admits_null(schema["not"], root, seen),
+        reference is not None
+        and reference not in seen
+        and not admits_null(resolve_reference(reference, root), root, seen | {reference}),
+    ]
+    return not any(refusals)
 
 
 def schema_variants(schema: dict[str, JsonValue], combinator: str) -> list[JsonValue]:
@@ -1079,8 +1097,13 @@ def schema_objects(value: JsonValue, root: JsonValue, inherited: Members) -> lis
     if not isinstance(value, dict):
         return []
     properties = value.get("properties")
-    if not isinstance(properties, dict):
+    if "properties" not in value:
         return [found for child in value.values() for found in schema_objects(child, root, {})]
+    if not isinstance(properties, dict):
+        raise SystemExit(
+            f"binary emitted a schema `properties` of {json.dumps(properties)}; next: emit an "
+            "object's members as a map from each name to its schema"
+        )
     members = dict(inherited)
     reference = value.get("$ref")
     if isinstance(reference, str):

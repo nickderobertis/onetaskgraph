@@ -233,6 +233,45 @@ def test_the_guard_refuses_a_combinator_that_is_not_a_list() -> None:
     assert "schema whose `oneOf` is not a list" in str(refused.value)
 
 
+@pytest.mark.parametrize(
+    ("member", "admits"),
+    [
+        ({"type": "string"}, False),
+        ({"type": ["string", "null"]}, True),
+        ({"format": "uint32"}, True),
+        ({"type": "string", "anyOf": [{"type": "null"}]}, False),
+        ({"allOf": [{"type": ["string", "null"]}, {"enum": ["a", None]}]}, True),
+        ({"allOf": [{"type": ["string", "null"]}, {"enum": ["a"]}]}, False),
+        ({"oneOf": [{"type": "null"}, {}]}, False),
+        ({"not": {"type": "null"}}, False),
+        ({"const": None}, True),
+        (False, False),
+    ],
+)
+def test_the_guard_reads_a_schema_as_the_conjunction_of_its_keywords(
+    member: JsonValue, admits: bool
+) -> None:
+    """`null` validates only where every keyword that can refuse it accepts it."""
+    assert generate.admits_null(member, {}) is admits
+
+
+@pytest.mark.parametrize(
+    ("malformed", "named"),
+    [
+        ({"properties": {"comments": 3}}, "binary emitted 3 where a schema belongs"),
+        ({"properties": {"comments": {"type": 3}}}, "schema `type` of 3"),
+        ({"properties": {"comments": {"enum": "a"}}}, 'schema `enum` of "a"'),
+        ({"properties": {"comments": {"allOf": {}}}}, "schema whose `allOf` is not a list"),
+        ({"properties": []}, "schema `properties` of []"),
+    ],
+)
+def test_the_guard_refuses_a_schema_it_cannot_read(malformed: JsonValue, named: str) -> None:
+    """A schema in a shape JSON Schema does not define is refused, naming what was emitted."""
+    with pytest.raises(SystemExit) as refused:
+        generate.schema_nullability(malformed)
+    assert named in str(refused.value)
+
+
 def test_generation_fails_when_its_models_stop_following_the_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
