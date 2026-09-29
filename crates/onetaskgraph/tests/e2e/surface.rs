@@ -263,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 24);
+    assert_eq!(bundle["version"], 25);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -827,6 +827,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         TaskRef::DELIVERED_BY_KEY,
         ItemKind::METADATA_KEY,
         MetadataKey::TEMPLATE_KEY,
+        MetadataKey::COPIES_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
