@@ -27,9 +27,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, Metering, NativeId, Page, PageRequest, Project, ProjectQuery,
-    Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
+    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
+    DocumentQuery, ItemKind, ItemWrite, Location, MetadataMatch, Metering, NativeId, Page,
+    PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
+    TaskQuery, TaskRef, TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -418,6 +419,43 @@ impl Wanted {
             }
             Self::Title(wanted) => title == wanted,
             Self::Metadata(key, value) => metadata.get(key) == Some(value),
+        }
+    }
+
+    /// The task query that asks `capabilities`' source for this item rather than for all of
+    /// them, when that source applies the predicate itself.
+    ///
+    /// Only ever a narrowing the source declared it applies, so a source that cannot is
+    /// asked for everything exactly as before; and never the last word, because
+    /// [`found`](Self::found) still confirms each row. A text search is wider than an equal
+    /// title, and a source may answer a match it cannot yet see as absent — which is the
+    /// same answer the whole-store walk gave for an item its own listing was behind on.
+    fn task_query(&self, capabilities: &Capabilities) -> TaskQuery {
+        match self {
+            Self::Origin(id) if capabilities.filter_by_origin.is_native() => TaskQuery {
+                origin: Some(id.clone()),
+                ..TaskQuery::default()
+            },
+            Self::Title(title) if capabilities.search_title.is_native() => TaskQuery {
+                text: Some(TextQuery {
+                    terms: title.clone(),
+                    fields: TextFields::Title,
+                }),
+                ..TaskQuery::default()
+            },
+            Self::Metadata(key, Value::String(value))
+                if capabilities.filter_by_metadata.is_native() =>
+            {
+                TaskQuery {
+                    metadata: vec![MetadataMatch {
+                        key: key.clone(),
+                        path: Vec::new(),
+                        value: value.clone(),
+                    }],
+                    ..TaskQuery::default()
+                }
+            }
+            _ => TaskQuery::default(),
         }
     }
 }
@@ -1197,6 +1235,9 @@ impl Engine {
             }
             Target::Create => None,
         };
+        // A project this copy creates holds nothing it did not file itself, so nothing filed
+        // under it can be an orphan and the destination is not walked for one.
+        let created = matches!(project.target, Target::Create);
         let mut outcomes = self
             .copy_items(destination, request, vec![project], None, running, journal)
             .await?;
@@ -1231,7 +1272,10 @@ impl Engine {
         );
         // A member copy was told which members it carries, so it cannot tell a member it
         // left out from one the source no longer holds, and does not walk for either.
-        if walks_orphans && let Some(filed) = filed {
+        if walks_orphans
+            && !created
+            && let Some(filed) = filed
+        {
             outcomes.extend(
                 self.orphans(destination, &id, &filed.native, &members)
                     .await?,
@@ -1323,6 +1367,8 @@ impl Engine {
             project: ProjectSelector::Qualified(project.clone()),
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
@@ -1982,6 +2028,7 @@ impl Engine {
         wanted: &Wanted,
     ) -> Result<Option<NativeId>, EngineError> {
         let mut cursor: Option<Cursor> = None;
+        let tasks = wanted.task_query(&destination.source().capabilities());
         loop {
             let asked = cursor.clone();
             let request = request_for(destination, cursor);
@@ -1989,7 +2036,7 @@ impl Engine {
                 Level::Task => {
                     let page = destination
                         .source()
-                        .query_tasks(&TaskQuery::default(), &request)
+                        .query_tasks(&tasks, &request)
                         .await
                         .map_err(|error| refused(destination, error))?;
                     fits(page.items.len(), request.limit)

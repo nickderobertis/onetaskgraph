@@ -33,8 +33,8 @@ pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};
 pub use metering::{Metered, Metering};
 pub use query::{
-    Cursor, DocumentQuery, LabelFilter, Page, PageRequest, ProjectFilter, ProjectQuery, TaskQuery,
-    TextFields, TextQuery,
+    Cursor, DocumentQuery, LabelFilter, MetadataMatch, Page, PageRequest, ProjectFilter,
+    ProjectQuery, TaskQuery, TextFields, TextQuery,
 };
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};

@@ -96,6 +96,10 @@ pub enum Predicate {
     /// Applied locally, it costs a read of the source's comments for every task the source's
     /// other predicates kept — which is what a plan naming it there is saying.
     CommentedSince,
+    /// Filter by a caller-defined metadata value.
+    Metadata,
+    /// Filter by copy origin: the qualified id an item was copied from.
+    Origin,
     /// Search titles.
     SearchTitle,
     /// Search bodies.

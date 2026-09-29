@@ -1,9 +1,12 @@
 //! What a caller asks a source for, and how a source hands back more than fits
 //! in one answer.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde_json::Value;
 
 use crate::{Comment, NativeId, Priority, StatusCategory};
 
@@ -43,9 +46,64 @@ pub struct TaskQuery {
     /// is never handed one it would have to ignore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commented_since: Option<DateTime<Utc>>,
+    /// Caller-defined metadata values to keep: a task matches when **every** one of these
+    /// holds of its [`Task::metadata`](crate::Task::metadata). Empty means unfiltered.
+    ///
+    /// Defaulted when absent and left out of the wire when empty, so a plugin written before
+    /// there were metadata matches reads exactly the query it read before — and, declaring no
+    /// [`Capabilities::filter_by_metadata`](crate::Capabilities::filter_by_metadata), is never
+    /// handed one it would have to ignore.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub metadata: Vec<MetadataMatch>,
+    /// The copy origin to keep: a task matches when its
+    /// [`ORIGIN_KEY`](Self::ORIGIN_KEY) metadata entry is a string equal to this, exactly.
+    /// `None` means unfiltered.
+    ///
+    /// A **qualified id** — `<source>:<native>` — spelled exactly as a copy stores it. A
+    /// plugin never constructs or interprets one: it compares this string with the one it
+    /// holds, byte for byte, and nothing else, which is why it is a string here rather than
+    /// the engine's own qualified-id type.
+    ///
+    /// Defaulted when absent and left out of the wire when `None`, on the terms
+    /// [`metadata`](Self::metadata) gives, with
+    /// [`Capabilities::filter_by_origin`](crate::Capabilities::filter_by_origin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 impl TaskQuery {
+    /// The reserved metadata key a copied item records the qualified id it was copied from
+    /// under, which [`origin`](Self::origin) is compared with.
+    ///
+    /// The engine owns this key; it is restated here so a source applying the predicate
+    /// natively and the engine narrowing for one that does not read the same entry.
+    /// `scripts/check-origin-key-spelling.sh` holds this spelling to the engine's own.
+    pub const ORIGIN_KEY: &'static str = "onetaskgraph.origin";
+
+    /// Whether `metadata` — one task's — satisfies every [`metadata`](Self::metadata) match:
+    /// always when the query carries none.
+    ///
+    /// The one statement of the predicate's meaning, so a source applying it natively and the
+    /// engine narrowing for a source that does not cannot answer the same store differently.
+    #[must_use]
+    pub fn metadata_matches(&self, metadata: &BTreeMap<String, Value>) -> bool {
+        self.metadata.iter().all(|wanted| wanted.holds(metadata))
+    }
+
+    /// Whether `metadata` — one task's — satisfies [`origin`](Self::origin): always when the
+    /// query carries none, and otherwise exactly when its [`ORIGIN_KEY`](Self::ORIGIN_KEY)
+    /// entry is a string equal to it.
+    #[must_use]
+    pub fn origin_matches(&self, metadata: &BTreeMap<String, Value>) -> bool {
+        self.origin.as_ref().is_none_or(|origin| {
+            metadata
+                .get(Self::ORIGIN_KEY)
+                .and_then(Value::as_str)
+                .is_some_and(|held| held == origin)
+        })
+    }
+
     /// Whether `comments` — one task's — satisfy [`commented_since`](Self::commented_since):
     /// always when the query carries no instant, and otherwise exactly when one of them was
     /// created or last edited at or after it.
@@ -69,6 +127,40 @@ impl TaskQuery {
 fn commented_at_or_after(comment: &Comment, since: DateTime<Utc>) -> bool {
     comment.created_at.is_some_and(|at| at >= since)
         || comment.updated_at.is_some_and(|at| at >= since)
+}
+
+/// One caller-defined metadata value a task must hold.
+///
+/// The location is a top-level metadata key — which may itself contain dots, such as
+/// `orchestrator.follow-up` — and zero or more nested object keys below it. The match holds
+/// when the value there is a JSON **string** equal to [`value`](Self::value), case-sensitively;
+/// a number, a boolean, an array, an object, a missing key and a path through a non-object
+/// all fail it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MetadataMatch {
+    /// The top-level metadata key.
+    pub key: String,
+    /// Nested object keys under [`key`](Self::key), outermost first. Empty names the
+    /// top-level value itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub path: Vec<String>,
+    /// The string the value there must equal.
+    pub value: String,
+}
+
+impl MetadataMatch {
+    /// Whether `metadata` holds [`value`](Self::value) as a string at this location.
+    #[must_use]
+    pub fn holds(&self, metadata: &BTreeMap<String, Value>) -> bool {
+        let mut held = metadata.get(&self.key);
+        for segment in &self.path {
+            held = held
+                .and_then(Value::as_object)
+                .and_then(|object| object.get(segment));
+        }
+        held.and_then(Value::as_str) == Some(self.value.as_str())
+    }
 }
 
 /// A filter over a source's projects.

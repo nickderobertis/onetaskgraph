@@ -2705,6 +2705,8 @@ pub async fn run(nomination: Nomination) {
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

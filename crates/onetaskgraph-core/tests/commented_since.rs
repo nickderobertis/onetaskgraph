@@ -80,6 +80,8 @@ fn request(sources: &[&str], statuses: Vec<StatusCategory>) -> TaskRequest {
         project: ProjectSelector::Any,
         priorities: Vec::new(),
         commented_since: Some(since()),
+        metadata: Vec::new(),
+        origin: None,
         paging: Paging {
             limit: std::num::NonZeroU32::new(1).expect("not zero"),
             token: None,

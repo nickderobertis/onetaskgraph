@@ -682,3 +682,41 @@ reaches the instant; the bounds are in
 `an_edited_comment_moves_its_issue_and_is_selected_since`. The loopback board stamps each
 write a second after the last and answers the first read current, so the recorded session
 makes neither retry and the record is unchanged.
+
+## Asking GitHub the narrower question, and what that moves
+
+A task read carrying a text, metadata or origin predicate no longer reads the board: text and
+metadata are one board-scoped issue search carrying the phrases, and an origin is
+`graphql::ORIGIN_LOOKUP` — the board's own field filter and the body-mirror search in one
+request. A copy's second rule asks the destination that origin lookup instead of walking it.
+Two writes stopped reading what they already knew: an issue this write created is blocked by
+nothing, so its `blockedBy` is not read before it is reconciled, and a project this copy
+created holds nothing it did not file, so the copy does not walk the destination for orphans
+under it.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As the sections above: a difference between two committed states of `tests/fixtures/copy-cost.txt` and `tests/fixtures/session-cost.txt`, each held by its own test, which fails on any change to that record and names this file as the place to say what moved. -->
+**`copy-cost.txt`.** (a), the first whole copy of a project of ten tasks, goes from 68
+requests and 32,750 worst-case nodes to **67 and 29,600**: ten origin lookups at 915 nodes
+each replace the board read, the eleven dependency reads of issues the copy had just created,
+and the orphan walk under a project it had just created, and one read of the board's fields
+replaces what the board read used to answer for the writes. (b) to (f) do not move. Two rows
+are new: (g), a `task copy` finding its counterpart written the way the release before this
+one wrote it — its origin in the board field and not in the body — in 4 requests, and (h), a
+`task copy` finding none and creating, in 7. Neither reads the board.
+
+**`session-cost.txt`.** The session goes from 126 requests and 280,490 worst-case nodes to
+**128 and 352,105**, and this is the one record that grows. The journey lists its own
+artifacts by title and searches for a body marker many times over from one long-lived
+source, and every one of those listings used to be answered from one whole-board read the
+source kept; each distinct question is now one search of its own — four more
+`searching this board's issues` and one fewer `reading the board`. The loopback board is one
+page, so a whole-board read costs it one request and the per-question search looks dear
+beside it; on a board of hundreds of items a whole read is a page of `ProjectV2.items` and a
+page of search per hundred items, paid again by every fresh source, and the narrowed search
+stays one page. The rest: one more reconciliation, of the new document; one more
+`reading the board's fields`, which the board read used to answer; five fewer
+`reading an issue's dependencies`, of issues just created; and two more
+`reading a task's comments`, because the comment-activity read now also considers the
+existing items this source wrote, and the loopback board reports no `updatedAt` for an issue
+nobody commented on, so neither is ruled out without reading its comments. GitHub always
+reports one, and an item written before the instant is ruled out without a read.

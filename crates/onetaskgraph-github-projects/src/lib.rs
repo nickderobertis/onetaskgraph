@@ -497,15 +497,25 @@ const NESTED_PAGE_SIZE: u32 = 50;
 /// more boards at once, which keeps the recovery path exceptional rather than routine for
 /// a plausible deployment.
 const BOARD_ITEMS_PAGE_SIZE: u32 = 3;
+/// How many carriers of one copy origin one page of [`graphql::ORIGIN_LOOKUP`] asks each of
+/// its two connections for.
+///
+/// An origin names one item, so the answer an origin lookup expects is one carrier, and a
+/// second is a duplicate a copy already takes the first of. Both connections are walked to
+/// exhaustion whatever this is, so it decides how many requests an unusual answer costs and
+/// never what the answer is. It is small because every point of it is paid on every lookup,
+/// and a copy makes one lookup per item it has no link for: at three, ten lookups cost fewer
+/// worst-case nodes than the one whole-board read they replaced.
+const ORIGIN_PAGE_SIZE: u32 = 3;
 
 pub use github_graphql_node_count::{NodeCountError, Variables};
 
 /// The largest value this source can bind to each page-size variable its documents name.
 ///
-/// Every `first:` in [`graphql`] reads one of these three, and each is capped at the
+/// Every `first:` in [`graphql`] reads one of these four, and each is capped at the
 /// constant above it wherever a caller's own limit could reach it — `$first` at
 /// [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
-/// `BOARD_ITEMS_PAGE_SIZE`. So this is the worst case a caller can drive this source to,
+/// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`. So this is the worst case a caller can drive this source to,
 /// not one configuration of it, which is what makes a bound computed under it a bound on
 /// every read.
 pub fn largest_page_sizes() -> Variables {
@@ -513,6 +523,7 @@ pub fn largest_page_sizes() -> Variables {
         ("first".to_owned(), MAX_PAGE_SIZE),
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
         ("boardItems".to_owned(), BOARD_ITEMS_PAGE_SIZE),
+        ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
     ])
 }
 
@@ -702,6 +713,21 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// What a read of the board's own `items` selects of each item's content.
+    ///
+    /// A macro for the reason [`board_item_values!`] is one: [`BOARD`] and [`ORIGIN_LOOKUP`]
+    /// both walk `ProjectV2.items` and hand each item to one resolver, so they select its
+    /// content by one spelling.
+    macro_rules! board_item_content {
+        () => {
+            r#" content{
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on PullRequest{__typename id}
+        ... on DraftIssue{__typename id title body createdAt updatedAt}
+      }"#
+        };
+    }
+
     /// Reads the board's fields and one page of its items.
     pub const BOARD: &str = concat!(
         r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!){
@@ -715,12 +741,53 @@ pub mod graphql {
       }pageInfo{hasNextPage}}
       items(first:$first,after:$after){nodes{id "#,
         board_item_values!(),
-        r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
-        ... on PullRequest{__typename id}
-        ... on DraftIssue{__typename id title body createdAt updatedAt}
-      }} pageInfo{hasNextPage endCursor}}
+        board_item_content!(),
+        r#"} pageInfo{hasNextPage endCursor}}
     }"#
+    );
+
+    /// Every carrier of one copy origin, by two reads in one request, and nothing else of
+    /// the board.
+    ///
+    /// **`originItems`** is the board's own items narrowed by its own field filter —
+    /// `ProjectV2.items(query:)`, which GitHub's schema declares as "Search query for
+    /// filtering items" — to those whose `onetaskgraph.origin` text field holds the
+    /// qualified id, quoted. It reads the field every carrier already holds, whichever release
+    /// wrote it, and matches it exactly: measured on 2026-09-29 against a 394-item board,
+    /// the quoted, the unquoted and the bare-value spellings each returned exactly the one
+    /// carrier and a prefix of the value returned none. It is `ProjectV2.items`, so it lags a
+    /// fresh `addProjectV2ItemById` the way that connection does.
+    ///
+    /// **`search`** is the board-scoped issue search for the same id as a quoted phrase in
+    /// the body, which is where this source mirrors the origin into its metadata slot. GitHub
+    /// indexes that comment, and the index catches up with a write in a second or two rather
+    /// than in minutes, so it finds a carrier another process wrote that the first read is
+    /// still behind on.
+    ///
+    /// Each connection pages at `$originFirst`, its own small size — see `ORIGIN_PAGE_SIZE`
+    /// — and resumes from its own cursor; a connection already walked to its end is resumed
+    /// from its last cursor, which answers an empty page. Every candidate either read returns
+    /// is confirmed against its own origin field before it is reported, so a token match of
+    /// the search or anything else the filter admits never is.
+    ///
+    /// The root is aliased `originItems` rather than `owner`, so nothing counting the board's
+    /// own whole reads counts this one among them.
+    pub const ORIGIN_LOOKUP: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$filter:String!,$search:String!,$type:SearchType!,$originFirst:Int!,$itemsAfter:String,$searchAfter:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      originItems:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){
+          items(first:$originFirst,after:$itemsAfter,query:$filter){nodes{id "#,
+        board_item_values!(),
+        board_item_content!(),
+        r#"} pageInfo{hasNextPage endCursor}}
+        }}
+      }
+      search(query:$search,type:$type,first:$originFirst,after:$searchAfter){
+        pageInfo{hasNextPage endCursor}
+        nodes{__typename ...BoardIssue}
+      }
+    }"#,
+        board_issue!()
     );
 
     /// The board's own id and field definitions, and not one of its items.
@@ -897,7 +964,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 28] = [
+    pub const DOCUMENTS: [(&str, &str); 29] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -906,6 +973,7 @@ pub mod graphql {
         ),
         (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
+        (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
         (BOARD_FIELDS, "reading the board's fields"),
         (DRAFT, "reading one draft"),
         (REPOSITORY, "reading the destination repository"),
@@ -1968,6 +2036,15 @@ pub struct GitHubProjectsSource {
     /// itself just write, it lives and dies with the process, and it is never consulted for
     /// an item this source did not create.
     created: Mutex<Vec<Resolved>>,
+    /// Every item that already existed and that this source has written since it was built,
+    /// as it wrote it.
+    ///
+    /// The other half of [`Self::created`], held on the same terms and for the reason a
+    /// narrowed read needs it: an answer from GitHub's search or from the board's own field
+    /// filter is an index behind a write this process made moments ago, so a query matching
+    /// what this process just wrote onto an existing item would otherwise miss it. Nothing
+    /// is remembered that this process did not itself just write.
+    updated: Mutex<Vec<Resolved>>,
     /// How fast this source writes, and how long it waits out a refusal.
     pacing: Pacing,
     /// When the last content-creating mutation finished, or the moment the furthest-out
@@ -1999,6 +2076,16 @@ pub struct GitHubProjectsSource {
     /// [`Self::board_cache`]. One read answers every question a command asks, so a command
     /// that lists this board's projects and its tasks pays for one search rather than two.
     search_cache: Mutex<Option<Vec<Resolved>>>,
+    /// What each narrowed question GitHub was asked answered, keyed by that question, for
+    /// the length of one command.
+    ///
+    /// The narrowed counterpart of [`Self::search_cache`], held on the same terms: it lives
+    /// and dies with the process, nothing is written down, a write this process makes
+    /// updates the entry here as it updates the other two, and every answer is completed
+    /// with this process's own writes each time it is given. A command that asks the same
+    /// narrowed question twice — a wait polling for its own items, a listing repeated after a
+    /// write — pays for it once, which is what the whole-board read it replaced gave it.
+    narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
     /// The board's own id and field definitions as this process last read them on their
     /// own, for the length of one command.
     ///
@@ -2946,10 +3033,12 @@ impl GitHubProjectsSource {
                     message: format!("cannot build HTTP client: {e}"),
                 })?,
             created: Mutex::new(Vec::new()),
+            updated: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
+            narrowed_cache: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
@@ -3907,8 +3996,17 @@ impl GitHubProjectsSource {
     /// documentation records it — so a caller that asks again from its last instant should
     /// overlap the two by more than that.
     async fn updated_since(&self, since: DateTime<Utc>) -> Result<Vec<Resolved>, SourceError> {
-        let qualifier = format!("updated:>={}", since.format("%Y-%m-%dT%H:%M:%S+00:00"));
-        let search = self.board_search(Some(&qualifier));
+        let found = self.searched(&updated_qualifier(since)).await?;
+        self.completed_with_written(found, |_| true)
+    }
+
+    /// Every issue of this board GitHub's issue search reports for the board-scoped search
+    /// narrowed by `also`, walked to exhaustion at [`MAX_PAGE_SIZE`].
+    ///
+    /// Uncompleted: what this process wrote is added by the caller, which knows whether its
+    /// own record is the fresher of the two.
+    async fn searched(&self, also: &str) -> Result<Vec<Resolved>, SourceError> {
+        let search = self.board_search(Some(also));
         let mut after: Option<String> = None;
         let mut found = Vec::new();
         loop {
@@ -3918,10 +4016,159 @@ impl GitHubProjectsSource {
             found.extend(page);
             match next {
                 Some(next) => after = Some(next),
-                None => break,
+                None => return Ok(found),
             }
         }
-        self.completed_with_written(found, |_| true)
+    }
+
+    /// The candidates for a task query carrying a text, metadata or origin predicate, read
+    /// without enumerating the board — or `None` for a query carrying none of the three, which
+    /// keeps the reads it always had.
+    ///
+    /// An origin is answered by [`Self::origin_carriers`], whatever else the query carries,
+    /// because it names at most a handful of items. Text and metadata are answered by one
+    /// board-scoped issue search carrying every term — see [`narrowing_qualifiers`] — narrowed
+    /// further by `updated:>=` when the query also asks for comment activity, since both
+    /// qualifiers must hold of an issue the answer keeps. Every candidate is confirmed in
+    /// process afterwards by the same predicates [`task_matches`] applies to every read.
+    ///
+    /// Completed with what this process wrote, its own record winning over the index's copy
+    /// of the same item: see [`Self::with_own_writes`].
+    async fn narrowed(&self, query: &TaskQuery) -> Result<Option<Vec<Resolved>>, SourceError> {
+        let asked = match (&query.origin, narrowing_qualifiers(query)) {
+            (Some(origin), _) => Narrowing::Origin(origin.clone()),
+            (None, Some(qualifiers)) => Narrowing::Search(match query.commented_since {
+                Some(since) => format!("{} {qualifiers}", updated_qualifier(since)),
+                None => qualifiers,
+            }),
+            (None, None) => return Ok(None),
+        };
+        // A question about comment activity is asked afresh every time, as it always was: it
+        // is the one a caller polls from one source while waiting for the index, and an
+        // answer held from the first poll would be the answer to every later one.
+        let key = query.commented_since.is_none().then(|| asked.key());
+        let cached = match &key {
+            Some(key) => self.narrowed_cache()?.get(key).cloned(),
+            None => None,
+        };
+        let found = match cached {
+            Some(found) => found,
+            None => {
+                let found = match &asked {
+                    Narrowing::Origin(origin) => self.origin_carriers(origin).await?,
+                    Narrowing::Search(also) => self.searched(also).await?,
+                };
+                if let Some(key) = key {
+                    self.narrowed_cache()?.insert(key, found.clone());
+                }
+                found
+            }
+        };
+        self.with_own_writes(found).map(Some)
+    }
+
+    /// Every item of this board that carries `origin`, found by [`graphql::ORIGIN_LOOKUP`]
+    /// and never by enumerating the board.
+    ///
+    /// The union of the board's own field filter over the `onetaskgraph.origin` text field —
+    /// which reads the field every carrier holds, whichever release wrote it — and the
+    /// board-scoped issue search for the same id as a phrase in the body, where this source
+    /// mirrors it. The caller adds the third read, this process's own writes. Candidates are
+    /// returned unconfirmed; [`task_matches`] compares each one's own origin field with the
+    /// query's, exactly.
+    ///
+    /// Both connections are walked to exhaustion, each from its own cursor. One that has
+    /// already ended is sent its last cursor again, which answers an empty page, so the one
+    /// document serves every page of either. What the two leave is stated in the module
+    /// documentation: a carrier another process added within the last second or two, before
+    /// either index has it.
+    async fn origin_carriers(&self, origin: &str) -> Result<Vec<Resolved>, SourceError> {
+        let filter = format!("{ORIGIN_FIELD}:{}", quoted(origin));
+        let search = self.board_search(Some(&format!("in:body {}", quoted(origin))));
+        let mut items_after: Option<String> = None;
+        let mut search_after: Option<String> = None;
+        let mut found: Vec<Resolved> = Vec::new();
+        let keep = |resolved: Resolved, found: &mut Vec<Resolved>| {
+            if !found.iter().any(|held| held.id == resolved.id) {
+                found.push(resolved);
+            }
+        };
+        loop {
+            let data = self
+                .graphql(
+                    graphql::ORIGIN_LOOKUP,
+                    json!({"owner":self.owner,"number":self.project_number,"filter":filter,
+                           "search":search,"type":"ISSUE","originFirst":ORIGIN_PAGE_SIZE,
+                           "itemsAfter":items_after,"searchAfter":search_after,
+                           "nestedFirst":NESTED_PAGE_SIZE,"boardItems":BOARD_ITEMS_PAGE_SIZE,
+                           "duplicates":true}),
+                )
+                .await?;
+            let items = data
+                .pointer("/originItems/projectV2/items")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub project {}/{} was not found or is not visible to the token",
+                        self.owner, self.project_number
+                    ),
+                })?;
+            for item in optional_nodes(Some(items), "project items")?
+                .into_iter()
+                .flatten()
+            {
+                if let Some(resolved) = self.resolve(item)? {
+                    keep(resolved, &mut found);
+                }
+            }
+            let searched = data.get("search").ok_or_else(|| SourceError::Malformed {
+                message: "GitHub search response has no search connection".into(),
+            })?;
+            for node in optional_nodes(Some(searched), "search")?
+                .into_iter()
+                .flatten()
+            {
+                if let Some(resolved) = self.resolve_issue(node).await? {
+                    keep(resolved, &mut found);
+                }
+            }
+            let items_next = resumed(items, items_after.as_deref())?;
+            let search_next = resumed(searched, search_after.as_deref())?;
+            if !items_next.more && !search_next.more {
+                return Ok(found);
+            }
+            items_after = items_next.cursor;
+            search_after = search_next.cursor;
+        }
+    }
+
+    /// `found`, followed by every item this process created or wrote, as it wrote it.
+    ///
+    /// An item the read already names comes a second time only when this process wrote it
+    /// differently from how the read reports it — its title, its body or its origin — and
+    /// the read's comes first: the read is what GitHub holds now, but a read of an item
+    /// written moments ago can still be behind the board fields written onto it, the origin
+    /// field included, which is the one a narrowed read is confirmed against. So the caller
+    /// keeps the first of the two that its predicates hold of, and one item is never
+    /// reported twice. See [`Self::created`] and
+    /// [`Self::updated`](GitHubProjectsSource::updated).
+    fn with_own_writes(&self, mut found: Vec<Resolved>) -> Result<Vec<Resolved>, SourceError> {
+        let own: Vec<Resolved> = self
+            .created()?
+            .iter()
+            .chain(self.updated()?.iter())
+            .filter(|own| {
+                found.iter().all(|read| {
+                    read.id != own.id
+                        || read.origin != own.origin
+                        || read.title != own.title
+                        || read.raw_body != own.raw_body
+                })
+            })
+            .cloned()
+            .collect();
+        found.extend(own);
+        Ok(found)
     }
 
     /// Whether `item` has a comment created or last edited at or after `since` — always, when
@@ -4059,6 +4306,13 @@ impl GitHubProjectsSource {
                 return Ok(());
             }
         }
+        {
+            let mut own = self.updated()?;
+            match own.iter_mut().find(|held| held.id == item.id) {
+                Some(held) => *held = item.clone(),
+                None => own.push(item.clone()),
+            }
+        }
         if let Some(board) = self.board_cache()?.as_mut()
             && let Some(held) = board.items.iter_mut().find(|held| held.id == item.id)
         {
@@ -4067,7 +4321,12 @@ impl GitHubProjectsSource {
         if let Some(found) = self.search_cache()?.as_mut()
             && let Some(held) = found.iter_mut().find(|held| held.id == item.id)
         {
-            *held = item;
+            *held = item.clone();
+        }
+        for found in self.narrowed_cache()?.values_mut() {
+            if let Some(held) = found.iter_mut().find(|held| held.id == item.id) {
+                *held = item.clone();
+            }
         }
         Ok(())
     }
@@ -4075,13 +4334,30 @@ impl GitHubProjectsSource {
     /// Forget one item this process has just deleted, from every half of its own view.
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
         self.created()?.retain(|own| own.id != *id);
+        self.updated()?.retain(|own| own.id != *id);
         if let Some(board) = self.board_cache()?.as_mut() {
             board.items.retain(|item| item.id != *id);
         }
         if let Some(found) = self.search_cache()?.as_mut() {
             found.retain(|item| item.id != *id);
         }
+        for found in self.narrowed_cache()?.values_mut() {
+            found.retain(|item| item.id != *id);
+        }
         Ok(())
+    }
+
+    /// This process's own record of each narrowed answer, or the refusal a poisoned lock is.
+    fn narrowed_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Vec<Resolved>>>, SourceError> {
+        self.narrowed_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of a narrowed read was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
     }
 
     /// Every page of the board, read from GitHub.
@@ -4124,6 +4400,16 @@ impl GitHubProjectsSource {
             id: required_str(&board, "id")?.to_owned(),
             fields: board.get("fields").cloned().unwrap_or(Value::Null),
             items,
+        })
+    }
+
+    /// The existing items this source has written, for completing a narrowed read that is
+    /// behind; see [`Self::updated`](GitHubProjectsSource::updated).
+    fn updated(&self) -> Result<std::sync::MutexGuard<'_, Vec<Resolved>>, SourceError> {
+        self.updated.lock().map_err(|_| SourceError::Unavailable {
+            message: "this source's record of what it wrote in this run was left inconsistent \
+                      by an earlier failure; next: run the command again"
+                .into(),
         })
     }
 
@@ -5051,7 +5337,7 @@ impl GitHubProjectsSource {
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
         {
-            blocked_by_moved = self.reconcile_blocked_by(&item.id, native).await?;
+            blocked_by_moved = self.reconcile_blocked_by(&item.id, native, false).await?;
         }
 
         if let Some(title) = &update.title {
@@ -5904,7 +6190,8 @@ impl GitHubProjectsSource {
             // relationships a person had made on that issue, which is a write nobody
             // asked for.
             if incoming.written.kind() != BoardKind::Document {
-                self.reconcile_blocked_by(content_id, native).await?;
+                self.reconcile_blocked_by(content_id, native, existing.is_none())
+                    .await?;
             }
         }
         Ok(())
@@ -6293,12 +6580,20 @@ impl GitHubProjectsSource {
 
     /// Bring one issue's `blockedBy` to exactly `native`, sending only the difference, and say
     /// whether there was one.
+    ///
+    /// `created` says the issue was created by this very write, so it is blocked by nothing
+    /// yet and its relationships are not read: there is nothing a read of them could find.
     async fn reconcile_blocked_by(
         &self,
         content_id: &NativeId,
         native: &[String],
+        created: bool,
     ) -> Result<bool, SourceError> {
-        let current = self.native_dependency_ids(content_id).await?;
+        let current = if created {
+            Vec::new()
+        } else {
+            self.native_dependency_ids(content_id).await?
+        };
         let mut changed = false;
         for (operation, far_id) in current
             .iter()
@@ -6376,8 +6671,115 @@ fn unresolvable_node(error: &SourceError) -> bool {
 /// the way it documents. A title matched here is still compared for equality afterwards:
 /// the qualifier narrows what the server sends, and this source decides what it names.
 fn title_qualifier(name: &str) -> String {
-    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("in:title \"{escaped}\"")
+    format!("in:title {}", quoted(name))
+}
+
+/// `value` as one quoted phrase of a GitHub search or a board filter, with the two
+/// characters GitHub's quoting grammar gives a meaning inside a quoted phrase escaped the way
+/// it documents — so a value holding a qualifier's spelling is searched for rather than
+/// obeyed.
+fn quoted(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// The search qualifier for the issues updated at or after `since`.
+///
+/// Written to the second, rounded down, which can only widen what the search returns.
+fn updated_qualifier(since: DateTime<Utc>) -> String {
+    format!("updated:>={}", since.format("%Y-%m-%dT%H:%M:%S+00:00"))
+}
+
+/// The search terms that narrow a board-scoped issue search to a task query's text and
+/// metadata predicates, or `None` when it carries neither.
+///
+/// The text is one quoted phrase, searched `in:title`, `in:body` or both as its fields say,
+/// and each metadata value is one more quoted phrase, which GitHub finds in the body because
+/// its index covers the metadata comment the value is stored in. GitHub ANDs the phrases and
+/// matches each in any field the `in:` qualifier names, so a query naming a title search and
+/// a metadata value searches both fields for both — wider than asked, never narrower, and
+/// every candidate is confirmed in process afterwards.
+///
+/// **This narrows a text search, and that is this source's declared semantics.** GitHub
+/// matches whole tokens where a substring rule would match inside a word, so an item holding
+/// the text only inside a longer word is not returned. A text of nothing but whitespace
+/// matches every item, so it narrows nothing and is not sent.
+fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
+    let text = query
+        .text
+        .as_ref()
+        .filter(|text| !text.terms.trim().is_empty());
+    if text.is_none() && query.metadata.is_empty() {
+        return None;
+    }
+    let (title, body) = match text.map(|text| text.fields) {
+        None => (false, true),
+        Some(TextFields::Title) => (true, !query.metadata.is_empty()),
+        Some(TextFields::Content) => (false, true),
+        Some(TextFields::TitleOrContent) => (true, true),
+    };
+    let fields = match (title, body) {
+        (true, true) => "in:title,body",
+        (true, false) => "in:title",
+        _ => "in:body",
+    };
+    let phrases = text
+        .map(|text| text.terms.as_str())
+        .into_iter()
+        .chain(query.metadata.iter().map(|wanted| wanted.value.as_str()))
+        .map(quoted)
+        .collect::<Vec<_>>();
+    Some(format!("{fields} {}", phrases.join(" ")))
+}
+
+/// The one narrower question a task query carrying a text, metadata or origin predicate is
+/// sent as.
+enum Narrowing {
+    /// Every carrier of this origin: [`graphql::ORIGIN_LOOKUP`].
+    Origin(String),
+    /// The board-scoped issue search narrowed by these qualifiers.
+    Search(String),
+}
+
+impl Narrowing {
+    /// What this question is remembered under for the length of one command.
+    fn key(&self) -> String {
+        match self {
+            Self::Origin(origin) => format!("origin {origin}"),
+            Self::Search(also) => format!("search {also}"),
+        }
+    }
+}
+
+/// Where one connection of [`graphql::ORIGIN_LOOKUP`] resumes, and whether it has more.
+struct Resumed {
+    /// Whether the connection reported another page.
+    more: bool,
+    /// The cursor to send next: the page's own end when it has one, and otherwise the
+    /// cursor it was reached from, so a connection that has ended answers an empty page.
+    cursor: Option<String>,
+}
+
+/// Where `connection`, reached from `after`, resumes — refused when it reports another page
+/// from a cursor that does not advance.
+fn resumed(connection: &Value, after: Option<&str>) -> Result<Resumed, SourceError> {
+    let info = connection
+        .get("pageInfo")
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub connection has no pageInfo".into(),
+        })?;
+    let more = required_bool(info, "hasNextPage")?;
+    let end = optional_str(info, "endCursor")?;
+    if more {
+        let next = end.ok_or_else(|| SourceError::Malformed {
+            message: "GitHub connection reports another page and no endCursor".into(),
+        })?;
+        validate_cursor_progress(after, next)?;
+    }
+    Ok(Resumed {
+        more,
+        cursor: end.map(str::to_owned).or_else(|| after.map(str::to_owned)),
+    })
 }
 
 /// The board, and every item on it this source reports.
@@ -6538,6 +6940,10 @@ impl Resolved {
         metadata.remove(ItemKind::METADATA_KEY);
         metadata.remove(TaskRef::DELIVERS_KEY);
         metadata.remove(TaskRef::DELIVERED_BY_KEY);
+        // The board field is the origin, and the body's copy of it is only a mirror for the
+        // issue search to find: an item whose field holds none has none, whatever its body
+        // says, so no reader ever sees two answers.
+        metadata.remove(ORIGIN_KEY);
         if let Some(origin) = &self.origin {
             metadata.insert(ORIGIN_KEY.to_owned(), Value::String(origin.clone()));
         }
@@ -6881,6 +7287,10 @@ fn task_matches(task: &Task, query: &TaskQuery, project: &ProjectFilter) -> bool
             .text
             .as_ref()
             .is_none_or(|text| text_matches(&task.title, task.content.as_deref(), text))
+        // Against the parsed metadata slot, and against the origin field, which is where
+        // `Resolved::metadata` reads each of them from.
+        && query.metadata_matches(&task.metadata)
+        && query.origin_matches(&task.metadata)
 }
 
 fn project_matches(project: &Project, query: &ProjectQuery) -> bool {
@@ -6928,6 +7338,8 @@ impl TaskSource for GitHubProjectsSource {
             },
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -6971,30 +7383,38 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
         // A read narrowed to one project asks that project for its own tasks, so nothing
-        // about it costs what the rest of the board holds. A read narrowed to comment
-        // activity asks the board's own issue search for the issues updated since, which is
-        // every issue a comment could have been written or edited on since. Every other task
-        // read is a question about the whole board and is answered by reading it.
+        // about it costs what the rest of the board holds. A read carrying a text, metadata
+        // or origin predicate asks GitHub the narrower question those predicates are, and a
+        // read narrowed to comment activity alone asks the board's own issue search for the
+        // issues updated since, which is every issue a comment could have been written or
+        // edited on since. Every other task read is a question about the whole board and is
+        // answered by reading it.
         let (held, membership) = match (&query.project, query.commented_since) {
             (ProjectFilter::Is(project), _) => (
                 self.project_children(project).await?,
                 // Answered by where these items came from; see `task_matches`.
                 &ProjectFilter::Any,
             ),
-            (ProjectFilter::Any | ProjectFilter::Orphans, Some(since)) => {
-                (self.updated_since(since).await?, &query.project)
-            }
-            (ProjectFilter::Any | ProjectFilter::Orphans, None) => {
-                (self.board().await?.items, &query.project)
+            (ProjectFilter::Any | ProjectFilter::Orphans, since) => {
+                match (self.narrowed(query).await?, since) {
+                    (Some(narrowed), _) => (narrowed, &query.project),
+                    (None, Some(since)) => (self.updated_since(since).await?, &query.project),
+                    (None, None) => (self.board().await?.items, &query.project),
+                }
             }
         };
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
-        let mut tasks = Vec::new();
+        // An item a narrowed read and this process's own record both name comes twice; the
+        // first the predicates hold of is the one kept — see `with_own_writes`.
+        let mut tasks: Vec<Task> = Vec::new();
         for item in held
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         {
+            if tasks.iter().any(|kept| kept.id == item.id) {
+                continue;
+            }
             let task = item.task()?;
             if task_matches(&task, query, membership)
                 && self.commented_since(item, query.commented_since).await?
@@ -7659,13 +8079,25 @@ fn state_input(target: Option<&StatusTarget>) -> Value {
 /// rather than carried: the kind marker so an empty project stays readable, the
 /// repository list only when it is not exactly the issue's own repository, and the far
 /// ends no relationship here can name.
+///
+/// The copy origin is the one typed field that is also mirrored here, and only as a
+/// mirror: it lands in the board's origin field as well, which stays the one every reader
+/// takes it from, and it is here so that GitHub's issue search — which indexes this comment
+/// and catches up with a write in seconds rather than minutes — can find the item by it.
+/// A reader of the release before this one drops the slot's copy and reads the field, so an
+/// item written here still reads with exactly one origin there.
 fn slot_metadata(
     incoming: &Incoming<'_>,
     own_repository: Option<&Repository>,
     fallback: &[DependencyEdge],
 ) -> BTreeMap<String, Value> {
     let mut metadata = incoming.metadata.clone();
-    metadata.remove(ORIGIN_KEY);
+    match metadata.remove(ORIGIN_KEY) {
+        Some(Value::String(origin)) if !origin.is_empty() => {
+            metadata.insert(ORIGIN_KEY.to_owned(), Value::String(origin));
+        }
+        _ => {}
+    }
     match incoming.written.kind() {
         BoardKind::Work(kind) => metadata.insert(
             ItemKind::METADATA_KEY.to_owned(),

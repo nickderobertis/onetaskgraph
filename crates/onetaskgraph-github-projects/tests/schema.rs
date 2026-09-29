@@ -294,6 +294,11 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         ),
         (graphql::ISSUE, None, None),
         (graphql::BOARD_FIELDS, None, None),
+        (
+            graphql::ORIGIN_LOOKUP,
+            Some("/data"),
+            Some(include_str!("fixtures/origin-lookup.json")),
+        ),
         (graphql::DRAFT, None, None),
         (
             graphql::ISSUE_BOARD_ITEMS,

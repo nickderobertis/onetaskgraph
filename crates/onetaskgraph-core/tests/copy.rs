@@ -107,6 +107,8 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             project: onetaskgraph_core::ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1061,6 +1063,8 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             project: onetaskgraph_core::ProjectSelector::Any,
             priorities: Vec::new(),
             commented_since: None,
+            metadata: Vec::new(),
+            origin: None,
             paging: paging(),
         })
         .await
@@ -2332,6 +2336,8 @@ impl TaskSource for Misbehaving {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

@@ -15,9 +15,12 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Document, Label, LabelFilter, NativeId, Priority, Project, ProjectFilter, StatusCategory, Task,
-    TextFields, TextQuery,
+    Document, Label, LabelFilter, MetadataMatch, NativeId, Priority, Project, ProjectFilter,
+    StatusCategory, Task, TextFields, TextQuery,
 };
+use serde_json::Value;
+
+use crate::GlobalId;
 
 /// The task predicates this source left to the engine.
 ///
@@ -42,6 +45,11 @@ pub(crate) struct LocalTasks {
     /// predicate is answered by a read of the source's comments rather than by the row, and
     /// only for a row every predicate here has already kept.
     pub commented_since: Option<DateTime<Utc>>,
+    /// Metadata values every kept task holds, when the source does not filter by them.
+    pub metadata: Vec<MetadataMatch>,
+    /// The copy origin every kept task records, when the source does not filter by it —
+    /// the qualified id spelled as a copy stores it.
+    pub origin: Option<String>,
 }
 
 impl LocalTasks {
@@ -60,6 +68,24 @@ impl LocalTasks {
         }
         if let Some(query) = &self.text
             && !text_matches(&task.title, task.content.as_deref(), query)
+        {
+            return false;
+        }
+        // The contract's own statement of both predicates, so the engine and a source that
+        // applies them natively cannot answer one store two ways.
+        if !self
+            .metadata
+            .iter()
+            .all(|wanted| wanted.holds(&task.metadata))
+        {
+            return false;
+        }
+        if let Some(origin) = &self.origin
+            && task
+                .metadata
+                .get(GlobalId::ORIGIN_KEY)
+                .and_then(Value::as_str)
+                != Some(origin.as_str())
         {
             return false;
         }

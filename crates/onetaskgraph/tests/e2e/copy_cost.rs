@@ -288,6 +288,96 @@ fn one_targeted_update(tasks: usize, changed: usize) -> [Measured; 2] {
     [plan.measure(&settlement), plan.measure(&settlement)]
 }
 
+/// Whether a document is the board's own whole read of its items.
+fn reads_the_board(document: &str) -> bool {
+    document == onetaskgraph_github_projects::graphql::BOARD
+}
+
+/// A task copy into a board that already holds the task's counterpart, written the way the
+/// release before this one writes a copy — its origin in the board field and not in the
+/// body — so the copy's second rule can only find it by the board's own field filter.
+fn a_task_copy_finding_a_counterpart_written_before_this_release() -> Measured {
+    let plan = Plan::of(1);
+    let (_, _, first) = plan.copy(&[]);
+    let (_, counterpart) = landed(&first)
+        .into_iter()
+        .find(|(source, _)| source == "plans:T-0")
+        .expect("the first copy landed the task");
+    let counterpart = native(&counterpart);
+    plan.board.written_before_the_origin_mirror(&counterpart);
+    assert_eq!(plan.board.origin(&counterpart), json!("plans:T-0"));
+    let measured = plan.measure(&["task", "copy", "plans:T-0", "--to", "board", "--json"]);
+    assert_eq!(
+        measured.2["items"]
+            .as_array()
+            .expect("a copy report carries items")
+            .iter()
+            .map(|item| (item["action"].clone(), native(&item["destination"])))
+            .collect::<Vec<_>>(),
+        [(json!("unchanged"), counterpart)],
+        "the copy found the counterpart rather than creating a second one: {:#}",
+        measured.2
+    );
+    measured
+}
+
+/// A task copy into a board that holds no counterpart of it: a task filed in no project, so
+/// the copy has no project to find either.
+fn a_task_copy_finding_no_counterpart() -> Measured {
+    let plan = Plan::of(0);
+    std::fs::write(
+        plan.root.join("tasks/L.md"),
+        "---\ntitle: A loose step\nstatus: Todo\n---\na step in no project\n",
+    )
+    .expect("a task");
+    let measured = plan.measure(&["task", "copy", "plans:L", "--to", "board", "--json"]);
+    assert_eq!(
+        measured.2["items"]
+            .as_array()
+            .expect("a copy report carries items")
+            .iter()
+            .map(|item| item["action"].clone())
+            .collect::<Vec<_>>(),
+        [json!("created")],
+        "{:#}",
+        measured.2
+    );
+    measured
+}
+
+#[test]
+fn a_task_copy_into_a_board_finds_its_counterpart_by_origin_and_never_reads_the_board() {
+    for (what, task, (_, served, _)) in [
+        (
+            "finding one written before this release",
+            "T-0",
+            a_task_copy_finding_a_counterpart_written_before_this_release(),
+        ),
+        ("finding none", "L", a_task_copy_finding_no_counterpart()),
+    ] {
+        let lookups = served
+            .iter()
+            .filter(|(document, _)| {
+                document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP
+            })
+            .map(|(_, variables)| variables["filter"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lookups,
+            [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
+            "a task copy {what} asks the board for that origin once: {served:#?}"
+        );
+        let whole: Vec<&(String, Value)> = served
+            .iter()
+            .filter(|(document, _)| reads_the_board(document))
+            .collect();
+        assert!(
+            whole.is_empty(),
+            "a task copy {what} read the whole board: {whole:#?}"
+        );
+    }
+}
+
 #[test]
 fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says() {
     let ten = Plan::of(10);
@@ -434,6 +524,14 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         rendered(
             "(f) the same targeted update again, every value it names already held",
             &repeat_update,
+        ),
+        rendered(
+            "(g) a task copy into a board holding its counterpart, its origin in the board field alone",
+            &a_task_copy_finding_a_counterpart_written_before_this_release().0,
+        ),
+        rendered(
+            "(h) a task copy into a board holding no counterpart",
+            &a_task_copy_finding_no_counterpart().0,
         ),
     ]
     .join("\n");

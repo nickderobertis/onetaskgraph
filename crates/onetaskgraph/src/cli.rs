@@ -6,12 +6,15 @@
 //! same setting on the command line, at the same dotted path.
 
 use std::num::NonZeroU32;
+use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
-use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
-use onetaskgraph_plugin_api::{Direction, NativeId, Priority, StatusCategory, TextFields};
+use onetaskgraph_core::{GlobalId, OutputFormat, PluginKind, SearchKind};
+use onetaskgraph_plugin_api::{
+    Direction, MetadataMatch, NativeId, Priority, StatusCategory, TextFields,
+};
 use serde_json::Value;
 
 /// One interface over the ticketing systems your work lives in.
@@ -977,8 +980,56 @@ pub struct TaskListArgs {
     #[arg(long = "commented-since", value_name = "RFC3339", value_parser = instant)]
     pub commented_since: Option<DateTime<Utc>>,
 
+    /// Keep tasks holding this metadata value: `<KEY>[/<SEGMENT>…]=<VALUE>`. Repeat for
+    /// several; a task is kept when it holds every one.
+    ///
+    /// `/` splits the top-level key — which may contain dots, such as
+    /// `orchestrator.follow-up` — from nested object keys under it, and the first `=` splits
+    /// that location from the value. The value there must be a JSON string equal to VALUE,
+    /// case-sensitively: `--metadata orchestrator.follow-up/root_cause=stale-cache`.
+    #[arg(long = "metadata", value_name = "KEY[/SEGMENT…]=VALUE", value_parser = metadata_match)]
+    pub metadata: Vec<MetadataMatch>,
+
+    /// Keep tasks copied from this item: those whose recorded copy origin is exactly this
+    /// qualified id, `<source>:<native-id>`.
+    #[arg(long = "origin", value_name = "SOURCE:ID", value_parser = origin)]
+    pub origin: Option<GlobalId>,
+
     #[command(flatten)]
     pub paging: PageArgs,
+}
+
+/// A metadata match as a command line hands one over: `<KEY>[/<SEGMENT>…]=<VALUE>`.
+///
+/// The first `=` ends the location, so a value may hold `=` and `/` freely; a key or a
+/// segment may hold neither. An empty key or an empty segment names no location, so it is
+/// refused rather than read as one.
+fn metadata_match(value: &str) -> Result<MetadataMatch, String> {
+    let Some((location, wanted)) = value.split_once('=') else {
+        return Err("no `=`; expected <KEY>[/<SEGMENT>...]=<VALUE>, such as \
+             orchestrator.follow-up/root_cause=stale-cache"
+            .to_owned());
+    };
+    let mut segments = location.split('/').map(str::to_owned);
+    let key = segments.next().unwrap_or_default();
+    let path: Vec<String> = segments.collect();
+    if key.is_empty() || path.iter().any(String::is_empty) {
+        return Err(format!(
+            "{location:?} has an empty key or segment; expected <KEY>[/<SEGMENT>...]=<VALUE>, \
+             such as orchestrator.follow-up/root_cause=stale-cache"
+        ));
+    }
+    Ok(MetadataMatch {
+        key,
+        path,
+        value: wanted.to_owned(),
+    })
+}
+
+/// A copy origin as a command line hands one over: a qualified id, refused before any
+/// source is asked when it is not one.
+fn origin(value: &str) -> Result<GlobalId, String> {
+    GlobalId::from_str(value).map_err(|error| error.to_string())
 }
 
 /// An instant as a command line hands one over: RFC 3339, with its offset.

@@ -7,10 +7,10 @@
 use chrono::{TimeZone as _, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyKind, DependencySupport, Direction, Document,
-    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SOURCE_NAME_PATTERN,
-    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
-    TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
+    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataMatch,
+    NativeId, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    SOURCE_NAME_PATTERN, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery, WriteSupport,
 };
 use onetaskgraph_plugin_api::{
     Comment, CommentBody, MetadataKey, MetadataRecord, NewComment, TaskRef, commentless,
@@ -37,6 +37,8 @@ impl TaskSource for Silent {
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
+            filter_by_metadata: Support::Unsupported,
+            filter_by_origin: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Native,
@@ -1098,6 +1100,12 @@ fn a_query_round_trips_with_every_filter_populated() {
         project: ProjectFilter::Is(NativeId::from("P-1")),
         priorities: Vec::new(),
         commented_since: Some("2026-09-28T12:00:00Z".parse().expect("an RFC 3339 instant")),
+        metadata: vec![MetadataMatch {
+            key: "orchestrator.follow-up".to_owned(),
+            path: vec!["root_cause".to_owned()],
+            value: "stale-cache".to_owned(),
+        }],
+        origin: Some("work:ENG-1".to_owned()),
     };
     let encoded = serde_json::to_string(&query).expect("encodes");
     assert_eq!(
@@ -2256,6 +2264,8 @@ fn a_query_without_comment_activity_is_the_byte_for_byte_query_an_older_plugin_r
         project: ProjectFilter::Is(NativeId::from("P-1")),
         priorities: vec![Priority::Urgent],
         commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
     };
     assert_eq!(
         serde_json::to_string(&query).expect("encodes"),
@@ -2380,4 +2390,115 @@ async fn a_source_that_writes_no_priority_or_content_refuses_both_by_name() {
         message,
         "the read-only plugin cannot write a task's content on its own"
     );
+}
+
+/// A handshake written before there were metadata or origin filters: every other field, and
+/// neither of those two.
+#[test]
+fn a_handshake_written_before_metadata_and_origin_filters_declares_neither() {
+    let before = r#"{
+        "projects": "native",
+        "orphan_tasks": "native",
+        "filter_by_label": "native",
+        "filter_by_status": "native",
+        "filter_by_priority": "native",
+        "filter_by_comment_activity": "native",
+        "search_title": "native",
+        "search_content": "native",
+        "task_dependencies": "both-directions",
+        "project_dependencies": "both-directions",
+        "max_page_size": 25
+    }"#;
+    let read: Capabilities = serde_json::from_str(before).expect("an older handshake decodes");
+    assert_eq!(read.filter_by_metadata, Support::Unsupported);
+    assert_eq!(read.filter_by_origin, Support::Unsupported);
+}
+
+#[test]
+fn a_query_without_metadata_or_origin_carries_neither_member_on_the_wire() {
+    let unfiltered = serde_json::to_value(TaskQuery::default()).expect("encodes");
+    assert!(unfiltered.get("metadata").is_none(), "{unfiltered}");
+    assert!(unfiltered.get("origin").is_none(), "{unfiltered}");
+    let query = TaskQuery {
+        metadata: vec![MetadataMatch {
+            key: "team.owner".to_owned(),
+            path: Vec::new(),
+            value: "ada".to_owned(),
+        }],
+        origin: Some("work:ENG-1".to_owned()),
+        ..TaskQuery::default()
+    };
+    let encoded = serde_json::to_value(&query).expect("encodes");
+    assert_eq!(
+        encoded["metadata"],
+        serde_json::json!([{"key":"team.owner","value":"ada"}]),
+        "an empty path is left off the wire"
+    );
+    assert_eq!(encoded["origin"], serde_json::json!("work:ENG-1"));
+    assert_eq!(
+        serde_json::from_value::<TaskQuery>(encoded).expect("decodes"),
+        query
+    );
+}
+
+#[test]
+fn a_metadata_match_holds_only_a_string_equal_to_its_value_at_its_location() {
+    let metadata: std::collections::BTreeMap<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
+        "orchestrator.follow-up": {"root_cause": "stale-cache", "count": 3, "nested": {"deep": "x"}},
+        "team.owner": "ada",
+        "team.flag": true
+    }))
+    .expect("a metadata map");
+    let at = |key: &str, path: &[&str], value: &str| MetadataMatch {
+        key: key.to_owned(),
+        path: path.iter().map(|segment| (*segment).to_owned()).collect(),
+        value: value.to_owned(),
+    };
+    assert!(at("orchestrator.follow-up", &["root_cause"], "stale-cache").holds(&metadata));
+    assert!(at("orchestrator.follow-up", &["nested", "deep"], "x").holds(&metadata));
+    assert!(at("team.owner", &[], "ada").holds(&metadata));
+    // Case-sensitive, and never a prefix or a substring.
+    assert!(!at("team.owner", &[], "Ada").holds(&metadata));
+    assert!(!at("team.owner", &[], "ad").holds(&metadata));
+    // Only a string matches: a number, a boolean and an object all fail it.
+    assert!(!at("orchestrator.follow-up", &["count"], "3").holds(&metadata));
+    assert!(!at("team.flag", &[], "true").holds(&metadata));
+    assert!(!at("orchestrator.follow-up", &[], "stale-cache").holds(&metadata));
+    // A path through a non-object, and a key nobody wrote.
+    assert!(!at("team.owner", &["x"], "ada").holds(&metadata));
+    assert!(!at("team.missing", &[], "ada").holds(&metadata));
+
+    let both = TaskQuery {
+        metadata: vec![
+            at("team.owner", &[], "ada"),
+            at("orchestrator.follow-up", &["root_cause"], "stale-cache"),
+        ],
+        ..TaskQuery::default()
+    };
+    assert!(both.metadata_matches(&metadata), "every match holds");
+    let one_fails = TaskQuery {
+        metadata: vec![at("team.owner", &[], "ada"), at("team.owner", &[], "bob")],
+        ..TaskQuery::default()
+    };
+    assert!(
+        !one_fails.metadata_matches(&metadata),
+        "the matches are ANDed"
+    );
+    assert!(TaskQuery::default().metadata_matches(&metadata));
+}
+
+#[test]
+fn an_origin_matches_only_the_exact_qualified_id_recorded() {
+    let recorded = |origin: serde_json::Value| {
+        std::collections::BTreeMap::from([(TaskQuery::ORIGIN_KEY.to_owned(), origin)])
+    };
+    let query = TaskQuery {
+        origin: Some("work:ENG-1".to_owned()),
+        ..TaskQuery::default()
+    };
+    assert!(query.origin_matches(&recorded(serde_json::json!("work:ENG-1"))));
+    assert!(!query.origin_matches(&recorded(serde_json::json!("work:ENG-10"))));
+    assert!(!query.origin_matches(&recorded(serde_json::json!("xwork:ENG-1"))));
+    assert!(!query.origin_matches(&std::collections::BTreeMap::new()));
+    assert!(TaskQuery::default().origin_matches(&std::collections::BTreeMap::new()));
 }

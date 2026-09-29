@@ -83,6 +83,28 @@ pub struct Capabilities {
     /// predates the predicate is narrowed by the engine rather than trusted to have filtered.
     #[serde(default = "no_comment_activity_filter")]
     pub filter_by_comment_activity: Support,
+    /// Whether the source keeps only the tasks every one of a query's
+    /// [`TaskQuery::metadata`](crate::TaskQuery::metadata) matches holds of, itself.
+    ///
+    /// A predicate, and so one the second capability rule reaches: a source declaring
+    /// `Unsupported` ignores the matches and returns the wider set, and the engine narrows it
+    /// over each task's own metadata, which every read already carries.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates the predicate is narrowed by the engine rather than trusted to have filtered.
+    #[serde(default = "no_metadata_filter")]
+    pub filter_by_metadata: Support,
+    /// Whether the source keeps only the tasks whose copy origin is a query's
+    /// [`TaskQuery::origin`](crate::TaskQuery::origin), itself.
+    ///
+    /// A predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and
+    /// its own member because a source may be able to ask its store one question and not the
+    /// other: a board keeps a copy's origin in a field of its own and caller metadata in the
+    /// issue body.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms.
+    #[serde(default = "no_origin_filter")]
+    pub filter_by_origin: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -136,6 +158,18 @@ fn no_priority_filter() -> Support {
 /// it: a plugin that has never heard of the predicate, on the terms [`no_priority_filter`]
 /// gives.
 fn no_comment_activity_filter() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::filter_by_metadata`] means when a wire value does not carry it: a
+/// plugin that has never heard of the predicate, on the terms [`no_priority_filter`] gives.
+fn no_metadata_filter() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::filter_by_origin`] means when a wire value does not carry it: a
+/// plugin that has never heard of the predicate, on the terms [`no_priority_filter`] gives.
+fn no_origin_filter() -> Support {
     Support::Unsupported
 }
 

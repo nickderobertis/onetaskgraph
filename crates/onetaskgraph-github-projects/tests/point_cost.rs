@@ -42,6 +42,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUE_BOARD_ITEMS, 1),
     (graphql::SUB_ISSUES, 5),
     (graphql::BOARD, 2),
+    (graphql::ORIGIN_LOOKUP, 1),
     (graphql::BOARD_FIELDS, 1),
     (graphql::DRAFT, 1),
     (graphql::REPOSITORY, 1),
