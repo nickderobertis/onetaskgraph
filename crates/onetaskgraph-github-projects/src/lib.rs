@@ -353,8 +353,9 @@
 //! this one — its origin in the field alone — can be missing for as long as the board's own
 //! item connection is behind on it. A copy that must not duplicate its own earlier write
 //! relies on the link it records, not on either index. **A board draft is not an issue**, so
-//! no search lists one: a draft is never returned by a text, metadata or origin query, whatever
-//! it holds.
+//! a draft is never returned by a text, metadata or origin query, whatever it holds: no search
+//! lists one, the origin lookup drops any the board's own field filter names, and one this
+//! process wrote is not added back either.
 //!
 //! **The origin lives in the board field, and the body holds a mirror of it.** A write that
 //! carries an origin writes it to the `onetaskgraph.origin` text field and also into the
@@ -466,11 +467,10 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, MetadataMatch, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
-    WriteSupport,
+    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -4124,7 +4124,7 @@ impl GitHubProjectsSource {
     /// either index has it.
     async fn origin_candidates(&self, origin: &str) -> Result<Vec<Resolved>, SourceError> {
         let filter = format!("{ORIGIN_FIELD}:{}", quoted(origin));
-        let search = self.board_search(Some(&format!("in:body {}", quoted(origin))));
+        let search = self.board_search(Some(&format!("in:body {}", quoted(&as_stored(origin)))));
         let mut items_after: Option<String> = None;
         let mut search_after: Option<String> = None;
         let mut found: Vec<Resolved> = Vec::new();
@@ -4157,7 +4157,11 @@ impl GitHubProjectsSource {
                 .into_iter()
                 .flatten()
             {
-                if let Some(resolved) = self.resolve(item)? {
+                // The board's own items list its drafts too, and a draft is not an issue: no
+                // narrowed read answers with one, whatever its origin field holds.
+                if let Some(resolved) = self.resolve(item)?
+                    && resolved.content_kind == ContentKind::Issue
+                {
                     keep(resolved, &mut found);
                 }
             }
@@ -4174,11 +4178,11 @@ impl GitHubProjectsSource {
             }
             let items_next = resumed(items, items_after.as_deref())?;
             let search_next = resumed(searched, search_after.as_deref())?;
-            if !items_next.more && !search_next.more {
+            if !items_next.has_more() && !search_next.has_more() {
                 return Ok(found);
             }
-            items_after = items_next.cursor;
-            search_after = search_next.cursor;
+            items_after = items_next.cursor();
+            search_after = search_next.cursor();
         }
     }
 
@@ -4194,10 +4198,13 @@ impl GitHubProjectsSource {
     /// by, so the read's `updatedAt` is kept when the record has none of its own. See
     /// [`Self::created`] and [`Self::updated`](GitHubProjectsSource::updated).
     fn with_own_writes(&self, mut found: Vec<Resolved>) -> Result<Vec<Resolved>, SourceError> {
+        // A board draft is not an issue, so no narrowed read returns one, and this process
+        // having written one does not make it an answer either.
         let own: Vec<Resolved> = self
             .created()?
             .iter()
             .chain(self.updated()?.iter())
+            .filter(|own| own.content_kind == ContentKind::Issue)
             .cloned()
             .collect();
         for mut own in own {
@@ -6778,12 +6785,27 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
         _ => "in:body",
     };
     let phrases = text
-        .map(|text| text.terms.as_str())
+        .map(|text| text.terms.clone())
         .into_iter()
-        .chain(query.metadata.iter().map(MetadataMatch::value))
-        .map(quoted)
+        .chain(
+            query
+                .metadata
+                .iter()
+                .map(|wanted| as_stored(wanted.value())),
+        )
+        .map(|phrase| quoted(&phrase))
         .collect::<Vec<_>>();
     Some(format!("{fields} {}", phrases.join(" ")))
+}
+
+/// `value` spelled the way the metadata slot stores it: as the inside of its JSON string.
+///
+/// What GitHub indexes is the slot's JSON text, so a value holding a character JSON escapes —
+/// a newline, a tab, a quote — is found by the escape the body holds and not by the character,
+/// which GitHub's word match would read as different words.
+fn as_stored(value: &str) -> String {
+    let encoded = Value::String(value.to_owned()).to_string();
+    encoded[1..encoded.len() - 1].to_owned()
 }
 
 /// The one narrower question a task query carrying a text, metadata or origin predicate is
@@ -6805,35 +6827,50 @@ impl Narrowing {
     }
 }
 
-/// Where one connection of [`graphql::ORIGIN_LOOKUP`] resumes, and whether it has more.
-struct Resumed {
-    /// Whether the connection reported another page.
-    more: bool,
-    /// The cursor to send next: the page's own end when it has one, and otherwise the
-    /// cursor it was reached from, so a connection that has ended answers an empty page.
-    cursor: Option<String>,
+/// Where one connection of [`graphql::ORIGIN_LOOKUP`] resumes.
+enum Resumed {
+    /// It reported another page, which starts after this cursor.
+    More(String),
+    /// It has ended. Sending this cursor again — the page's own end when it had one, and
+    /// otherwise the cursor it was reached from — answers an empty page, so the one document
+    /// can go on walking the other connection.
+    Ended(Option<String>),
+}
+
+impl Resumed {
+    /// Whether the connection has another page.
+    const fn has_more(&self) -> bool {
+        matches!(self, Self::More(_))
+    }
+
+    /// The cursor to send this connection next.
+    fn cursor(self) -> Option<String> {
+        match self {
+            Self::More(next) => Some(next),
+            Self::Ended(last) => last,
+        }
+    }
 }
 
 /// Where `connection`, reached from `after`, resumes — refused when it reports another page
-/// from a cursor that does not advance.
+/// with no cursor to it, or from a cursor that does not advance.
 fn resumed(connection: &Value, after: Option<&str>) -> Result<Resumed, SourceError> {
     let info = connection
         .get("pageInfo")
         .ok_or_else(|| SourceError::Malformed {
             message: "GitHub connection has no pageInfo".into(),
         })?;
-    let more = required_bool(info, "hasNextPage")?;
     let end = optional_str(info, "endCursor")?;
-    if more {
+    if required_bool(info, "hasNextPage")? {
         let next = end.ok_or_else(|| SourceError::Malformed {
             message: "GitHub connection reports another page and no endCursor".into(),
         })?;
         validate_cursor_progress(after, next)?;
+        return Ok(Resumed::More(next.to_owned()));
     }
-    Ok(Resumed {
-        more,
-        cursor: end.map(str::to_owned).or_else(|| after.map(str::to_owned)),
-    })
+    Ok(Resumed::Ended(
+        end.map(str::to_owned).or_else(|| after.map(str::to_owned)),
+    ))
 }
 
 /// The board, and every item on it this source reports.

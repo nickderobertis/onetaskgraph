@@ -14562,3 +14562,76 @@ async fn comment_activity_with_a_narrowed_search_asks_for_both_qualifiers_at_onc
     );
     assert_eq!(fixture.requests("board"), 0);
 }
+
+#[tokio::test]
+async fn a_metadata_value_json_escapes_is_found_by_the_escape_the_body_holds() {
+    // The slot is JSON, so a newline, a tab and a quote are held as their escapes, and GitHub
+    // reads `\n` beside a word as part of that word. Searching for the raw characters would
+    // ask for different words than the body holds and miss the item.
+    let values = [
+        "line one\nline two",
+        "column\tvalue",
+        "said \"stale\" twice",
+    ];
+    let fixture = board(
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                Item::issue(&format!("I_{index}"), "escaped")
+                    .status("Todo")
+                    .body(&slotted("", &json!({"team.note": value})))
+            })
+            .collect(),
+    );
+    let source = source(&fixture);
+    for (index, value) in values.iter().enumerate() {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &metadata_query("team.note", &[], value)).await,
+            [format!("I_{index}")],
+            "{value:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_draft_this_process_wrote_is_not_an_answer_to_a_narrowed_read() {
+    let fixture = board(vec![Item::draft("D_1", "Draft").status("Todo")]);
+    let source = source(&fixture);
+    let mut written = task("D_1", "Ship it", status(StatusCategory::Todo, "Todo"));
+    written.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("work:ENG-3")),
+        ("team.owner".to_owned(), json!("ada")),
+    ]);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("D_1".to_owned())),
+            item: written,
+            depends_on: vec![],
+        })
+        .await
+        .expect("the draft is updated");
+    for query in [
+        TaskQuery {
+            text: text("ship", TextFields::Title),
+            ..TaskQuery::default()
+        },
+        metadata_query("team.owner", &[], "ada"),
+        origin_query("work:ENG-3"),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "a board draft is not an issue, so no narrowed read returns one: {query:?}"
+        );
+    }
+    // It is still the board's, and still read by its id.
+    assert_eq!(
+        source
+            .get_task(&NativeId("D_1".to_owned()))
+            .await
+            .expect("a read by id")
+            .map(|task| task.title),
+        Some("Ship it".to_owned())
+    );
+}
