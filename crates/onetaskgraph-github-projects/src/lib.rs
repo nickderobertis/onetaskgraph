@@ -127,8 +127,10 @@
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
-//! | `search_title` | **Supported and proven,** over `Issue.title`. |
-//! | `search_content` | **Supported and proven,** over the visible body — the trailing metadata comment is not part of it. |
+//! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. |
+//! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
+//! | `search_title` | **Supported, and asked of GitHub,** over `Issue.title`: one board-scoped issue search for the text as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so an item holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. |
+//! | `search_content` | **Supported, and asked of GitHub** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
@@ -146,24 +148,26 @@
 //! — so that the engine may push it down and apply nothing of its own.
 //!
 //! Second, this source can keep that promise for every predicate at no additional API
-//! cost, because whichever of the three reads below answers a query has already read every
-//! item that query could keep before it filters anything. Filtering those items is
+//! cost, because whichever of the reads below answers a query has already read every
+//! candidate that query will return before it filters anything. Filtering those items is
 //! in-process work over data already in hand.
 //!
-//! Third, no predicate but `projects` and `filter_by_comment_activity` could be pushed into
-//! the API even if that were wanted, and both are — comment activity through the issue
-//! search's `updated:` qualifier, the row above says how: `ProjectV2.items` takes `first` and `after` and
-//! offers no filter argument of any kind, GitHub's issue search offers no qualifier for a
-//! label set, a status column or a substring of a body, and its title qualifier matches
-//! tokens where this source — and the local Markdown source beside it — match substrings,
-//! so pushing a search down would silently *narrow* the answer. What a project filter has
-//! instead is a relationship: a project's tasks are that issue's sub-issues, and asking
-//! the issue for them is both cheaper and exact. So there are two predicates this source
-//! applies by asking a narrower question, six it applies in process, and none it is unable
-//! to apply. Declaring one `Unsupported` would make the engine compensate for work this
-//! source has already done, and declaring `projects` native while ignoring the filter
-//! (which this source once did) silently returns another project's tasks, because the
-//! engine trusts the declaration and applies nothing locally.
+//! Third, six predicates are asked of GitHub as a narrower question and the rest are applied
+//! in process over what that question returned. A project filter has a relationship — a
+//! project's tasks are that issue's sub-issues, and asking the issue for them is both cheaper
+//! and exact. Comment activity is the issue search's `updated:` qualifier. A text search, and
+//! a search for metadata values, is the board-scoped issue search carrying the text and each
+//! value as quoted phrases; an origin is the board's own field filter over its origin field
+//! beside the same search for the id. **The text search narrows, and that is this source's
+//! declared semantics:** GitHub matches whole words where the substring rule this source and
+//! the local Markdown source confirm with would match inside one, so an item holding the text
+//! only inside a longer word is never a candidate. Every item returned does contain the text.
+//! GitHub's issue search offers no qualifier for a label set, a status column or a priority,
+//! so those three are applied in process over the candidates, and a query carrying none of
+//! the six narrowing predicates reads the board. Declaring one `Unsupported` would make the
+//! engine compensate for work this source has already done, and declaring `projects` native
+//! while ignoring the filter (which this source once did) silently returns another project's
+//! tasks, because the engine trusts the declaration and applies nothing locally.
 //!
 //! # The three ways this source reaches an item, and what each costs
 //!
@@ -179,7 +183,9 @@
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
-//! | every task, every document, every label | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
+//! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — paged at [`MAX_PAGE_SIZE`] | the issues that match |
+//! | which tasks were copied from one origin | [`graphql::ORIGIN_LOOKUP`] — the board's own `items` under its field filter on the origin field, and the same board-scoped search for the id `in:body`, in one request, each paged at three | the carriers of that origin, which is one item |
+//! | every task, every document, every label, when nothing above narrows the question | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
 //! The board half of an issue — its board item's id, its `Status` option and this
@@ -326,10 +332,43 @@
 //! credentialed journey asks through a source built afresh, and why the union above rather
 //! than a longer wait is what makes such a wait converge.
 //!
+//! **A narrowed read is the same bargain, stated for each of the three predicates it
+//! answers.** A read carrying a text, metadata or origin predicate asks GitHub's index rather
+//! than walking the board, and every such answer is completed with what this process wrote —
+//! its [`created`](GitHubProjectsSource::created) record and every existing item it wrote,
+//! each filtered by the same predicates as the rest — so an item this command wrote a moment
+//! ago is returned by a query that matches it whether or not the index has caught up. An item
+//! a caller holds the id of is read by that id, with `node(id:)`, which is strongly
+//! consistent. What is left is stated rather than papered over:
+//!
+//! | Read | Finds | Behind by |
+//! | --- | --- | --- |
+//! | text, metadata | the issue search for the phrases | what another process wrote in the last second or two, until GitHub indexes it |
+//! | origin, first read | the board's field filter over the origin field — every carrier, whichever release wrote it | what `ProjectV2.items` is behind on, which the measurements above put in minutes |
+//! | origin, second read | the issue search for the id in the body, where a write of this release mirrors it | a second or two, as any search |
+//! | origin, third read | this process's own writes | nothing |
+//!
+//! So an origin carrier another process added within the last second or two, before either
+//! index has it, can be missing from an origin query, and one written by the release before
+//! this one — its origin in the field alone — can be missing for as long as the board's own
+//! item connection is behind on it. A copy that must not duplicate its own earlier write
+//! relies on the link it records, not on either index. **A board draft is not an issue**, so
+//! no search lists one: a draft is never returned by a text, metadata or origin query, whatever
+//! it holds.
+//!
+//! **The origin lives in the board field, and the body holds a mirror of it.** A write that
+//! carries an origin writes it to the `onetaskgraph.origin` text field and also into the
+//! body's metadata slot, so the issue search can find it in seconds. The field is
+//! authoritative: this source reads an item's origin from the field alone, so a slot that
+//! disagrees with it, or holds one where the field holds none, is never read as a second
+//! origin — and the release before this one reads the slot, drops that key's copy for the
+//! field's, and sees the same one origin.
+//!
 //! Filtering happens before paging, so a page of a filtered result is a page of the
-//! survivors rather than the survivors of a page. Label and text matching answer the same
-//! question the same way the local Markdown source's do, so one cross-source expectation
-//! holds for both.
+//! survivors rather than the survivors of a page. Label matching and the substring rule a
+//! text candidate is confirmed by answer the same question the same way the local Markdown
+//! source's do; which candidates a text search has to confirm is GitHub's word match, which
+//! is the one place the two sources can answer the same text differently.
 //!
 //! <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The declaration itself
 //! has one source, `capabilities`, and the note above is the reasoning behind it rather

@@ -707,6 +707,11 @@ fn github_item(
     labels: Value,
     slot: Value,
 ) -> Value {
+    // The board field is where an origin lives; the slot's copy is the mirror a write keeps.
+    let origin = slot
+        .get("onetaskgraph.origin")
+        .cloned()
+        .unwrap_or_else(|| json!(""));
     let body = if slot.as_object().is_some_and(serde_json::Map::is_empty) {
         body.to_owned()
     } else {
@@ -715,7 +720,7 @@ fn github_item(
     json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,"body":body,
            "state":at.state.0,"reason":at.state.1,
            "parent":at.parent.map_or(Value::Null, |id| json!(id)),
-           "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":"",
+           "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":origin,
            "priority":at.priority,"labels":labels})
 }
 
@@ -796,7 +801,10 @@ fn github_dataset(recorded: Option<&Value>) -> Vec<Value> {
                 priority: Some("Low"),
             },
             json!([["L-3", "core"]]),
-            json!({}),
+            // A copy's origin, in the board field every release reads it from and mirrored in
+            // the slot the way this release writes it.
+            json!({"onetaskgraph.origin":"elsewhere:ORIG-4",
+                   "orchestrator.follow-up":{"root_cause":"stale-cache"}}),
         ),
         github_item(
             "P-1",
@@ -4275,7 +4283,7 @@ fn local_md_block(sandbox: &Sandbox) -> Value {
         (
             "tasks",
             "T-4",
-            "title: Delta docs\nstatus: Doing\npriority: low\nlabels: [{id: L-3, name: core}]\nproject: P-2\ndepends_on:\n  - id: T-2\n    kind: related",
+            "title: Delta docs\nstatus: Doing\npriority: low\nlabels: [{id: L-3, name: core}]\nproject: P-2\nmetadata: {onetaskgraph.origin: \"elsewhere:ORIG-4\", orchestrator.follow-up: {root_cause: stale-cache}}\ndepends_on:\n  - id: T-2\n    kind: related",
             "documentation",
         ),
         (
@@ -4440,7 +4448,9 @@ pub fn dataset() -> Value {
              "labels": [{"id": "L-1", "name": "bug"}]},
             {"id": "T-4", "title": "Delta docs", "content": "documentation",
              "status": {"category": "in-progress", "name": "Doing"}, "priority": "low",
-             "labels": [{"id": "L-3", "name": "core"}], "project": "P-2"}
+             "labels": [{"id": "L-3", "name": "core"}], "project": "P-2",
+             "metadata": {"onetaskgraph.origin": "elsewhere:ORIG-4",
+                          "orchestrator.follow-up": {"root_cause": "stale-cache"}}}
         ],
         "projects": [
             {"id": "P-1", "title": "Engine", "content": "the engine",

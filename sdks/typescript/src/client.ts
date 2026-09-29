@@ -726,6 +726,11 @@ export class OnetaskgraphClient {
       // An RFC 3339 instant with its offset: keep tasks with a comment created or last edited
       // at or after it.
       commentedSince?: string;
+      // `<KEY>[/<SEGMENT>...]=<VALUE>`: keep tasks holding that string at that metadata key and
+      // nested path. Every one must hold.
+      metadata?: string[];
+      // A qualified id, `<source>:<id>`: keep tasks copied from exactly that item.
+      origin?: string;
     } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
     const args: string[] = [];
@@ -736,6 +741,8 @@ export class OnetaskgraphClient {
     if (options.commentedSince !== undefined) {
       args.push("--commented-since", options.commentedSince);
     }
+    for (const match of options.metadata ?? []) args.push("--metadata", match);
+    if (options.origin !== undefined) args.push("--origin", options.origin);
     return this.run("task list", args);
   }
   taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {

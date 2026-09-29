@@ -70,6 +70,8 @@ class Predicate(StrEnum):
     PredicateStatus = "status"
     PredicatePriority = "priority"
     PredicateCommentedSince = "commented-since"
+    PredicateMetadata = "metadata"
+    PredicateOrigin = "origin"
     PredicateSearchTitle = "search-title"
     PredicateSearchContent = "search-content"
     PredicateProject = "project"

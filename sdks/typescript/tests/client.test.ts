@@ -941,6 +941,45 @@ test("a task list is narrowed to comment activity since an instant through the r
   }
 });
 
+test("a task list is narrowed to a metadata value and to a copy origin through the real binary", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-metadata-"));
+  try {
+    mkdirSync(resolve(root, "work/tasks"), { recursive: true });
+    const task = (name: string, metadata: string) =>
+      writeFileSync(
+        resolve(root, `work/tasks/${name}.md`),
+        `---\ntitle: ${name}\nstatus: todo\nmetadata: ${metadata}\n---\nThe body.\n`,
+      );
+    task("tagged", "{orchestrator.follow-up: {root_cause: stale-cache}}");
+    task("shallow", "{orchestrator.follow-up: stale-cache}");
+    task("copied", '{onetaskgraph.origin: "work:ENG-1"}');
+    task("near", '{onetaskgraph.origin: "work:ENG-10"}');
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: { work: { plugin: "local-md", config: { root: resolve(root, "work") } } },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const ids = async (options: Parameters<OnetaskgraphClient["taskList"]>[0]) =>
+      (await client.taskList(options)).items.map((item) => item.id).sort();
+    expect(await ids({ metadata: ["orchestrator.follow-up/root_cause=stale-cache"] })).toEqual([
+      "work:tagged",
+    ]);
+    expect(await ids({ metadata: ["orchestrator.follow-up=stale-cache"] })).toEqual([
+      "work:shallow",
+    ]);
+    expect(await ids({ origin: "work:ENG-1" })).toEqual(["work:copied"]);
+    expect(await ids({ origin: "work:ENG" })).toEqual([]);
+
+    const refused = client.taskList({ origin: "ENG-1" });
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 2 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a task's content is replaced from a file through the real binary, and nothing else", async () => {
   const contentRoot = priorityFolder();
   try {

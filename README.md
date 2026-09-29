@@ -64,6 +64,7 @@ onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--priority none|urgent|high|medium|low]...
                        [--project P | --no-project] [--commented-since RFC3339]
+                       [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID>
@@ -157,6 +158,43 @@ the time you last asked, overlap the two instants by more than that. A source th
 apply it itself — Linear, today — is narrowed by the engine, which **reads that source's
 comments task by task** for every task the other filters kept: correct, and as costly as
 that sounds on a large workspace.
+
+`task list --metadata <KEY>[/<SEGMENT>…]=<VALUE>` keeps the tasks whose caller-defined
+metadata holds the string `VALUE` at that location. `/` splits the top-level key — which may
+itself contain dots, such as `orchestrator.follow-up` — from the nested object keys under it,
+and the first `=` splits the location from the value, so
+`--metadata orchestrator.follow-up/root_cause=stale-cache` keeps the tasks whose
+`orchestrator.follow-up` object holds `root_cause: "stale-cache"`. The value there must be a
+string equal to `VALUE`, case-sensitively. Repeat the flag and a task is kept only when it
+holds every one. `task list --origin <SOURCE>:<ID>` keeps the tasks copied from that item:
+those whose `onetaskgraph.origin` is exactly that qualified id — never one it only begins or
+ends with. A folder of Markdown and an in-memory source apply both themselves; a source that
+does not, Linear today, is narrowed by the engine over each task's own metadata.
+
+A GitHub Projects board answers `--search`, `--metadata` and `--origin` **without listing the
+board**, which is what keeps a large board affordable:
+
+- `--search` is one board-scoped issue search for the text as a phrase, in the title, the body
+  or both as `--in` says, and every candidate is confirmed by the same case-insensitive
+  substring rule a folder of Markdown uses — so every task returned contains the text. GitHub
+  matches whole words, so a task holding the text only inside a longer word (`ship` inside
+  `Shipment`) is **not** returned: that is this source's declared behaviour, not a defect.
+- `--metadata` is the same search with each value as a phrase in the body — GitHub indexes the
+  metadata comment a board keeps at the end of each issue body — and every candidate is
+  confirmed against that parsed comment.
+- `--origin` is the board's own field filter on its `onetaskgraph.origin` field, which finds
+  every carrier whichever release wrote it, together with the issue search for the id in the
+  body, where a write mirrors it so a copy another process made seconds ago is found too.
+  Every candidate is confirmed against the origin field, which is the one place a board's
+  origin is read from.
+
+Every answer is completed with what the same command has just written, so a task written a
+moment ago is found. A task **another** process wrote moments ago may be missing until GitHub
+indexes it — usually a second or two, and for a task whose origin is in the field alone, as
+long as the board's own item list is behind on it, which can be minutes. A board **draft** is
+not an issue and is never returned by any of the three. Labels, status, priority and project
+are confirmed over the candidates, and a query carrying none of the three reads the board as
+before.
 
 ![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 
@@ -328,8 +366,9 @@ holds a mapping: the correspondence lives on the item, inside the plugin that ow
 
 Two rules find the counterpart, in this order. If the item's origin names the destination,
 that origin *is* the destination item and the copy updates it. Otherwise the destination
-is searched for an item whose origin is the id being copied; found, it is updated, and not
-found, one is created carrying that origin.
+is asked for the task whose origin is the id being copied — the same question
+`task list --origin` asks, which a source that can answers without listing everything it
+holds; found, it is updated, and not found, one is created carrying that origin.
 
 Which rule found it decides what the copy records there. A copy that got its counterpart
 from the first rule is a copy **back**: the destination is the original, and the item being

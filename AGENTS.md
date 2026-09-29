@@ -63,7 +63,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
-  `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
+  `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
@@ -773,6 +773,12 @@ them do; this is the inventory of what is owed, not a status board.
     Markdown in process and over the stdio plugin protocol alike; both SDKs answer what the
     command line answers; and an instant without an offset, or one that does not parse, is
     refused naming the flag.
+68. `task list --metadata` keeps exactly the tasks holding every string it names at its key
+    and nested path, and `task list --origin` exactly the tasks copied from that qualified id
+    and never one it only begins or ends with — on every source kind, with the plan naming
+    each predicate pushed down or applied locally; the Python SDK answers what the command
+    line answers; and a location with an empty key or segment, a value with no `=`, and an
+    origin that is not a qualified id are each refused naming the flag.
 
 ## What a copied document's references are pointed at
 

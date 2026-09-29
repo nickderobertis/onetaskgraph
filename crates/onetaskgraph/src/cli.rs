@@ -987,7 +987,7 @@ pub struct TaskListArgs {
     /// `orchestrator.follow-up` — from nested object keys under it, and the first `=` splits
     /// that location from the value. The value there must be a JSON string equal to VALUE,
     /// case-sensitively: `--metadata orchestrator.follow-up/root_cause=stale-cache`.
-    #[arg(long = "metadata", value_name = "KEY[/SEGMENT…]=VALUE", value_parser = metadata_match)]
+    #[arg(long = "metadata", value_name = "KEY[/SEGMENT...]=VALUE", value_parser = metadata_match)]
     pub metadata: Vec<MetadataMatch>,
 
     /// Keep tasks copied from this item: those whose recorded copy origin is exactly this
