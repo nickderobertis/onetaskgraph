@@ -288,6 +288,30 @@ fn one_targeted_update(tasks: usize, changed: usize) -> [Measured; 2] {
     [plan.measure(&settlement), plan.measure(&settlement)]
 }
 
+/// A plan of `tasks` tasks the board holds, landed by one whole copy that recorded every
+/// item's link, and two re-copies of the task at `changed` with its status changed: first by
+/// the link the whole copy recorded, then — every link removed, as every item was before
+/// there were links — by searching the board.
+fn one_task_recopy(tasks: usize, changed: usize) -> [Measured; 2] {
+    let plan = Plan::of(tasks);
+    plan.copy(&[]);
+    let task = format!("plans:T-{changed}");
+    let recopy = ["task", "copy", task.as_str(), "--to", "board", "--json"];
+    // `author` writes every file afresh, which drops the links the whole copy recorded, so
+    // the status is moved by hand here and the links are kept.
+    let path = plan.root.join(format!("tasks/T-{changed}.md"));
+    let linked = std::fs::read_to_string(&path).expect("the task");
+    assert!(
+        linked.contains("onetaskgraph.copies"),
+        "the whole copy recorded the task's link: {linked}"
+    );
+    std::fs::write(&path, linked.replace("status: Todo", "status: Doing")).expect("an edit");
+    let by_link = plan.measure(&recopy);
+    plan.author(&[], None);
+    let by_scan = plan.measure(&recopy);
+    [by_link, by_scan]
+}
+
 #[test]
 fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says() {
     let ten = Plan::of(10);
@@ -413,6 +437,49 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         );
     }
 
+    // (g) and (h): one task re-copied on its own. By its link, the copy reads its board item
+    // and its project's by id and never walks or searches the board; without one, it does
+    // both, which is what every re-copy cost before a copy recorded where it landed.
+    let [
+        (by_link, by_link_served, by_link_report),
+        (by_scan, _, by_scan_report),
+    ] = one_task_recopy(10, 3);
+    assert_eq!(
+        (
+            &by_link_report["items"][0]["via"],
+            &by_link_report["items"][0]["action"]
+        ),
+        (&json!("link"), &json!("updated")),
+        "{by_link_report:#}"
+    );
+    assert_eq!(
+        (
+            &by_scan_report["items"][0]["via"],
+            &by_scan_report["items"][0]["action"]
+        ),
+        (&json!("scan"), &json!("updated")),
+        "{by_scan_report:#}"
+    );
+    {
+        use onetaskgraph_github_projects::graphql;
+        let walked: Vec<&(String, Value)> = by_link_served
+            .iter()
+            .filter(|(document, _)| {
+                document == graphql::BOARD || document == graphql::SEARCH_ISSUES
+            })
+            .collect();
+        assert!(
+            walked.is_empty(),
+            "(g) read the board or searched its issues: {walked:#?}"
+        );
+    }
+    assert!(
+        by_link.total_node_count() < by_scan.total_node_count(),
+        "(g) cost {} worst-case nodes and (h) {}",
+        by_link.total_node_count(),
+        by_scan.total_node_count()
+    );
+
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
         rendered(
@@ -434,6 +501,14 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         rendered(
             "(f) the same targeted update again, every value it names already held",
             &repeat_update,
+        ),
+        rendered(
+            "(g) a task copy of 1 of those 10 tasks, its status changed, found by the link the whole copy recorded",
+            &by_link,
+        ),
+        rendered(
+            "(h) the same task copy with every link removed, found by searching the board",
+            &by_scan,
         ),
     ]
     .join("\n");

@@ -2473,7 +2473,9 @@ impl Engine {
     /// Looked for once per source project per command. A project this command itself
     /// copied is already known, and one an earlier task of this command was filed under
     /// was already looked for; walking the destination again for either would spend a
-    /// scan per task on an answer the command holds.
+    /// scan per task on an answer the command holds. A project whose own link names its
+    /// counterpart there is found by that link — see [`Engine::linked_project`] — and the
+    /// destination is walked only when it does not.
     async fn counterpart(
         &self,
         destination: &ResolvedSource,
@@ -2491,16 +2493,65 @@ impl Engine {
         if let Some(looked) = running.filings.get(&qualified) {
             return Ok(looked.clone());
         }
-        let found = self
-            .scan(
-                destination,
-                Level::Project,
-                &Wanted::Origin(qualified.clone()),
-            )
-            .await?;
+        let found = match self
+            .linked_project(destination, &item.source.source, project, &qualified)
+            .await?
+        {
+            Some(linked) => Some(linked),
+            None => {
+                self.scan(
+                    destination,
+                    Level::Project,
+                    &Wanted::Origin(qualified.clone()),
+                )
+                .await?
+            }
+        };
         let filed = Some(found.unwrap_or_else(|| project.clone()));
         running.filings.insert(qualified, filed.clone());
         Ok(filed)
+    }
+
+    /// The destination project a source project's own `onetaskgraph.copies` entry names,
+    /// when the project it names there still records that source project as its origin.
+    ///
+    /// The filing lookup's half of following a link: one read of the project at its source
+    /// and one of its counterpart by id, in place of a walk of the destination's projects.
+    /// A link that names nothing there, or names a project somebody re-pointed, is not a
+    /// refusal here as it is for a copy's own target — this only decides where an item is
+    /// filed — so the walk answers instead, exactly as it did before there were links.
+    async fn linked_project(
+        &self,
+        destination: &ResolvedSource,
+        source: &SourceName,
+        project: &NativeId,
+        qualified: &str,
+    ) -> Result<Option<NativeId>, EngineError> {
+        let source = self.readable(source)?;
+        if !source.source().capabilities().projects.is_native() {
+            return Ok(None);
+        }
+        let Some(held) = source
+            .source()
+            .get_project(project)
+            .await
+            .map_err(|error| refused(source, error))?
+        else {
+            return Ok(None);
+        };
+        let Some(link) = link_of(&held.metadata, destination.name()) else {
+            return Ok(None);
+        };
+        let there = destination
+            .source()
+            .get_project(&link.native)
+            .await
+            .map_err(|error| refused(destination, error))?;
+        Ok(there
+            .filter(|there| {
+                origin_of(&there.metadata).is_some_and(|origin| origin.to_string() == qualified)
+            })
+            .map(|_| link.native))
     }
 
     /// What the destination holds at one id, item and forward edges together.
