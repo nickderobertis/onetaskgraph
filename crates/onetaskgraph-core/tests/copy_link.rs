@@ -765,3 +765,75 @@ async fn a_repeated_copy_of_a_linked_item_keeps_the_destinations_own_link() {
     );
     assert!(matches!(back.items[0].action, CopyAction::Unchanged { .. }));
 }
+
+/// A source holding project `P-1` and task `T-1` filed under it.
+fn a_project_and_its_task() -> Value {
+    json!({
+        "projects": [{"id": "P-1", "title": "Engine",
+                      "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+        "tasks": [{"id": "T-1", "title": "Alpha", "project": "P-1",
+                   "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+    })
+}
+
+#[tokio::test]
+async fn a_task_copied_on_its_own_is_filed_under_its_project_by_the_projects_link() {
+    let (engine, pages) = engine(&a_project_and_its_task(), &json!({}));
+    copied(
+        &engine,
+        &copy_of(&["from:P-1"], CopyScope::Projects { tasks: true }),
+    )
+    .await;
+
+    pages.store(0, Ordering::Relaxed);
+    let report = copied(&engine, &one("from:T-1")).await;
+    assert_eq!(
+        said(&report.items[0]),
+        landed("into:T-1", "unchanged", CopyVia::Link, CopyLink::Unchanged)
+    );
+    assert_eq!(
+        pages.load(Ordering::Relaxed),
+        0,
+        "neither the task nor the project it is filed under was searched for"
+    );
+    assert_eq!(
+        engine
+            .task(&id("into:T-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .project,
+        Some(NativeId("P-1".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn a_project_link_naming_nothing_there_files_by_searching_instead_of_refusing() {
+    // Only a copy's own target is refused for a stale link: where an item is filed is a
+    // lookup, and a lookup the link cannot answer is answered the way it always was.
+    let mut from = a_project_and_its_task();
+    from["projects"][0]["metadata"] = json!({MetadataKey::COPIES_KEY: {"into": "into:GONE"}});
+    let into = json!({"projects": [{"id": "Q", "title": "Engine",
+        "status": {"category": "todo", "name": "Todo"}, "labels": [],
+        "metadata": {GlobalId::ORIGIN_KEY: "from:P-1"}}]});
+    let (engine, pages) = engine(&from, &into);
+
+    let report = copied(&engine, &one("from:T-1")).await;
+    assert_eq!(
+        said(&report.items[0]),
+        landed("into:T-1", "created", CopyVia::Created, CopyLink::Recorded)
+    );
+    assert!(pages.load(Ordering::Relaxed) > 0);
+    assert_eq!(
+        engine
+            .task(&id("into:T-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .project,
+        Some(NativeId("Q".to_owned())),
+        "filed under the project the search found"
+    );
+}
