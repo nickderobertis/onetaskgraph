@@ -3,8 +3,9 @@
 //! A copy records where each item landed on the item itself, at `onetaskgraph.copies`, and
 //! the next copy of that item follows it by one read of the destination by id. What a
 //! command line can see of that is proven here: the entry in the source's own file, over
-//! the in-process boundary and the stdio plugin protocol alike; the rule each copy reports
-//! it was found by; and the refusal a link naming nothing earns. That a copy found by its
+//! the in-process boundary and the stdio plugin protocol alike, and on a GitHub board item
+//! through that board's own metadata write; the rule each copy reports it was found by; and
+//! the refusal a link naming nothing earns. That a copy found by its
 //! link reads no page of the destination is counted where it can be — against the
 //! in-memory sources in `crates/onetaskgraph-core/tests/copy_link.rs`, and against the
 //! loopback GitHub board in `copy_cost.rs`.
@@ -14,7 +15,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
-use crate::fixtures::{SOURCE, document, empty_folder, qualified};
+use crate::fixtures::{SOURCE, document, empty_folder, github_projects_with_board, qualified};
 
 const NOTES: &str = "notes";
 
@@ -369,6 +370,181 @@ fn an_item_its_folder_cannot_edit_narrowly_is_copied_and_reported_unrecorded() {
                 json!("unrecorded")
             ),
             "{boundary:?}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_found_by_its_title_or_by_searching_reports_so_and_records_the_link() {
+    let sandbox = Sandbox::new();
+    markdown_pair(&sandbox, SOURCE_BOUNDARIES[0]);
+    let from = qualified(SOURCE, "T-1");
+    let into = qualified(NOTES, "T-1");
+    // A person's own item of the same title, written before any copy and naming no origin.
+    let theirs = sandbox.subdirectory(NOTES).join("tasks/T-1.md");
+    std::fs::create_dir_all(theirs.parent().expect("a folder")).expect("a folder");
+    std::fs::write(
+        &theirs,
+        "---\ntitle: Alpha engine\nstatus: todo\n---\ntheirs\n",
+    )
+    .expect("their item");
+
+    let (destination, action, via, link) = copy(&sandbox, "task", &from, &["--match-by", "title"]);
+    assert_eq!(
+        (destination, action, via, link),
+        (
+            json!(into),
+            json!("updated"),
+            json!("match"),
+            json!("recorded")
+        )
+    );
+    assert_eq!(
+        metadata(&sandbox, "task", &from)["onetaskgraph.copies"],
+        json!({NOTES: into})
+    );
+
+    // With the link taken off again, the next copy finds the item by the origin the first one
+    // wrote there, and records the link it no longer has.
+    let path = source_file(&sandbox, "task", "T-1");
+    let linked = std::fs::read_to_string(&path).expect("the source task");
+    let unlinked: String = linked
+        .lines()
+        .filter(|line| !line.contains("onetaskgraph.copies"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert_ne!(linked, unlinked, "the link was one line of the file");
+    std::fs::write(&path, unlinked).expect("the link removed");
+    assert_eq!(
+        copy(&sandbox, "task", &from, &[]),
+        (
+            json!(into),
+            json!("unchanged"),
+            json!("scan"),
+            json!("recorded")
+        )
+    );
+    assert_eq!(
+        metadata(&sandbox, "task", &from)["onetaskgraph.copies"],
+        json!({NOTES: into})
+    );
+}
+
+#[test]
+fn a_dry_run_follows_a_recorded_link_and_writes_neither_side() {
+    let sandbox = Sandbox::new();
+    markdown_pair(&sandbox, SOURCE_BOUNDARIES[0]);
+    let from = qualified(SOURCE, "T-1");
+    let notes = sandbox.subdirectory(NOTES);
+
+    // Before any copy: nothing is created at the destination and no link is written.
+    parsed(&exits(
+        &sandbox,
+        &["task", "copy", &from, "--to", NOTES, "--dry-run", "--json"],
+        0,
+    ));
+    assert!(
+        !notes.join("tasks/T-1.md").exists(),
+        "a dry run created the copy"
+    );
+
+    // After one: the dry run finds the copy by the link and touches neither file.
+    copy(&sandbox, "task", &from, &[]);
+    let source = source_file(&sandbox, "task", "T-1");
+    let edited = std::fs::read_to_string(&source)
+        .expect("the source task")
+        .replace("title: Alpha engine", "title: Alpha engine, edited");
+    std::fs::write(&source, &edited).expect("an edit");
+    let copied = std::fs::read_to_string(notes.join("tasks/T-1.md")).expect("the copy");
+
+    let report = parsed(&exits(
+        &sandbox,
+        &["task", "copy", &from, "--to", NOTES, "--dry-run", "--json"],
+        0,
+    ));
+    let item = &report["items"][0];
+    assert_eq!(
+        (&item["action"], &item["via"]),
+        (&json!("updated"), &json!("link")),
+        "{report:#}"
+    );
+    assert!(item.get("link").is_none(), "{report:#}");
+    assert_eq!(
+        std::fs::read_to_string(&source).expect("the source task"),
+        edited
+    );
+    assert_eq!(
+        std::fs::read_to_string(notes.join("tasks/T-1.md")).expect("the copy"),
+        copied
+    );
+}
+
+#[test]
+fn a_board_item_copied_out_records_its_link_on_the_board_and_the_next_copy_follows_it() {
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        let authored = sandbox.subdirectory("authored");
+        std::fs::create_dir_all(authored.join("tasks")).expect("a folder");
+        std::fs::write(
+            authored.join("tasks/A.md"),
+            "---\ntitle: Board-born task\nstatus: Todo\n---\nfiled on the board\n",
+        )
+        .expect("a task");
+        let (config, board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(&json!({
+            "authored": {"plugin":"local-md","config":{
+                "root": authored,
+                "status_mapping": {"Todo":"todo","Doing":"in-progress","Shipped":"done"}}},
+            "board": boundary.source_with_secrets(
+                "github-projects",
+                config,
+                &["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+            ),
+            NOTES: {"plugin": "local-md", "config": empty_folder(&sandbox, NOTES)},
+        })));
+
+        // An issue on the board, whose own origin names the folder it came from — not notes.
+        let filed = parsed(&exits(
+            &sandbox,
+            &["task", "copy", "authored:A", "--to", "board", "--json"],
+            0,
+        ));
+        let issue = filed["items"][0]["destination"]
+            .as_str()
+            .expect("a board id")
+            .to_owned();
+
+        let copy_out = ["task", "copy", issue.as_str(), "--to", NOTES, "--json"];
+        let first = parsed(&exits(&sandbox, &copy_out, 0));
+        let item = &first["items"][0];
+        assert_eq!(
+            (&item["action"], &item["via"], &item["link"]),
+            (&json!("created"), &json!("created"), &json!("recorded")),
+            "{boundary:?}: {first:#}"
+        );
+        let landed = item["destination"].as_str().expect("a notes id").to_owned();
+
+        // The link went through the board's own metadata write, into the issue's body …
+        assert!(
+            board.served().iter().any(|(document, variables)| {
+                document.contains("updateIssue")
+                    && variables.to_string().contains("onetaskgraph.copies")
+            }),
+            "{boundary:?}: no issue update carried the link"
+        );
+        // … and a later invocation reads it back from the board.
+        assert_eq!(
+            metadata(&sandbox, "task", &issue)["onetaskgraph.copies"],
+            json!({NOTES: landed}),
+            "{boundary:?}"
+        );
+
+        let second = parsed(&exits(&sandbox, &copy_out, 0));
+        let item = &second["items"][0];
+        assert_eq!(
+            (&item["destination"], &item["via"], &item["link"]),
+            (&json!(landed), &json!("link"), &json!("unchanged")),
+            "{boundary:?}: {second:#}"
         );
     }
 }
