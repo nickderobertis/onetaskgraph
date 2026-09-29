@@ -961,18 +961,19 @@ const TWENTY_FOURTH_BUNDLE_SHAPE: [(&str, u64); 88] = [
 ];
 
 /// The exact schema bundle published as version 25: version 24's document with the two
-/// things a copy now says about each item — `CopyOutcome.via`, which rule found where it
-/// landed, and `CopyOutcome.link`, what became of the `onetaskgraph.copies` link it records —
-/// and each of their vocabularies, `CopyVia` and `CopyLink`, as a root of its own.
+/// things a copy now says about each item it landed — `via`, which rule found where it
+/// landed, and `link`, what became of the `onetaskgraph.copies` link it records — carried on
+/// the `created`, `updated` and `unchanged` actions and on no `orphaned` one, and the
+/// vocabularies of both, `CopyVia` and `CopyLink`, as roots of their own.
 const TWENTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 90] = [
     ("Capabilities", 0x4595ee377b2b01e7),
     ("Comment", 0xfc9fab5a2266887e),
     ("CommentList", 0xcd30d5deff29948d),
-    ("CopyAction", 0x92821be0daa46894),
+    ("CopyAction", 0x6f602a0b698fc4ee),
     ("CopyLink", 0xa73df648489586ed),
-    ("CopyOutcome", 0x98f061f1f8ca55e4),
-    ("CopyReport", 0xc32cd826e960f61f),
-    ("CopyVia", 0x47e5167ee7a94670),
+    ("CopyOutcome", 0x52a88fbf6698587f),
+    ("CopyReport", 0x1982e902475bf2d4),
+    ("CopyVia", 0x641c3292827db1fb),
     ("CredentialLayer", 0x54cdffe467a3b7f1),
     ("DeletedComment", 0xaa757b7907bb38f8),
     ("Delivered", 0xd27ae244686ce058),

@@ -48,10 +48,10 @@ pub use engine::{
     Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered, DeliveryOutcome,
     DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError, Filters,
-    LabelRequest, LeftBehind, MatchBy, MetadataSet, Paging, ProjectRequest, ProjectSelector,
-    Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest,
-    SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskPrioritySet, TaskRequest,
-    TaskStatusSet, TaskUpdated, settled,
+    LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, Paging, ProjectRequest,
+    ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
+    SearchRequest, SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskPrioritySet,
+    TaskRequest, TaskStatusSet, TaskUpdated, settled,
 };
 pub use engine::{
     DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,

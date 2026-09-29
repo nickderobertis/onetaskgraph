@@ -311,27 +311,15 @@ pub struct CopyOutcome {
     /// What happened to it, and where.
     #[serde(flatten)]
     pub action: CopyAction,
-    /// Which rule found the destination item, or that none was found — for every item the
-    /// copy read and landed, a dry run's included.
-    ///
-    /// Absent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no
-    /// rule was asked where it goes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub via: Option<CopyVia>,
-    /// What the copy did to the link the copied item records for this destination at
-    /// `onetaskgraph.copies`.
-    ///
-    /// Absent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]
-    /// entry, which was not copied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub link: Option<CopyLink>,
 }
 
-/// How a copy found the destination item it landed one item on.
+/// Which rule found the destination counterpart an item was updated at, or found already
+/// reading as it does.
 ///
 /// Tried in this order, and the first that answers is the one reported: the link the item
 /// records, its own origin, a search of the destination for an item recording it as its
-/// origin, the caller's `--match-by`, and otherwise nothing.
+/// origin, and the caller's `--match-by`. When none answers, the item is created and says
+/// so as [`NoCounterpart`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum CopyVia {
@@ -344,7 +332,18 @@ pub enum CopyVia {
     Scan,
     /// A search of the destination by the caller's `--match-by`.
     Match,
+}
+
+/// What a created item reports as its `via`: no rule found a counterpart.
+///
+/// One word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a
+/// counterpart cannot say none was found and a created one cannot name a rule that found
+/// one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum NoCounterpart {
     /// No counterpart was found, so one was created — or, in a dry run, would have been.
+    #[default]
     Created,
 }
 
@@ -385,19 +384,38 @@ pub enum CopyAction {
         /// The id it was created under, or `null` for a dry run that would have created
         /// one — there is no id, because nothing was.
         destination: Option<GlobalId>,
+        /// That no rule found a counterpart. The one word it can be, so a report written
+        /// before there was a `via` reads as saying it.
+        #[serde(default)]
+        via: NoCounterpart,
+        /// What the copy did to the link the copied item records for this destination at
+        /// `onetaskgraph.copies`; absent for a dry run, which writes nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<CopyLink>,
     },
     /// The destination held a counterpart and it now reads as the source does.
     Updated {
         /// The item that was updated.
         destination: GlobalId,
+        /// Which rule found it.
+        via: CopyVia,
+        /// What the copy did to the copied item's link; absent for a dry run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<CopyLink>,
     },
     /// The destination held a counterpart that already read that way; nothing was written.
     Unchanged {
         /// The item that already said it.
         destination: GlobalId,
+        /// Which rule found it.
+        via: CopyVia,
+        /// What the copy did to the copied item's link; absent for a dry run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<CopyLink>,
     },
     /// The destination holds a counterpart the source no longer does. A copy never
-    /// deletes, so it was left exactly as it is.
+    /// deletes, so it was left exactly as it is — and no rule was asked where it goes, and
+    /// no link was touched, because it was not copied.
     Orphaned {
         /// The item that was left alone.
         destination: GlobalId,
@@ -409,10 +427,41 @@ impl CopyAction {
     #[must_use]
     pub fn destination(&self) -> Option<&GlobalId> {
         match self {
-            Self::Created { destination } => destination.as_ref(),
-            Self::Updated { destination }
-            | Self::Unchanged { destination }
+            Self::Created { destination, .. } => destination.as_ref(),
+            Self::Updated { destination, .. }
+            | Self::Unchanged { destination, .. }
             | Self::Orphaned { destination } => Some(destination),
+        }
+    }
+
+    /// Which rule found the counterpart, or `None` when none did — the item was created —
+    /// and for an orphan, which no rule was asked about.
+    #[must_use]
+    pub fn found_by(&self) -> Option<CopyVia> {
+        match self {
+            Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
+            Self::Created { .. } | Self::Orphaned { .. } => None,
+        }
+    }
+
+    /// What became of the copied item's link, or `None` for a dry run and for an orphan.
+    #[must_use]
+    pub fn link(&self) -> Option<CopyLink> {
+        match self {
+            Self::Created { link, .. }
+            | Self::Updated { link, .. }
+            | Self::Unchanged { link, .. } => *link,
+            Self::Orphaned { .. } => None,
+        }
+    }
+
+    /// The link slot of an item this copy landed, `None` for an orphan.
+    fn link_slot(&mut self) -> Option<&mut Option<CopyLink>> {
+        match self {
+            Self::Created { link, .. }
+            | Self::Updated { link, .. }
+            | Self::Unchanged { link, .. } => Some(link),
+            Self::Orphaned { .. } => None,
         }
     }
 
@@ -483,11 +532,11 @@ impl Found {
 }
 
 impl Target {
-    /// The word the report says this target was reached by.
-    fn via(&self) -> CopyVia {
+    /// Which rule found this target, or `None` for one this copy creates.
+    fn found(&self) -> Option<Found> {
         match self {
-            Self::Update { found, .. } => found.via(),
-            Self::Create => CopyVia::Created,
+            Self::Update { found, .. } => Some(*found),
+            Self::Create => None,
         }
     }
 }
@@ -680,8 +729,8 @@ struct Linking {
     item: GlobalId,
     /// Which of that source's interfaces holds it.
     level: Level,
-    /// Which rule found where it landed.
-    via: CopyVia,
+    /// Which rule found where it landed, or `None` when this copy created it.
+    found: Option<Found>,
     /// Where it landed.
     destination: GlobalId,
     /// What it held at `onetaskgraph.copies` when it was read, if anything.
@@ -1207,8 +1256,8 @@ impl Engine {
     /// landed, so a copy that fails before this point has written nothing on any source.
     ///
     /// Each outcome is told what happened to its item's link. The items landed are exactly
-    /// the outcomes that report a [`CopyVia`], in the order they landed: an orphan reports
-    /// none, and a dry run records nothing, so this is never asked about either.
+    /// the outcomes that are not orphans, in the order they landed; a dry run records
+    /// nothing, so this is never asked about one.
     async fn link(
         &self,
         destination: &ResolvedSource,
@@ -1216,13 +1265,16 @@ impl Engine {
         items: &mut [CopyOutcome],
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        let mut landed = items.iter_mut().filter(|outcome| outcome.via.is_some());
+        let mut landed = items
+            .iter_mut()
+            .filter(|outcome| !matches!(outcome.action, CopyAction::Orphaned { .. }));
         for entry in linking {
-            let outcome = landed
+            let slot = landed
                 .next()
                 .filter(|outcome| outcome.source == entry.item)
+                .and_then(|outcome| outcome.action.link_slot())
                 .expect("every item a copy landed is reported, in the order it landed");
-            outcome.link = Some(self.linked(destination, entry, journal).await?);
+            *slot = Some(self.linked(destination, entry, journal).await?);
         }
         Ok(())
     }
@@ -1241,16 +1293,15 @@ impl Engine {
         entry: Linking,
         journal: &mut Journal,
     ) -> Result<CopyLink, EngineError> {
-        if entry.via == CopyVia::Origin {
+        if entry.found == Some(Found::Origin) {
             return Ok(CopyLink::Unchanged);
         }
         let wanted = Value::String(entry.destination.to_string());
-        let mut links = match &entry.held {
-            Some(Value::Object(held)) => held.clone(),
-            // Anything else under the key is not a link this can read, so it is replaced by
-            // one that is — exactly as an entry naming another item is rewritten.
-            _ => serde_json::Map::new(),
-        };
+        // Only the entries that are links are kept. Anything else under the key — a value
+        // that is not an object, or an entry a person spelled wrong — is not a link this or
+        // any later copy can read, so it is replaced by what is, exactly as an entry naming
+        // another item is rewritten.
+        let mut links = well_formed(entry.held.as_ref());
         if links.get(destination.name().as_str()) == Some(&wanted) {
             return Ok(CopyLink::Unchanged);
         }
@@ -1455,14 +1506,23 @@ impl Engine {
         let mut outcomes = self
             .copy_items(destination, request, vec![project], None, running, journal)
             .await?;
-        if let (Some(unchanged), Some(landed)) = (unchanged, outcomes[0].destination().cloned()) {
+        if let (Some(unchanged), Some(landed), Some(via)) = (
+            unchanged,
+            outcomes[0].destination().cloned(),
+            outcomes[0].action.found_by(),
+        ) {
+            let link = outcomes[0].action.link();
             outcomes[0].action = if unchanged {
                 CopyAction::Unchanged {
                     destination: landed,
+                    via,
+                    link,
                 }
             } else {
                 CopyAction::Updated {
                     destination: landed,
+                    via,
+                    link,
                 }
             };
         }
@@ -1961,8 +2021,6 @@ impl Engine {
                     action: CopyAction::Orphaned {
                         destination: GlobalId::new(destination.name().clone(), task.id.clone()),
                     },
-                    via: None,
-                    link: None,
                 });
             }
             unrepeated(
@@ -2071,7 +2129,7 @@ impl Engine {
                     running.linking.push(Linking {
                         item: item.source.clone(),
                         level: item.item.level(),
-                        via: item.target.via(),
+                        found: item.target.found(),
                         destination: id.clone(),
                         held: described(&item.item)
                             .1
@@ -2354,10 +2412,28 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let Pointing { edges, delivers } = pointing;
-        let via = item.target.via();
-        let target = match &item.target {
-            Target::Update { id, .. } => Some(id.clone()),
-            Target::Create => None,
+        let (target, found) = match &item.target {
+            Target::Update { id, found } => (Some(id.clone()), Some(*found)),
+            Target::Create => (None, None),
+        };
+        // Every link is settled once the whole copy has landed, by `Engine::link`, so none
+        // is known here.
+        let reached = |destination: Option<GlobalId>, changed: bool| match (found, destination) {
+            (Some(via), Some(destination)) if changed => CopyAction::Updated {
+                destination,
+                via: via.via(),
+                link: None,
+            },
+            (Some(via), Some(destination)) => CopyAction::Unchanged {
+                destination,
+                via: via.via(),
+                link: None,
+            },
+            (_, destination) => CopyAction::Created {
+                destination,
+                via: NoCounterpart::Created,
+                link: None,
+            },
         };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to
@@ -2379,12 +2455,7 @@ impl Engine {
             return Ok((
                 CopyOutcome {
                     source: item.source.clone(),
-                    action: CopyAction::Unchanged {
-                        destination: qualified(id.clone()),
-                    },
-                    via: Some(via),
-                    // Settled once the whole copy has landed, by `Engine::link`.
-                    link: None,
+                    action: reached(Some(qualified(id.clone())), false),
                 },
                 prior,
             ));
@@ -2393,20 +2464,13 @@ impl Engine {
             return Ok((
                 CopyOutcome {
                     source: item.source.clone(),
-                    action: match target {
-                        Some(id) => CopyAction::Updated {
-                            destination: qualified(id),
-                        },
-                        // Null only here: nothing was created, so there is no id to report.
-                        None => CopyAction::Created { destination: None },
-                    },
-                    via: Some(via),
-                    link: None,
+                    // Null only for a create here: nothing was created, so there is no id to
+                    // report.
+                    action: reached(target.map(qualified), true),
                 },
                 prior,
             ));
         }
-        let updating = target.is_some();
         let written = qualified(
             self.write(
                 destination,
@@ -2423,17 +2487,7 @@ impl Engine {
         Ok((
             CopyOutcome {
                 source: item.source.clone(),
-                action: if updating {
-                    CopyAction::Updated {
-                        destination: written,
-                    }
-                } else {
-                    CopyAction::Created {
-                        destination: Some(written),
-                    }
-                },
-                via: Some(via),
-                link: None,
+                action: reached(Some(written), true),
             },
             prior,
         ))
@@ -3170,6 +3224,45 @@ fn link_of(metadata: &BTreeMap<String, Value>, destination: &SourceName) -> Opti
         .parse::<GlobalId>()
         .ok()?;
     (&linked.source == destination).then_some(linked)
+}
+
+/// The entries of a `onetaskgraph.copies` value that are links: a source name, and a
+/// qualified id of that same source.
+fn well_formed(value: Option<&Value>) -> serde_json::Map<String, Value> {
+    let Some(Value::Object(held)) = value else {
+        return serde_json::Map::new();
+    };
+    held.iter()
+        .filter(|(destination, linked)| {
+            linked
+                .as_str()
+                .and_then(|linked| linked.parse::<GlobalId>().ok())
+                .is_some_and(|linked| linked.source.as_str() == destination.as_str())
+        })
+        .map(|(destination, linked)| (destination.clone(), linked.clone()))
+        .collect()
+}
+
+/// Why a value is not one a `onetaskgraph.copies` entry may hold, or nothing when it is: a
+/// JSON object mapping each destination source name to a qualified id of that source.
+///
+/// What the stdio boundary holds an incoming value of that key to, so a plugin is never
+/// handed a link it could not answer a later copy with.
+pub(crate) fn malformed_links(value: &Value) -> Option<String> {
+    let Value::Object(held) = value else {
+        return Some(format!(
+            "{} holds an object of destination source names to qualified ids, not {value}",
+            MetadataKey::COPIES_KEY
+        ));
+    };
+    let wrong = held.len() - well_formed(Some(value)).len();
+    (wrong > 0).then(|| {
+        format!(
+            "{} holds an object of destination source names to qualified ids of that source, \
+             and {wrong} of its entries is not one: {value}",
+            MetadataKey::COPIES_KEY
+        )
+    })
 }
 
 /// The title and metadata of either kind of item.

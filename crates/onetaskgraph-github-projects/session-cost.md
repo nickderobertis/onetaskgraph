@@ -671,6 +671,7 @@ node count, **not points**:
 - **(h)** the same `task copy` with every link removed, which is how every re-copy of a task
   on its own was found before a copy recorded one.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
 | **requests**       |                      9 |                     8 |

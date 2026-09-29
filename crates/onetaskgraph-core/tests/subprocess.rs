@@ -2461,3 +2461,44 @@ async fn a_targeted_update_answered_for_another_task_is_malformed() {
         Err(SourceError::Malformed { .. })
     ));
 }
+
+#[test]
+fn a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links() {
+    // `onetaskgraph.copies` is the one reserved key §4.18 admits, and only as an object of
+    // destination source names to qualified ids of that source: anything else is refused at
+    // the boundary, before the hosted source is asked, so no plugin holds a link a later copy
+    // could not read.
+    let write = |value: Value| {
+        json!({"id": "1", "method": "set_task_metadata",
+               "params": {"id": "T-1", "key": "onetaskgraph.copies", "value": value}})
+    };
+    for value in [
+        json!("notes:T-1"),
+        json!({"notes": 5}),
+        json!({"notes": "elsewhere:T-1"}),
+        json!({"notes": "not qualified"}),
+    ] {
+        let answers = served(&[handshake(2, hosted_settings()), write(value.clone())]);
+        assert_eq!(
+            refusal(&answers[1]),
+            "malformed",
+            "{value}: {:#}",
+            answers[1]
+        );
+    }
+
+    let link = json!({"notes": "notes:T-1", "board": "board:I_1"});
+    let answers = served(&[handshake(2, hosted_settings()), write(link.clone())]);
+    assert_eq!(
+        answers[1]["result"]["task"]["metadata"]["onetaskgraph.copies"], link,
+        "{:#}",
+        answers[1]
+    );
+    // And every other key in the namespace is refused as it always was.
+    let other = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id": "1", "method": "set_task_metadata",
+               "params": {"id": "T-1", "key": "onetaskgraph.origin", "value": "x:y"}}),
+    ]);
+    assert_eq!(refusal(&other[1]), "malformed", "{:#}", other[1]);
+}

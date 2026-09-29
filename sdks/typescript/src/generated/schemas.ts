@@ -245,9 +245,64 @@ export const runtimeSchemas = {
   },
   "CopyAction": {
     "$defs": {
+      "CopyLink": {
+        "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
+        "oneOf": [
+          {
+            "const": "recorded",
+            "description": "The entry was written, because the item held none for this destination or held one\nnaming another item.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "Nothing was written: the entry already named this destination item, or the item was\nfound by its own origin, where the correspondence is already recorded on the other\nside.",
+            "type": "string"
+          },
+          {
+            "const": "unrecorded",
+            "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+            "type": "string"
+          }
+        ]
+      },
+      "CopyVia": {
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "oneOf": [
+          {
+            "const": "link",
+            "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+            "type": "string"
+          },
+          {
+            "const": "scan",
+            "description": "A search of the destination for an item recording this one as its origin.",
+            "type": "string"
+          },
+          {
+            "const": "match",
+            "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
+      },
+      "NoCounterpart": {
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "oneOf": [
+          {
+            "const": "created",
+            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -270,6 +325,22 @@ export const runtimeSchemas = {
               }
             ],
             "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+          },
+          "via": {
+            "$ref": "#/$defs/NoCounterpart",
+            "default": "created",
+            "description": "That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
           }
         },
         "required": [
@@ -287,11 +358,27 @@ export const runtimeSchemas = {
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that was updated."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "via": {
+            "$ref": "#/$defs/CopyVia",
+            "description": "Which rule found it."
           }
         },
         "required": [
           "action",
-          "destination"
+          "destination",
+          "via"
         ],
         "type": "object"
       },
@@ -305,16 +392,32 @@ export const runtimeSchemas = {
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that already said it."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "via": {
+            "$ref": "#/$defs/CopyVia",
+            "description": "Which rule found it."
           }
         },
         "required": [
           "action",
-          "destination"
+          "destination",
+          "via"
         ],
         "type": "object"
       },
       {
-        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is — and no rule was asked where it goes, and\nno link was touched, because it was not copied.",
         "properties": {
           "action": {
             "const": "orphaned",
@@ -379,7 +482,7 @@ export const runtimeSchemas = {
         ]
       },
       "CopyVia": {
-        "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
         "oneOf": [
           {
             "const": "link",
@@ -400,17 +503,22 @@ export const runtimeSchemas = {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
             "type": "string"
-          },
-          {
-            "const": "created",
-            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
-            "type": "string"
           }
         ]
       },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
+      },
+      "NoCounterpart": {
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "oneOf": [
+          {
+            "const": "created",
+            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -433,6 +541,22 @@ export const runtimeSchemas = {
               }
             ],
             "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+          },
+          "via": {
+            "$ref": "#/$defs/NoCounterpart",
+            "default": "created",
+            "description": "That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
           }
         },
         "required": [
@@ -450,11 +574,27 @@ export const runtimeSchemas = {
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that was updated."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "via": {
+            "$ref": "#/$defs/CopyVia",
+            "description": "Which rule found it."
           }
         },
         "required": [
           "action",
-          "destination"
+          "destination",
+          "via"
         ],
         "type": "object"
       },
@@ -468,16 +608,32 @@ export const runtimeSchemas = {
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that already said it."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CopyLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "via": {
+            "$ref": "#/$defs/CopyVia",
+            "description": "Which rule found it."
           }
         },
         "required": [
           "action",
-          "destination"
+          "destination",
+          "via"
         ],
         "type": "object"
       },
       {
-        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+        "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is — and no rule was asked where it goes, and\nno link was touched, because it was not copied.",
         "properties": {
           "action": {
             "const": "orphaned",
@@ -496,31 +652,9 @@ export const runtimeSchemas = {
       }
     ],
     "properties": {
-      "link": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/CopyLink"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-      },
       "source": {
         "$ref": "#/$defs/GlobalId",
         "description": "The qualified id the item was read from."
-      },
-      "via": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/CopyVia"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "description": "Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
       }
     },
     "required": [
@@ -601,6 +735,22 @@ export const runtimeSchemas = {
                   }
                 ],
                 "description": "The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+              },
+              "link": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CopyLink"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+              },
+              "via": {
+                "$ref": "#/$defs/NoCounterpart",
+                "default": "created",
+                "description": "That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
               }
             },
             "required": [
@@ -618,11 +768,27 @@ export const runtimeSchemas = {
               "destination": {
                 "$ref": "#/$defs/GlobalId",
                 "description": "The item that was updated."
+              },
+              "link": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CopyLink"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the copied item's link; absent for a dry run."
+              },
+              "via": {
+                "$ref": "#/$defs/CopyVia",
+                "description": "Which rule found it."
               }
             },
             "required": [
               "action",
-              "destination"
+              "destination",
+              "via"
             ],
             "type": "object"
           },
@@ -636,16 +802,32 @@ export const runtimeSchemas = {
               "destination": {
                 "$ref": "#/$defs/GlobalId",
                 "description": "The item that already said it."
+              },
+              "link": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CopyLink"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the copied item's link; absent for a dry run."
+              },
+              "via": {
+                "$ref": "#/$defs/CopyVia",
+                "description": "Which rule found it."
               }
             },
             "required": [
               "action",
-              "destination"
+              "destination",
+              "via"
             ],
             "type": "object"
           },
           {
-            "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is.",
+            "description": "The destination holds a counterpart the source no longer does. A copy never\ndeletes, so it was left exactly as it is — and no rule was asked where it goes, and\nno link was touched, because it was not copied.",
             "properties": {
               "action": {
                 "const": "orphaned",
@@ -664,31 +846,9 @@ export const runtimeSchemas = {
           }
         ],
         "properties": {
-          "link": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/CopyLink"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-          },
           "source": {
             "$ref": "#/$defs/GlobalId",
             "description": "The qualified id the item was read from."
-          },
-          "via": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/CopyVia"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
           }
         },
         "required": [
@@ -697,7 +857,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "CopyVia": {
-        "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
         "oneOf": [
           {
             "const": "link",
@@ -717,11 +877,6 @@ export const runtimeSchemas = {
           {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
-            "type": "string"
-          },
-          {
-            "const": "created",
-            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
             "type": "string"
           }
         ]
@@ -906,6 +1061,16 @@ export const runtimeSchemas = {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
       },
+      "NoCounterpart": {
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "oneOf": [
+          {
+            "const": "created",
+            "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
+            "type": "string"
+          }
+        ]
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -1046,7 +1211,7 @@ export const runtimeSchemas = {
   },
   "CopyVia": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "How a copy found the destination item it landed one item on.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, the caller's `--match-by`, and otherwise nothing.",
+    "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
     "oneOf": [
       {
         "const": "link",
@@ -1066,11 +1231,6 @@ export const runtimeSchemas = {
       {
         "const": "match",
         "description": "A search of the destination by the caller's `--match-by`.",
-        "type": "string"
-      },
-      {
-        "const": "created",
-        "description": "No counterpart was found, so one was created — or, in a dry run, would have been.",
         "type": "string"
       }
     ],

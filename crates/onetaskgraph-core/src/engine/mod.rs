@@ -53,9 +53,10 @@ pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
 pub use comment::{CommentList, DeletedComment, TaskDetail};
+pub(crate) use copy::malformed_links;
 pub use copy::{
     BudgetSpent, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest, CopyScope,
-    CopyVia, MatchBy, Spent,
+    CopyVia, MatchBy, NoCounterpart, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;

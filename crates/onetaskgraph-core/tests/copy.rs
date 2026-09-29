@@ -329,7 +329,11 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
     // Null only for a dry run that would create: there is no id, because nothing was.
     assert_eq!(
         planned.items[0].action,
-        CopyAction::Created { destination: None }
+        CopyAction::Created {
+            destination: None,
+            via: onetaskgraph_core::NoCounterpart::Created,
+            link: None,
+        }
     );
     assert!(listed(&engine, "into").await.is_empty());
 }

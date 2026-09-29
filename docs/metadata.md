@@ -14,6 +14,11 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate
+     rather than by words: `the_reserved_key_inventory_names_exactly_the_keys_the_code_spells`
+     in `crates/onetaskgraph/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
+     lists or the count it states in words differ from the constants each key is spelled once
+     as — `MetadataKey::COPIES_KEY` among them. -->
 - `onetaskgraph.` belongs to this product. It defines exactly eight keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
@@ -24,6 +29,7 @@ Keys are free-form, with two prefixes reserved:
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
   interprets, though `github-projects` routes the key itself into a text field of its own.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 - `onepipeline.` belongs to that consumer.
 
 Every other key is the caller's. A source returns it exactly as it holds it — the same

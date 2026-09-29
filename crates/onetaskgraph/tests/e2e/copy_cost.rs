@@ -26,6 +26,9 @@ use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 const RECORD: &str =
     include_str!("../../../onetaskgraph-github-projects/tests/fixtures/copy-cost.txt");
 
+/// Where the record's figures are explained, one table of which this test holds as well.
+const EXPLAINED: &str = include_str!("../../../onetaskgraph-github-projects/session-cost.md");
+
 /// What one measured command came to: the requests the board served for it, as a session and
 /// as the documents and variables themselves, and what the command reported.
 type Measured = (Session, Vec<(String, Value)>, Value);
@@ -479,6 +482,28 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         by_link.total_node_count(),
         by_scan.total_node_count()
     );
+
+    // The comparison `session-cost.md` draws between the two is the same two figures, so it
+    // is held to them here rather than trusted to be kept in step by hand.
+    for (row, searching, linked) in [
+        (
+            "**requests**",
+            by_scan.total_requests(),
+            by_link.total_requests(),
+        ),
+        (
+            "**node count**",
+            usize::try_from(by_scan.total_node_count()).expect("a node count fits"),
+            usize::try_from(by_link.total_node_count()).expect("a node count fits"),
+        ),
+    ] {
+        let line = format!("| {row:<18} | {searching:>22} | {linked:>21} |");
+        assert!(
+            EXPLAINED.contains(&line),
+            "session-cost.md's table of (h) against (g) no longer says what they cost; its \
+             row should read:\n{line}"
+        );
+    }
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),

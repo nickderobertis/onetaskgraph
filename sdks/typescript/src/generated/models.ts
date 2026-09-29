@@ -227,6 +227,16 @@ action: "created"
  * one — there is no id, because nothing was.
  */
 destination?: (GlobalId | null)
+/**
+ * What the copy did to the link the copied item records for this destination at
+ * `onetaskgraph.copies`; absent for a dry run, which writes nothing.
+ */
+link?: (CopyLink | null)
+/**
+ * That no rule found a counterpart. The one word it can be, so a report written
+ * before there was a `via` reads as saying it.
+ */
+via?: "created"
 [k: string]: any
 } | {
 action: "updated"
@@ -237,6 +247,14 @@ action: "updated"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -247,6 +265,14 @@ action: "unchanged"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -266,6 +292,11 @@ destination: string
  * so a native id may contain colons freely.
  */
 export type GlobalId = string
+/**
+ * What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
+ * destination.
+ */
+export type CopyLink = ("recorded" | "unchanged" | "unrecorded")
 
 }
 export type CopyAction = GeneratedCopyAction.CopyAction;
@@ -290,28 +321,12 @@ export namespace GeneratedCopyOutcome {
  */
 export type CopyOutcome = ({
 /**
- * What the copy did to the link the copied item records for this destination at
- * `onetaskgraph.copies`.
- *
- * Absent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]
- * entry, which was not copied.
- */
-link?: (CopyLink | null)
-/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
 source: string
-/**
- * Which rule found the destination item, or that none was found — for every item the
- * copy read and landed, a dry run's included.
- *
- * Absent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no
- * rule was asked where it goes.
- */
-via?: (CopyVia | null)
 [k: string]: any
 } & ({
 action: "created"
@@ -320,6 +335,16 @@ action: "created"
  * one — there is no id, because nothing was.
  */
 destination?: (GlobalId | null)
+/**
+ * What the copy did to the link the copied item records for this destination at
+ * `onetaskgraph.copies`; absent for a dry run, which writes nothing.
+ */
+link?: (CopyLink | null)
+/**
+ * That no rule found a counterpart. The one word it can be, so a report written
+ * before there was a `via` reads as saying it.
+ */
+via?: "created"
 [k: string]: any
 } | {
 action: "updated"
@@ -330,6 +355,14 @@ action: "updated"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -340,6 +373,14 @@ action: "unchanged"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -353,25 +394,17 @@ destination: string
 [k: string]: any
 }))
 /**
- * What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
- * destination.
- */
-export type CopyLink = ("recorded" | "unchanged" | "unrecorded")
-/**
- * How a copy found the destination item it landed one item on.
- *
- * Tried in this order, and the first that answers is the one reported: the link the item
- * records, its own origin, a search of the destination for an item recording it as its
- * origin, the caller's `--match-by`, and otherwise nothing.
- */
-export type CopyVia = ("link" | "origin" | "scan" | "match" | "created")
-/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
 export type GlobalId = string
+/**
+ * What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
+ * destination.
+ */
+export type CopyLink = ("recorded" | "unchanged" | "unrecorded")
 
 }
 export type CopyOutcome = GeneratedCopyOutcome.CopyOutcome;
@@ -461,43 +494,14 @@ export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-prog
  */
 export type CopyOutcome = ({
 /**
- * What the copy did to the link the copied item records for this destination at
- * `onetaskgraph.copies`.
- *
- * Absent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]
- * entry, which was not copied.
- */
-link?: (CopyLink | null)
-/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
  * so a native id may contain colons freely.
  */
 source: string
-/**
- * Which rule found the destination item, or that none was found — for every item the
- * copy read and landed, a dry run's included.
- *
- * Absent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no
- * rule was asked where it goes.
- */
-via?: (CopyVia | null)
 [k: string]: any
 } & CopyOutcome1)
-/**
- * What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
- * destination.
- */
-export type CopyLink = ("recorded" | "unchanged" | "unrecorded")
-/**
- * How a copy found the destination item it landed one item on.
- *
- * Tried in this order, and the first that answers is the one reported: the link the item
- * records, its own origin, a search of the destination for an item recording it as its
- * origin, the caller's `--match-by`, and otherwise nothing.
- */
-export type CopyVia = ("link" | "origin" | "scan" | "match" | "created")
 export type CopyOutcome1 = ({
 action: "created"
 /**
@@ -505,6 +509,16 @@ action: "created"
  * one — there is no id, because nothing was.
  */
 destination?: (GlobalId | null)
+/**
+ * What the copy did to the link the copied item records for this destination at
+ * `onetaskgraph.copies`; absent for a dry run, which writes nothing.
+ */
+link?: (CopyLink | null)
+/**
+ * That no rule found a counterpart. The one word it can be, so a report written
+ * before there was a `via` reads as saying it.
+ */
+via?: "created"
 [k: string]: any
 } | {
 action: "updated"
@@ -515,6 +529,14 @@ action: "updated"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -525,6 +547,14 @@ action: "unchanged"
  * so a native id may contain colons freely.
  */
 destination: string
+/**
+ * What the copy did to the copied item's link; absent for a dry run.
+ */
+link?: (CopyLink | null)
+/**
+ * Which rule found it.
+ */
+via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -537,6 +567,11 @@ action: "orphaned"
 destination: string
 [k: string]: any
 })
+/**
+ * What a copy did to the `onetaskgraph.copies` entry the copied item holds for the
+ * destination.
+ */
+export type CopyLink = ("recorded" | "unchanged" | "unrecorded")
 
 /**
  * What a copy did, one entry per item.
@@ -686,13 +721,15 @@ unit: string
 export type CopyReport = GeneratedCopyReport.CopyReport;
 export namespace GeneratedCopyVia {
 /**
- * How a copy found the destination item it landed one item on.
+ * Which rule found the destination counterpart an item was updated at, or found already
+ * reading as it does.
  *
  * Tried in this order, and the first that answers is the one reported: the link the item
  * records, its own origin, a search of the destination for an item recording it as its
- * origin, the caller's `--match-by`, and otherwise nothing.
+ * origin, and the caller's `--match-by`. When none answers, the item is created and says
+ * so as [`NoCounterpart`] instead.
  */
-export type CopyVia = ("link" | "origin" | "scan" | "match" | "created")
+export type CopyVia = ("link" | "origin" | "scan" | "match")
 
 }
 export type CopyVia = GeneratedCopyVia.CopyVia;

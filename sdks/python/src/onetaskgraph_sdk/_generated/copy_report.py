@@ -36,7 +36,6 @@ class CopyVia(StrEnum):
     CopyViaOrigin = "origin"
     CopyViaScan = "scan"
     CopyViaMatch = "match"
-    CopyViaCreated = "created"
 
 
 class FailureClass(StrEnum):
@@ -51,6 +50,10 @@ class GlobalId(RootModel[str]):
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
+
+
+class NoCounterpart(StrEnum):
+    NoCounterpartCreated = "created"
 
 
 class SourceName(RootModel[str]):
@@ -91,19 +94,7 @@ class StatusCategory(StrEnum):
 
 
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-        ),
-    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    via: Annotated[
-        CopyVia | None,
-        Field(
-            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
-        ),
-    ] = None
     action: Literal["created"]
     destination: Annotated[
         GlobalId | None,
@@ -111,58 +102,44 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
         ),
     ] = None
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+        ),
+    ] = None
+    via: Annotated[
+        NoCounterpart,
+        Field(
+            description="That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
+        ),
+    ] = NoCounterpart.NoCounterpartCreated
 
 
 class CopyOutcomeUpdated(BaseModel):
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-        ),
-    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    via: Annotated[
-        CopyVia | None,
-        Field(
-            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
-        ),
-    ] = None
     action: Literal["updated"]
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
 
 
 class CopyOutcomeUnchanged(BaseModel):
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-        ),
-    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    via: Annotated[
-        CopyVia | None,
-        Field(
-            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
-        ),
-    ] = None
     action: Literal["unchanged"]
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
 
 
 class CopyOutcomeOrphaned(BaseModel):
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`.\n\nAbsent for a dry run, which writes nothing, and for an [`CopyAction::Orphaned`]\nentry, which was not copied."
-        ),
-    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    via: Annotated[
-        CopyVia | None,
-        Field(
-            description="Which rule found the destination item, or that none was found — for every item the\ncopy read and landed, a dry run's included.\n\nAbsent only for an [`CopyAction::Orphaned`] entry: that item was not copied, so no\nrule was asked where it goes."
-        ),
-    ] = None
     action: Literal["orphaned"]
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
 

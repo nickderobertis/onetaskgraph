@@ -1105,14 +1105,21 @@ ever sent any of these, and `set_document_metadata` only to one that also declar
 
 `id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
 `MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
-not `onetaskgraph` — or exactly `onetaskgraph.copies`, the one reserved key the engine sends
-here, when a copy records on an item it read from this plugin where that item landed (see
-`docs/metadata.md`). Its `value` is a JSON object of destination source names to qualified
-ids, and the plugin holds it wherever it holds the item's metadata. The engine sends no other
-key in that namespace, and a plugin may refuse one with `{"kind": "malformed"}` if it is ever
-handed one. A plugin that cannot hold `onetaskgraph.copies` refuses it with
-`{"kind": "refused"}`; the copy then goes on without the link and says so, rather than
-failing. `value` is any JSON value, `null` included.
+not `onetaskgraph`, `value` is any JSON value, `null` included, and the engine sends no other
+key in that namespace but one — a plugin may refuse any other with `{"kind": "malformed"}`
+if it is ever handed one.
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour rather
+     than by words: the served side refuses every other shape of this one key's value before
+     the hosted source is asked, and
+     `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
+     `crates/onetaskgraph-core/tests/subprocess.rs` drives each refused shape and the accepted
+     one across the wire; the value's own shape is stated once, in `docs/metadata.md`. -->
+The one is `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
+record where that item landed; its value is the object `docs/metadata.md` describes, and the
+plugin holds it wherever it holds the item's metadata. A plugin that cannot hold it refuses
+with `{"kind": "refused"}`, and the copy goes on without the link and says so rather than
+failing.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 The plugin holds `value` under `key` — adding the key when the record does not hold it and
 replacing what it holds when it does — and changes **nothing else**: every other metadata key,

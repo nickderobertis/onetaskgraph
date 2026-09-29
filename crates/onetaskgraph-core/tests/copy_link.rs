@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use onetaskgraph_core::{
     ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest,
-    CopyScope, CopyVia, Engine, EngineError, Failure, GlobalId, MatchBy, ResolvedSource,
+    CopyScope, Engine, EngineError, Failure, GlobalId, MatchBy, ResolvedSource,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, Direction, Document, DocumentQuery, Health, ItemWrite, Label,
@@ -39,28 +39,59 @@ fn id(value: &str) -> GlobalId {
     value.parse().expect("a qualified id")
 }
 
-/// An `in-memory` source that counts every page it serves and can be told to fail one
-/// item's link write as a backend would.
+/// An `in-memory` source that counts every page it serves and can be told how one item's
+/// metadata write goes wrong, as a backend or a plugin would.
 ///
 /// Every page read goes through the three `query_*` methods, so `pages` is every scan of
 /// this source — the rule-2 search, a `--match-by` search, the walk for a project to file
-/// under and the walk for what a project copy left behind alike. A link write it is told
-/// to fail answers `Unavailable`, which is neither of the two refusals a copy reads as the
-/// source being unable to hold a link, so the copy fails and has to undo itself.
+/// under and the walk for what a project copy left behind alike.
 struct Watched {
     inner: Box<dyn TaskSource>,
     pages: Arc<AtomicU32>,
-    unavailable_link: Option<NativeId>,
+    faults: Vec<(NativeId, Fault)>,
+}
+
+/// How one item's metadata write goes wrong.
+#[derive(Clone, Copy)]
+enum Fault {
+    /// The backend drops it: neither of the answers a copy reads as the source being unable
+    /// to hold a link, so the copy fails and has to undo itself.
+    Unavailable,
+    /// The source answers that it holds no such item, as one deleted mid-copy would.
+    Gone,
+    /// A plugin written when §4.18 refused every reserved key refuses this one as malformed
+    /// — after having written it, as far as the copy can tell.
+    Malformed,
 }
 
 impl Watched {
-    fn unavailable(&self, id: &NativeId) -> Result<(), SourceError> {
-        if self.unavailable_link.as_ref() == Some(id) {
-            return Err(SourceError::Unavailable {
+    /// What the write of `id` does before it reaches the source: the answer it gives in
+    /// place of the source's, the failure, or nothing.
+    fn before<T>(&self, id: &NativeId) -> Result<Option<Option<T>>, SourceError> {
+        match self.fault_of(id) {
+            Some(Fault::Gone) => Ok(Some(None)),
+            Some(Fault::Unavailable) => Err(SourceError::Unavailable {
                 message: format!("the backend dropped the metadata write of {id}"),
-            });
+            }),
+            Some(Fault::Malformed) | None => Ok(None),
         }
-        Ok(())
+    }
+
+    /// What the write of `id` answers once the source has made it.
+    fn after<T>(&self, id: &NativeId, written: Option<T>) -> Result<Option<T>, SourceError> {
+        match self.fault_of(id) {
+            Some(Fault::Malformed) => Err(SourceError::Malformed {
+                message: format!("the reserved key sent for {id} is not a caller's own"),
+            }),
+            _ => Ok(written),
+        }
+    }
+
+    fn fault_of(&self, id: &NativeId) -> Option<Fault> {
+        self.faults
+            .iter()
+            .find(|(faulty, _)| faulty == id)
+            .map(|(_, fault)| *fault)
     }
 }
 
@@ -161,8 +192,11 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
-        self.unavailable(id)?;
-        self.inner.set_task_metadata(id, key, value).await
+        if let Some(answer) = self.before(id)? {
+            return Ok(answer);
+        }
+        let written = self.inner.set_task_metadata(id, key, value).await?;
+        self.after(id, written)
     }
 
     async fn set_project_metadata(
@@ -171,8 +205,11 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
-        self.unavailable(id)?;
-        self.inner.set_project_metadata(id, key, value).await
+        if let Some(answer) = self.before(id)? {
+            return Ok(answer);
+        }
+        let written = self.inner.set_project_metadata(id, key, value).await?;
+        self.after(id, written)
     }
 
     async fn set_document_metadata(
@@ -181,8 +218,11 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
-        self.unavailable(id)?;
-        self.inner.set_document_metadata(id, key, value).await
+        if let Some(answer) = self.before(id)? {
+            return Ok(answer);
+        }
+        let written = self.inner.set_document_metadata(id, key, value).await?;
+        self.after(id, written)
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -202,7 +242,7 @@ impl TaskSource for Watched {
 fn watched(
     source: &str,
     config: &Value,
-    unavailable_link: Option<&str>,
+    faults: &[(&str, Fault)],
 ) -> (ConfiguredSource, Arc<AtomicU32>) {
     let pages = Arc::new(AtomicU32::new(0));
     let inner = onetaskgraph_in_memory::Plugin
@@ -211,7 +251,10 @@ fn watched(
     let built = Watched {
         inner,
         pages: Arc::clone(&pages),
-        unavailable_link: unavailable_link.map(|id| NativeId(id.to_owned())),
+        faults: faults
+            .iter()
+            .map(|(id, fault)| (NativeId((*id).to_owned()), *fault))
+            .collect(),
     };
     (
         ConfiguredSource::Ready(ResolvedSource::adopt(name(source), Box::new(built))),
@@ -222,17 +265,17 @@ fn watched(
 /// An engine copying out of `from` into `into`, both `in-memory` and both watched, and the
 /// count of the pages `into` serves.
 fn engine(from: &Value, into: &Value) -> (Engine, Arc<AtomicU32>) {
-    engine_failing(from, into, None)
+    engine_failing(from, into, &[])
 }
 
-/// The same, with `from` failing the link write of `unavailable_link`.
+/// The same, with `from` answering each metadata write named in `faults` as it says.
 fn engine_failing(
     from: &Value,
     into: &Value,
-    unavailable_link: Option<&str>,
+    faults: &[(&str, Fault)],
 ) -> (Engine, Arc<AtomicU32>) {
-    let (from, _) = watched("from", from, unavailable_link);
-    let (into, pages) = watched("into", into, None);
+    let (from, _) = watched("from", from, faults);
+    let (into, pages) = watched("into", into, &[]);
     (
         Engine::new(vec![from, into], vec![name("from"), name("into")]),
         pages,
@@ -271,25 +314,48 @@ fn one(item: &str) -> CopyRequest {
 
 /// What a report says about one item: where it landed, what the copy did, which rule found
 /// it and what became of its link.
-fn said(outcome: &CopyOutcome) -> (Option<String>, String, Option<CopyVia>, Option<CopyLink>) {
+fn said(outcome: &CopyOutcome) -> (Option<String>, String, Option<String>, Option<CopyLink>) {
     (
         outcome.destination().map(ToString::to_string),
         outcome.action.name(),
-        outcome.via,
-        outcome.link,
+        via(outcome),
+        outcome.action.link(),
     )
+}
+
+/// The word an outcome reports at `via`, read off its own wire form: `created`, or the
+/// `CopyVia` that found its counterpart.
+fn via(outcome: &CopyOutcome) -> Option<String> {
+    let word = serde_json::to_value(outcome).expect("an outcome serialises")["via"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    // The typed reading agrees with the wire: the rule for an item found, `created` for one
+    // created, and nothing for an orphan.
+    let typed = outcome.action.found_by().map(|found| {
+        serde_json::to_value(found)
+            .expect("a word")
+            .as_str()
+            .expect("a word")
+            .to_owned()
+    });
+    match &outcome.action {
+        CopyAction::Created { .. } => assert_eq!(word.as_deref(), Some("created")),
+        CopyAction::Orphaned { .. } => assert_eq!(word, None),
+        CopyAction::Updated { .. } | CopyAction::Unchanged { .. } => assert_eq!(word, typed),
+    }
+    word
 }
 
 fn landed(
     destination: &str,
     action: &str,
-    via: CopyVia,
+    via: &str,
     link: CopyLink,
-) -> (Option<String>, String, Option<CopyVia>, Option<CopyLink>) {
+) -> (Option<String>, String, Option<String>, Option<CopyLink>) {
     (
         Some(destination.to_owned()),
         action.to_owned(),
-        Some(via),
+        Some(via.to_owned()),
         Some(link),
     )
 }
@@ -309,7 +375,7 @@ async fn task_metadata(engine: &Engine, item: &str) -> serde_json::Map<String, V
 }
 
 /// What one task records at `onetaskgraph.copies`, or `Value::Null` when it records none.
-async fn links(engine: &Engine, item: &str) -> Value {
+async fn links_of(engine: &Engine, item: &str) -> Value {
     task_metadata(engine, item)
         .await
         .get(MetadataKey::COPIES_KEY)
@@ -354,10 +420,10 @@ async fn a_copied_task_records_its_link_and_the_next_copy_follows_it_without_a_s
     let first = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&first.items[0]),
-        landed("into:T-1", "created", CopyVia::Created, CopyLink::Recorded)
+        landed("into:T-1", "created", "created", CopyLink::Recorded)
     );
     assert_eq!(
-        links(&engine, "from:T-1").await,
+        links_of(&engine, "from:T-1").await,
         json!({"into": "into:T-1"})
     );
     // The link is the copied item's own and never travels: the destination item records
@@ -375,7 +441,7 @@ async fn a_copied_task_records_its_link_and_the_next_copy_follows_it_without_a_s
     let again = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&again.items[0]),
-        landed("into:T-1", "unchanged", CopyVia::Link, CopyLink::Unchanged)
+        landed("into:T-1", "unchanged", "link", CopyLink::Unchanged)
     );
     engine
         .set_task_metadata(
@@ -388,7 +454,7 @@ async fn a_copied_task_records_its_link_and_the_next_copy_follows_it_without_a_s
     let edited = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&edited.items[0]),
-        landed("into:T-1", "updated", CopyVia::Link, CopyLink::Unchanged)
+        landed("into:T-1", "updated", "link", CopyLink::Unchanged)
     );
     assert_eq!(
         pages.load(Ordering::Relaxed),
@@ -419,7 +485,7 @@ async fn a_project_and_a_document_record_their_links_and_are_found_by_them() {
         let first = copied(&engine, request).await;
         assert_eq!(
             said(&first.items[0]),
-            landed(landed_on, "created", CopyVia::Created, CopyLink::Recorded)
+            landed(landed_on, "created", "created", CopyLink::Recorded)
         );
     }
     let project_links = engine
@@ -446,7 +512,7 @@ async fn a_project_and_a_document_record_their_links_and_are_found_by_them() {
         let again = copied(&engine, request).await;
         assert_eq!(
             said(&again.items[0]),
-            landed(landed_on, "unchanged", CopyVia::Link, CopyLink::Unchanged)
+            landed(landed_on, "unchanged", "link", CopyLink::Unchanged)
         );
     }
     assert_eq!(
@@ -493,11 +559,11 @@ async fn a_link_naming_nothing_there_refuses_until_recreate_creates_and_records_
     .await;
     assert_eq!(
         said(&recreated.items[0]),
-        landed("into:T-1", "created", CopyVia::Created, CopyLink::Recorded)
+        landed("into:T-1", "created", "created", CopyLink::Recorded)
     );
     // The one entry is rewritten and every other destination's is left as it was.
     assert_eq!(
-        links(&engine, "from:T-1").await,
+        links_of(&engine, "from:T-1").await,
         json!({"into": "into:T-1", "elsewhere": "elsewhere:E-1"})
     );
 }
@@ -517,9 +583,12 @@ async fn a_link_to_an_item_somebody_repointed_is_ignored_and_rewritten_to_what_t
     let report = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:Y", "unchanged", CopyVia::Scan, CopyLink::Recorded)
+        landed("into:Y", "unchanged", "scan", CopyLink::Recorded)
     );
-    assert_eq!(links(&engine, "from:T-1").await, json!({"into": "into:Y"}));
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:Y"})
+    );
     assert_eq!(
         task_metadata(&engine, "into:X").await[GlobalId::ORIGIN_KEY],
         json!("elsewhere:Z"),
@@ -531,7 +600,7 @@ async fn a_link_to_an_item_somebody_repointed_is_ignored_and_rewritten_to_what_t
     let again = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&again.items[0]),
-        landed("into:Y", "unchanged", CopyVia::Link, CopyLink::Unchanged)
+        landed("into:Y", "unchanged", "link", CopyLink::Unchanged)
     );
     assert_eq!(pages.load(Ordering::Relaxed), 0);
 }
@@ -548,10 +617,10 @@ async fn a_repointed_link_with_nothing_else_to_find_creates_and_records_the_new_
     let report = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:T-1", "created", CopyVia::Created, CopyLink::Recorded)
+        landed("into:T-1", "created", "created", CopyLink::Recorded)
     );
     assert_eq!(
-        links(&engine, "from:T-1").await,
+        links_of(&engine, "from:T-1").await,
         json!({"into": "into:T-1"})
     );
 }
@@ -569,9 +638,9 @@ async fn an_item_whose_own_origin_names_the_destination_is_found_by_it_and_recor
     let report = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:A", "updated", CopyVia::Origin, CopyLink::Unchanged)
+        landed("into:A", "updated", "origin", CopyLink::Unchanged)
     );
-    assert_eq!(links(&engine, "from:T-1").await, Value::Null);
+    assert_eq!(links_of(&engine, "from:T-1").await, Value::Null);
     assert_eq!(pages.load(Ordering::Relaxed), 0);
     assert!(
         !task_metadata(&engine, "into:A")
@@ -597,9 +666,12 @@ async fn a_match_by_escape_is_reported_as_a_match_and_records_the_link() {
     .await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:M", "updated", CopyVia::Match, CopyLink::Recorded)
+        landed("into:M", "updated", "match", CopyLink::Recorded)
     );
-    assert_eq!(links(&engine, "from:T-1").await, json!({"into": "into:M"}));
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:M"})
+    );
 }
 
 #[tokio::test]
@@ -618,8 +690,8 @@ async fn a_dry_run_says_which_rule_would_answer_and_records_no_link() {
     )
     .await;
     assert_eq!(
-        (report.items[0].via, report.items[0].link),
-        (Some(CopyVia::Created), None)
+        (via(&report.items[0]), report.items[0].action.link()),
+        (Some("created".to_owned()), None)
     );
     let wire = serde_json::to_value(&report).expect("a report serialises");
     assert_eq!(wire["items"][0]["via"], json!("created"));
@@ -627,7 +699,7 @@ async fn a_dry_run_says_which_rule_would_answer_and_records_no_link() {
         wire["items"][0].get("link").is_none(),
         "a dry run leaves `link` out: {wire}"
     );
-    assert_eq!(links(&engine, "from:T-1").await, Value::Null);
+    assert_eq!(links_of(&engine, "from:T-1").await, Value::Null);
 }
 
 #[tokio::test]
@@ -646,21 +718,16 @@ async fn a_source_that_cannot_hold_a_link_is_copied_from_as_before_and_says_so()
         let first = copied(&engine, &one("from:T-1")).await;
         assert_eq!(
             said(&first.items[0]),
-            landed(
-                "into:T-1",
-                "created",
-                CopyVia::Created,
-                CopyLink::Unrecorded
-            ),
+            landed("into:T-1", "created", "created", CopyLink::Unrecorded),
             "a source that {why}"
         );
-        assert_eq!(links(&engine, "from:T-1").await, Value::Null, "{why}");
+        assert_eq!(links_of(&engine, "from:T-1").await, Value::Null, "{why}");
         // With no link, the next copy is found exactly as it was before there were any.
         pages.store(0, Ordering::Relaxed);
         let again = copied(&engine, &one("from:T-1")).await;
         assert_eq!(
             said(&again.items[0]),
-            landed("into:T-1", "unchanged", CopyVia::Scan, CopyLink::Unrecorded),
+            landed("into:T-1", "unchanged", "scan", CopyLink::Unrecorded),
             "a source that {why}"
         );
         assert!(pages.load(Ordering::Relaxed) > 0, "{why}");
@@ -687,7 +754,7 @@ async fn a_copy_that_fails_after_creating_leaves_the_source_without_the_link() {
         "the destination holds none of the copy's items"
     );
     for item in ["from:T-1", "from:T-2"] {
-        assert_eq!(links(&engine, item).await, Value::Null, "{item}");
+        assert_eq!(links_of(&engine, item).await, Value::Null, "{item}");
     }
 }
 
@@ -701,7 +768,7 @@ async fn a_link_write_that_fails_undoes_every_link_and_every_item_the_copy_wrote
         task("T-3", "Gamma", &json!({"caller.kept": [1, "two"]})),
         task("T-2", "Beta", &json!({})),
     ]});
-    let (engine, _) = engine_failing(&from, &json!({}), Some("T-2"));
+    let (engine, _) = engine_failing(&from, &json!({}), &[("T-2", Fault::Unavailable)]);
 
     let refused = engine
         .copy(&copy_of(
@@ -718,7 +785,7 @@ async fn a_link_write_that_fails_undoes_every_link_and_every_item_the_copy_wrote
     );
     assert!(held(&engine, "into").await.is_empty(), "{refused}");
     assert_eq!(
-        links(&engine, "from:T-1").await,
+        links_of(&engine, "from:T-1").await,
         json!({"elsewhere": "elsewhere:E-1"})
     );
     let untouched = task_metadata(&engine, "from:T-3").await;
@@ -727,7 +794,7 @@ async fn a_link_write_that_fails_undoes_every_link_and_every_item_the_copy_wrote
         "{untouched:?}"
     );
     assert_eq!(untouched["caller.kept"], json!([1, "two"]));
-    assert_eq!(links(&engine, "from:T-2").await, Value::Null);
+    assert_eq!(links_of(&engine, "from:T-2").await, Value::Null);
 }
 
 #[tokio::test]
@@ -750,17 +817,12 @@ async fn a_repeated_copy_of_a_linked_item_keeps_the_destinations_own_link() {
     .await;
     assert_eq!(
         said(&back.items[0]),
-        landed(
-            "from:T-1",
-            "unchanged",
-            CopyVia::Origin,
-            CopyLink::Unchanged
-        ),
+        landed("from:T-1", "unchanged", "origin", CopyLink::Unchanged),
         "the copy back finds the original by the copy's own origin, and the original's \
          link is not a difference"
     );
     assert_eq!(
-        links(&engine, "from:T-1").await,
+        links_of(&engine, "from:T-1").await,
         json!({"into": "into:T-1"})
     );
     assert!(matches!(back.items[0].action, CopyAction::Unchanged { .. }));
@@ -789,7 +851,7 @@ async fn a_task_copied_on_its_own_is_filed_under_its_project_by_the_projects_lin
     let report = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:T-1", "unchanged", CopyVia::Link, CopyLink::Unchanged)
+        landed("into:T-1", "unchanged", "link", CopyLink::Unchanged)
     );
     assert_eq!(
         pages.load(Ordering::Relaxed),
@@ -822,7 +884,7 @@ async fn a_project_link_naming_nothing_there_files_by_searching_instead_of_refus
     let report = copied(&engine, &one("from:T-1")).await;
     assert_eq!(
         said(&report.items[0]),
-        landed("into:T-1", "created", CopyVia::Created, CopyLink::Recorded)
+        landed("into:T-1", "created", "created", CopyLink::Recorded)
     );
     assert!(pages.load(Ordering::Relaxed) > 0);
     assert_eq!(
@@ -835,5 +897,92 @@ async fn a_project_link_naming_nothing_there_files_by_searching_instead_of_refus
             .project,
         Some(NativeId("Q".to_owned())),
         "filed under the project the search found"
+    );
+}
+
+#[tokio::test]
+async fn a_source_that_no_longer_holds_the_item_or_answers_malformed_leaves_it_unrecorded() {
+    // Neither answer is a failure of the copy: the destination landed, and what went wrong
+    // is only that the item could not be told where.
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({})),
+        task("T-2", "Beta", &json!({})),
+        task("T-3", "Gamma", &json!({})),
+    ]});
+    let (engine, _) = engine_failing(
+        &from,
+        &json!({}),
+        &[("T-1", Fault::Gone), ("T-2", Fault::Malformed)],
+    );
+
+    let report = copied(
+        &engine,
+        &copy_of(&["from:T-1", "from:T-2", "from:T-3"], CopyScope::Tasks),
+    )
+    .await;
+    let links: Vec<Option<CopyLink>> = report
+        .items
+        .iter()
+        .map(|outcome| outcome.action.link())
+        .collect();
+    assert_eq!(
+        links,
+        [
+            Some(CopyLink::Unrecorded),
+            Some(CopyLink::Unrecorded),
+            Some(CopyLink::Recorded)
+        ]
+    );
+    assert_eq!(
+        held(&engine, "into").await,
+        ["into:T-1", "into:T-2", "into:T-3"]
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-3").await,
+        json!({"into": "into:T-3"})
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_answer_is_still_put_back_when_the_copy_cannot_finish() {
+    // A plugin that answered malformed may have written the link before it did, so the
+    // journal keeps the write and a later failure puts the item back regardless.
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({MetadataKey::COPIES_KEY: {"elsewhere": "elsewhere:E"}})),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let (engine, _) = engine_failing(
+        &from,
+        &json!({}),
+        &[("T-1", Fault::Malformed), ("T-2", Fault::Unavailable)],
+    );
+
+    engine
+        .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+        .await
+        .expect_err("the second link write fails");
+    assert!(held(&engine, "into").await.is_empty());
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E"})
+    );
+}
+
+#[tokio::test]
+async fn entries_that_are_not_links_are_dropped_when_the_link_is_recorded() {
+    // A person's typo under the key is no link any copy can follow, so it is not carried into
+    // the value the source is handed — which a plugin behind the stdio boundary would refuse.
+    let from = json!({"tasks": [task("T-1", "Alpha", &json!({MetadataKey::COPIES_KEY: {
+        "elsewhere": "elsewhere:E",
+        "notes": 5,
+        "board": "elsewhere:X",
+    }}))]});
+    let (engine, _) = engine(&from, &json!({}));
+
+    let report = copied(&engine, &one("from:T-1")).await;
+    assert_eq!(report.items[0].action.link(), Some(CopyLink::Recorded));
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E", "into": "into:T-1"})
     );
 }

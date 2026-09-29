@@ -622,15 +622,43 @@ pub(crate) struct DeliveredByResult {
 /// `set_task_metadata`, `set_project_metadata` and `set_document_metadata` parameters
 /// (§4.18).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedMetadataParams")]
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
     pub(crate) id: NativeId,
     /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
     /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
-    #[serde(deserialize_with = "caller_or_copies")]
     pub(crate) key: MetadataKey,
-    /// The value to hold under it: any JSON, `null` included.
+    /// The value to hold under it: any JSON, `null` included — and for
+    /// [`MetadataKey::COPIES_KEY`], only an object of destination source names to qualified
+    /// ids of that source.
     pub(crate) value: Value,
+}
+
+/// [`MetadataParams`] as they arrive, before the value of the one reserved key is checked.
+#[derive(Deserialize)]
+struct UncheckedMetadataParams {
+    id: NativeId,
+    #[serde(deserialize_with = "caller_or_copies")]
+    key: MetadataKey,
+    value: Value,
+}
+
+impl TryFrom<UncheckedMetadataParams> for MetadataParams {
+    type Error = String;
+
+    fn try_from(params: UncheckedMetadataParams) -> Result<Self, Self::Error> {
+        if params.key.is_copies()
+            && let Some(malformed) = crate::engine::malformed_links(&params.value)
+        {
+            return Err(malformed);
+        }
+        Ok(Self {
+            id: params.id,
+            key: params.key,
+            value: params.value,
+        })
+    }
 }
 
 /// A narrow metadata write's key as §4.18 admits it: any key [`MetadataKey::new`] accepts,

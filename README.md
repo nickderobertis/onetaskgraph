@@ -401,14 +401,13 @@ refusal says so and names what is still there rather than leaving you to find it
 ```
 
 `action` says which of the four things above happened to that item, and `destination` is
-`null` only for a dry run that would have created something. `via` says which rule found
-the counterpart — `link`, `origin`, `scan`, `match` for `--match-by`, or `created` when none
-was found — and `link` says what became of the item's own link: `recorded`, `unchanged`, or
-`unrecorded` where its source cannot hold one. A dry run reports `via` and leaves `link`
-out, and an `orphaned` entry carries neither. The vocabularies themselves are published
-rather than restated here: they are the `CopyAction`, `CopyVia` and `CopyLink` roots of
-`onetaskgraph schema`, which is what both SDKs are generated from and what the journeys
-validate this output against.
+`null` only for a dry run that would have created something. `via` says which of the rules
+above found the counterpart, or that none did and the item was created, and `link` says what
+became of the item's own link — including that its source could not hold one. A dry run
+reports `via` and leaves `link` out, and an `orphaned` entry carries neither. The
+vocabularies themselves are published rather than restated here: they are the `CopyAction`,
+`CopyVia` and `CopyLink` roots of `onetaskgraph schema`, which is what both SDKs are
+generated from and what the journeys validate this output against.
 
 A copy that reaches a source which counts its own requests — `github-projects` does — also
 says what it **spent**: the requests those sources sent for the command, and what that cost
