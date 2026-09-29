@@ -961,6 +961,61 @@ fn a_title_with_no_letter_or_digit_is_matched_on_a_board_without_asking_its_sear
 }
 
 #[test]
+fn a_board_refuses_a_value_or_text_it_cannot_search_before_asking_github_anything() {
+    // GitHub's issue search indexes words, so a metadata value or a text with no letter or
+    // digit is one no bounded query finds. The board says so as a refusal the caller reads
+    // back — exit `4` and an error of kind `refused` naming the source and the value —
+    // rather than reading the whole board for it or answering nothing, and it asks GitHub
+    // nothing first.
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.subdirectory("authored")).unwrap();
+    let board = board_with_plans(&sandbox, "authored");
+    for (flag, value, named) in [
+        (
+            "--metadata",
+            "team.note=",
+            "cannot filter by the metadata value \"\" at \"team.note\"",
+        ),
+        (
+            "--metadata",
+            "orchestrator.follow-up/root_cause=---",
+            "cannot filter by the metadata value \"---\" at \"orchestrator.follow-up/root_cause\"",
+        ),
+        ("--search", "--", "cannot search for the text \"--\""),
+    ] {
+        let given = format!("{flag}={value}");
+        let arguments = ["task", "list", "--source", "board", &given];
+        let said = refused(&sandbox, &arguments, 4);
+        assert!(
+            said.contains(named) && said.contains("GitHub's issue search indexes words"),
+            "{flag} {value}: the refusal names the value and why: {said}"
+        );
+
+        let output = run(&sandbox, &[&arguments[..], &["--json"]].concat());
+        assert_eq!(output.status.code(), Some(4), "{flag} {value}");
+        let answered: Value = serde_json::from_str(&stdout(&output)).expect("a query response");
+        let errors = answered["errors"]
+            .as_array()
+            .expect("the source's failure is reported");
+        assert_eq!(errors.len(), 1, "{answered:#}");
+        assert_eq!(errors[0]["source"], "board", "{answered:#}");
+        assert_eq!(errors[0]["class"], "refused", "{answered:#}");
+        assert_eq!(errors[0]["error"]["kind"], "refused", "{answered:#}");
+        assert!(
+            errors[0]["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(named)),
+            "{answered:#}"
+        );
+    }
+    assert_eq!(
+        board.documents(),
+        Vec::<String>::new(),
+        "a refused query asked GitHub something"
+    );
+}
+
+#[test]
 fn a_project_and_its_tasks_copy_into_a_board_without_touching_the_board_itself() {
     // The defect this replaces: the source resolved to one board id and treated it as the
     // project, so copying a project into it renamed a real user's board. A board is a
