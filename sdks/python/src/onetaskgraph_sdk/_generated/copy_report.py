@@ -132,7 +132,7 @@ class DeliveredWritten(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -152,7 +152,7 @@ class DeliveredUnchanged(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -171,7 +171,7 @@ class DeliveredLeft(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -223,7 +223,7 @@ class DeliveredFailed(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -252,14 +252,14 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
 
 class CopyReport(BaseModel):
     delivered: Annotated[
-        list[Delivered] | None,
+        list[Delivered],
         Field(
             description="One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
             validate_default=True,
         ),
     ] = []
     delivers_rewritten: Annotated[
-        int | None,
+        int,
         Field(
             description="`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
             ge=0,
@@ -272,21 +272,21 @@ class CopyReport(BaseModel):
         ),
     ]
     references_ambiguous: Annotated[
-        int | None,
+        int,
         Field(
             description="How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
             ge=0,
         ),
     ] = 0
     references_rewritten: Annotated[
-        int | None,
+        int,
         Field(
             description="Reference occurrences the copy rewrote to the destination's own location for the\nrecord they name.\n\nA silent bound is indistinguishable from a bug, so the copy says what it did to the\nreferences the documents it carried hold. This and the two below are totals over the\nwhole invocation rather than figures per document, and all three default to zero, so\na consumer written against the output before they existed is unaffected.\n\n**What these figures do not claim.** The referent set is a document's own project,\nso a reference to a record in a *different* project is never recognised at all and\ncannot appear in [`Self::references_unresolved`] either. These are the references\nthe copy recognised; they are not a census of every reference a document holds.\nNoticing an out-of-scope reference would need exactly the unbounded destination walk\nthis design refuses.",
             ge=0,
         ),
     ] = 0
     references_unresolved: Annotated[
-        int | None,
+        int,
         Field(
             description="Reference occurrences the copy recognised and left byte-for-byte as they were,\nbecause the correspondence could not be established.",
             ge=0,

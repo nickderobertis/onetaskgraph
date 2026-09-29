@@ -106,13 +106,13 @@ class SourceListingUnavailable(BaseModel):
 
 class Capabilities(BaseModel):
     comments: Annotated[
-        Support | None,
+        Support,
         Field(
             description="Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
         ),
     ] = Support.SupportUnsupported
     documents: Annotated[
-        Support | None,
+        Support,
         Field(
             description="Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
         ),

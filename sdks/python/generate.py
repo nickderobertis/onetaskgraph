@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import inspect
 import json
 import keyword
 import re
@@ -12,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, RootModel, TypeAdapter, ValidationError
 
 ROOT = Path(__file__).parent
 GENERATED = ROOT / "src" / "onetaskgraph_sdk" / "_generated"
@@ -414,6 +416,12 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                     "--use-union-operator",
                     "--use-annotated",
                     "--use-title-as-name",
+                    # A member the schema gives a default and no `null` type is generated as
+                    # its own type with that default, rather than `T | None`: the wire lets it
+                    # be omitted, never written as `null`. A member whose schema admits `null`
+                    # (an `Option` on the Rust side) stays optional. [`nullability_disagreements`]
+                    # holds the result to the schema.
+                    "--strict-nullable",
                     "--disable-timestamp",
                     # Named rather than left to the tool's default, because this module is
                     # read back below as UTF-8 and compared byte for byte by `--check`.
@@ -952,54 +960,8 @@ def enum_defaults(lines: list[str]) -> list[str]:
     return rewritten
 
 
-# Defaulted contract members that are never nullable: an omitted one takes its default — which
-# is how a document written before the member existed is read — and an explicit `null` is
-# refused, because the binary always writes the member and never writes `null` for it. The code
-# generator types every defaulted member `T | None`, so each of these is narrowed by name, and
-# only these: the rule is scoped to the members the priority contract added, keyed by the name
-# and the type it is declared with.
-NON_NULLABLE_DEFAULTED: dict[str, set[str]] = {
-    # `Task.priority`, defaulted to `none`.
-    "priority": {"Priority", "Support"},
-    # `Capabilities.priority` above and `Capabilities.filter_by_priority`, defaulted to
-    # `unsupported`.
-    "filter_by_priority": {"Support"},
-    # `Capabilities.filter_by_comment_activity`, defaulted to `unsupported` on the same terms.
-    "filter_by_comment_activity": {"Support"},
-}
-
-
-def non_nullable_defaults(lines: list[str]) -> tuple[list[str], set[tuple[str, str]]]:
-    """Narrow each member [`NON_NULLABLE_DEFAULTED`] names from `T | None` to `T`.
-
-    Answers the rewritten lines and every (member, type) it narrowed, so the caller can refuse a
-    bundle in which one of them no longer appears rather than silently stop narrowing it. A
-    member whose default is `None` is left alone: narrowing it would make the default invalid.
-    """
-    rewritten = list(lines)
-    narrowed: set[tuple[str, str]] = set()
-    for index, line in enumerate(lines):
-        member = re.fullmatch(r"    (\w+): Annotated\[", line)
-        if member is None or member.group(1) not in NON_NULLABLE_DEFAULTED:
-            continue
-        name = member.group(1)
-        typed = re.fullmatch(r"        (\w+) \| None,", lines[index + 1])
-        if typed is None or typed.group(1) not in NON_NULLABLE_DEFAULTED[name]:
-            continue
-        closing = next((later for later in lines[index + 2 :] if later.startswith("    ]")), "")
-        if closing.endswith("= None"):
-            continue
-        rewritten[index + 1] = f"        {typed.group(1)},"
-        narrowed.add((name, typed.group(1)))
-    return rewritten, narrowed
-
-
-def format_generated(destination: Path) -> set[tuple[str, str]]:
-    """Apply the package's locked formatter to deterministic generated output.
-
-    Answers every (member, type) [`non_nullable_defaults`] narrowed, for [`generate`] to hold
-    against [`NON_NULLABLE_DEFAULTED`] over the whole package.
-    """
+def format_generated(destination: Path) -> None:
+    """Apply the package's locked formatter to deterministic generated output."""
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
     subprocess.run(
         # `I001` alongside `F401` because the package's own lint enforces import order and
@@ -1010,18 +972,15 @@ def format_generated(destination: Path) -> set[tuple[str, str]]:
         ["ruff", "check", "--fix", "--select", "F401,I001", str(destination)],
         check=True,
     )
-    # After formatting rather than before it: the shape a field is written in is the
-    # formatter's, and reading it back is what lets this be one rule rather than a guess
-    # at what the code generator happened to emit on one line or several.
-    narrowed: set[tuple[str, str]] = set()
+    # After formatting rather than before it: [`enum_defaults`] reads each field in the shape
+    # the formatter writes it, which is what lets it be one rule rather than a guess at what
+    # the code generator happened to emit on one line or several.
     for module in sorted(destination.glob("*.py")):
         lines = module.read_text(encoding="utf-8").splitlines()
-        rewritten, found = non_nullable_defaults(enum_defaults(lines))
-        narrowed |= found
+        rewritten = enum_defaults(lines)
         if rewritten != lines:
             module.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
     subprocess.run(["ruff", "format", str(destination)], check=True, capture_output=True)
-    return narrowed
 
 
 def check_generated(expected_dir: Path, actual_dir: Path) -> None:
@@ -1046,6 +1005,228 @@ def check_generated(expected_dir: Path, actual_dir: Path) -> None:
             + ", ".join(changed)
             + "; run `uv run python generate.py` from sdks/python to regenerate"
         )
+
+
+# One object's members, each keyed by its wire name, as a schema declares them or a model reads
+# them; and every such object of one root, keyed by its members so the two sides can be paired
+# without depending on the names the generator chose.
+Members = dict[str, JsonValue]
+Nullability = dict[frozenset[str], set[frozenset[str]]]
+
+
+def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = frozenset()) -> bool:
+    """Whether JSON `null` validates against `schema`, following local references.
+
+    A schema is the conjunction of its keywords, so `null` validates only where every keyword
+    that can refuse it accepts it; a keyword that constrains another type — `properties`,
+    `items`, `format`, `minimum` — accepts `null` by JSON Schema's own rule. A keyword this
+    reads in a shape JSON Schema does not define is refused rather than guessed at.
+    """
+    if isinstance(schema, bool):
+        return schema
+    if not isinstance(schema, dict):
+        raise SystemExit(
+            f"binary emitted {json.dumps(schema)} where a schema belongs; next: emit every "
+            "member as a JSON Schema object or boolean"
+        )
+    declared = schema.get("type", "null")
+    if not (
+        isinstance(declared, str)
+        or (isinstance(declared, list) and all(isinstance(kind, str) for kind in declared))
+    ):
+        raise SystemExit(f"binary emitted a schema `type` of {json.dumps(declared)}")
+    enumerated = schema.get("enum", [None])
+    if not isinstance(enumerated, list):
+        raise SystemExit(f"binary emitted a schema `enum` of {json.dumps(enumerated)}")
+    reference = schema.get("$ref")
+    if reference is not None and not isinstance(reference, str):
+        raise SystemExit(f"binary emitted a schema `$ref` of {json.dumps(reference)}")
+    refusals = [
+        "null" not in ([declared] if isinstance(declared, str) else declared),
+        "const" in schema and schema["const"] is not None,
+        None not in enumerated,
+        any(not admits_null(v, root, seen) for v in schema_variants(schema, "allOf")),
+        "anyOf" in schema
+        and not any(admits_null(v, root, seen) for v in schema_variants(schema, "anyOf")),
+        "oneOf" in schema
+        and sum(admits_null(v, root, seen) for v in schema_variants(schema, "oneOf")) != 1,
+        "not" in schema and admits_null(schema["not"], root, seen),
+        reference is not None
+        and reference not in seen
+        and not admits_null(resolve_reference(reference, root), root, seen | {reference}),
+    ]
+    return not any(refusals)
+
+
+def schema_variants(schema: dict[str, JsonValue], combinator: str) -> list[JsonValue]:
+    """The variants `schema` lists under `combinator`, refusing any that is not a schema.
+
+    A variant that is a schema but carries no members of its own is still a variant, and is
+    returned; one that is neither an object nor a boolean is no schema at all.
+    """
+    variants = schema.get(combinator, [])
+    if not isinstance(variants, list):
+        raise SystemExit(
+            f"binary emitted a schema whose `{combinator}` is not a list; next: emit every "
+            "combinator as an array of schemas, as JSON Schema defines it"
+        )
+    for variant in variants:
+        if not isinstance(variant, dict | bool):
+            raise SystemExit(
+                f"binary emitted {json.dumps(variant)} as a `{combinator}` variant; next: emit "
+                "every variant as a JSON Schema object or boolean"
+            )
+    return variants
+
+
+def resolve_reference(reference: str, root: JsonValue) -> JsonValue:
+    """The local definition `reference` names, refusing one the root does not define.
+
+    Refused rather than read as an empty schema, which admits anything: a reference the guard
+    cannot follow is a member whose nullability it cannot vouch for.
+    """
+    definitions = root.get("$defs") if isinstance(root, dict) else None
+    name = reference.removeprefix("#/$defs/")
+    found = definitions.get(name) if isinstance(definitions, dict) else None
+    if name == reference or found is None:
+        raise SystemExit(
+            f"binary emitted a schema reference {reference!r} that is not a definition of its "
+            "own root; next: emit every root with its definitions under `$defs`"
+        )
+    return found
+
+
+def schema_objects(value: JsonValue, root: JsonValue, inherited: Members) -> list[Members]:
+    """Every object schema under `value` that the generator renders as one model's members.
+
+    An object's own members join those of a definition it references beside them, and an
+    object whose `oneOf` or `anyOf` variants carry members of their own is rendered once per
+    variant, holding the object's members and that variant's together — which is the shape
+    the generator gives an internally tagged enum with fields beside the tag.
+    """
+    if isinstance(value, list):
+        return [found for item in value for found in schema_objects(item, root, {})]
+    if not isinstance(value, dict):
+        return []
+    properties = value.get("properties")
+    if "properties" not in value:
+        return [found for child in value.values() for found in schema_objects(child, root, {})]
+    if not isinstance(properties, dict):
+        raise SystemExit(
+            f"binary emitted a schema `properties` of {json.dumps(properties)}; next: emit an "
+            "object's members as a map from each name to its schema"
+        )
+    members = dict(inherited)
+    reference = value.get("$ref")
+    if reference is not None and not isinstance(reference, str):
+        raise SystemExit(f"binary emitted a schema `$ref` of {json.dumps(reference)}")
+    if reference is not None:
+        referenced = resolve_reference(reference, root)
+        beside = referenced.get("properties") if isinstance(referenced, dict) else None
+        members |= beside if isinstance(beside, dict) else {}
+    members |= properties
+    found: list[Members] = []
+    variants = [
+        variant
+        for combinator in ("oneOf", "anyOf")
+        for variant in schema_variants(value, combinator)
+        if isinstance(variant, dict) and isinstance(variant.get("properties"), dict)
+    ]
+    for variant in variants:
+        found += schema_objects(variant, root, members)
+    if not variants:
+        found.append(members)
+    for key, child in value.items():
+        if key not in {"oneOf", "anyOf", "properties"}:
+            found += schema_objects(child, root, {})
+    for child in properties.values():
+        found += schema_objects(child, root, {})
+    return found
+
+
+def schema_nullability(schema: JsonValue) -> Nullability:
+    """Which members of every object one root declares accept `null`, by the schema."""
+    declared: Nullability = {}
+    for members in schema_objects(schema, schema, {}):
+        nullable = frozenset(
+            name for name, member in members.items() if admits_null(member, schema)
+        )
+        declared.setdefault(frozenset(members), set()).add(nullable)
+    return declared
+
+
+def model_nullability(module: Path) -> Nullability:
+    """Which fields of every generated model in `module` accept `None`, by decoding one.
+
+    Decoding rather than reading the annotation's text is the point: it is what a consumer's
+    `model_validate` does with an explicit `null`, whatever spelling the generator chose.
+    """
+    name = f"_nullability_{module.stem}"
+    spec = importlib.util.spec_from_file_location(name, module)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load the generated module {module}")
+    loaded = importlib.util.module_from_spec(spec)
+    # Registered while it runs, because its postponed annotations resolve through it.
+    sys.modules[name] = loaded
+    try:
+        spec.loader.exec_module(loaded)
+        generated: Nullability = {}
+        for model in vars(loaded).values():
+            if not (
+                inspect.isclass(model)
+                and issubclass(model, BaseModel)
+                and not issubclass(model, RootModel)
+                and model.__module__ == name
+                and model.model_fields
+            ):
+                continue
+            fields = {field.alias or key: field for key, field in model.model_fields.items()}
+            nullable = frozenset(wire for wire in fields if accepts_none(model, wire))
+            generated.setdefault(frozenset(fields), set()).add(nullable)
+        return generated
+    finally:
+        del sys.modules[name]
+
+
+def accepts_none(model: type[BaseModel], wire: str) -> bool:
+    """Whether `model` decodes a document carrying an explicit `null` for its member `wire`.
+
+    The document holds that member alone, so the members it leaves out may be refused as
+    missing; only a refusal located at `wire` itself says the `null` was refused.
+    """
+    try:
+        model.model_validate({wire: None})
+    except ValidationError as refused:
+        return not any(error["loc"][:1] == (wire,) for error in refused.errors())
+    return True
+
+
+def nullability_disagreements(bundle: SchemaBundle, destination: Path) -> list[str]:
+    """Every object whose members accept `null` in the generated models but not the schema.
+
+    Or the other way round, over every root generated into `destination`. A schema object with
+    no model holding exactly its members is a disagreement too: a pairing this cannot make is
+    a member this cannot vouch for.
+
+    Objects are paired by the names of their members, not by the model names the generator
+    chose, so two objects of one root holding the same member names are compared as one set of
+    nullability patterns: a pattern present on one side and absent on the other is reported,
+    and two such objects trading patterns with each other is not.
+    """
+    disagreements: list[str] = []
+    for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):
+        declared = schema_nullability(bundle["roots"][root])
+        generated = model_nullability(destination / f"{camel_to_snake(root)}.py")
+        for members in sorted(declared.keys() | generated.keys(), key=sorted):
+            schema_side = sorted(sorted(nullable) for nullable in declared.get(members, set()))
+            model_side = sorted(sorted(nullable) for nullable in generated.get(members, set()))
+            if schema_side != model_side:
+                disagreements.append(
+                    f"{root} object {{{', '.join(sorted(members))}}}: the schema admits null "
+                    f"for {schema_side or 'no such object'}, the models for "
+                    f"{model_side or 'no such model'}"
+                )
+    return disagreements
 
 
 def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
@@ -1074,18 +1255,15 @@ def generate(bundle: SchemaBundle, *, check: bool, destination: Path = GENERATED
         target = Path(temporary) if check else destination
         generate_models(bundle, target)
         generate_client(commands, target)
-        narrowed = format_generated(target)
-        # Over the whole package: every member the table names has to have been found, so a
-        # contract member renamed or retyped fails generation rather than quietly going
-        # nullable again.
-        expected = {
-            (name, kind) for name, kinds in NON_NULLABLE_DEFAULTED.items() for kind in kinds
-        }
-        if narrowed != expected:
+        format_generated(target)
+        if disagreements := nullability_disagreements(bundle, target):
             raise SystemExit(
-                "generate.py narrows the non-nullable defaulted members "
-                f"{sorted(expected)}, and the bundle yielded {sorted(narrowed)}; next: update "
-                "NON_NULLABLE_DEFAULTED to the members the contract really declares"
+                "the generated models and the schema disagree about which members accept "
+                "`null`:\n  "
+                + "\n  ".join(disagreements)
+                + "\nnext: make the schema say what the wire accepts at its Rust source, or "
+                "the generator's options generate what the schema says; never edit the "
+                "generated text"
             )
         if check:
             check_generated(target, destination)

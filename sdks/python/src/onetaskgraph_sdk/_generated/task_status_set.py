@@ -53,7 +53,7 @@ class DeliveredWritten(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -73,7 +73,7 @@ class DeliveredUnchanged(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -92,7 +92,7 @@ class DeliveredLeft(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,
@@ -152,7 +152,7 @@ class DeliveredFailed(BaseModel):
         ),
     ]
     pruned: Annotated[
-        list[GlobalId] | None,
+        list[GlobalId],
         Field(
             description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
             validate_default=True,

@@ -231,7 +231,7 @@ class Document(BaseModel):
         Field(description="Where it is, when the source says (see [`Location`])."),
     ] = None
     metadata: Annotated[
-        dict[str, JsonValue] | None,
+        dict[str, JsonValue],
         Field(
             description="Caller-defined attributes, preserving their JSON types, with the same reserved\nprefixes [`Task::metadata`] carries."
         ),
@@ -243,7 +243,7 @@ class Document(BaseModel):
         ),
     ] = None
     repositories: Annotated[
-        list[Repository] | None,
+        list[Repository],
         Field(
             description="Normalized repository origins this document concerns, in source order and without\nrepeats, as a [`Task`]'s.",
             validate_default=True,
