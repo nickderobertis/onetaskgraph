@@ -975,6 +975,16 @@ test("a task list is narrowed to a metadata value and to a copy origin through t
     const refused = client.taskList({ origin: "ENG-1" });
     await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
     await expect(refused).rejects.toMatchObject({ exitCode: 2 });
+
+    // A value that is not the text a command line takes is refused before anything is started.
+    const malformed = [
+      { metadata: "orchestrator.follow-up/root_cause=stale-cache" },
+      { metadata: [7] },
+      { origin: 7 },
+    ] as unknown as Parameters<OnetaskgraphClient["taskList"]>[0][];
+    for (const options of malformed) {
+      expect(() => client.taskList(options)).toThrow(TypeError);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

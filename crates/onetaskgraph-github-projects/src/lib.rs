@@ -4181,32 +4181,33 @@ impl GitHubProjectsSource {
         }
     }
 
-    /// `found`, followed by every item this process created or wrote, as it wrote it.
+    /// `found`, with every item this process created or wrote in its place, and every one of
+    /// them the read did not report added.
     ///
-    /// An item the read already names comes a second time only when this process wrote it
-    /// differently from how the read reports it — its title, its body or its origin — and
-    /// the read's comes first: the read is what GitHub holds now, but a read of an item
-    /// written moments ago can still be behind the board fields written onto it, the origin
-    /// field included, which is the one a narrowed read is confirmed against. So the caller
-    /// keeps the first of the two that its predicates hold of, and one item is never
-    /// reported twice. See [`Self::created`] and
-    /// [`Self::updated`](GitHubProjectsSource::updated).
+    /// This process's own record wins over the read's copy of the same item, because a read
+    /// of an item written moments ago can still be behind what was written onto it — the
+    /// origin field included, which is the one a narrowed read is confirmed against — and a
+    /// read that still names an item under a predicate this process's write moved it out of
+    /// must not return it. The one thing the read knows that the record cannot is when GitHub
+    /// last saw the item change, which is what a comment-activity read rules a candidate out
+    /// by, so the read's `updatedAt` is kept when the record has none of its own. See
+    /// [`Self::created`] and [`Self::updated`](GitHubProjectsSource::updated).
     fn with_own_writes(&self, mut found: Vec<Resolved>) -> Result<Vec<Resolved>, SourceError> {
         let own: Vec<Resolved> = self
             .created()?
             .iter()
             .chain(self.updated()?.iter())
-            .filter(|own| {
-                found.iter().all(|read| {
-                    read.id != own.id
-                        || read.origin != own.origin
-                        || read.title != own.title
-                        || read.raw_body != own.raw_body
-                })
-            })
             .cloned()
             .collect();
-        found.extend(own);
+        for mut own in own {
+            match found.iter_mut().find(|read| read.id == own.id) {
+                Some(read) => {
+                    own.updated_at = own.updated_at.max(read.updated_at);
+                    *read = own;
+                }
+                None => found.push(own),
+            }
+        }
         Ok(found)
     }
 
@@ -7444,16 +7445,11 @@ impl TaskSource for GitHubProjectsSource {
         };
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
-        // An item a narrowed read and this process's own record both name comes twice; the
-        // first the predicates hold of is the one kept — see `with_own_writes`.
-        let mut tasks: Vec<Task> = Vec::new();
+        let mut tasks = Vec::new();
         for item in held
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         {
-            if tasks.iter().any(|kept| kept.id == item.id) {
-                continue;
-            }
             let task = item.task()?;
             if task_matches(&task, query, membership)
                 && self.commented_since(item, query.commented_since).await?

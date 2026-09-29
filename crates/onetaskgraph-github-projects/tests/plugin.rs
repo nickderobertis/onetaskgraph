@@ -578,6 +578,12 @@ struct State {
     searches: Vec<String>,
     /// The field filter of every origin lookup this board answered, in order.
     origin_filters: Vec<String>,
+    /// Items this board's indexes — its issue search and its item connection's field filter —
+    /// still answer as they were before a write, by content id.
+    ///
+    /// GitHub's indexes lag a write, so a search can still name an item under what it held a
+    /// moment ago, and answer with that. A read of the item by its own id is current.
+    indexed_as: BTreeMap<String, Item>,
     /// The issue named by every read of an issue's comments this board answered, in order.
     comment_reads: Vec<String>,
     /// The repository's own labels, as `(name, node id)`.
@@ -707,6 +713,13 @@ impl Limits {
 }
 
 impl State {
+    /// `item` as this board's indexes answer it: as it was when its index was last current.
+    fn indexed(&self, item: &Item) -> Item {
+        self.indexed_as
+            .get(&item.content_id)
+            .cloned()
+            .unwrap_or_else(|| item.clone())
+    }
     fn options(&self) -> Value {
         Value::Array(
             self.options
@@ -998,6 +1011,18 @@ impl Fixture {
     fn filed_by_something_else(&self, item: Item) {
         self.state.lock().unwrap().items.push(item);
     }
+    /// Hold this board's indexes on `content_id` as it is now, whatever is written to it
+    /// later. See [`State::indexed_as`].
+    fn indexes_behind(&self, content_id: &str) {
+        let mut state = self.state.lock().unwrap();
+        let held = state
+            .items
+            .iter()
+            .find(|item| item.content_id == content_id)
+            .expect("this board holds the item")
+            .clone();
+        state.indexed_as.insert(content_id.to_owned(), held);
+    }
     /// The field filter of every origin lookup this board answered, in order.
     fn origin_filters(&self) -> Vec<String> {
         self.state.lock().unwrap().origin_filters.clone()
@@ -1090,6 +1115,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         documents: Vec::new(),
         searches: Vec::new(),
         origin_filters: Vec::new(),
+        indexed_as: BTreeMap::new(),
         comment_reads: Vec::new(),
         labels: Vec::new(),
         next: 0,
@@ -1618,7 +1644,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // which is what a read taken straight after a write has to answer through anyway.
         let visible = state.items.len().saturating_sub(state.lagging_reads);
         let options = state.options();
-        let matched = state.items[..visible]
+        let indexed: Vec<Item> = state.items[..visible]
+            .iter()
+            .map(|item| state.indexed(item))
+            .collect();
+        let matched = indexed
             .iter()
             .filter(|item| item.listed && item.typename == "Issue")
             .filter(|item| {
@@ -2061,6 +2091,7 @@ fn answer_an_origin_lookup(state: &mut State, variables: &Value, asked: Asked) -
         .min(state.items.len());
     let carriers = state.items[..listed.saturating_sub(state.lagging_reads)]
         .iter()
+        .map(|item| state.indexed(item))
         .filter(|item| item.listed && item.origin.as_deref() == Some(wanted.as_str()))
         .map(|item| {
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),
@@ -2070,6 +2101,7 @@ fn answer_an_origin_lookup(state: &mut State, variables: &Value, asked: Asked) -
     let visible = state.items.len().saturating_sub(state.lagging_reads);
     let found = state.items[..visible]
         .iter()
+        .map(|item| state.indexed(item))
         .filter(|item| item.listed && item.typename == "Issue")
         .filter(|item| {
             phrase.admits(
@@ -14301,4 +14333,64 @@ async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on()
          read from what this command already asked"
     );
     assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn an_item_this_process_wrote_out_of_a_predicate_is_not_returned_from_a_stale_index() {
+    let fixture = board(vec![
+        Item::issue("I_moved", "Ship it")
+            .status("Todo")
+            .carrying("work:ENG-1")
+            .body(&slotted(
+                "prose",
+                &json!({"onetaskgraph.origin": "work:ENG-1", "team.owner": "ada"}),
+            )),
+    ]);
+    // Every index this board keeps still answers the item as it is now, after the write below.
+    fixture.indexes_behind("I_moved");
+    let source = source(&fixture);
+    let mut moved = task("I_moved", "Parked", status(StatusCategory::Todo, "Todo"));
+    moved.metadata = BTreeMap::from([
+        ("onetaskgraph.origin".to_owned(), json!("work:ENG-2")),
+        ("team.owner".to_owned(), json!("bob")),
+    ]);
+    source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("I_moved".to_owned())),
+            item: moved,
+            depends_on: vec![],
+        })
+        .await
+        .expect("the update lands");
+    assert_eq!(fixture.item("I_moved").title, "Parked");
+
+    let titled = |terms: &str| TaskQuery {
+        text: text(terms, TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let none = Vec::<String>::new();
+    for (query, expected) in [
+        (titled("ship"), none.clone()),
+        (metadata_query("team.owner", &[], "ada"), none.clone()),
+        (origin_query("work:ENG-1"), none.clone()),
+        (titled("parked"), vec!["I_moved".to_owned()]),
+        (
+            metadata_query("team.owner", &[], "bob"),
+            vec!["I_moved".to_owned()],
+        ),
+        (origin_query("work:ENG-2"), vec!["I_moved".to_owned()]),
+    ] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            expected,
+            "{query:?}"
+        );
+    }
+    // A source that did not write it still reads the index's answer, which is what makes the
+    // answers above this process's own record rather than GitHub's.
+    let stranger = self::source(&fixture);
+    assert_eq!(
+        selected_tasks(stranger.as_ref(), &origin_query("work:ENG-1")).await,
+        ["I_moved"]
+    );
 }

@@ -345,37 +345,28 @@ fn a_task_copy_finding_no_counterpart() -> Measured {
     measured
 }
 
-#[test]
-fn a_task_copy_into_a_board_finds_its_counterpart_by_origin_and_never_reads_the_board() {
-    for (what, task, (_, served, _)) in [
-        (
-            "finding one written before this release",
-            "T-0",
-            a_task_copy_finding_a_counterpart_written_before_this_release(),
-        ),
-        ("finding none", "L", a_task_copy_finding_no_counterpart()),
-    ] {
-        let lookups = served
-            .iter()
-            .filter(|(document, _)| {
-                document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP
-            })
-            .map(|(_, variables)| variables["filter"].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            lookups,
-            [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
-            "a task copy {what} asks the board for that origin once: {served:#?}"
-        );
-        let whole: Vec<&(String, Value)> = served
-            .iter()
-            .filter(|(document, _)| reads_the_board(document))
-            .collect();
-        assert!(
-            whole.is_empty(),
-            "a task copy {what} read the whole board: {whole:#?}"
-        );
-    }
+/// Hold a task copy to its second rule's one question: the board is asked for the origin of
+/// `task` once, and its items are never walked.
+fn asks_for_the_origin_and_never_walks_the_board(
+    what: &str,
+    task: &str,
+    served: &[(String, Value)],
+) {
+    let lookups = served
+        .iter()
+        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP)
+        .map(|(_, variables)| variables["filter"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lookups,
+        [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
+        "{what} asks the board for that origin once: {served:#?}"
+    );
+    let whole: Vec<&(String, Value)> = served
+        .iter()
+        .filter(|(document, _)| reads_the_board(document))
+        .collect();
+    assert!(whole.is_empty(), "{what} read the whole board: {whole:#?}");
 }
 
 #[test]
@@ -503,6 +494,14 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         );
     }
 
+    // (g) and (h): a task copy finds its counterpart by asking the board for its origin, and
+    // never by walking the board — one written the way the release before this one wrote it,
+    // with its origin in the board field alone, included — and creates when there is none.
+    let (found, found_served, _) = a_task_copy_finding_a_counterpart_written_before_this_release();
+    asks_for_the_origin_and_never_walks_the_board("(g)", "T-0", &found_served);
+    let (created, created_served, _) = a_task_copy_finding_no_counterpart();
+    asks_for_the_origin_and_never_walks_the_board("(h)", "L", &created_served);
+
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
         rendered(
@@ -527,12 +526,9 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         ),
         rendered(
             "(g) a task copy into a board holding its counterpart, its origin in the board field alone",
-            &a_task_copy_finding_a_counterpart_written_before_this_release().0,
+            &found,
         ),
-        rendered(
-            "(h) a task copy into a board holding no counterpart",
-            &a_task_copy_finding_no_counterpart().0,
-        ),
+        rendered("(h) a task copy into a board holding no counterpart", &created),
     ]
     .join("\n");
     assert_eq!(

@@ -741,8 +741,12 @@ export class OnetaskgraphClient {
     if (options.commentedSince !== undefined) {
       args.push("--commented-since", options.commentedSince);
     }
-    for (const match of options.metadata ?? []) args.push("--metadata", match);
-    if (options.origin !== undefined) args.push("--origin", options.origin);
+    for (const match of stringList("taskList", "metadata", options.metadata)) {
+      args.push("--metadata", match);
+    }
+    if (options.origin !== undefined) {
+      args.push("--origin", stringOption("taskList", "origin", options.origin));
+    }
     return this.run("task list", args);
   }
   taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {
