@@ -1057,13 +1057,23 @@ def admits_null(schema: JsonValue, root: JsonValue, seen: frozenset[str] = froze
 
 
 def schema_variants(schema: dict[str, JsonValue], combinator: str) -> list[JsonValue]:
-    """The variants `schema` lists under `combinator`, refusing one that is not a list."""
+    """The variants `schema` lists under `combinator`, refusing any that is not a schema.
+
+    A variant that is a schema but carries no members of its own is still a variant, and is
+    returned; one that is neither an object nor a boolean is no schema at all.
+    """
     variants = schema.get(combinator, [])
     if not isinstance(variants, list):
         raise SystemExit(
             f"binary emitted a schema whose `{combinator}` is not a list; next: emit every "
             "combinator as an array of schemas, as JSON Schema defines it"
         )
+    for variant in variants:
+        if not isinstance(variant, dict | bool):
+            raise SystemExit(
+                f"binary emitted {json.dumps(variant)} as a `{combinator}` variant; next: emit "
+                "every variant as a JSON Schema object or boolean"
+            )
     return variants
 
 

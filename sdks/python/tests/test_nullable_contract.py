@@ -264,6 +264,11 @@ def test_the_guard_reads_a_schema_as_the_conjunction_of_its_keywords(
         ({"properties": {"comments": {"enum": "a"}}}, 'schema `enum` of "a"'),
         ({"properties": {"comments": {"allOf": {}}}}, "schema whose `allOf` is not a list"),
         ({"properties": []}, "schema `properties` of []"),
+        (
+            {"properties": {}, "oneOf": [{"properties": {}}, 3]},
+            "binary emitted 3 as a `oneOf` variant",
+        ),
+        ({"properties": {"comments": {"anyOf": ["null"]}}}, '"null" as a `anyOf` variant'),
     ],
 )
 def test_the_guard_refuses_a_schema_it_cannot_read(malformed: JsonValue, named: str) -> None:
