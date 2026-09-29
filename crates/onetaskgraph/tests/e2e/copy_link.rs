@@ -43,7 +43,6 @@ fn exits(sandbox: &Sandbox, arguments: &[&str], code: i32) -> Output {
     output
 }
 
-/// The one JSON document a `--json` run printed.
 fn parsed(output: &Output) -> Value {
     serde_json::from_str(&stdout(output))
         .unwrap_or_else(|error| panic!("not one JSON document ({error}):\n{}", stdout(output)))
@@ -102,13 +101,19 @@ fn copy(sandbox: &Sandbox, verb: &str, id: &str, extra: &[&str]) -> (Value, Valu
     )
 }
 
-/// One record's metadata, as `<verb> show --json` reports it.
+/// The README's own words, which the journeys below hold to what the binary does.
+fn readme() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
+    )
+    .expect("README.md is readable")
+}
+
 fn metadata(sandbox: &Sandbox, verb: &str, id: &str) -> Value {
     parsed(&exits(sandbox, &[verb, "show", id, "--json"], 0))["items"][0]["item"]["metadata"]
         .clone()
 }
 
-/// The file the source folder holds one record in.
 fn source_file(sandbox: &Sandbox, verb: &str, id: &str) -> std::path::PathBuf {
     sandbox
         .subdirectory("local-md")
@@ -150,11 +155,16 @@ fn every_kind_copied_out_of_a_folder_records_its_link_and_the_next_copy_follows_
                 "{boundary:?}: the source file records where {id} landed:\n{after}"
             );
             assert_ne!(before, after, "{boundary:?}: {verb} {id}");
-            assert_eq!(
-                metadata(&sandbox, verb, &from)["onetaskgraph.copies"],
-                json!({NOTES: into}),
-                "{boundary:?}: {verb} {id}"
-            );
+            let recorded = metadata(&sandbox, verb, &from)["onetaskgraph.copies"].clone();
+            assert_eq!(recorded, json!({NOTES: into}), "{boundary:?}: {verb} {id}");
+            // The README shows a link by example, and this is the link that example is of.
+            if verb == "task" {
+                let example = format!("`{recorded}`").replace("\":\"", "\": \"");
+                assert!(
+                    readme().contains(&example),
+                    "the README's example of a link is not what a copy records: {example}"
+                );
+            }
             // Every other key the source held reads back as it did.
             if verb != "project" {
                 assert_eq!(
@@ -230,6 +240,18 @@ fn a_link_naming_nothing_refuses_naming_both_ids_until_recreate_records_it_again
             failure["failure"]["kind"],
             json!("stale-link"),
             "{boundary:?}"
+        );
+        // And the README names the refusal by the kind the binary reports it under.
+        let rules = readme();
+        let rules = &rules[rules
+            .find("These rules find the counterpart, in this order:")
+            .expect("the README's rules")..];
+        assert!(
+            rules.contains(&format!(
+                "the failure kind\n   `{}`",
+                failure["failure"]["kind"].as_str().expect("a kind")
+            )),
+            "the README's rule for a link naming nothing does not name the kind the binary reports"
         );
         assert!(
             !sandbox.subdirectory(NOTES).join("tasks/T-1.md").exists(),

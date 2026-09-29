@@ -322,6 +322,10 @@ $ $EDITOR notes/tasks/T-1.md
 $ onetaskgraph task copy notes:T-1 --to work
 ```
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys
+     in `crates/onetaskgraph/tests/e2e/copy_link.rs`: one fails unless the link example below is
+     the link a copy of `T-1` into `notes` really records, and another fails unless the rule for
+     a link naming nothing names the failure kind the binary really reports. -->
 The copy back **updates** rather than duplicating because the copied file carries the id
 it came from, under the reserved metadata key `onetaskgraph.origin`. The item it was copied
 *from* records where it landed too, under `onetaskgraph.copies` — an object naming the
@@ -342,6 +346,7 @@ These rules find the counterpart, in this order:
    destination item and the copy updates it.
 3. **The search.** Otherwise the destination is searched for an item whose origin is the id
    being copied; found, it is updated, and not found, one is created carrying that origin.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 Once the whole copy has landed, every item found by the link, the search or `--match-by`, or
 created, has its link for that destination recorded or refreshed — one metadata write at its

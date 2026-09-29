@@ -49,6 +49,8 @@ struct Watched {
     inner: Box<dyn TaskSource>,
     pages: Arc<AtomicU32>,
     faults: Vec<(NativeId, Fault)>,
+    /// Every item whose metadata write has reached the source, for [`Fault::Unrestorable`].
+    written: std::sync::Mutex<Vec<NativeId>>,
 }
 
 /// How one item's metadata write goes wrong.
@@ -62,18 +64,25 @@ enum Fault {
     /// A plugin written when §4.18 refused every reserved key refuses this one as malformed
     /// — after having written it, as far as the copy can tell.
     Malformed,
+    /// The first write lands, and every later one — the copy putting it back — is dropped.
+    Unrestorable,
 }
 
 impl Watched {
     /// What the write of `id` does before it reaches the source: the answer it gives in
     /// place of the source's, the failure, or nothing.
     fn before<T>(&self, id: &NativeId) -> Result<Option<Option<T>>, SourceError> {
+        let dropped = || SourceError::Unavailable {
+            message: format!("the backend dropped the metadata write of {id}"),
+        };
+        let mut written = self.written.lock().expect("the record of writes");
+        let again = written.contains(id);
+        written.push(id.clone());
         match self.fault_of(id) {
             Some(Fault::Gone) => Ok(Some(None)),
-            Some(Fault::Unavailable) => Err(SourceError::Unavailable {
-                message: format!("the backend dropped the metadata write of {id}"),
-            }),
-            Some(Fault::Malformed) | None => Ok(None),
+            Some(Fault::Unavailable) => Err(dropped()),
+            Some(Fault::Unrestorable) if again => Err(dropped()),
+            Some(Fault::Malformed | Fault::Unrestorable) | None => Ok(None),
         }
     }
 
@@ -255,6 +264,7 @@ fn watched(
             .iter()
             .map(|(id, fault)| (NativeId((*id).to_owned()), *fault))
             .collect(),
+        written: std::sync::Mutex::new(Vec::new()),
     };
     (
         ConfiguredSource::Ready(ResolvedSource::adopt(name(source), Box::new(built))),
@@ -984,5 +994,59 @@ async fn entries_that_are_not_links_are_dropped_when_the_link_is_recorded() {
     assert_eq!(
         links_of(&engine, "from:T-1").await,
         json!({"elsewhere": "elsewhere:E", "into": "into:T-1"})
+    );
+}
+
+#[tokio::test]
+async fn a_link_the_source_will_not_take_back_is_named_as_left_behind() {
+    // The copy fails after `T-1`'s link landed, and `T-1`'s source then refuses to put its
+    // link back: the refusal says the copy could not be undone and names `T-1` as holding
+    // what it wrote, while the destination items it created are still taken back.
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({MetadataKey::COPIES_KEY: {"elsewhere": "elsewhere:E"}})),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let (engine, _) = engine_failing(
+        &from,
+        &json!({}),
+        &[("T-1", Fault::Unrestorable), ("T-2", Fault::Unavailable)],
+    );
+
+    let refused = engine
+        .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+        .await
+        .expect_err("the second link write fails");
+    let EngineError::CopyNotUndone {
+        left_behind,
+        refusal,
+        ..
+    } = &refused
+    else {
+        panic!("the copy could not be undone, and says so: {refused:?}");
+    };
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["from:T-1"]
+    );
+    assert!(
+        matches!(refusal, SourceError::Unavailable { .. }),
+        "{refusal:?}"
+    );
+    let message = refused.to_string();
+    assert!(
+        message.contains("could not be undone") && message.contains("from:T-1"),
+        "{message}"
+    );
+    assert!(
+        held(&engine, "into").await.is_empty(),
+        "the created items were still taken back"
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E", "into": "into:T-1"}),
+        "and T-1 holds what the copy wrote, as the refusal says"
     );
 }
