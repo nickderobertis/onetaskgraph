@@ -336,6 +336,7 @@ impl TaskSource for Misbehaving {
             comments: Support::Native,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

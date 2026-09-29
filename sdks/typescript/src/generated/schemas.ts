@@ -47,6 +47,11 @@ export const runtimeSchemas = {
         "default": "unsupported",
         "description": "Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
       },
+      "filter_by_comment_activity": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source keeps only the tasks a query's\n[`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a\ntask one of whose comments was created or last edited at or after the instant.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the instant and returns the wider set, and the engine narrows it\n— by reading **that source's comments, task by task**, for every task the source's\nother predicates kept. That is correct and it is not cheap, which is why a source that\ncan ask its store the narrower question declares `Native`. A source whose tasks have no\n[`comments`](Self::comments) at all holds no comment activity, so the engine keeps none\nof its tasks without asking it anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+      },
       "filter_by_label": {
         "$ref": "#/$defs/Support",
         "description": "Whether the source filters by label itself."
@@ -3731,6 +3736,11 @@ export const runtimeSchemas = {
         "type": "string"
       },
       {
+        "const": "commented-since",
+        "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+        "type": "string"
+      },
+      {
         "const": "search-title",
         "description": "Search titles.",
         "type": "string"
@@ -5092,6 +5102,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -5392,6 +5407,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -5781,6 +5801,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -6188,6 +6213,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -6603,6 +6633,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -7172,6 +7207,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -7815,6 +7855,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -9566,6 +9611,11 @@ export const runtimeSchemas = {
             "default": "unsupported",
             "description": "Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
           },
+          "filter_by_comment_activity": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks a query's\n[`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a\ntask one of whose comments was created or last edited at or after the instant.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the instant and returns the wider set, and the engine narrows it\n— by reading **that source's comments, task by task**, for every task the source's\nother predicates kept. That is correct and it is not cheap, which is why a source that\ncan ask its store the narrower question declares `Native`. A source whose tasks have no\n[`comments`](Self::comments) at all holds no comment activity, so the engine keeps none\nof its tasks without asking it anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+          },
           "filter_by_label": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source filters by label itself."
@@ -9859,6 +9909,11 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
             "description": "Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
+          },
+          "filter_by_comment_activity": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source keeps only the tasks a query's\n[`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a\ntask one of whose comments was created or last edited at or after the instant.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the instant and returns the wider set, and the engine narrows it\n— by reading **that source's comments, task by task**, for every task the source's\nother predicates kept. That is correct and it is not cheap, which is why a source that\ncan ask its store the narrower question declares `Native`. A source whose tasks have no\n[`comments`](Self::comments) at all holds no comment activity, so the engine keeps none\nof its tasks without asking it anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
           },
           "filter_by_label": {
             "$ref": "#/$defs/Support",
@@ -10170,6 +10225,11 @@ export const runtimeSchemas = {
           {
             "const": "priority",
             "description": "Filter by priority.",
+            "type": "string"
+          },
+          {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
             "type": "string"
           },
           {
@@ -10988,6 +11048,11 @@ export const runtimeSchemas = {
             "type": "string"
           },
           {
+            "const": "commented-since",
+            "description": "Filter by comment activity: a comment created or last edited at or after an instant.\n\nApplied locally, it costs a read of the source's comments for every task the source's\nother predicates kept — which is what a plan naming it there is saying.",
+            "type": "string"
+          },
+          {
             "const": "search-title",
             "description": "Search titles.",
             "type": "string"
@@ -11776,6 +11841,14 @@ export const runtimeSchemas = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "A filter over a source's tasks.\n\nEvery field narrows; an empty or `None` field means unfiltered.",
     "properties": {
+      "commented_since": {
+        "description": "Comment activity to keep: a task matches when **at least one of its comments** was\ncreated, or last edited, at or after this instant — its\n[`Comment::created_at`](crate::Comment::created_at) or\n[`Comment::updated_at`](crate::Comment::updated_at) is at or after it. A task with no\ncomments never matches, and a comment deleted before the query is not a match. `None`\nmeans unfiltered. An RFC 3339 string on the wire.\n\nDefaulted when absent and left out of the wire when `None`, so a plugin written before\nthere was comment activity reads exactly the query it read before — and, declaring no\n[`Capabilities::filter_by_comment_activity`](crate::Capabilities::filter_by_comment_activity),\nis never handed one it would have to ignore.",
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "labels": {
         "$ref": "#/$defs/LabelFilter",
         "description": "Label membership."

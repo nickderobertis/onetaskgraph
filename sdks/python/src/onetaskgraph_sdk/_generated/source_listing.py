@@ -117,6 +117,12 @@ class Capabilities(BaseModel):
             description="Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
         ),
     ] = Support.SupportUnsupported
+    filter_by_comment_activity: Annotated[
+        Support,
+        Field(
+            description="Whether the source keeps only the tasks a query's\n[`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a\ntask one of whose comments was created or last edited at or after the instant.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the instant and returns the wider set, and the engine narrows it\n— by reading **that source's comments, task by task**, for every task the source's\nother predicates kept. That is correct and it is not cheap, which is why a source that\ncan ask its store the narrower question declares `Native`. A source whose tasks have no\n[`comments`](Self::comments) at all holds no comment activity, so the engine keeps none\nof its tasks without asking it anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
+        ),
+    ] = Support.SupportUnsupported
     filter_by_label: Annotated[
         Support, Field(description="Whether the source filters by label itself.")
     ]

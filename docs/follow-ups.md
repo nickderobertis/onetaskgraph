@@ -60,6 +60,29 @@ to `Support::Native`, updating this plugin's row in `crates/onetaskgraph/tests/e
 and the fake Linear server there so it applies the predicate, and deleting this entry and the
 verdict's wording in `onetaskgraph-linear`'s module documentation.
 
+## Linear: the comment-activity filter is unimplemented
+
+Unsupported fields: `onetaskgraph-linear` `filter_by_comment_activity`
+
+`onetaskgraph-linear` holds an issue's comments natively and declares
+`filter_by_comment_activity` as `Support::Unsupported`. So it ignores a query's
+`commented_since` and returns the wider page, and the engine narrows it exactly by reading
+the comments of every issue the query's other predicates kept — correct, and one comment read
+per such issue, which on a large workspace is the cost the predicate exists to avoid.
+
+It is a gap rather than a limit. The plugin sends Linear no comment-activity filter today,
+and nothing about the remote service has been shown to prevent one: what is missing is an
+`IssueFilter` member that selects issues by their comments' creation and update times, pinned
+in `crates/onetaskgraph-linear/tests/fixtures/schema.graphql` against Linear's published
+schema and a live observation, and the plugin sending it — or, failing that, a narrowing on
+`Issue.updatedAt` confirmed by the comments, as the GitHub Projects plugin does, once Linear
+is observed to move that timestamp when a comment is edited.
+
+Closing it means: sending that predicate, pinning it, flipping the field to
+`Support::Native`, updating this plugin's row in `crates/onetaskgraph/tests/e2e/fixtures.rs`
+and the fake Linear server there so it applies the predicate, and deleting this entry and the
+verdict's wording in `onetaskgraph-linear`'s module documentation.
+
 ## What a Windows location is spelled like, and who decides
 
 `local-md` reports a location by handing `std::fs::canonicalize` to `Location::Path`. On

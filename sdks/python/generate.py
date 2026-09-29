@@ -100,6 +100,7 @@ OPTION_TYPES = {
     "answers": "answers",
     "author": "str",
     "body_file": "str",
+    "commented_since": "str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
@@ -146,6 +147,7 @@ OPTION_PLACEHOLDERS = {
     "answers": "FILE",
     "author": "NAME",
     "body_file": "PATH",
+    "commented_since": "RFC3339",
     "dry_run": None,
     "default_sources": "NAMES",
     "delivers": "ID",
@@ -962,6 +964,8 @@ NON_NULLABLE_DEFAULTED: dict[str, set[str]] = {
     # `Capabilities.priority` above and `Capabilities.filter_by_priority`, defaulted to
     # `unsupported`.
     "filter_by_priority": {"Support"},
+    # `Capabilities.filter_by_comment_activity`, defaulted to `unsupported` on the same terms.
+    "filter_by_comment_activity": {"Support"},
 }
 
 

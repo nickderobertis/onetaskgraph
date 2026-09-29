@@ -91,6 +91,11 @@ pub enum Predicate {
     Status,
     /// Filter by priority.
     Priority,
+    /// Filter by comment activity: a comment created or last edited at or after an instant.
+    ///
+    /// Applied locally, it costs a read of the source's comments for every task the source's
+    /// other predicates kept — which is what a plan naming it there is saying.
+    CommentedSince,
     /// Search titles.
     SearchTitle,
     /// Search bodies.

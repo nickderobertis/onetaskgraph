@@ -13,6 +13,7 @@
 //! its own crate boundary — the engine may not reach into one, and the moment it did,
 //! the answer would depend on which plugin happened to be first in the list.
 
+use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Document, Label, LabelFilter, NativeId, Priority, Project, ProjectFilter, StatusCategory, Task,
     TextFields, TextQuery,
@@ -35,6 +36,12 @@ pub(crate) struct LocalTasks {
     pub project: Option<ProjectFilter>,
     /// Priorities to keep, when the source does not filter by priority.
     pub priorities: Vec<Priority>,
+    /// The comment-activity instant, when the source does not filter by it.
+    ///
+    /// Not read by [`keeps`](Self::keeps): a task does not carry its comments, so this one
+    /// predicate is answered by a read of the source's comments rather than by the row, and
+    /// only for a row every predicate here has already kept.
+    pub commented_since: Option<DateTime<Utc>>,
 }
 
 impl LocalTasks {

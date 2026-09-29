@@ -7,6 +7,7 @@
 
 use std::num::NonZeroU32;
 
+use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{OutputFormat, PluginKind, SearchKind};
@@ -969,8 +970,30 @@ pub struct TaskListArgs {
     #[arg(long = "priority", value_name = "PRIORITY")]
     pub priority: Vec<PriorityArg>,
 
+    /// Keep tasks with a comment created or last edited at or after this RFC 3339 instant,
+    /// offset included (`2026-09-28T12:00:00Z`). A task with no comments is never kept.
+    ///
+    /// A source that does not apply this itself has its comments read task by task.
+    #[arg(long = "commented-since", value_name = "RFC3339", value_parser = instant)]
+    pub commented_since: Option<DateTime<Utc>>,
+
     #[command(flatten)]
     pub paging: PageArgs,
+}
+
+/// An instant as a command line hands one over: RFC 3339, with its offset.
+///
+/// An instant with no offset names a different moment in every time zone, so it is refused
+/// rather than read as UTC or as local time.
+fn instant(value: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|parsed| parsed.with_timezone(&Utc))
+        .map_err(|error| {
+            format!(
+                "{error}; expected an RFC 3339 instant with its offset, such as \
+                 2026-09-28T12:00:00Z or 2026-09-28T08:00:00-04:00"
+            )
+        })
 }
 
 /// `onetaskgraph project list`.

@@ -196,6 +196,23 @@ impl InMemorySource {
         self.text_survives(&task.title, task.content.as_deref(), query.text.as_ref())
     }
 
+    /// Whether a task survives the comment-activity predicate, over the comments held beside
+    /// it — kept whenever the predicate is not declared `Native`, which is rule 2's wider set.
+    fn comment_activity_matches(
+        &self,
+        comments: &[HeldComment],
+        task: &Task,
+        query: &TaskQuery,
+    ) -> bool {
+        !self.declared().filter_by_comment_activity.is_native()
+            || query.comments_match(
+                comments
+                    .iter()
+                    .filter(|held| held.task == task.id)
+                    .map(|held| &held.comment),
+            )
+    }
+
     /// Whether a task survives the project predicate.
     ///
     /// `Orphans` is gated on `orphan_tasks` and `Is(..)` on `projects`, because a
@@ -348,13 +365,15 @@ impl TaskSource for InMemorySource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let matched: Vec<Task> = self
-            .held()?
+        let held = self.held()?;
+        let matched: Vec<Task> = held
             .tasks
             .iter()
             .filter(|task| self.task_matches(task, query))
+            .filter(|task| self.comment_activity_matches(&held.comments, task, query))
             .cloned()
             .collect();
+        drop(held);
         self.paginate(&matched, page)
     }
 

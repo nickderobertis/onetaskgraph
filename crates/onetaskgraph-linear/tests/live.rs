@@ -844,6 +844,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             comments: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

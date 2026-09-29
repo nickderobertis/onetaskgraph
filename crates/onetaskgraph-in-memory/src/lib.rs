@@ -32,6 +32,7 @@
 //! | `comments` | **Supported and proven,** and configurable. Not a predicate either: it means *this source's tasks have comments at all*, defaults to unsupported, and a source declaring it holds each task's comments in memory beside the task — added, edited and removed through the four comment methods whenever `writes` also says it can be written. |
 //! | `priority` | **Supported and proven,** and configurable. Not a predicate: it means *this source's tasks hold a priority at all*, defaults to native, and a source declaring it holds each task's priority in memory, written by a copy and by the narrow priority write. A source declaring it unsupported refuses a task configured with a priority where the configuration is read. |
 //! | `filter_by_priority` | **Supported and proven,** and configurable. |
+//! | `filter_by_comment_activity` | **Supported and proven** by this crate's `tests/commented_since.rs`, and configurable: a task is kept when one of the comments held beside it was created or last edited at or after `commented_since`; a task with no comments never is. |
 //! | `orphan_tasks` | **Supported and proven,** and configurable. |
 //! | `filter_by_label` | **Supported and proven,** and configurable. |
 //! | `filter_by_status` | **Supported and proven,** and configurable. |

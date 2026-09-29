@@ -723,6 +723,9 @@ export class OnetaskgraphClient {
       project?: string;
       noProject?: boolean;
       priorities?: Priority[];
+      // An RFC 3339 instant with its offset: keep tasks with a comment created or last edited
+      // at or after it.
+      commentedSince?: string;
     } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
     const args: string[] = [];
@@ -730,6 +733,9 @@ export class OnetaskgraphClient {
     if (options.project !== undefined) args.push("--project", options.project);
     if (options.noProject) args.push("--no-project");
     for (const priority of options.priorities ?? []) args.push("--priority", priority);
+    if (options.commentedSince !== undefined) {
+      args.push("--commented-since", options.commentedSince);
+    }
     return this.run("task list", args);
   }
   taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {

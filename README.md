@@ -63,7 +63,7 @@ onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--priority none|urgent|high|medium|low]...
-                       [--project P | --no-project]
+                       [--project P | --no-project] [--commented-since RFC3339]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID>
@@ -141,6 +141,22 @@ account themselves and refuse it rather than drop it. `task show` prints a task'
 after its body, and its `--json` carries them as a top-level `comments` list for a source
 whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
 `task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
+
+`task list --commented-since <INSTANT>` keeps the tasks **one of whose comments was created,
+or last edited, at or after** the instant — an RFC 3339 time with its offset, such as
+`2026-09-28T12:00:00Z`; one without an offset is refused, naming the flag. A task with no
+comments never matches, and a comment deleted before the query is not a match. It combines
+with every other filter, and the answer is exactly their intersection. A folder of Markdown,
+an in-memory source and a GitHub Projects board apply it themselves. A board asks GitHub's
+issue search, scoped by the board alone, for the issues updated since the instant, then reads
+those candidates' comments and no others' — exact for new and for edited comments in every
+repository the board's items live in, because GitHub moves an issue's `updatedAt` when one of
+its comments is added or edited, which the board's credentialed journey re-takes on every
+run. That search is an index that lags a write by a second or two, so when you ask again from
+the time you last asked, overlap the two instants by more than that. A source that does not
+apply it itself — Linear, today — is narrowed by the engine, which **reads that source's
+comments task by task** for every task the other filters kept: correct, and as costly as
+that sounds on a large workspace.
 
 ![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 

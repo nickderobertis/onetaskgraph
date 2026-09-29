@@ -134,6 +134,7 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         filters,
         project,
         priorities: Vec::new(),
+        commented_since: None,
         paging,
     }
 }
@@ -420,6 +421,7 @@ async fn a_request_naming_a_source_nothing_configures_is_refused_with_the_names_
             filters: Filters::default(),
             project: ProjectSelector::Any,
             priorities: Vec::new(),
+            commented_since: None,
             paging: page(10),
         })
         .await
@@ -593,6 +595,7 @@ impl TaskSource for Rendezvous {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -731,6 +734,7 @@ impl TaskSource for Stuck {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -856,6 +860,7 @@ impl TaskSource for StuckEdges {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1336,6 +1341,7 @@ impl TaskSource for Recording {
             comments: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
+            filter_by_comment_activity: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
