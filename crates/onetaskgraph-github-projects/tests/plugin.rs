@@ -14719,6 +14719,75 @@ async fn a_metadata_value_json_escapes_is_found_by_the_escape_the_body_holds() {
 }
 
 #[tokio::test]
+async fn a_value_or_text_with_no_searchable_words_is_not_sent_and_is_confirmed_exactly() {
+    // GitHub's index holds words, so an empty value, or one of punctuation alone, names none
+    // to find. The phrase is left out of the search rather than trusted to GitHub — whatever
+    // it answers for a phrase with no words — so the search can only be wider, and the answer
+    // is exactly the items holding that string, confirmed in process.
+    let items = || {
+        vec![
+            Item::issue("I_empty", "empty")
+                .status("Todo")
+                .body(&slotted("", &json!({"team.note": ""}))),
+            Item::issue("I_dashes", "--- divider")
+                .status("Todo")
+                .body(&slotted("", &json!({"team.note": "---"}))),
+            Item::issue("I_words", "words")
+                .status("Todo")
+                .body(&slotted("", &json!({"team.note": "stale"}))),
+            Item::issue("I_bare", "Plain").status("Todo"),
+        ]
+    };
+    let mut titled_with_value = metadata_query("team.note", &[], "---");
+    titled_with_value.text = text("divider", TextFields::Title);
+    let cases = [
+        (
+            "an empty value",
+            metadata_query("team.note", &[], ""),
+            vec!["I_empty"],
+            "project:octo-org/7 is:issue in:body",
+        ),
+        (
+            "a punctuation value",
+            metadata_query("team.note", &[], "---"),
+            vec!["I_dashes"],
+            "project:octo-org/7 is:issue in:body",
+        ),
+        (
+            "a punctuation text",
+            TaskQuery {
+                text: text("--", TextFields::Title),
+                ..TaskQuery::default()
+            },
+            vec!["I_dashes"],
+            "project:octo-org/7 is:issue in:title",
+        ),
+        (
+            "a punctuation value beside a text with words",
+            titled_with_value,
+            vec!["I_dashes"],
+            "project:octo-org/7 is:issue in:title,body \"divider\"",
+        ),
+    ];
+    for (what, query, expected, search) in cases {
+        let fixture = board(items());
+        let source = source(&fixture);
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            expected,
+            "{what}"
+        );
+        assert_eq!(fixture.searches(), [search], "{what}");
+        assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+        assert_eq!(
+            fixture.board_item_reads(),
+            Vec::<String>::new(),
+            "{what} walked the board's items"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_draft_this_process_wrote_is_not_an_answer_to_a_narrowed_read() {
     let fixture = board(vec![Item::draft("D_1", "Draft").status("Todo")]);
     let source = source(&fixture);
