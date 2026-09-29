@@ -337,6 +337,11 @@ store the item was authored in matching nothing and creating a second item besid
 
 ### `onetaskgraph.copies`: where a copied item landed
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
+     `crates/onetaskgraph-core/tests/subprocess.rs` reads the example below out of this page and
+     fails unless the one validator of this value, at the stdio boundary, accepts it — beside
+     the shapes that validator refuses. -->
 `onetaskgraph.origin` is on the copy and names where it came from; `onetaskgraph.copies` is
 on the item that was copied and names where it went. Its value is a JSON object mapping a
 destination **source name** to the **qualified id** of that item's counterpart there, with at
@@ -345,6 +350,7 @@ most one entry per destination:
 ```json
 {"followups": "followups:I_kwDOAbc123", "notes": "notes:T-1"}
 ```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 A copy that is not a dry run records or refreshes the entry for its destination on every item
 whose counterpart it found by this link, by searching the destination, or by `--match-by`,
