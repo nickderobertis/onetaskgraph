@@ -269,7 +269,20 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 24
+    assert emitted_bundle["version"] == 25
+    # Version 25 published what a copy says about each item it landed beyond its action:
+    # which rule found where it landed, and what became of the link it records at
+    # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.
+    for root, words in (
+        ("CopyVia", {"link", "origin", "scan", "match"}),
+        ("CopyLink", {"recorded", "unchanged", "unrecorded"}),
+    ):
+        assert root in bundle["roots"], root
+        spelled = {entry["const"] for entry in emitted_bundle["roots"][root]["oneOf"]}
+        assert spelled == words, root
+    copy_action = json.dumps(emitted_bundle["roots"]["CopyAction"])
+    assert '"via"' in copy_action and '"link"' in copy_action
+    assert '"created"' in copy_action
     # Version 24 published the comment activity a task list may be narrowed by: the query's
     # `commented_since`, the capability a source declares it with, and the plan's predicate.
     task_query = bundle["roots"]["TaskQuery"]

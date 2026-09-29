@@ -2225,10 +2225,12 @@ fn a_project_copied_beside_itself_files_its_tasks_under_the_copy_and_links_them_
         }]),
         "{dependencies:#}"
     );
+    // The original is as it was, but for the one entry that records where it was copied to.
     assert_eq!(
         std::fs::read_to_string(root.join("tasks/rule-scope/alpha.md")).expect("the original"),
         "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
-         depends_on: [rule-scope/beta]\n---\nbody\n"
+         depends_on: [rule-scope/beta]\nmetadata:\n  \
+         \"onetaskgraph.copies\": {\"authoring\":\"authoring:rule-scope-2/alpha\"}\n---\nbody\n"
     );
 
     // Copied again onto the copy it made, each task is found where the first copy put it and

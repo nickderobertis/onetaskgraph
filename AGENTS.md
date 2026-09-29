@@ -773,6 +773,12 @@ them do; this is the inventory of what is owed, not a status board.
     Markdown in process and over the stdio plugin protocol alike; both SDKs answer what the
     command line answers; and an instant without an offset, or one that does not parse, is
     refused naming the flag.
+68. A task, a project and a document copied out of a folder of Markdown record where they
+    landed in their own file, over the in-process boundary and the stdio plugin protocol
+    alike, and the next copy of each is found by that link; one whose metadata the folder
+    cannot edit narrowly is copied and reported as not having recorded it; a link naming a
+    deleted copy is refused until `--recreate`; and a task re-copied into a GitHub board by
+    its link sends no board read and no board-scoped search.
 
 ## What a copied document's references are pointed at
 

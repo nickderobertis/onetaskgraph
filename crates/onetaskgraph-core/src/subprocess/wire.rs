@@ -621,14 +621,82 @@ pub(crate) struct DeliveredByResult {
 
 /// `set_task_metadata`, `set_project_metadata` and `set_document_metadata` parameters
 /// (§4.18).
+///
+/// Built only through [`MetadataParams::new`], which deserialization goes through too, so no
+/// value of this type holds [`MetadataKey::COPIES_KEY`] with a value that is not links.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedMetadataParams")]
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
-    pub(crate) id: NativeId,
-    /// The key, a caller's own dotted key outside the `onetaskgraph.` namespace.
-    pub(crate) key: MetadataKey,
-    /// The value to hold under it: any JSON, `null` included.
-    pub(crate) value: Value,
+    id: NativeId,
+    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
+    /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
+    key: MetadataKey,
+    /// The value to hold under it: any JSON, `null` included — and for
+    /// [`MetadataKey::COPIES_KEY`], only an object of destination source names to qualified
+    /// ids of that source.
+    value: Value,
+}
+
+impl MetadataParams {
+    /// One narrow metadata write, once its value is one its key may hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns why, when `key` is [`MetadataKey::COPIES_KEY`] and `value` is not links.
+    pub(crate) fn new(id: NativeId, key: MetadataKey, value: Value) -> Result<Self, String> {
+        if key.is_copies()
+            && let Some(malformed) = crate::engine::malformed_links(&value)
+        {
+            return Err(malformed);
+        }
+        Ok(Self { id, key, value })
+    }
+
+    /// The record whose metadata key is set.
+    pub(crate) fn id(&self) -> &NativeId {
+        &self.id
+    }
+
+    /// The key.
+    pub(crate) fn key(&self) -> &MetadataKey {
+        &self.key
+    }
+
+    /// The value to hold under it.
+    pub(crate) fn value(&self) -> &Value {
+        &self.value
+    }
+}
+
+/// [`MetadataParams`] as they arrive, before the value of the one reserved key is checked.
+#[derive(Deserialize)]
+struct UncheckedMetadataParams {
+    id: NativeId,
+    #[serde(deserialize_with = "caller_or_copies")]
+    key: MetadataKey,
+    value: Value,
+}
+
+impl TryFrom<UncheckedMetadataParams> for MetadataParams {
+    type Error = String;
+
+    fn try_from(params: UncheckedMetadataParams) -> Result<Self, Self::Error> {
+        Self::new(params.id, params.key, params.value)
+    }
+}
+
+/// A narrow metadata write's key as §4.18 admits it: any key [`MetadataKey::new`] accepts,
+/// and [`MetadataKey::COPIES_KEY`], which the engine alone sends and nothing a caller types
+/// can name.
+fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<MetadataKey, D::Error> {
+    let key = String::deserialize(deserializer)?;
+    if key == MetadataKey::COPIES_KEY {
+        return Ok(MetadataKey::copies());
+    }
+    MetadataKey::new(key).map_err(serde::de::Error::custom)
 }
 
 /// The result of any write method (§4.9, §4.12): the id the destination holds the item

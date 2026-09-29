@@ -291,11 +291,22 @@ test("copy drives the real binary and reports what it did to each item", async (
 
     const planned = await copyClient.taskCopy(["from:T-1"], "into", { dryRun: true });
     // Null only for a dry run that would create: nothing was, so there is no id.
-    expect(planned.items).toEqual([{ source: "from:T-1", action: "created", destination: null }]);
+    // A dry run says which rule would have answered, and leaves the link out: it writes none.
+    expect(planned.items).toEqual([
+      { source: "from:T-1", action: "created", destination: null, via: "created" },
+    ]);
 
+    // The source file's `metadata:` is written on one line, which that folder will not edit
+    // one key of without rewriting the rest, so it cannot hold the link and the copy says so.
     const created = await copyClient.taskCopy(["from:T-1"], "into");
     expect(created.items).toEqual([
-      { source: "from:T-1", action: "created", destination: "into:T-1" },
+      {
+        source: "from:T-1",
+        action: "created",
+        destination: "into:T-1",
+        via: "created",
+        link: "unrecorded",
+      },
     ]);
     // A copy of tasks carries no document, so it recognised no reference and the binary
     // writes no figure at all — which is why a consumer generated before these figures
@@ -326,7 +337,13 @@ test("copy drives the real binary and reports what it did to each item", async (
     );
     const matched = await copyClient.taskCopy(["from:T-1"], "into", { matchBy: "title" });
     expect(matched.items).toEqual([
-      { source: "from:T-1", action: "updated", destination: "into:T-1" },
+      {
+        source: "from:T-1",
+        action: "updated",
+        destination: "into:T-1",
+        via: "match",
+        link: "unrecorded",
+      },
     ]);
 
     // An origin naming nothing at the destination refuses, and --recreate says to create.
@@ -346,8 +363,16 @@ test("copy drives the real binary and reports what it did to each item", async (
       ["from:T-1", "unchanged"],
     ]);
     const alone = await copyClient.projectCopy("from:P-1", "into", { noTasks: true });
+    // The project holds no one-line `metadata:`, so the folder could add the link to it: the
+    // project copy before this one recorded it, and this one follows it.
     expect(alone.items).toEqual([
-      { source: "from:P-1", action: "unchanged", destination: "into:P-1" },
+      {
+        source: "from:P-1",
+        action: "unchanged",
+        destination: "into:P-1",
+        via: "link",
+        link: "unchanged",
+      },
     ]);
     // The project and exactly the members named; a folder of Markdown meters nothing, so
     // the report says nothing about what the copy spent.
@@ -418,11 +443,19 @@ test("a document copy drives the real binary and is refused by a source with non
     const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
 
     const planned = await documentClient.documentCopy(["from:D-1"], "notes", { dryRun: true });
-    expect(planned.items).toEqual([{ source: "from:D-1", action: "created", destination: null }]);
+    expect(planned.items).toEqual([
+      { source: "from:D-1", action: "created", destination: null, via: "created" },
+    ]);
 
     const created = await documentClient.documentCopy(["from:D-1"], "notes");
     expect(created.items).toEqual([
-      { source: "from:D-1", action: "created", destination: "notes:D-1" },
+      {
+        source: "from:D-1",
+        action: "created",
+        destination: "notes:D-1",
+        via: "created",
+        link: "recorded",
+      },
     ]);
 
     // The destination really holds it, read back through the same binary: every
@@ -448,6 +481,8 @@ test("a document copy drives the real binary and is refused by a source with non
     // own API rather than for a file call of this runtime — and only ahead of a drive letter,
     // the one form a temporary tree takes, so the `UNC\\` spelling this test never produces
     // is left whole rather than turned into a bad path.
+    // The cast holds because this destination is a folder of Markdown, which reports every
+    // document's location as a path; were it anything else, the read below fails outright.
     const located = document?.location as { path: string };
     const openable = located.path.replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, "");
     const sentinel = "read back through the location this source reported";

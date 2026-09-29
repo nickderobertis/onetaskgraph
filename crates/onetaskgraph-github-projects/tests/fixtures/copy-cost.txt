@@ -57,3 +57,25 @@ node count 203
 
 requests per call
     1     203  reading one issue
+
+(g) a task copy of 1 of those 10 tasks, its status changed, found by the link the whole copy recorded
+requests 8
+node count 1009
+
+requests per call
+    2     400  reading an issue's dependencies
+    3     609  reading one issue
+    1       0  updating an issue
+    2       0  writing a board field
+
+(h) the same task copy with every link removed, found by searching the board
+requests 9
+node count 31356
+
+requests per call
+    2     400  reading an issue's dependencies
+    2     406  reading one issue
+    1   10150  reading the board
+    1   20400  searching this board's issues
+    1       0  updating an issue
+    2       0  writing a board field

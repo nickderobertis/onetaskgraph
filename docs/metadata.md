@@ -14,15 +14,22 @@ trip through the ticketing system the user already works in.
 
 Keys are free-form, with two prefixes reserved:
 
-- `onetaskgraph.` belongs to this product. It defines exactly seven keys, each spelled
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate
+     rather than by words: `the_reserved_key_inventory_names_exactly_the_keys_the_code_spells`
+     in `crates/onetaskgraph/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
+     lists or the count it states in words differ from the constants each key is spelled once
+     as — `MetadataKey::COPIES_KEY` among them. -->
+- `onetaskgraph.` belongs to this product. It defines exactly eight keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
   `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
-  (`ItemKind::METADATA_KEY`) and `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`) in
-  the contract crate, and `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
+  (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`) and
+  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`) in the contract crate, and
+  `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
   interprets, though `github-projects` routes the key itself into a text field of its own.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 - `onepipeline.` belongs to that consumer.
 
 Every other key is the caller's. A source returns it exactly as it holds it — the same
@@ -327,3 +334,58 @@ the item being copied came out of it, so the destination keeps the origin it hol
 keeps holding none where it holds none. The original's provenance is its own, and
 overwriting it with the id of its own copy would leave the next ordinary copy from the
 store the item was authored in matching nothing and creating a second item beside it.
+
+### `onetaskgraph.copies`: where a copied item landed
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
+     `crates/onetaskgraph-core/tests/subprocess.rs` reads the example below out of this page and
+     fails unless the one validator of this value, at the stdio boundary, accepts it — beside
+     the shapes that validator refuses. -->
+`onetaskgraph.origin` is on the copy and names where it came from; `onetaskgraph.copies` is
+on the item that was copied and names where it went. Its value is a JSON object mapping a
+destination **source name** to the **qualified id** of that item's counterpart there, with at
+most one entry per destination:
+
+```json
+{"followups": "followups:I_kwDOAbc123", "notes": "notes:T-1"}
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+A copy that is not a dry run records or refreshes the entry for its destination on every item
+whose counterpart it found by this link, by searching the destination, or by `--match-by`,
+and on every item it created — once the whole copy has landed, through the item's own
+source's narrow metadata write (the one `metadata set` uses), and undone with the rest of the
+copy if the copy cannot finish. Every other destination's entry is left as it is, so long as
+it is a link at all: an entry whose value is not a qualified id of the source it is filed
+under is dropped when the entry is written, because no copy could follow it. A copy that found its
+counterpart by the item's own `onetaskgraph.origin` records nothing, because that
+correspondence is already written down, on the destination item. The next copy of the item
+reads the entry first: when the item it names still records this item as its origin, it is
+the counterpart, found by one read by id and no search — see the copy section of the README
+for the order the rules are tried in and the `stale-link` refusal.
+
+It lives in the `onetaskgraph.` namespace like the origin: `metadata set` refuses to write it,
+and a copy never carries it onto a destination — a destination item keeps the entry it holds,
+which says where *it* was copied to. A source that cannot hold it is copied from exactly as
+before, and the copy reports the link `unrecorded` rather than failing.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour, row by
+     row: `crates/onetaskgraph/tests/e2e/copy_link.rs` records the link in a folder's front
+     matter and reports a one-line `metadata:` as not recorded, over both boundaries;
+     `crates/onetaskgraph-core/tests/copy_link.rs` records it on an in-memory source;
+     `the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind` in the
+     github-projects plugin tests holds the body slot; the Linear plugin's
+     `a_metadata_key_is_refused_by_name_for_every_record_before_any_request` holds its refusal,
+     which the engine reads as not recorded; and
+     `a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked`
+     with `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` hold the
+     stdio row. -->
+| source | where it keeps `onetaskgraph.copies` |
+| --- | --- |
+| `local-md` | an entry of the front matter's `metadata:` block, one line of compact JSON; a record whose `metadata:` is written on one line, or that this source otherwise cannot edit one key of narrowly, cannot hold it |
+| `in-memory` | beside its other metadata, for the life of its process |
+| `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
+| `linear` | nowhere: it cannot write one metadata key on its own, so a copy out of it reports the link `unrecorded` |
+| a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->

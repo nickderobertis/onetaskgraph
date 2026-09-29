@@ -471,21 +471,21 @@ async fn dispatch(
         "set_task_metadata" => {
             let params: MetadataParams = decode(method, params)?;
             let task = source
-                .set_task_metadata(&params.id, &params.key, &params.value)
+                .set_task_metadata(params.id(), params.key(), params.value())
                 .await?;
             encode(json!({ "task": task.map(|task| told_task(task, known)) }))
         }
         "set_project_metadata" => {
             let params: MetadataParams = decode(method, params)?;
             let project = source
-                .set_project_metadata(&params.id, &params.key, &params.value)
+                .set_project_metadata(params.id(), params.key(), params.value())
                 .await?;
             encode(json!({ "project": project.map(|project| told_project(project, known)) }))
         }
         "set_document_metadata" => {
             let params: MetadataParams = decode(method, params)?;
             let document = source
-                .set_document_metadata(&params.id, &params.key, &params.value)
+                .set_document_metadata(params.id(), params.key(), params.value())
                 .await?;
             encode(json!({ "document": document }))
         }

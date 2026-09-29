@@ -322,14 +322,40 @@ $ $EDITOR notes/tasks/T-1.md
 $ onetaskgraph task copy notes:T-1 --to work
 ```
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys
+     in `crates/onetaskgraph/tests/e2e/copy_link.rs`: one fails unless the link example below is
+     the link a copy of `T-1` into `notes` really records, and another fails unless the rule for
+     a link naming nothing names the failure kind the binary really reports. -->
 The copy back **updates** rather than duplicating because the copied file carries the id
-it came from, under the reserved metadata key `onetaskgraph.origin`. Nothing anywhere
-holds a mapping: the correspondence lives on the item, inside the plugin that owns it.
+it came from, under the reserved metadata key `onetaskgraph.origin`. The item it was copied
+*from* records where it landed too, under `onetaskgraph.copies` — an object naming the
+counterpart at each destination it was copied into, such as
+`{"notes": "notes:T-1"}`. Nothing anywhere holds a mapping: the correspondence lives on the
+two items, inside the plugins that own them.
 
-Two rules find the counterpart, in this order. If the item's origin names the destination,
-that origin *is* the destination item and the copy updates it. Otherwise the destination
-is searched for an item whose origin is the id being copied; found, it is updated, and not
-found, one is created carrying that origin.
+These rules find the counterpart, in this order:
+
+1. **The link.** If the item's `onetaskgraph.copies` names an item at the destination, that
+   item is read by id, and when its own origin names the item being copied it is the
+   counterpart and the copy updates it — one read, and no search of the destination. If it
+   names an item the destination no longer holds, the copy refuses with the failure kind
+   `stale-link`, naming both ids, because creating there would duplicate work somebody
+   deleted; `--recreate` goes on to the rules below instead, and then creates. If it names an
+   item whose origin somebody re-pointed at something else, the link is ignored.
+2. **The origin.** If the item's origin names the destination, that origin *is* the
+   destination item and the copy updates it.
+3. **The search.** Otherwise the destination is searched for an item whose origin is the id
+   being copied; found, it is updated, and not found, one is created carrying that origin.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+Once the whole copy has landed, every item found by the link, the search or `--match-by`, or
+created, has its link for that destination recorded or refreshed — one metadata write at its
+own source, undone with everything else if the copy cannot finish. An item found by its own
+origin records nothing: that correspondence is already written down, on the destination
+item. A source that cannot hold the link — it has no write side, or will not make the narrow
+metadata write — is copied from exactly as before, and the report says the link was not
+recorded. So after one copy the pair is found from either side by one read by id: forward
+by the link, back by the origin.
 
 Which rule found it decides what the copy records there. A copy that got its counterpart
 from the first rule is a copy **back**: the destination is the original, and the item being
@@ -342,7 +368,7 @@ copied from, which is what makes the next copy of it an update.
 | Flag | What it is for |
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |
-| `--recreate` | An origin naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
+| `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
@@ -372,17 +398,32 @@ project having to be re-run, and the re-run is the burst of writes that trips a 
 destination's rate limiter. When the destination will not take one of them back, the
 refusal says so and names what is still there rather than leaving you to find it.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
 `--json` gives one entry per item for a script to read:
 
 ```json
-{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142"}]}
+{"items": [{"source": "notes:ENG-142", "action": "updated", "destination": "work:ENG-142",
+            "via": "link", "link": "unchanged"}]}
 ```
 
 `action` says which of the four things above happened to that item, and `destination` is
-`null` only for a dry run that would have created something. The vocabulary itself is
-published rather than restated here: it is the `CopyAction` root of `onetaskgraph schema`,
-which is what both SDKs are generated from and what the journeys validate this output
-against.
+`null` only for a dry run that would have created something. The vocabulary itself is the
+`CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
+what the journeys validate this output against.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
+     `crates/onetaskgraph/tests/e2e/surface.rs` reads this paragraph and fails unless the words
+     it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
+`via` is one field with five words, on every `created`, `updated` and `unchanged` item. On
+`updated` and `unchanged` it names the rule above that found the counterpart: `link`,
+`origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
+none did. `link` says what became of the item's own link, on those same three actions of a
+copy that writes: `recorded`, `unchanged`, or `unrecorded` where its source could not hold
+one. A dry run reports `via` and leaves `link` out, and an `orphaned` item carries neither.
+In the generated SDKs the four rule words are the type `CopyVia` and `created` is
+`NoCounterpart`, and the link words are `CopyLink`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 A copy that reaches a source which counts its own requests — `github-projects` does — also
 says what it **spent**: the requests those sources sent for the command, and what that cost

@@ -25,6 +25,19 @@ class BudgetSpent(BaseModel):
     unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
+class CopyLink(StrEnum):
+    CopyLinkRecorded = "recorded"
+    CopyLinkUnchanged = "unchanged"
+    CopyLinkUnrecorded = "unrecorded"
+
+
+class CopyVia(StrEnum):
+    CopyViaLink = "link"
+    CopyViaOrigin = "origin"
+    CopyViaScan = "scan"
+    CopyViaMatch = "match"
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -37,6 +50,10 @@ class GlobalId(RootModel[str]):
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
+
+
+class NoCounterpart(StrEnum):
+    NoCounterpartCreated = "created"
 
 
 class SourceName(RootModel[str]):
@@ -85,18 +102,40 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
         ),
     ] = None
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+        ),
+    ] = None
+    via: Annotated[
+        NoCounterpart,
+        Field(
+            description="That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
+        ),
+    ] = NoCounterpart.NoCounterpartCreated
 
 
 class CopyOutcomeUpdated(BaseModel):
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["updated"]
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
 
 
 class CopyOutcomeUnchanged(BaseModel):
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["unchanged"]
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
 
 
 class CopyOutcomeOrphaned(BaseModel):

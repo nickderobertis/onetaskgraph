@@ -77,7 +77,8 @@
 //! why neither can hold a caller's own prose. Setting one caller key on its own — on a task,
 //! a project or a document alike — is one update of the issue body that changes that slot
 //! and not one byte outside it, and it is not sent at all when the key already holds the
-//! value.
+//! value. The link a copy records on an item it copied, `onetaskgraph.copies`, is small and
+//! is kept in that same slot, written by that same update.
 //!
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This public module documentation is a required user-facing description; the loopback plugin tests and shared live journey drive StatusMapping resolution, both mutations, and observed read-back together.
 //! **Status.** `status_mapping` is per-instance configuration from a status category to

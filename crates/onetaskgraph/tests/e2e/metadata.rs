@@ -358,6 +358,14 @@ fn a_mistaken_id_key_or_value_is_refused_before_any_source_is_asked() {
                 "[]",
                 "which this product owns",
             ),
+            // The link a copy records: the engine writes it through this same seam, and
+            // nothing a person types does.
+            (
+                "store:D-1",
+                "onetaskgraph.copies",
+                r#"{"store":"store:D-9"}"#,
+                "which this product owns",
+            ),
             ("store:D-1", "myapp.review", "yes", "is not JSON"),
             ("store:D-1", "myapp.review", "2026-01-01", "is not JSON"),
             (

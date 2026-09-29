@@ -657,6 +657,37 @@ as `task status set` does. A terminal status adds its close to the same `updateI
 open status crossing from closed reopens in it; a priority that changes is one field write
 more; edges that differ cost the `blockedBy` difference and the reads that find it.
 
+## A task copy that follows the link its last copy recorded, and what that moved
+
+A copy now records where each item landed on the item it copied, at `onetaskgraph.copies`,
+and the next copy of that item reads its counterpart by id instead of searching the board
+for an item whose origin names it. Filing a task under its project follows the project's own
+link the same way. `tests/fixtures/copy-cost.txt` records two more rows, taken by the same
+test on the same loopback board and in the same two quantities — requests and worst-case
+node count, **not points**:
+
+- **(g)** `task copy` of one of the 10 tasks (a) landed, its status changed, after (a)
+  recorded every item's link;
+- **(h)** the same `task copy` with every link removed, which is how every re-copy of a task
+  on its own was found before a copy recorded one.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
+|                    | (h) found by searching | (g) found by the link |
+| ------------------ | ---------------------: | --------------------: |
+| **requests**       |                      9 |                     8 |
+| **node count**     |                  31356 |                  1009 |
+
+(h) reads the board once to find the project the task is filed under (`reading the board`)
+and searches the board's issues once to find the task (`searching this board's issues`), and
+both of those grow with the board. (g) sends neither: it
+reads the task's issue and its project's issue by their node ids — one `reading one issue`
+more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
+sends no board read and no board-scoped search, and that both copies update the one item.
+
+Rows (a) to (f) do not move. The link a whole copy records is written to the Markdown
+folder the plan lives in, which sends the board nothing, and every copy in (b) to (f) is of
+items whose own origin already names the board item, which records nothing.
+
 ## Re-taking the fact comment activity rests on, and what that costs
 
 `filter_by_comment_activity` is answered with the board-scoped issue search's `updated:`
