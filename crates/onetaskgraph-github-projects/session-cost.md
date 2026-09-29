@@ -708,15 +708,22 @@ one wrote it — its origin in the board field and not in the body — in 4 requ
 **128 and 352,105**, and this is the one record that grows. The journey lists its own
 artifacts by title and searches for a body marker many times over from one long-lived
 source, and every one of those listings used to be answered from one whole-board read the
-source kept; each distinct question is now one search of its own — four more
-`searching this board's issues` and one fewer `reading the board`. The loopback board is one
+source kept; each distinct question is now one search of its own. The loopback board is one
 page, so a whole-board read costs it one request and the per-question search looks dear
 beside it; on a board of hundreds of items a whole read is a page of `ProjectV2.items` and a
 page of search per hundred items, paid again by every fresh source, and the narrowed search
-stays one page. The rest: one more reconciliation, of the new document; one more
-`reading the board's fields`, which the board read used to answer; five fewer
-`reading an issue's dependencies`, of issues just created; and two more
-`reading a task's comments`, because the comment-activity read now also considers the
-existing items this source wrote, and the loopback board reports no `updatedAt` for an issue
-nobody commented on, so neither is ruled out without reading its comments. GitHub always
-reports one, and an item written before the instant is ruled out without a read.
+stays one page. `a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pages`
+in `tests/plugin.rs` holds that: each of the three questions sends the same requests to a
+board of four pages as to a board of one, while the unnarrowed read beside them does not.
+
+Every line of the record that moved, and nothing else moved:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 6 → 10 (+4) | 122,400 → 204,000 (+81,600) | each distinct title or marker listing is its own narrowed search rather than a share of one kept board read |
+| `reading the board` | 4 → 3 (−1) | 30,601 → 20,451 (−10,150) | the listings those searches answer no longer read the board |
+| `reading the board's fields` | 1 → 2 (+1) | 50 → 100 (+50) | a write that used to take the fields from the kept board read now reads them on their own |
+| `reading an issue's dependencies` | 9 → 4 (−5) | 1,400 → 400 (−1,000) | an issue this write just created is blocked by nothing, so its `blockedBy` is not read |
+| `reading a task's comments` | 2 → 4 (+2) | 200 → 400 (+200) | the comment-activity read now also considers the existing items this source wrote; the loopback board reports no `updatedAt` for an issue nobody commented on, so neither is ruled out without reading its comments. GitHub always reports one, and an item written before the instant is ruled out without a read |
+| `node-count and point-cost reconciliation while looking up the items copied from one origin` | 0 → 1 (+1) | 0 → 915 (+915) | a new line: the one reconciliation of the new `graphql::ORIGIN_LOOKUP` document, as every other document has one |
+| **total** | **126 → 128 (+2)** | **280,490 → 352,105 (+71,615)** | |

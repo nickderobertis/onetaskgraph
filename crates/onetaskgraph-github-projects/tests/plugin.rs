@@ -968,6 +968,18 @@ impl Fixture {
             .filter(|(_, seen, _)| seen == operation)
             .count()
     }
+    /// The operation every request this board received carried, in order, refused ones
+    /// included.
+    fn operations(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .limits
+            .arrivals
+            .iter()
+            .map(|(_, seen, _)| seen.clone())
+            .collect()
+    }
     /// The gaps between consecutive arrivals of any content-creating mutation.
     fn mutation_gaps(&self) -> Vec<Duration> {
         let state = self.state.lock().unwrap();
@@ -14336,6 +14348,77 @@ async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on()
          read from what this command already asked"
     );
     assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pages() {
+    // The one-page board is `narrowing_board`; the other is the same board with 350 more
+    // items that none of the three questions matches — four pages of `ProjectV2.items` and of
+    // an unqualified board search at GitHub's 100. Each question, asked of a fresh source,
+    // sends the same requests to both, so what it costs is the size of its answer and never
+    // the size of the board.
+    let several_pages = || {
+        let fixture = narrowing_board();
+        for index in 0..350 {
+            fixture.filed_by_something_else(
+                Item::issue(&format!("I_filler_{index:03}"), &format!("filler {index}"))
+                    .status("Todo")
+                    .carrying(&format!("work:OTHER-{index}"))
+                    .body(&slotted(
+                        "unrelated prose",
+                        &json!({"orchestrator.follow-up": {"root_cause": format!("cause-{index}")}}),
+                    )),
+            );
+        }
+        fixture
+    };
+    for (what, query, expected) in [
+        (
+            "text",
+            TaskQuery {
+                text: text("Ship it", TextFields::Title),
+                ..TaskQuery::default()
+            },
+            vec!["I_ship"],
+        ),
+        (
+            "metadata",
+            metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache"),
+            vec!["I_owned"],
+        ),
+        ("origin", origin_query("work:ENG-1"), vec!["I_copied"]),
+    ] {
+        let mut sent = Vec::new();
+        for fixture in [narrowing_board(), several_pages()] {
+            let source = source(&fixture);
+            assert_eq!(
+                selected_tasks(source.as_ref(), &query).await,
+                expected,
+                "{what}"
+            );
+            assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+            sent.push(fixture.operations());
+        }
+        assert!(!sent[0].is_empty(), "{what} sent nothing at all");
+        assert_eq!(
+            sent[0], sent[1],
+            "{what} sent more to a board of several pages than to a board of one"
+        );
+    }
+
+    // The unnarrowed read beside them does grow with the board, which is what makes the
+    // equality above a property of the three questions rather than of this fixture.
+    let unnarrowed = TaskQuery {
+        statuses: vec![StatusCategory::Todo],
+        ..TaskQuery::default()
+    };
+    let mut sent = Vec::new();
+    for fixture in [narrowing_board(), several_pages()] {
+        let source = source(&fixture);
+        selected_tasks(source.as_ref(), &unnarrowed).await;
+        sent.push(fixture.operations().len());
+    }
+    assert!(sent[1] > sent[0], "{sent:?}");
 }
 
 #[tokio::test]
