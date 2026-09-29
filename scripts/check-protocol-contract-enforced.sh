@@ -111,7 +111,7 @@ names "the list gone" 'no longer says "The template operations are not carried."
 run_case "a private wire member the document stops naming" \
   's/"path": \["root_cause"\], //; s/— `path`, zero or more nested object keys/— a path, zero or more nested object keys/' \
   refuse \
-  "restore the reading of a private-field struct's members in STRUCT_SECTIONS' loop in $GUARD"
+  "restore the reading of private as well as public members in STRUCT_SECTIONS' loop in $GUARD"
 names "a private wire member the document stops naming" \
   '`MetadataMatch` carries the field "path"' \
   "make $GUARD name the struct and the member the section no longer specifies"

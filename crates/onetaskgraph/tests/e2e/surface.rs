@@ -637,6 +637,9 @@ fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
     let readme = readme();
     let mut missing = Vec::new();
     for command in [
+        // The one list verb whose entry spells out its flags: its filters grew one at a time,
+        // and each has to reach the entry a reader looks for it in.
+        "task list",
         "task create",
         "task render",
         "task answers",
