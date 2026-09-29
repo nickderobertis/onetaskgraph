@@ -368,7 +368,7 @@ copied from, which is what makes the next copy of it an update.
 | Flag | What it is for |
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |
-| `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default (`stale-origin`, `stale-link`), because creating there would duplicate work somebody deleted. This says create instead. |
+| `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
@@ -398,6 +398,7 @@ project having to be re-run, and the re-run is the burst of writes that trips a 
 destination's rate limiter. When the destination will not take one of them back, the
 refusal says so and names what is still there rather than leaving you to find it.
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
 `--json` gives one entry per item for a script to read:
 
 ```json

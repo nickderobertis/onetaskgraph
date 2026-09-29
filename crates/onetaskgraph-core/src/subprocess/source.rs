@@ -885,7 +885,7 @@ impl TaskSource for SubprocessSource {
     ) -> Result<Option<Task>, SourceError> {
         self.metadata_updates(MetadataRecord::Task)?;
         let result: TaskResult = self
-            .ask("set_task_metadata", metadata_params(id, key, value))
+            .ask("set_task_metadata", metadata_params(id, key, value)?)
             .await?;
         Ok(result.task)
     }
@@ -898,7 +898,7 @@ impl TaskSource for SubprocessSource {
     ) -> Result<Option<Project>, SourceError> {
         self.metadata_updates(MetadataRecord::Project)?;
         let result: ProjectResult = self
-            .ask("set_project_metadata", metadata_params(id, key, value))
+            .ask("set_project_metadata", metadata_params(id, key, value)?)
             .await?;
         Ok(result.project)
     }
@@ -911,7 +911,7 @@ impl TaskSource for SubprocessSource {
     ) -> Result<Option<Document>, SourceError> {
         self.metadata_updates(MetadataRecord::Document)?;
         let result: DocumentResult = self
-            .ask("set_document_metadata", metadata_params(id, key, value))
+            .ask("set_document_metadata", metadata_params(id, key, value)?)
             .await?;
         Ok(result.document)
     }
@@ -1127,11 +1127,10 @@ fn params<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("method parameters are plain data")
 }
 
-/// The parameters of any of the three narrow metadata writes (§4.18).
-fn metadata_params(id: &NativeId, key: &MetadataKey, value: &Value) -> Value {
-    params(&MetadataParams {
-        id: id.clone(),
-        key: key.clone(),
-        value: value.clone(),
-    })
+/// The parameters of any of the three narrow metadata writes (§4.18), or the refusal of a
+/// value its key may not hold — which is never sent.
+fn metadata_params(id: &NativeId, key: &MetadataKey, value: &Value) -> Result<Value, SourceError> {
+    MetadataParams::new(id.clone(), key.clone(), value.clone())
+        .map(|built| params(&built))
+        .map_err(|message| SourceError::Refused { message })
 }

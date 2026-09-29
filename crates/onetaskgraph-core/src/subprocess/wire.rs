@@ -621,18 +621,52 @@ pub(crate) struct DeliveredByResult {
 
 /// `set_task_metadata`, `set_project_metadata` and `set_document_metadata` parameters
 /// (§4.18).
+///
+/// Built only through [`MetadataParams::new`], which deserialization goes through too, so no
+/// value of this type holds [`MetadataKey::COPIES_KEY`] with a value that is not links.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "UncheckedMetadataParams")]
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
-    pub(crate) id: NativeId,
+    id: NativeId,
     /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
     /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
-    pub(crate) key: MetadataKey,
+    key: MetadataKey,
     /// The value to hold under it: any JSON, `null` included — and for
     /// [`MetadataKey::COPIES_KEY`], only an object of destination source names to qualified
     /// ids of that source.
-    pub(crate) value: Value,
+    value: Value,
+}
+
+impl MetadataParams {
+    /// One narrow metadata write, once its value is one its key may hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns why, when `key` is [`MetadataKey::COPIES_KEY`] and `value` is not links.
+    pub(crate) fn new(id: NativeId, key: MetadataKey, value: Value) -> Result<Self, String> {
+        if key.is_copies()
+            && let Some(malformed) = crate::engine::malformed_links(&value)
+        {
+            return Err(malformed);
+        }
+        Ok(Self { id, key, value })
+    }
+
+    /// The record whose metadata key is set.
+    pub(crate) fn id(&self) -> &NativeId {
+        &self.id
+    }
+
+    /// The key.
+    pub(crate) fn key(&self) -> &MetadataKey {
+        &self.key
+    }
+
+    /// The value to hold under it.
+    pub(crate) fn value(&self) -> &Value {
+        &self.value
+    }
 }
 
 /// [`MetadataParams`] as they arrive, before the value of the one reserved key is checked.
@@ -648,16 +682,7 @@ impl TryFrom<UncheckedMetadataParams> for MetadataParams {
     type Error = String;
 
     fn try_from(params: UncheckedMetadataParams) -> Result<Self, Self::Error> {
-        if params.key.is_copies()
-            && let Some(malformed) = crate::engine::malformed_links(&params.value)
-        {
-            return Err(malformed);
-        }
-        Ok(Self {
-            id: params.id,
-            key: params.key,
-            value: params.value,
-        })
+        Self::new(params.id, params.key, params.value)
     }
 }
 

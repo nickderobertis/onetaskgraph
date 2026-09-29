@@ -1213,3 +1213,34 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
     ]);
     assert_eq!(named, expected, "the README's paragraph:\n{paragraph}");
 }
+
+#[test]
+fn the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits() {
+    // The README shows what `--json` gives a script by example, and a script is generated
+    // against the schema, so the example is held to that schema rather than to the prose.
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
+    )
+    .expect("README.md is readable");
+    let lead = "`--json` gives one entry per item for a script to read:\n\n```json\n";
+    let start = readme
+        .find(lead)
+        .expect("the README's example of a copy report")
+        + lead.len();
+    let example: serde_json::Value =
+        serde_json::from_str(&readme[start..start + readme[start..].find("```").unwrap()])
+            .expect("the example is JSON");
+    crate::machine::validates(
+        &crate::machine::bundle(&Sandbox::new()),
+        "CopyReport",
+        &example,
+        "the README's example of a copy report",
+    );
+    // An example of a copy that found its counterpart, so it shows both fields a script reads
+    // beside `action`.
+    let item = &example["items"][0];
+    assert!(
+        item.get("via").is_some() && item.get("link").is_some(),
+        "{example}"
+    );
+}

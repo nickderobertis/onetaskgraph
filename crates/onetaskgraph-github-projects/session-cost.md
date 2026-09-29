@@ -677,9 +677,9 @@ node count, **not points**:
 | **requests**       |                      9 |                     8 |
 | **node count**     |                  31356 |                  1009 |
 
-(h) reads the board once to find the project the task is filed under (`reading the board`,
-10,150 worst-case nodes) and searches the board's issues once to find the task
-(`searching this board's issues`, 20,400); both grow with the board. (g) sends neither: it
+(h) reads the board once to find the project the task is filed under (`reading the board`)
+and searches the board's issues once to find the task (`searching this board's issues`), and
+both of those grow with the board. (g) sends neither: it
 reads the task's issue and its project's issue by their node ids — one `reading one issue`
 more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
 sends no board read and no board-scoped search, and that both copies update the one item.

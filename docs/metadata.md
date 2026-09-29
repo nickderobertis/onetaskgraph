@@ -356,7 +356,9 @@ A copy that is not a dry run records or refreshes the entry for its destination 
 whose counterpart it found by this link, by searching the destination, or by `--match-by`,
 and on every item it created — once the whole copy has landed, through the item's own
 source's narrow metadata write (the one `metadata set` uses), and undone with the rest of the
-copy if the copy cannot finish. Every other entry is left as it is. A copy that found its
+copy if the copy cannot finish. Every other destination's entry is left as it is, so long as
+it is a link at all: an entry whose value is not a qualified id of the source it is filed
+under is dropped when the entry is written, because no copy could follow it. A copy that found its
 counterpart by the item's own `onetaskgraph.origin` records nothing, because that
 correspondence is already written down, on the destination item. The next copy of the item
 reads the entry first: when the item it names still records this item as its origin, it is
@@ -368,6 +370,17 @@ and a copy never carries it onto a destination — a destination item keeps the 
 which says where *it* was copied to. A source that cannot hold it is copied from exactly as
 before, and the copy reports the link `unrecorded` rather than failing.
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour, row by
+     row: `crates/onetaskgraph/tests/e2e/copy_link.rs` records the link in a folder's front
+     matter and reports a one-line `metadata:` as not recorded, over both boundaries;
+     `crates/onetaskgraph-core/tests/copy_link.rs` records it on an in-memory source;
+     `the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind` in the
+     github-projects plugin tests holds the body slot; the Linear plugin's
+     `a_metadata_key_is_refused_by_name_for_every_record_before_any_request` holds its refusal,
+     which the engine reads as not recorded; and
+     `a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked`
+     with `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` hold the
+     stdio row. -->
 | source | where it keeps `onetaskgraph.copies` |
 | --- | --- |
 | `local-md` | an entry of the front matter's `metadata:` block, one line of compact JSON; a record whose `metadata:` is written on one line, or that this source otherwise cannot edit one key of narrowly, cannot hold it |
@@ -375,3 +388,4 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
 | `linear` | nowhere: it cannot write one metadata key on its own, so a copy out of it reports the link `unrecorded` |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
