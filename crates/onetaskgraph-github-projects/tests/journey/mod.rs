@@ -419,7 +419,7 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
 /// this source can drive a document to, which is what the offline bound is computed under.
 /// Every other variable takes a value of the right type and no meaning at all, because
 /// `dryRun: true` computes the count without resolving one of them.
-fn dry_run_variables(document: &str) -> Value {
+pub fn dry_run_variables(document: &str) -> Value {
     let mut variables = serde_json::Map::new();
     let mut bind = |name: &str, value: Value| {
         if document.contains(&format!("${name}:")) {

@@ -578,6 +578,10 @@ struct State {
     searches: Vec<String>,
     /// The field filter of every origin lookup this board answered, in order.
     origin_filters: Vec<String>,
+    /// Every non-null variable a request declared and left unbound, as `$name: Type`, in
+    /// arrival order. GitHub refuses such a request before it runs, and so does this board;
+    /// this is the record a test reads to say which request it was.
+    unbound_variables: Vec<String>,
     /// Items this board's indexes — its issue search and its item connection's field filter —
     /// still answer as they were before a write, by content id.
     ///
@@ -1039,6 +1043,10 @@ impl Fixture {
     fn origin_filters(&self) -> Vec<String> {
         self.state.lock().unwrap().origin_filters.clone()
     }
+    /// Every non-null variable a request this board refused had left unbound.
+    fn unbound_variables(&self) -> Vec<String> {
+        self.state.lock().unwrap().unbound_variables.clone()
+    }
     fn items_connection_falls_behind(&self) {
         let mut state = self.state.lock().unwrap();
         state.items_connection_behind_from = Some(state.items.len());
@@ -1127,6 +1135,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         documents: Vec::new(),
         searches: Vec::new(),
         origin_filters: Vec::new(),
+        unbound_variables: Vec::new(),
         indexed_as: BTreeMap::new(),
         comment_reads: Vec::new(),
         labels: Vec::new(),
@@ -1181,7 +1190,9 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                          x-ratelimit-remaining: {remaining}\r\n\
                          x-ratelimit-resource: graphql\r\n"
                     ),
-                    match refused(&served, query, variables) {
+                    match unbound_refusal(&served, query, variables)
+                        .or_else(|| refused(&served, query, variables))
+                    {
                         Some(message) => json!({"errors":[{"message":message}]}).to_string(),
                         None => json!({ "data": answer(&served, query, variables) }).to_string(),
                     },
@@ -1201,6 +1212,25 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         }
     });
     Fixture { endpoint, state }
+}
+
+/// GitHub's refusal of a request that leaves a non-null variable unbound, recorded, or
+/// `None` when every such variable is given.
+///
+/// GitHub validates the variables before it runs anything, so a request refused here reaches
+/// no board state — exactly what the credentialed lane saw of an origin lookup's cost probe
+/// sent without its `$filter`, which no board that answered it anyway could have shown.
+fn unbound_refusal(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<String> {
+    let unbound = board::unbound_required_variables(query, variables);
+    let (name, ty) = unbound.first()?.clone();
+    state
+        .lock()
+        .unwrap()
+        .unbound_variables
+        .extend(unbound.iter().map(|(name, ty)| format!("${name}: {ty}")));
+    Some(format!(
+        "Variable ${name} of type {ty} was provided invalid value"
+    ))
 }
 
 /// The GraphQL error a refused mutation answers with, or `None` to perform it.
@@ -14220,6 +14250,79 @@ async fn a_metadata_answer_is_confirmed_against_the_parsed_metadata_comment() {
         ]
     );
     assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn every_request_a_text_metadata_or_origin_query_sends_binds_every_non_null_variable() {
+    // GitHub refuses a request that leaves a variable it declares non-null unbound, before it
+    // runs a thing — "Variable $filter of type String! was provided invalid value" is how the
+    // credentialed lane met the origin lookup's cost probe sent without its filter. This board
+    // refuses the same way, so each of these reads, walked a page at a time to exhaustion,
+    // would fail naming the variable; what is asserted besides is that nothing was refused.
+    let mut all_three = metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache");
+    all_three.text = text("mentioned", TextFields::Content);
+    all_three.origin = Some("work:ENG-1".to_owned());
+    let cases = [
+        (
+            "title text",
+            TaskQuery {
+                text: text("Ship it", TextFields::Title),
+                ..TaskQuery::default()
+            },
+            vec!["I_ship"],
+        ),
+        (
+            "content text",
+            TaskQuery {
+                text: text("release notes", TextFields::Content),
+                ..TaskQuery::default()
+            },
+            vec!["I_ship"],
+        ),
+        (
+            "title-or-content text",
+            TaskQuery {
+                text: text("ship", TextFields::TitleOrContent),
+                ..TaskQuery::default()
+            },
+            // "Shipment plan" holds the substring but not the token, so GitHub's search
+            // never offers it: the documented narrowing.
+            vec!["I_ship"],
+        ),
+        (
+            "metadata",
+            metadata_query("orchestrator.follow-up", &["root_cause"], "stale-cache"),
+            vec!["I_owned"],
+        ),
+        ("origin", origin_query("work:ENG-1"), vec!["I_copied"]),
+        ("all three at once", all_three, vec![]),
+    ];
+    for (what, query, expected) in cases {
+        let fixture = narrowing_board();
+        let source = source(&fixture);
+        let mut selected = Vec::new();
+        let mut request = page(1);
+        loop {
+            let answered = source
+                .query_tasks(&query, &request)
+                .await
+                .unwrap_or_else(|error| panic!("{what}: {error}"));
+            selected.extend(answered.items.into_iter().map(|task| task.id.0));
+            let Some(next) = answered.next else { break };
+            request = resume(&next.0, 1);
+        }
+        selected.sort();
+        assert_eq!(selected, expected, "{what}");
+        assert_eq!(
+            fixture.unbound_variables(),
+            Vec::<String>::new(),
+            "{what} sent a request leaving a non-null variable unbound"
+        );
+        assert!(
+            !fixture.searches().is_empty(),
+            "{what} sent no search at all"
+        );
+    }
 }
 
 #[tokio::test]
