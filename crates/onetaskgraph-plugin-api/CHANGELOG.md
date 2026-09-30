@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.52](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.51...onetaskgraph-plugin-api-v0.2.52) - 2026-09-29
+
+### Added
+
+- *(github-projects)* answer text, metadata and origin queries with GitHub's own search ([#2983](https://github.com/nickderobertis/onetaskgraph/pull/2983))
+- *(copy)* record where an item was copied to and follow that link on every later copy ([#2967](https://github.com/nickderobertis/onetaskgraph/pull/2967))
+
 ## [0.2.50](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.49...onetaskgraph-plugin-api-v0.2.50) - 2026-09-29
 
 ### Added
