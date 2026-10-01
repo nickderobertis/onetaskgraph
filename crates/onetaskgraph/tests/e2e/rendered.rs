@@ -2375,3 +2375,243 @@ fn a_rendering_on_the_board_matches_it_through_every_write_and_an_interior_edit_
         );
     }
 }
+
+impl Plan {
+    /// A project `P-1` in `notes` holding one task, and that task's id and the location string
+    /// `notes` reports for it — the string a document's references are rewritten from.
+    fn planned_task(&self) -> (String, String) {
+        std::fs::create_dir_all(self.notes.join("projects")).unwrap();
+        std::fs::write(
+            self.notes.join("projects/P-1.md"),
+            "---\ntitle: Plan\nstatus: todo\n---\nWhy.\n",
+        )
+        .unwrap();
+        let body = self.file("step.md", "The step.");
+        let task = stdout(&self.exits(
+            &[
+                "task",
+                "create",
+                "notes",
+                "--project",
+                "P-1",
+                "--title",
+                "Step",
+                "--body-file",
+                &body,
+            ],
+            0,
+        ))
+        .trim()
+        .to_owned();
+        let location = self.task(&task)["location"]["path"]
+            .as_str()
+            .expect("a folder of Markdown reports a task's path")
+            .to_owned();
+        (task, location)
+    }
+
+    /// A design document in `notes`' `P-1` rendered from the task template, whose goal names
+    /// `goal` — inside backticks, the way the artifact this exists for names a task.
+    fn design(&self, goal: &str) -> String {
+        let answer = format!("goal=`{goal}`");
+        let created = self.json(&[
+            "document",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Design",
+            "--template",
+            &self.template(),
+            "--search-path",
+            &self.search_path(),
+            "--var",
+            &answer,
+            "--no-interactive",
+        ]);
+        created["items"][0]["id"].as_str().unwrap().to_owned()
+    }
+
+    fn document(&self, id: &str) -> Value {
+        self.json(&["document", "show", id])["items"][0]["item"].clone()
+    }
+
+    /// `document copy` of `id` into `to`, answering the report and the copy as `to` holds it.
+    fn copy_document(&self, id: &str, to: &str) -> (Value, Value) {
+        let report = self.json(&["document", "copy", id, "--to", to]);
+        let copied = report["items"][0]["destination"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the copy names where it landed: {report:#}"))
+            .to_owned();
+        (report, self.document(&copied))
+    }
+}
+
+/// The provenance a copied document carries, beside the SHA-256 of its content there.
+fn recorded_and_hashed(document: &Value) -> (Value, Value) {
+    (
+        document["metadata"]["onetaskgraph.template"].clone(),
+        json!(sha256(document["content"].as_str().unwrap())),
+    )
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
+#[test]
+fn a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given() {
+    let plan = Plan::new();
+    let (task, location) = plan.planned_task();
+    let id = plan.design(&location);
+    let authored = plan.document(&id);
+    let provenance = authored["metadata"]["onetaskgraph.template"].clone();
+    assert_eq!(
+        provenance["body_digest"],
+        json!(sha256(authored["content"].as_str().unwrap())),
+        "the rendering is as it was rendered"
+    );
+
+    let project = plan.json(&["project", "copy", "notes:P-1", "--to", "back"]);
+    let counterpart = project["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["source"] == json!(task))
+        .unwrap_or_else(|| panic!("the task was copied: {project:#}"))["destination"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let there = plan.task(&counterpart)["location"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let (report, copied) = plan.copy_document(&id, "back");
+    assert_eq!(report["references_rewritten"], 1, "{report:#}");
+    let content = copied["content"].as_str().unwrap();
+    assert!(
+        content.contains(&format!("Goal: `{there}`")) && !content.contains(&location),
+        "the content names the destination's record for the task:\n{content}"
+    );
+    let entry = &copied["metadata"]["onetaskgraph.template"];
+    assert_eq!(
+        entry["body_digest"],
+        json!(sha256(content)),
+        "the recorded body_digest is the rewritten content's"
+    );
+    for field in ["template", "digest", "answers_digest"] {
+        assert_eq!(entry[field], provenance[field], "`{field}` is carried");
+    }
+    assert_eq!(
+        entry.as_object().unwrap().len(),
+        4,
+        "still the four strings: {entry:#}"
+    );
+
+    // Copied again, unchanged: the same content and the same provenance.
+    let (_, again) = plan.copy_document(&id, "back");
+    assert_eq!(again["content"], copied["content"]);
+    assert_eq!(again["metadata"], copied["metadata"]);
+
+    // What an earlier release's copy left — the rewritten content beside the unrewritten
+    // rendering's digest — is brought to the rewritten content's digest by the next copy.
+    let file = plan.back.join("documents").join(format!(
+        "{}.md",
+        native(report["items"][0]["destination"].as_str().unwrap())
+    ));
+    let held = std::fs::read_to_string(&file).unwrap();
+    let rewritten = entry["body_digest"].as_str().unwrap();
+    let unrewritten = provenance["body_digest"].as_str().unwrap();
+    assert!(held.contains(rewritten), "{held}");
+    std::fs::write(&file, held.replace(rewritten, unrewritten)).unwrap();
+    let stale = plan.document(report["items"][0]["destination"].as_str().unwrap());
+    let (recorded, hashed) = recorded_and_hashed(&stale);
+    assert_ne!(
+        recorded["body_digest"], hashed,
+        "the earlier release's state"
+    );
+    let (_, repaired) = plan.copy_document(&id, "back");
+    let (recorded, hashed) = recorded_and_hashed(&repaired);
+    assert_eq!(recorded["body_digest"], hashed);
+    assert_eq!(repaired["metadata"], copied["metadata"]);
+    assert_eq!(repaired["content"], copied["content"]);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
+#[test]
+fn a_copy_carries_provenance_it_cannot_vouch_for_verbatim() {
+    let plan = Plan::new();
+    let (_, location) = plan.planned_task();
+    plan.json(&["project", "copy", "notes:P-1", "--to", "back"]);
+
+    // Edited by hand after it was rendered: the edit stays visible where it lands.
+    let edited = plan.design(&location);
+    let file = plan
+        .notes
+        .join("documents")
+        .join(format!("{}.md", native(&edited)));
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, text.replacen("# The task", "# The task, edited", 1)).unwrap();
+    let source = plan.document(&edited);
+    let (report, copied) = plan.copy_document(&edited, "back");
+    assert_eq!(report["references_rewritten"], 1, "{report:#}");
+    assert_eq!(
+        copied["metadata"]["onetaskgraph.template"], source["metadata"]["onetaskgraph.template"],
+        "a hand edit's provenance is carried unchanged"
+    );
+    let (recorded, hashed) = recorded_and_hashed(&copied);
+    assert_ne!(recorded["body_digest"], hashed, "and is not laundered");
+
+    // No provenance at all: none arrives.
+    let body = plan.file("plain.md", &format!("Goal: `{location}`\n"));
+    let plain = stdout(&plan.exits(
+        &[
+            "document",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Plain",
+            "--body-file",
+            &body,
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    let (report, copied) = plan.copy_document(&plain, "back");
+    assert_eq!(report["references_rewritten"], 1, "{report:#}");
+    assert_eq!(copied["metadata"].get("onetaskgraph.template"), None);
+
+    // An entry this product did not write: carried exactly as it was.
+    std::fs::write(
+        plan.notes.join("documents/forged.md"),
+        format!(
+            "---\ntitle: Forged\nproject: P-1\nmetadata:\n  onetaskgraph.template: by hand\n\
+             ---\nGoal: `{location}`\n"
+        ),
+    )
+    .unwrap();
+    let (report, copied) = plan.copy_document("notes:forged", "back");
+    assert_eq!(report["references_rewritten"], 1, "{report:#}");
+    assert_eq!(copied["metadata"]["onetaskgraph.template"], "by hand");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
+#[test]
+fn a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged() {
+    let plan = Plan::new();
+    let (_, location) = plan.planned_task();
+    let id = plan.design(&location);
+    let source = plan.document(&id);
+    // The project was never copied, so `back` holds no counterpart for the task it names.
+    let (report, copied) = plan.copy_document(&id, "back");
+    assert_eq!(report["references_unresolved"], 1, "{report:#}");
+    assert_eq!(copied["content"], source["content"]);
+    assert_eq!(
+        copied["metadata"]["onetaskgraph.template"],
+        source["metadata"]["onetaskgraph.template"]
+    );
+    let (recorded, hashed) = recorded_and_hashed(&copied);
+    assert_eq!(recorded["body_digest"], hashed);
+}

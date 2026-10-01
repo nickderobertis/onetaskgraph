@@ -52,6 +52,7 @@ use serde_json::Value;
 
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
+use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
 
 use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
@@ -1808,8 +1809,16 @@ impl Engine {
     /// exited. Reading the destination is also what makes a document copied on its own
     /// work, which a same-run mapping never could.
     ///
-    /// Tasks and projects are not touched. Only a document's content is rewritten, and
-    /// nothing else about it changes.
+    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This comment is required to state the rule; it is held by the journeys `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph/tests/e2e/rendered.rs`, and the entry's fields are `TemplateProvenance`'s own.
+    /// Tasks and projects are not touched. A document's content is rewritten, and so is
+    /// one thing beside it: when this substitutes at least one reference into a rendering
+    /// that still hashes to the `body_digest` its [`TemplateProvenance`] records, the copy
+    /// records as `body_digest` the digest of the rendering as this rewrote its references,
+    /// carrying the entry's other three fields; any other entry, or none, is carried
+    /// verbatim. The answers that rendering was made from, and the `answers_digest` naming
+    /// them, still hold the pre-copy locations, so the copy is not a fresh rendering of them
+    /// and a regenerate from them reproduces the pre-copy content.
+    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
     async fn rewrite_references(
         &self,
         destination: &ResolvedSource,
@@ -1843,6 +1852,13 @@ impl Engine {
                 continue;
             };
             let (rewritten, made) = substitute(content, &table_for(&referents, &counterparts));
+            if made.rewritten > 0
+                && let Some(provenance) = restamped(&document.metadata, content, &rewritten)
+            {
+                document
+                    .metadata
+                    .insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
+            }
             document.content = Some(rewritten);
             counts.add(made);
         }
@@ -3263,6 +3279,25 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
         at += character.len_utf8();
     }
     (written, counts)
+}
+
+/// The entry [`Engine::rewrite_references`] records for a document it rewrote from `read`
+/// to `written`, or `None` to carry what the document records verbatim.
+///
+/// `None` unless `read` is still the rendering its entry vouches for, because only then is
+/// the one change between it and `written` this copy's own: a hand edit is never laundered.
+fn restamped(
+    metadata: &BTreeMap<String, Value>,
+    read: &str,
+    written: &str,
+) -> Option<TemplateProvenance> {
+    let mut provenance = TemplateProvenance::read(metadata).ok().flatten()?;
+    if provenance.body_digest.as_str() != body_digest(read) {
+        return None;
+    }
+    provenance.body_digest =
+        Sha256Digest::parse(body_digest(written)).expect("`body_digest` spells a digest");
+    Some(provenance)
 }
 
 /// The origin one item records, when it records a usable one.
