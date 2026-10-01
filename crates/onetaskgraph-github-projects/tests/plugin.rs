@@ -15142,6 +15142,51 @@ async fn an_origin_lookup_walks_each_of_its_connections_past_its_first_page() {
 }
 
 #[tokio::test]
+async fn an_origin_lookup_keeps_its_page_of_three_whatever_the_answer_holds() {
+    // The bounded narrowing searches size their pages by the rows a caller needs; the origin
+    // lookup already costs one point a page and keeps its own size, so the number of pages it
+    // sends grows with the carriers alone.
+    for count in [0_usize, 3, 21, 130] {
+        let mut items = (0..count)
+            .map(|index| {
+                Item::issue(&format!("I_{index:03}"), "carrier")
+                    .status("Todo")
+                    .carrying("work:ENG-1")
+            })
+            .collect::<Vec<_>>();
+        items.push(
+            Item::issue("I_other", "other")
+                .status("Todo")
+                .carrying("work:ENG-2"),
+        );
+        let fixture = board(items);
+        let mut found =
+            walk_tasks(source(&fixture).as_ref(), &origin_query("work:ENG-1"), 100).await;
+        found.sort();
+        assert_eq!(
+            found,
+            (0..count)
+                .map(|index| format!("I_{index:03}"))
+                .collect::<Vec<_>>(),
+            "{count}"
+        );
+        let firsts = fixture
+            .state
+            .lock()
+            .unwrap()
+            .bindings
+            .iter()
+            .filter(|(operation, _)| operation == "originItems")
+            .map(|(_, variables)| variables["originFirst"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(firsts, vec![3; count.div_ceil(3).max(1)], "{count}");
+        assert_eq!(fixture.requests("originItems"), count.div_ceil(3).max(1));
+        assert_eq!(fixture.requests("search"), 0, "{count}");
+        assert_eq!(fixture.requests("board"), 0, "{count}");
+    }
+}
+
+#[tokio::test]
 async fn an_origin_lookup_answer_this_source_cannot_read_is_refused_by_what_is_wrong() {
     let empty = |more: bool, cursor: Value| json!({"nodes":[],"pageInfo":{"hasNextPage":more,"endCursor":cursor}});
     let answer = |items: Value, search: Value| json!({"data":{"originItems":{"projectV2":{"items":items}},"search":search}});
