@@ -955,6 +955,7 @@ struct GitHubBoard {
     drift_after_priority_update: bool,
     /// Whether a `Priority` value write is answered as landed and not kept.
     drops_priority_writes: bool,
+    priority_response: Option<Value>,
     /// Whether the board goes out of the token's sight after the next option-list update.
     hides_after_update: bool,
     /// Whether the next `Priority` option-list update re-mints a pre-existing option's id.
@@ -1147,6 +1148,11 @@ impl GitHubBoardFields {
             .as_mut()
             .expect("the board has a Priority field")
             .push(json!({"id":id,"name":name,"color":"PINK","description":"a person's"}));
+    }
+
+    /// Replace the next priority mutation's item payload with a malformed host response.
+    pub fn malform_priority_response(&self, value: Value) {
+        self.board.lock().unwrap().priority_response = Some(value);
     }
 
     /// Put one item in the `Priority` option named `name`, or in none.
@@ -1702,6 +1708,7 @@ fn github_projects_board_at(
         ),
         drift_after_priority_update: false,
         drops_priority_writes: false,
+        priority_response: None,
         hides_after_update: false,
         remints_after_priority_update: false,
         omits_added_priority_option: false,
@@ -1908,6 +1915,45 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
+        let mut result = serde_json::Map::new();
+        for (alias, variable, enabled, document, key) in [
+            (
+                "updateProjectV2ItemFieldValue",
+                "input",
+                true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "second",
+                "second",
+                variables["writeSecond"] == true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "third",
+                "third",
+                variables["writeThird"] == true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "cleared",
+                "clear",
+                variables["writeClear"] == true,
+                onetaskgraph_github_projects::graphql::CLEAR_FIELD,
+                "clearProjectV2ItemFieldValue",
+            ),
+        ] {
+            if enabled {
+                let answer = github_answer(board, document, &json!({"input":variables[variable]}));
+                result.insert(alias.to_owned(), answer[key].clone());
+            }
+        }
+        return Value::Object(result);
+    }
     let mut board = board.lock().unwrap();
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
     if query.contains("updateProjectV2Field(input:$input)") && input["fieldId"] == "FIELD-priority"
@@ -1986,7 +2032,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .find(|item| item["item"] == item_id)
             .expect("a field clear names a board item");
         held["priority"] = Value::Null;
-        return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
+        return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":null}}});
     }
     if query.contains("updateProjectV2Field(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
@@ -2298,7 +2344,21 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         if text.is_string() {
             held["origin"] = text;
         }
-        return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
+        let held = held.clone();
+        if variables["readPriority"] == true
+            && let Some(response) = board.priority_response.take()
+        {
+            return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":response}});
+        }
+        let rendered = board.rendered(&held);
+        let priority = rendered["fieldValues"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["field"]["name"] == "Priority")
+            .cloned()
+            .unwrap_or(Value::Null);
+        return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":priority}}});
     }
     if query.contains("addSubIssue(input:$input)") || query.contains("removeSubIssue(input:$input)")
     {

@@ -640,18 +640,39 @@ fn priority_writes(board: &GitHubBoardFields) -> Vec<String> {
     board
         .served()
         .into_iter()
-        .filter_map(|(query, variables)| {
-            if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
-                return Some("clear".to_owned());
-            }
-            (query.contains("updateProjectV2ItemFieldValue(input:$input)")
-                && variables["input"]["fieldId"] == "FIELD-priority")
-                .then(|| {
+        .flat_map(|(query, variables)| {
+            let mut writes = Vec::new();
+            if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
+                for (key, enabled) in [
+                    ("input", true),
+                    ("second", variables["writeSecond"] == true),
+                    ("third", variables["writeThird"] == true),
+                    ("clear", variables["writeClear"] == true),
+                ] {
+                    if enabled && variables[key]["fieldId"] == "FIELD-priority" {
+                        writes.push(if key == "clear" {
+                            "clear".to_owned()
+                        } else {
+                            variables[key]["value"]["singleSelectOptionId"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned()
+                        });
+                    }
+                }
+            } else if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
+                writes.push("clear".to_owned());
+            } else if query.contains("updateProjectV2ItemFieldValue(input:$input)")
+                && variables["input"]["fieldId"] == "FIELD-priority"
+            {
+                writes.push(
                     variables["input"]["value"]["singleSelectOptionId"]
                         .as_str()
-                        .expect("an option id")
-                        .to_owned()
-                })
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+            writes
         })
         .collect()
 }
@@ -1203,4 +1224,51 @@ fn a_stdio_plugin_written_before_priorities_is_never_handed_one_or_a_content_wri
         "{:?}",
         asked()
     );
+}
+
+#[test]
+fn a_priority_mutation_with_a_malformed_read_back_fails_without_resolving_again() {
+    for (payload, expected) in [
+        (Value::Null, "id"),
+        (json!({"id":"wrong"}), "wrong project item"),
+        (json!({"id":"ITEM-T-2"}), "no priority read-back"),
+        (
+            json!({"id":"ITEM-T-2","fieldValueByName":"bad"}),
+            "not a Priority field value",
+        ),
+        (
+            json!({"id":"ITEM-T-2","fieldValueByName":{"field":{"name":"Priority"},"name":7}}),
+            "name",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let (config, board) = github_projects_with_board(&sandbox);
+        sandbox.project_document(&document(
+            &json!({ SOURCE: {"plugin":"github-projects","config":config} }),
+        ));
+        board.malform_priority_response(payload);
+        let output = sandbox
+            .command()
+            .args([
+                "task",
+                "priority",
+                "set",
+                &qualified(SOURCE, "T-2"),
+                "medium",
+                "--json",
+            ])
+            .assert()
+            .get_output()
+            .clone();
+        assert_ne!(output.status.code(), Some(0));
+        assert!(stderr(&output).contains(expected), "{}", stderr(&output));
+        assert_eq!(
+            board
+                .served()
+                .iter()
+                .filter(|(query, _)| query == onetaskgraph_github_projects::graphql::ISSUE)
+                .count(),
+            1
+        );
+    }
 }

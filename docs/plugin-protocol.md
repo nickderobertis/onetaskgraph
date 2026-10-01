@@ -1477,3 +1477,52 @@ simply held one task, which is the failure no test above the plugin can catch.
   at the user's explicit request, names its destination, goes through that source's own
   write interface into that source's own store, and is never read back to answer a
   query. A cache is a write nobody asked for that the engine reads back.
+
+### GitHub Projects narrowing-search paging
+
+<!-- github-search-paging:start -->
+Board-scoped text, metadata, project-name and comment-activity searches send every
+page at `first = 20` (SEARCH_PAGE_SIZE), the SEARCH_ISSUES document's one-point
+ceiling. A later page is sent only when `hasNextPage` is true and the caller still
+needs rows. A page is never resized to the rows still needed: GitHub orders one
+search differently at different page sizes, so one fixed size makes a paged walk
+send exactly the requests one whole read sends, and the answer's order is the order
+those pages arrive in. A page below twenty would cost the same one point, and GitHub
+prices this document by rows, so twenty-row pages cost per row what 100-row pages do.
+Project-name lookup continues until an exact match or exhaustion. A task limit bounds
+returned and fetched pages: a limit is sliced from the pages it needs, and local
+confirmation can require more candidates than matching rows. Walking all pages
+returns the whole answer. The opaque version-4 source cursor carries GitHub's page
+cursor and how far into that page the last answer stopped, and resumes in the same
+process or a new one, without duplicates or gaps. It carries no rows: one process
+sends each page's search once, and a new process re-reads only the page it resumes
+in, then sends a further page once, never as a re-read, only when its limit still
+needs rows. Every request either walk sends is the one a whole read sends for that page. Own writes replace stale index
+copies and complete missing rows at exhaustion. Cache entries are whole GitHub pages,
+so a small answer cannot truncate a wider question. Origin pages remain three; whole-board sizing is unchanged.
+Read-after-write is a per-process guarantee. A cursor resumed in a new process is
+not required to include the original process's writes still omitted by the index.
+<!-- github-search-paging:end -->
+
+### GitHub Projects item records and writes
+
+`task show ID` includes comments by default. `task show ID --no-comments` reads
+only the item record and omits the optional `comments` member. The Python SDK
+exposes the same choice as `task_show(id=ID, no_comments=True)`; TypeScript uses
+`taskShow(ID, { noComments: true })`. Rust callers already have `Engine::task`
+for the record and `Engine::task_detail` for the record with comments. The
+response shape and schema version are unchanged: comments were already optional.
+
+A GitHub Projects source reuses records resolved in its own instance for writes
+and reuses their identity for comments. Explicit item reads still fetch fresh
+records. A mutation invalidates its target's binding before sending, and a
+successful write replaces it; a retry after a partial failure therefore resolves
+the target again. Comment mutations preserve the binding because they change no
+item fields. These records stay inside the plugin and are never persisted.
+
+A copy combines changed board fields in one GraphQL mutation request using
+aliases, including a priority clear. Unchanged origin and status fields need no
+mutation. A standalone priority write selects the stored priority in its mutation
+response, so its answer remains a read-back, including when the host did not keep
+the requested value, without resolving the issue a second time. The plugin's cost
+table records the requests and declared prices proved by the loopback journeys.

@@ -1,5 +1,5 @@
 (a) a whole copy of a project of 10 tasks
-requests 67
+requests 56
 node count 29600
 
 requests per call
@@ -10,7 +10,7 @@ requests per call
     1      50  reading the board's fields
     1       0  reading the destination repository
     1   20400  searching this board's issues
-   22       0  writing a board field
+   11       0  writing board fields together
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
 requests 24
@@ -23,24 +23,24 @@ requests per call
     1   20400  searching this board's issues
 
 (c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
-requests 9
-node count 1209
+requests 7
+node count 1006
 
 requests per call
     3     600  reading an issue's dependencies
-    3     609  reading one issue
+    2     406  reading one issue
     1       0  updating an issue
-    2       0  writing a board field
+    1       0  writing a board field
 
 (d) the same one-member copy of a project of 3 tasks
-requests 9
-node count 1209
+requests 7
+node count 1006
 
 requests per call
     3     600  reading an issue's dependencies
-    3     609  reading one issue
+    2     406  reading one issue
     1       0  updating an issue
-    2       0  writing a board field
+    1       0  writing a board field
 
 (e) a targeted update of 1 of those 10 tasks, naming its status, three metadata keys set and one removed
 requests 3
@@ -59,26 +59,26 @@ requests per call
     1     203  reading one issue
 
 (g) a task copy of 1 of those 10 tasks, its status changed, found by the link the whole copy recorded
-requests 8
-node count 1009
+requests 6
+node count 806
 
 requests per call
     2     400  reading an issue's dependencies
-    3     609  reading one issue
+    2     406  reading one issue
     1       0  updating an issue
-    2       0  writing a board field
+    1       0  writing a board field
 
 (h) the same task copy with every link removed, found by asking the board for its origin
-requests 9
-node count 22121
+requests 7
+node count 21918
 
 requests per call
     1     915  looking up the items copied from one origin
     2     400  reading an issue's dependencies
-    2     406  reading one issue
+    1     203  reading one issue
     1   20400  searching this board's issues
     1       0  updating an issue
-    2       0  writing a board field
+    1       0  writing a board field
 
 (i) a task copy into a board holding its counterpart, its origin in the board field alone
 requests 4
@@ -91,7 +91,7 @@ requests per call
     1   20400  searching this board's issues
 
 (j) a task copy into a board holding no counterpart
-requests 7
+requests 6
 node count 965
 
 requests per call
@@ -100,4 +100,4 @@ requests per call
     1     915  looking up the items copied from one origin
     1      50  reading the board's fields
     1       0  reading the destination repository
-    2       0  writing a board field
+    1       0  writing board fields together

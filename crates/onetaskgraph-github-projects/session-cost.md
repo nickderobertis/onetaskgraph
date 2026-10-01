@@ -674,8 +674,8 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      9 |                     8 |
-| **node count**     |                  22121 |                  1009 |
+| **requests**       |                      7 |                     6 |
+| **node count**     |                  21918 |                   806 |
 
 (h) asks the board once for the item whose origin is the task (`looking up the items copied
 from one origin`, the lookup described under *Asking GitHub the narrower question* below)
@@ -763,3 +763,115 @@ Every line of the record that moved, and nothing else moved:
 | `reading a task's comments` | 2 → 4 (+2) | 200 → 400 (+200) | the comment-activity read now also considers the existing items this source wrote; the loopback board reports no `updatedAt` for an issue nobody commented on, so neither is ruled out without reading its comments. GitHub always reports one, and an item written before the instant is ruled out without a read |
 | `node-count and point-cost reconciliation while looking up the items copied from one origin` | 0 → 1 (+1) | 0 → 915 (+915) | a new line: the one reconciliation of the new `graphql::ORIGIN_LOOKUP` document, as every other document has one |
 | **total** | **126 → 128 (+2)** | **280,490 → 352,105 (+71,615)** | |
+
+## Bounded narrowing searches
+
+The paging contract is stated in the plugin's cost table and
+[plugin protocol](../../docs/plugin-protocol.md#github-projects-narrowing-search-paging),
+reconciled by `the_published_paging_contract_matches_its_constants_and_both_documents`.
+The opaque cursor's golden is `tests/fixtures/search-cursor-v4.json`. Version 3 replaced
+the initial draft's independent nullable position and exhaustion flag with a tagged
+connection state and carries pending own-write ids for a new process to resolve by
+node id only when its page needs them. Version 4 adds how many rows of the page at that
+position were already handed out, because pages are now sent at one fixed size and a smaller
+limit is sliced from one. A zero offset and empty own-write ids are omitted.
+
+The loopback live-journey session golden moves only these lines:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 10 → 16 | 204,000 → 90,984 | bounded searches use smaller pages; differently sized asks have distinct cache entries, and exact-sized pages can require a resume to complete own writes absent from the index |
+| **total** | **128 → 134** | **352,105 → 239,089** | six additional small reads, 113,016 fewer declared nodes |
+
+**Fixed page sizes.** The credentialed lane then caught GitHub ordering one search
+differently at different page sizes: three issues came back in one order at a page of
+twenty and in another a row at a time, so a walk in pages of one disagreed with one whole
+page. A page is therefore no longer sized to the rows still needed: every page of a
+narrowing search is twenty rows (`SEARCH_PAGE_SIZE`), at the same one point any smaller
+page costs, and a limit is sliced from the pages it needs, so a paged walk and a whole
+read send the same requests. Twenty rather than a hundred for the later pages too, because
+GitHub prices this document by rows — five pages of twenty cost what one of a hundred
+does — while a fixed hundred-row later page would cost every `--limit 20` resumed in a new
+process five points instead of one. What it costs instead is requests: an answer of 130
+matches is seven requests rather than two, at the same points. `a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size` drives that
+against a loopback board that orders its search by page size. The session golden moves
+again, only on these lines:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 16 → 10 | 90,984 → 89,760 | the journey's walk in pages of one is now sliced from one page of twenty held for the process, rather than one request per row |
+| **total** | **123 → 117** | **238,074 → 236,850** | six fewer search requests |
+
+The document maximum-price and maximum-node records remain unchanged: later search
+pages could reach one hundred, and the document's declared maximum is unchanged. The paging change alone leaves the copy-cost record
+unchanged (the write changes below move it), because its origin
+lookup remains three rows and its whole-board reads retain their sizing.
+
+`metadata_accounting_names_only_search_and_needed_membership_recovery` records a metadata
+query through the plugin's own accounting and checks its session report against the
+loopback board's actual documents and bindings. A matching issue whose initial membership
+page contains this board costs only one search request, at one declared point for twenty
+requested rows. There is no fixed extra metadata-list request. When this board's entry
+is beyond the three memberships the search carries, it additionally sends
+`ISSUE_BOARD_ITEMS`, at one declared point even with `first: 100`; the issue's board item
+id and fields are needed to answer. Two matching issues requiring recovery explain two
+extra points. The shared-counter measurement alone cannot establish whether those
+recoveries or other traffic produced its extra two points. Recovery was already skipped
+when the search's own memberships answered, and no unnecessary request was found.
+
+## Reusing resolved items and combining copy field writes
+
+The real CLI and both SDKs are driven against the HTTP board in
+`detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks`.
+A detail read sends one `ISSUE` and one `ISSUE_COMMENTS`, two declared points;
+`--no-comments` sends just `ISSUE`, one. The existing optional comments member
+is omitted, so this adds no serialized member or schema change.
+
+`follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields` pins the
+requests and declared points for a standalone ticket, with status, priority,
+content and namespaced metadata changed on its bound re-copy. Each issue id is
+resolved at most once per invocation. The before column below was obtained by
+running that same fixture journey with the preserved pre-optimization plugin;
+it is offline declared cost, not a measurement against GitHub's account.
+
+| Verb | Before declared points | After declared points |
+|---|---:|---:|
+| New ticket copy | 8 | 6 |
+| Bound re-copy | 8 | 5 |
+| Comment addition | 2 | 2 |
+| Detail recount | 3 | 2 |
+| Comment plus recount | 5 | 4 |
+| Status set | 3 | 2 |
+| Priority set | 3 | 2 |
+| Content set | 2 | 2 |
+| Metadata set | 2 | 2 |
+
+The manager's 0.2.52 account measurements were 8 for a new ticket, 9 for a
+bound re-copy and 8 for comment plus recount. The create measurement agrees with this fixture. The bound fixture previously
+resolved its issue twice, while the manager recorded three resolutions, and its
+comment measurement exceeds this fixture's five declared points. Board
+membership recovery or concurrent traffic can add to an account observation;
+this loopback record cannot identify which caused that difference.
+
+The copy field mutation accepts one value per field, as GitHub requires, and
+uses aliases to send those field mutations together. The three-field create
+and two-field re-copy each send one field request. A bound record is reused
+rather than read again by the write. Priority's mutation response supplies the
+stored priority, preserving the existing dropped-write test without an extra
+issue read. Malformed alias answers and retry after a refused field request
+are covered by `every_batched_field_answer_is_validated_and_a_failed_write_can_retry`.
+
+The session golden moves from 134 requests and 239,089 nodes to 123 requests
+and 238,074 nodes: five issue reads (1,015 nodes) are removed, and six empty
+origin writes are removed. This journey does not set copy origins, so its field
+writes remain individual requests. The new alias mutation adds no read-document
+probe and reuses the existing mutation input and payload types.
+
+The copy golden moves only (a), (c), (d), (g), (h) and (j). Whole creation (a)
+combines 22 field requests into 11, reducing 67 requests to 56 without changing
+nodes. Member copies (c)/(d) remove one issue read and one unchanged origin write,
+9 requests/1,209 nodes to 7/1,006. Linked and origin-found task re-copies (g)/(h)
+remove the same two requests, 8/1,009 to 6/806 and 9/22,121 to 7/21,918.
+New task creation (j) combines two field writes, 7 requests to 6, with nodes
+unchanged. Other copy rows are unchanged. The (g)/(h) comparison table above is
+updated to these figures, as its existing drift test requires.

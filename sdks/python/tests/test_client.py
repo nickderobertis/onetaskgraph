@@ -536,6 +536,9 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     assert shown.comments is not None
     assert [comment.body for comment in shown.comments] == ["corrected\n"]
     assert shown.items[0].item.content == "Long-form task content."
+    record = run(client.task_show(id="notes:T-1", no_comments=True))
+    assert record.comments is None
+    assert record.items == shown.items
 
     # A source whose tasks have none carries no comments key, and refuses the verbs.
     assert run(client.task_show(id="plain:T-1")).comments is None

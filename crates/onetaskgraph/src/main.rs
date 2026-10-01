@@ -246,10 +246,21 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Show(args),
         } => {
-            let detail = engine(loaded)
-                .task_detail(&qualified(&args.id)?)
-                .await
-                .map_err(|error| Failure::from(&error))?;
+            let id = qualified(&args.item.id)?;
+            let detail = if args.no_comments {
+                onetaskgraph_core::TaskDetail {
+                    response: engine(loaded)
+                        .task(&id)
+                        .await
+                        .map_err(|error| Failure::from(&error))?,
+                    comments: None,
+                }
+            } else {
+                engine(loaded)
+                    .task_detail(&id)
+                    .await
+                    .map_err(|error| Failure::from(&error))?
+            };
             // The comments ride beside the task in the machine rendering, and after its body
             // in the human one — and not at all for a source whose tasks have none.
             let comments = detail.comments.as_deref();
@@ -259,7 +270,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 &detail.response,
                 &detail,
                 |task| render::task_with_comments(task, comments),
-                args,
+                &args.item,
                 "task",
             )
         }

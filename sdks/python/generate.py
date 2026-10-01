@@ -99,6 +99,7 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
+    "no_comments": "bool",
     "answers": "answers",
     "author": "str",
     "body_file": "str",
@@ -147,6 +148,7 @@ OPTION_TYPES = {
 OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
+    "no_comments": None,
     "answers": "FILE",
     "author": "NAME",
     "body_file": "PATH",
