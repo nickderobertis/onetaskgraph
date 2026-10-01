@@ -15719,6 +15719,9 @@ async fn inconsistent_search_cursor_states_are_refused_without_a_request() {
         (json!({"state":"initial"}), 0),
         // An exhausted connection has no page to be part of the way through.
         (json!({"state":"exhausted"}), 2),
+        // No page is resumed a whole page or more into it: those rows were never handed out.
+        (json!({"state":"initial"}), 20),
+        (json!({"state":"continuing","after":"20"}), 20),
     ] {
         let token = json!({"version":onetaskgraph_github_projects::SEARCH_CURSOR_VERSION,"connection":connection,"offset":offset}).to_string();
         assert!(

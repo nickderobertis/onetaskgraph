@@ -9133,12 +9133,15 @@ impl SearchConnection {
         matches!(self, Self::Exhausted { .. })
     }
     /// Whether a cursor naming this position, `offset` rows into its page, is one this
-    /// plugin could have handed out: an initial page is resumed only part of the way through
-    /// it, and an exhausted connection has no page to be part of the way through.
+    /// plugin could have handed out: a page is resumed only part of the way through it — an
+    /// offset of a whole page or more would skip rows nobody was given — an initial page
+    /// only once some of it was handed out, and an exhausted connection has no page to be
+    /// part of the way through.
     fn valid_resume(&self, offset: usize) -> bool {
+        let within = offset < SEARCH_PAGE_SIZE as usize;
         match self {
-            Self::Initial { .. } => offset > 0,
-            Self::Continuing { after } => !after.0.is_empty(),
+            Self::Initial { .. } => offset > 0 && within,
+            Self::Continuing { after } => !after.0.is_empty() && within,
             Self::Exhausted { .. } => offset == 0,
         }
     }
