@@ -14650,7 +14650,7 @@ async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
     // What the credentialed lane caught: GitHub answered three issues in one order at a page
     // of twenty and in another a row at a time, so a walk that sized its requests by the
     // rows it still needed disagreed with one whole page of the same search.
-    for count in [3, 20] {
+    for count in [3_usize, 20, 45] {
         let fixture = board(
             (0..count)
                 .map(|index| {
@@ -14668,6 +14668,7 @@ async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
             .await
             .unwrap();
         assert_eq!(whole.next, None);
+        let asked = search_requests(&fixture);
         let whole = whole
             .items
             .into_iter()
@@ -14707,9 +14708,39 @@ async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
                 "a walk in pages of {limit}, each in a new process"
             );
         }
-        // Every request was the same question: one page of twenty.
-        assert!(search_sizes(&fixture).iter().all(|first| *first == 20));
+        // Every walk asked GitHub exactly the questions the whole read asked, each one page
+        // of twenty: a process that resumes inside a page asks for that page again.
+        let mut once = Vec::new();
+        for request in search_requests(&fixture) {
+            if !once.contains(&request) {
+                once.push(request);
+            }
+        }
+        assert_eq!(
+            once, asked,
+            "the walks sent the whole read's requests and no other"
+        );
+        assert_eq!(asked.len(), count.div_ceil(20));
+        assert!(asked.iter().all(|(first, _)| *first == 20));
     }
+}
+
+/// Every board search this fixture answered, as the page size and cursor it was asked at.
+fn search_requests(fixture: &Fixture) -> Vec<(u64, Value)> {
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter(|(operation, _)| operation == "search")
+        .map(|(_, variables)| {
+            (
+                variables["first"].as_u64().unwrap(),
+                variables["after"].clone(),
+            )
+        })
+        .collect()
 }
 
 #[tokio::test]
