@@ -642,7 +642,9 @@ them do; this is the inventory of what is owed, not a status board.
     byte-for-byte and is counted unresolved. A location string occurring inside a longer
     location-like string is left alone, every copy reports what it rewrote, what it left
     unresolved and how many of those were ambiguous, and a dry run reports the same figures
-    and writes nothing. A rendered document whose references a copy rewrote arrives with
+    and writes nothing.
+    <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This list is the inventory of journeys, and this sentence is held by the three it names in `crates/onetaskgraph/tests/e2e/rendered.rs`: `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged`. -->
+    A rendered document whose references a copy rewrote arrives with
     `body_digest` the digest of the rendering as the copy rewrote its references, its other
     three provenance fields carried; its stored answers and `answers_digest` still name the
     pre-copy locations, so the copy is not a fresh rendering of them. A hand-edited
@@ -794,11 +796,12 @@ them do; this is the inventory of what is owed, not a status board.
 
 ## What a copied document's references are pointed at
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by the journeys numbered 37 above, which the sentence below summarises rather than restates. -->
 Only a **document** is rewritten, and only its `content` — together with the
 `body_digest` of its `onetaskgraph.template` entry when the rewrite changed a rendering that
 still matched it, so that entry stays true of what landed (the stored answers and
 `answers_digest` still name the pre-copy locations, so the copy is not a fresh rendering of
-them; see the README's "Creating and regenerating from a template"). A reference is a literal
+them). A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
 `String` inside `Location::Path` or `Location::Url` — and it becomes the location string
 the *destination* reports for that record's counterpart. Both ends come from the plugins'

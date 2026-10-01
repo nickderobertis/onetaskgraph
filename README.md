@@ -550,9 +550,12 @@ hand edit (the content's hash is not `body_digest`) and a changed template (the 
 digest is not `digest`) are both visible. **It proves nothing about who wrote it**: a check
 reading only these hashes trusts them, so provenance forged by hand passes it. The entry is
 four strings, whatever the template's reference — nothing caps its length but what the
-destination caps a whole item at — and a copy carries it like any other metadata, with one
-exception. A document copy points the references in a document's content at the
-destination's own records, and when it rewrote at least one of them in a rendering that
+destination caps a whole item at.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys
+     `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph/tests/e2e/rendered.rs`, which assert each case below through the binary. -->
+A copy carries the entry like any other metadata, with one exception. A document copy
+points the references in a document's content at the destination's own records, and when it rewrote at least one of them in a rendering that
 still hashes to its recorded `body_digest`, the copy records as `body_digest` the digest of
 the rendering **as the copy rewrote its references** — so the content that lands matches
 its entry — and carries `template`, `digest` and `answers_digest` as they were. The answers
@@ -561,6 +564,7 @@ pre-copy locations, so the copy is not a fresh rendering of those answers, and a
 from them reproduces the pre-copy content. A rendering edited by hand, an entry this product
 did not write, no entry at all, and a copy that rewrote nothing are carried verbatim, so a
 hand edit stays visible wherever it is copied.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **The answers themselves are kept in one place only**: beside the item in a `local-md`
 folder's own file, which is where an item is authored — never in its content or its

@@ -1812,10 +1812,12 @@ impl Engine {
     /// Tasks and projects are not touched. A document's content is rewritten, and so is
     /// one thing beside it: when this substitutes at least one reference into a rendering
     /// that still hashes to the `body_digest` its [`TemplateProvenance`] records, the copy
-    /// records the `body_digest` of the content as rewritten — see [`restamped`]. The
-    /// answers that rendering was made from, and the `answers_digest` naming them, still
-    /// hold the pre-copy locations, so the copy is not a fresh rendering of them and a
-    /// regenerate from them reproduces the pre-copy content.
+    /// records as `body_digest` the digest of the rendering as this rewrote its references,
+    /// carrying the entry's other three fields; any other entry, or none, is carried
+    /// verbatim. The answers that rendering was made from, and the `answers_digest` naming
+    /// them, still hold the pre-copy locations, so the copy is not a fresh rendering of them
+    /// and a regenerate from them reproduces the pre-copy content.
+    // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This comment is required to state the rule; it is held by the journeys `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph/tests/e2e/rendered.rs`, and the entry's fields are `TemplateProvenance`'s own.
     async fn rewrite_references(
         &self,
         destination: &ResolvedSource,
@@ -3278,16 +3280,11 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
     (written, counts)
 }
 
-/// The provenance a document whose references were rewritten from `read` to `written`
-/// records, when it is a rendering this copy may vouch for.
+/// The entry [`Engine::rewrite_references`] records for a document it rewrote from `read`
+/// to `written`, or `None` to carry what the document records verbatim.
 ///
-/// Only a rendering that still hashes to the `body_digest` its entry records: then the one
-/// change between it and `written` is this copy's own, and the entry is re-stamped with the
-/// digest of exactly what the destination is given, `template`, `digest` and
-/// `answers_digest` carried as they were. A rendering edited by hand after it was rendered,
-/// an entry [`TemplateProvenance::read`] refuses, and no entry at all answer `None`, so the
-/// entry — or its absence — is carried verbatim and a hand edit stays visible at the
-/// destination rather than laundered by a copy.
+/// `None` unless `read` is still the rendering its entry vouches for, because only then is
+/// the one change between it and `written` this copy's own: a hand edit is never laundered.
 fn restamped(
     metadata: &BTreeMap<String, Value>,
     read: &str,
