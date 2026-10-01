@@ -554,6 +554,10 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// Whether this board's issue search orders one answer differently at every page size,
+    /// as GitHub's does: the credentialed lane watched a search answer three issues in one
+    /// order at a page of twenty and in another when asked a row at a time.
+    search_order_varies_with_first: bool,
     /// How many items this board's own `ProjectV2.items` connection lists, once that
     /// connection has been left behind — `None` while it lists everything this board holds.
     ///
@@ -1013,6 +1017,12 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Order this board's issue search by the page size it is asked at, the way GitHub's
+    /// relevance ordering breaks its ties differently per page size; see
+    /// [`State::search_order_varies_with_first`].
+    fn order_search_by_page_size(&self) {
+        self.state.lock().unwrap().search_order_varies_with_first = true;
+    }
 
     /// Leave this board's own `ProjectV2.items` connection behind everything filed from now
     /// on, the way GitHub's is, and leave every other view of this board current.
@@ -1130,6 +1140,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        search_order_varies_with_first: false,
         items_connection_behind_from: None,
         stuck_membership_cursor: None,
         seen: Vec::new(),
@@ -1734,7 +1745,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .iter()
             .map(|item| state.indexed(item))
             .collect();
-        let matched = indexed
+        let mut matched = indexed
             .iter()
             .filter(|item| item.listed && item.typename == "Issue")
             .filter(|item| {
@@ -1745,6 +1756,16 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 )
             })
             .collect::<Vec<_>>();
+        if state.search_order_varies_with_first {
+            // One deterministic order per page size, and a different one at each: the same
+            // request is always answered alike, and two sizes rarely agree.
+            matched.sort_by_cached_key(|item| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                (&item.content_id, first).hash(&mut hasher);
+                hasher.finish()
+            });
+        }
         let end = (offset + first).min(matched.len());
         let nodes = matched[offset.min(end)..end]
             .iter()
@@ -14507,7 +14528,7 @@ async fn what_this_process_wrote_is_returned_while_the_index_is_behind_it() {
 }
 
 #[tokio::test]
-async fn a_narrowed_search_fetches_only_the_rows_each_page_needs() {
+async fn a_narrowed_search_fetches_only_the_pages_each_answer_needs() {
     let items = (0..130)
         .map(|index| {
             Item::issue(&format!("I_{index:03}"), &format!("widget {index}")).status("Todo")
@@ -14521,7 +14542,7 @@ async fn a_narrowed_search_fetches_only_the_rows_each_page_needs() {
     };
     let first = source.query_tasks(&query, &page(100)).await.unwrap();
     assert_eq!(first.items.len(), 100);
-    assert_eq!(search_sizes(&fixture), [20, 80]);
+    assert_eq!(search_sizes(&fixture), [20; 5]);
     let next = first.next.expect("a cursor to the rest");
     let rest = source
         .query_tasks(&query, &resume(&next.0, 100))
@@ -14531,9 +14552,10 @@ async fn a_narrowed_search_fetches_only_the_rows_each_page_needs() {
     assert_eq!(rest.next, None);
     assert_eq!(
         fixture.requests("search"),
-        3,
-        "20 then 80 fill the first answer; only resuming asks for the rest"
+        7,
+        "five pages of twenty fill the first answer; only resuming asks for the rest"
     );
+    assert_eq!(search_sizes(&fixture), [20; 7]);
     assert_eq!(fixture.requests("board"), 0);
 }
 
@@ -14586,13 +14608,13 @@ async fn narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps()
             let source = source(&fixture);
             let first = source.query_tasks(&query, &page(3)).await.unwrap();
             assert_eq!(first.items.len(), count.min(3));
-            assert_eq!(search_sizes(&fixture), [3]);
+            assert_eq!(search_sizes(&fixture), [20]);
             assert_eq!(source.query_tasks(&query, &page(3)).await.unwrap(), first);
-            assert_eq!(search_sizes(&fixture), [3]);
+            assert_eq!(search_sizes(&fixture), [20]);
             if count > 3 {
                 assert_eq!(
                     serde_json::from_str::<Value>(&first.next.as_ref().unwrap().0).unwrap(),
-                    serde_json::from_str::<Value>(include_str!("fixtures/search-cursor-v3.json"))
+                    serde_json::from_str::<Value>(include_str!("fixtures/search-cursor-v4.json"))
                         .unwrap()
                 );
             }
@@ -14620,6 +14642,73 @@ async fn narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps()
             // A wider ask cannot use the three-row cache entry as a complete answer.
             assert_eq!(walk_tasks(source.as_ref(), &query, 100).await, ids);
         }
+    }
+}
+
+#[tokio::test]
+async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
+    // What the credentialed lane caught: GitHub answered three issues in one order at a page
+    // of twenty and in another a row at a time, so a walk that sized its requests by the
+    // rows it still needed disagreed with one whole page of the same search.
+    for count in [3, 20] {
+        let fixture = board(
+            (0..count)
+                .map(|index| {
+                    Item::issue(&format!("I_{index:03}"), &format!("widget {index}")).status("Todo")
+                })
+                .collect(),
+        );
+        fixture.order_search_by_page_size();
+        let query = TaskQuery {
+            text: text("widget", TextFields::Title),
+            ..TaskQuery::default()
+        };
+        let whole = source(&fixture)
+            .query_tasks(&query, &page(100))
+            .await
+            .unwrap();
+        assert_eq!(whole.next, None);
+        let whole = whole
+            .items
+            .into_iter()
+            .map(|task| task.id.0)
+            .collect::<Vec<_>>();
+        let mut held = whole.clone();
+        held.sort();
+        assert_eq!(
+            held,
+            (0..count)
+                .map(|index| format!("I_{index:03}"))
+                .collect::<Vec<_>>(),
+            "one whole page holds every match once"
+        );
+        for limit in [1, 3] {
+            assert_eq!(
+                walk_tasks(source(&fixture).as_ref(), &query, limit).await,
+                whole,
+                "a walk in pages of {limit} in one process"
+            );
+            let mut walked = Vec::new();
+            let mut request = page(limit);
+            loop {
+                let answer = source(&fixture)
+                    .query_tasks(&query, &request)
+                    .await
+                    .unwrap();
+                assert!(answer.items.len() <= limit as usize);
+                walked.extend(answer.items.into_iter().map(|task| task.id.0));
+                match answer.next {
+                    Some(cursor) => request = resume(&cursor.0, limit),
+                    None => break,
+                }
+            }
+            assert_eq!(
+                walked, whole,
+                "a walk in pages of {limit}, each in a new process"
+            );
+        }
+        // Every request was the same question: one page of twenty.
+        assert!(search_sizes(&fixture).iter().all(|first| *first == 20));
     }
 }
 
@@ -14653,8 +14742,8 @@ async fn a_partial_narrowing_failure_can_retry_without_truncating_the_cached_pag
             .map(|index| format!("I_{index:03}"))
             .collect::<Vec<_>>()
     );
-    assert_eq!(search_sizes(&fixture), [20, 80, 100]);
-    assert_eq!(fixture.requests("search"), 4);
+    assert_eq!(search_sizes(&fixture), [20; 7]);
+    assert_eq!(fixture.requests("search"), 8);
 }
 
 #[tokio::test]
@@ -14700,7 +14789,7 @@ async fn resumed_pending_writes_handle_a_missing_node_and_retry_a_refused_node()
             assert_eq!(answer.items.len(), 1);
             assert_eq!(answer.items[0].id, created[1]);
         }
-        assert_eq!(search_sizes(&fixture), [1]);
+        assert_eq!(search_sizes(&fixture), [20]);
         assert_eq!(
             fixture.requests("issue") - reads_before,
             if missing { 1 } else { 2 }
@@ -14742,8 +14831,8 @@ async fn project_name_searches_stop_at_the_exact_match_or_connection_end() {
                 search_sizes(&fixture),
                 match count {
                     0 | 3 => vec![20],
-                    21 => vec![20, 100],
-                    _ => vec![20, 100, 100],
+                    21 => vec![20, 20],
+                    _ => vec![20; 7],
                 }
             );
         }
@@ -14772,7 +14861,7 @@ async fn a_project_name_on_a_later_search_page_is_found() {
         selected_tasks(source(&fixture).as_ref(), &query).await,
         ["I_child"]
     );
-    assert_eq!(search_sizes(&fixture), [20, 100, 100]);
+    assert_eq!(search_sizes(&fixture), [20; 7]);
 }
 
 #[tokio::test]
@@ -14800,7 +14889,14 @@ async fn comment_search_pages_stop_when_the_matching_answer_is_full() {
         assert_eq!(first.items.len(), count.min(100));
         assert_eq!(
             search_sizes(&fixture),
-            if count > 20 { vec![20, 80] } else { vec![20] }
+            vec![
+                20;
+                if count > 20 {
+                    count.min(100).div_ceil(20)
+                } else {
+                    1
+                }
+            ]
         );
         if let Some(next) = first.next {
             assert_eq!(
@@ -14935,7 +15031,7 @@ async fn metadata_accounting_names_only_search_and_needed_membership_recovery() 
         let session = ledger.snapshot();
         assert_eq!(session.total_requests(), if overflow { 2 } else { 1 });
         assert_eq!(fixture.membership_walks(), usize::from(overflow));
-        assert_eq!(search_sizes(&fixture), [10]);
+        assert_eq!(search_sizes(&fixture), [20]);
         let report = session.report();
         assert!(report.contains("searching this board's issues"));
         assert_eq!(
@@ -15589,12 +15685,8 @@ fn the_published_paging_contract_matches_its_constants_and_both_documents() {
     let stated = contract(protocol);
     for clause in [
         format!(
-            "first = min(rows still needed, {})",
-            onetaskgraph_github_projects::SEARCH_FIRST_PAGE_SIZE
-        ),
-        format!(
-            "first = min(rows still needed, {})",
-            onetaskgraph_github_projects::MAX_PAGE_SIZE
+            "every\npage at `first = {}` (SEARCH_PAGE_SIZE)",
+            onetaskgraph_github_projects::SEARCH_PAGE_SIZE
         ),
         format!(
             "version-{} source cursor",
@@ -15607,7 +15699,7 @@ fn the_published_paging_contract_matches_its_constants_and_both_documents() {
         );
     }
     let golden: Value =
-        serde_json::from_str(include_str!("fixtures/search-cursor-v3.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/search-cursor-v4.json")).unwrap();
     assert_eq!(
         golden["version"],
         onetaskgraph_github_projects::SEARCH_CURSOR_VERSION
@@ -15621,12 +15713,14 @@ async fn inconsistent_search_cursor_states_are_refused_without_a_request() {
         text: text("ship", TextFields::Title),
         ..TaskQuery::default()
     };
-    for connection in [
-        json!({"state":"continuing","after":""}),
-        json!({"state":"exhausted","after":"3"}),
-        json!({"state":"initial"}),
+    for (connection, offset) in [
+        (json!({"state":"continuing","after":""}), 0),
+        (json!({"state":"exhausted","after":"3"}), 0),
+        (json!({"state":"initial"}), 0),
+        // An exhausted connection has no page to be part of the way through.
+        (json!({"state":"exhausted"}), 2),
     ] {
-        let token = json!({"version":onetaskgraph_github_projects::SEARCH_CURSOR_VERSION,"connection":connection}).to_string();
+        let token = json!({"version":onetaskgraph_github_projects::SEARCH_CURSOR_VERSION,"connection":connection,"offset":offset}).to_string();
         assert!(
             source(&fixture)
                 .query_tasks(&query, &resume(&token, 3))

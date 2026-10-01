@@ -769,10 +769,12 @@ Every line of the record that moved, and nothing else moved:
 The paging contract is stated in the plugin's cost table and
 [plugin protocol](../../docs/plugin-protocol.md#github-projects-narrowing-search-paging),
 reconciled by `the_published_paging_contract_matches_its_constants_and_both_documents`.
-The opaque cursor's golden is `tests/fixtures/search-cursor-v3.json`; version 3 replaces
+The opaque cursor's golden is `tests/fixtures/search-cursor-v4.json`. Version 3 replaced
 the initial draft's independent nullable position and exhaustion flag with a tagged
 connection state and carries pending own-write ids for a new process to resolve by
-node id only when its page needs them. Empty own-write ids are omitted.
+node id only when its page needs them. Version 4 adds how many rows of the page at that
+position were already handed out, because pages are now sent at one fixed size and a smaller
+limit is sliced from one. A zero offset and empty own-write ids are omitted.
 
 The loopback live-journey session golden moves only these lines:
 
@@ -781,15 +783,34 @@ The loopback live-journey session golden moves only these lines:
 | `searching this board's issues` | 10 → 16 | 204,000 → 90,984 | bounded searches use smaller pages; differently sized asks have distinct cache entries, and exact-sized pages can require a resume to complete own writes absent from the index |
 | **total** | **128 → 134** | **352,105 → 239,089** | six additional small reads, 113,016 fewer declared nodes |
 
+**Fixed page sizes.** The credentialed lane then caught GitHub ordering one search
+differently at different page sizes: three issues came back in one order at a page of
+twenty and in another a row at a time, so a walk in pages of one disagreed with one whole
+page. A page is therefore no longer sized to the rows still needed: every page of a
+narrowing search is twenty rows (`SEARCH_PAGE_SIZE`), at the same one point any smaller
+page costs, and a limit is sliced from the pages it needs, so a paged walk and a whole
+read send the same requests. Twenty rather than a hundred for the later pages too, because
+GitHub prices this document by rows — five pages of twenty cost what one of a hundred
+does — while a fixed hundred-row later page would cost every `--limit 20` resumed in a new
+process five points instead of one. What it costs instead is requests: an answer of 130
+matches is seven requests rather than two, at the same points. `a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size` drives that
+against a loopback board that orders its search by page size. The session golden moves
+again, only on these lines:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 16 → 10 | 90,984 → 89,760 | the journey's walk in pages of one is now sliced from one page of twenty held for the process, rather than one request per row |
+| **total** | **123 → 117** | **238,074 → 236,850** | six fewer search requests |
+
 The document maximum-price and maximum-node records remain unchanged: later search
-pages can still reach one hundred. The paging change alone leaves the copy-cost record
+pages could reach one hundred, and the document's declared maximum is unchanged. The paging change alone leaves the copy-cost record
 unchanged (the write changes below move it), because its origin
 lookup remains three rows and its whole-board reads retain their sizing.
 
 `metadata_accounting_names_only_search_and_needed_membership_recovery` records a metadata
 query through the plugin's own accounting and checks its session report against the
 loopback board's actual documents and bindings. A matching issue whose initial membership
-page contains this board costs only one search request, at one declared point for ten
+page contains this board costs only one search request, at one declared point for twenty
 requested rows. There is no fixed extra metadata-list request. When this board's entry
 is beyond the three memberships the search carries, it additionally sends
 `ISSUE_BOARD_ITEMS`, at one declared point even with `first: 100`; the issue's board item

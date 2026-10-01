@@ -202,10 +202,10 @@ NOT_A_STORE = {
         "plugin's own lookup over a loopback board holding carriers whose origin differs from "
         "the one asked for by a suffix and by a prefix, and has to leave both out."
     ),
-    "crates/onetaskgraph-github-projects/tests/fixtures/search-cursor-v3.json": (
+    "crates/onetaskgraph-github-projects/tests/fixtures/search-cursor-v4.json": (
         "Not a store: it holds no items and no query is answered from it. It is the golden of "
         "the opaque `--page` token a bounded board-scoped search hands back — its version and "
-        "where GitHub's own connection stopped — and `tests/plugin.rs` holds it to what the "
+        "where GitHub's own connection and the page it stopped in stand — and `tests/plugin.rs` holds it to what the "
         "plugin emits in "
         "`narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps`, and "
         "its version to `SEARCH_CURSOR_VERSION` in "

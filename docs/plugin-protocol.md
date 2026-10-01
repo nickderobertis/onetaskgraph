@@ -1481,16 +1481,22 @@ simply held one task, which is the failure no test above the plugin can catch.
 ### GitHub Projects narrowing-search paging
 
 <!-- github-search-paging:start -->
-Board-scoped text, metadata, project-name and comment-activity searches start at
-`first = min(rows still needed, 20)`, the SEARCH_ISSUES document's one-point ceiling.
-Later pages use `first = min(rows still needed, 100)`, only when `hasNextPage` is true
-and the caller still needs rows. Project-name lookup continues until an exact match
-or exhaustion. A task limit bounds returned and fetched rows; local confirmation can
-require more candidates than matching rows. Walking all pages returns the whole answer.
-The opaque version-3 source cursor resumes in the same process or a new one, without
-duplicates or gaps. Own writes replace stale index copies and complete missing rows at
-exhaustion. Cache entries include requested size, so a small answer cannot truncate a
-wider question. Origin pages remain three; whole-board sizing is unchanged.
+Board-scoped text, metadata, project-name and comment-activity searches send every
+page at `first = 20` (SEARCH_PAGE_SIZE), the SEARCH_ISSUES document's one-point
+ceiling. A later page is sent only when `hasNextPage` is true and the caller still
+needs rows. A page is never resized to the rows still needed: GitHub orders one
+search differently at different page sizes, so one fixed size makes a paged walk
+send exactly the requests one whole read sends, and the answer's order is the order
+those pages arrive in. A page below twenty would cost the same one point, and GitHub
+prices this document by rows, so twenty-row pages cost per row what 100-row pages do.
+Project-name lookup continues until an exact match or exhaustion. A task limit bounds
+returned and fetched pages: a limit is sliced from the pages it needs, and local
+confirmation can require more candidates than matching rows. Walking all pages
+returns the whole answer. The opaque version-4 source cursor carries GitHub's page
+cursor and how far into that page the last answer stopped, and resumes in the same
+process or a new one, without duplicates or gaps. Own writes replace stale index
+copies and complete missing rows at exhaustion. Cache entries are whole GitHub pages,
+so a small answer cannot truncate a wider question. Origin pages remain three; whole-board sizing is unchanged.
 Read-after-write is a per-process guarantee. A cursor resumed in a new process is
 not required to include the original process's writes still omitted by the index.
 <!-- github-search-paging:end -->

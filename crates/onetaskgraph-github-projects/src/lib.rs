@@ -184,7 +184,7 @@
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
-//! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — bounded by the caller’s remaining rows | the issues that match |
+//! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — in pages of twenty, only as many as the caller's rows need | the issues that match |
 //! | which tasks were copied from one origin | [`graphql::ORIGIN_LOOKUP`] — the board's own `items` under its field filter on the origin field, and the same board-scoped search for the id `in:body`, in one request, each paged at three | the carriers of that origin, which is one item |
 //! | every task, every document, every label, when nothing above narrows the question | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
@@ -209,16 +209,22 @@
 //! | record only | 1 | ISSUE |
 //!
 //! <!-- github-search-paging:start -->
-//! Board-scoped text, metadata, project-name and comment-activity searches start at
-//! `first = min(rows still needed, 20)`, the SEARCH_ISSUES document's one-point ceiling.
-//! Later pages use `first = min(rows still needed, 100)`, only when `hasNextPage` is true
-//! and the caller still needs rows. Project-name lookup continues until an exact match
-//! or exhaustion. A task limit bounds returned and fetched rows; local confirmation can
-//! require more candidates than matching rows. Walking all pages returns the whole answer.
-//! The opaque version-3 source cursor resumes in the same process or a new one, without
-//! duplicates or gaps. Own writes replace stale index copies and complete missing rows at
-//! exhaustion. Cache entries include requested size, so a small answer cannot truncate a
-//! wider question. Origin pages remain three; whole-board sizing is unchanged.
+//! Board-scoped text, metadata, project-name and comment-activity searches send every
+//! page at `first = 20` (SEARCH_PAGE_SIZE), the SEARCH_ISSUES document's one-point
+//! ceiling. A later page is sent only when `hasNextPage` is true and the caller still
+//! needs rows. A page is never resized to the rows still needed: GitHub orders one
+//! search differently at different page sizes, so one fixed size makes a paged walk
+//! send exactly the requests one whole read sends, and the answer's order is the order
+//! those pages arrive in. A page below twenty would cost the same one point, and GitHub
+//! prices this document by rows, so twenty-row pages cost per row what 100-row pages do.
+//! Project-name lookup continues until an exact match or exhaustion. A task limit bounds
+//! returned and fetched pages: a limit is sliced from the pages it needs, and local
+//! confirmation can require more candidates than matching rows. Walking all pages
+//! returns the whole answer. The opaque version-4 source cursor carries GitHub's page
+//! cursor and how far into that page the last answer stopped, and resumes in the same
+//! process or a new one, without duplicates or gaps. Own writes replace stale index
+//! copies and complete missing rows at exhaustion. Cache entries are whole GitHub pages,
+//! so a small answer cannot truncate a wider question. Origin pages remain three; whole-board sizing is unchanged.
 //! Read-after-write is a per-process guarantee. A cursor resumed in a new process is
 //! not required to include the original process's writes still omitted by the index.
 //! <!-- github-search-paging:end -->
@@ -521,8 +527,10 @@ use accounting::Accounting;
 pub const KIND: &str = "github-projects";
 /// GitHub's maximum connection page size.
 pub const MAX_PAGE_SIZE: u32 = 100;
-/// First narrowing-search page: at most 20 rows keeps SEARCH_ISSUES at one point.
-pub const SEARCH_FIRST_PAGE_SIZE: u32 = 20;
+/// Every page of a board-scoped narrowing search: 20 rows, one point of SEARCH_ISSUES, the
+/// most one point buys. GitHub prices that document by rows, so pages of 20 cost what pages
+/// of 100 cost per row, and a page of fewer than 20 costs the same one point.
+pub const SEARCH_PAGE_SIZE: u32 = 20;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -4074,12 +4082,9 @@ impl GitHubProjectsSource {
         let search = self.board_search(Some(&title_qualifier(name)));
         let mut after = None;
         loop {
-            let first = if after.is_none() {
-                SEARCH_FIRST_PAGE_SIZE
-            } else {
-                MAX_PAGE_SIZE
-            };
-            let (candidates, next) = self.search_page(&search, first, after.as_deref()).await?;
+            let (candidates, next) = self
+                .search_page(&search, SEARCH_PAGE_SIZE, after.as_deref())
+                .await?;
             if let Some(item) = candidates.into_iter().find(|item| {
                 item.kind == BoardKind::Work(ItemKind::Project)
                     && item.title.eq_ignore_ascii_case(name)
@@ -4141,7 +4146,7 @@ impl GitHubProjectsSource {
     }
 
     /// Every issue of this board GitHub's issue search reports for the board-scoped search
-    /// narrowed by `also`, starting at [`SEARCH_FIRST_PAGE_SIZE`] then [`MAX_PAGE_SIZE`].
+    /// narrowed by `also`, in pages of [`SEARCH_PAGE_SIZE`].
     ///
     /// Uncompleted: what this process wrote is added by the caller, which knows whether its
     /// own record is the fresher of the two.
@@ -4151,15 +4156,7 @@ impl GitHubProjectsSource {
         let mut found = Vec::new();
         loop {
             let (page, next) = self
-                .search_page(
-                    &search,
-                    if after.is_none() {
-                        SEARCH_FIRST_PAGE_SIZE
-                    } else {
-                        MAX_PAGE_SIZE
-                    },
-                    after.as_deref(),
-                )
+                .search_page(&search, SEARCH_PAGE_SIZE, after.as_deref())
                 .await?;
             found.extend(page);
             match next {
@@ -4169,8 +4166,17 @@ impl GitHubProjectsSource {
         }
     }
 
-    /// A bounded task answer; the versioned cursor carries the connection position and
-    /// the own-write ids already observed, including across a new source instance.
+    /// A bounded task answer; the versioned cursor carries the connection position, how
+    /// many rows of the page starting there were already handed out, and the own-write ids
+    /// already observed, including across a new source instance.
+    ///
+    /// Every page is sent at one fixed size, [`SEARCH_PAGE_SIZE`], whatever the caller's
+    /// limit, and a limit smaller than a page is sliced from it. GitHub orders one search differently at different page sizes (its
+    /// relevance ties are broken per request), so a walk that sized its pages by the rows
+    /// still needed asked GitHub a different question on every page and reached rows in a
+    /// different order from one whole page, or twice, or not at all. At one size a paged walk
+    /// and a whole read send the very same requests, so the answer's order is the one those
+    /// pages arrive in. A page of fewer than twenty would cost what twenty does.
     async fn search_tasks(
         &self,
         query: &TaskQuery,
@@ -4182,7 +4188,8 @@ impl GitHubProjectsSource {
             Some(cursor) => serde_json::from_str::<SearchPosition>(&cursor.0)
                 .ok()
                 .filter(|position| {
-                    position.version == SEARCH_CURSOR_VERSION && position.connection.valid_resume()
+                    position.version == SEARCH_CURSOR_VERSION
+                        && position.connection.valid_resume(position.offset)
                 })
                 .ok_or_else(|| SourceError::Config {
                     message: "page cursor is invalid".into(),
@@ -4198,12 +4205,7 @@ impl GitHubProjectsSource {
         }
         let mut tasks = Vec::new();
         while !position.connection.exhausted() && tasks.len() < limit {
-            let first = (limit - tasks.len()) as u32;
-            let first = first.min(if position.connection.after().is_none() {
-                SEARCH_FIRST_PAGE_SIZE
-            } else {
-                MAX_PAGE_SIZE
-            });
+            let first = SEARCH_PAGE_SIZE;
             // Page size is part of the key: a short cached answer cannot answer a wider ask.
             let key =
                 serde_json::to_string(&("page", &search, &position.connection.after(), first))
@@ -4246,7 +4248,12 @@ impl GitHubProjectsSource {
                     (found, next)
                 }
             };
-            for mut item in found {
+            let rows = found.len();
+            for mut item in found.into_iter().skip(position.offset) {
+                if tasks.len() == limit {
+                    break;
+                }
+                position.offset += 1;
                 if position.own.contains(&item.id) {
                     if position.seen.contains(&item.id) {
                         continue;
@@ -4269,6 +4276,10 @@ impl GitHubProjectsSource {
                     }
                 }
             }
+            if position.offset < rows {
+                continue;
+            }
+            position.offset = 0;
             position.connection = match next {
                 Some(after) => SearchConnection::Continuing {
                     after: Cursor(after),
@@ -9102,7 +9113,7 @@ fn validate_cursor_progress(previous: Option<&str>, next: &str) -> Result<(), So
     }
 }
 /// The version of this plugin's opaque narrowing-search cursor.
-pub const SEARCH_CURSOR_VERSION: u32 = 3;
+pub const SEARCH_CURSOR_VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
@@ -9121,21 +9132,27 @@ impl SearchConnection {
     fn exhausted(&self) -> bool {
         matches!(self, Self::Exhausted { .. })
     }
-    fn valid_resume(&self) -> bool {
+    /// Whether a cursor naming this position, `offset` rows into its page, is one this
+    /// plugin could have handed out: an initial page is resumed only part of the way through
+    /// it, and an exhausted connection has no page to be part of the way through.
+    fn valid_resume(&self, offset: usize) -> bool {
         match self {
-            Self::Initial { .. } => false,
+            Self::Initial { .. } => offset > 0,
             Self::Continuing { after } => !after.0.is_empty(),
-            Self::Exhausted { .. } => true,
+            Self::Exhausted { .. } => offset == 0,
         }
     }
 }
 
-/// Versioned source cursor. Empty own-write ids are omitted.
+/// Versioned source cursor. A zero offset and empty own-write ids are omitted.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchPosition {
     version: u32,
     connection: SearchConnection,
+    /// How many rows of the page `connection` starts were already handed out.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    offset: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     seen: Vec<NativeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -9146,10 +9163,15 @@ impl Default for SearchPosition {
         Self {
             version: SEARCH_CURSOR_VERSION,
             connection: SearchConnection::Initial {},
+            offset: 0,
             seen: Vec::new(),
             own: Vec::new(),
         }
     }
+}
+
+fn is_zero(offset: &usize) -> bool {
+    *offset == 0
 }
 
 fn numeric_cursor(cursor: Option<&Cursor>) -> Result<usize, SourceError> {
