@@ -83,7 +83,7 @@ impl Pricing {
 /// text, and answering that would run a query GitHub would not have.
 ///
 /// A probe is refused, as GitHub refuses it, when `variables` leaves a variable the document
-/// declares non-null without a default unbound: `dryRun: true` computes the count without
+/// declares non-null unbound: `dryRun: true` computes the count without
 /// resolving a variable, but GitHub validates them first. A board that priced such a probe
 /// anyway would pass a reconciliation the real API rejects outright.
 pub fn answer_a_stateless_session_call(
@@ -112,8 +112,14 @@ pub fn answer_a_stateless_session_call(
     None
 }
 
-/// Every variable `document` declares non-null and without a default that `variables` does
-/// not bind to a value, with its declared type, in declaration order.
+/// Every variable `document` declares non-null that `variables` does not bind to a value,
+/// with its declared type, in declaration order.
+///
+/// A declared default does not excuse one. GraphQL's specification would let
+/// `$priorityName:String!="Priority"` go unbound, but GitHub refused exactly that document
+/// on the credentialed lane on 2026-10-01 — "Variable $priorityName of type String! was
+/// provided invalid value" — so a board that honoured the default would pass a write the
+/// real API rejects outright.
 pub fn unbound_required_variables(document: &str, variables: &Value) -> Vec<(String, String)> {
     use graphql_parser::query::{Definition, OperationDefinition, Type};
     let parsed = graphql_parser::parse_query::<String>(document).expect("a valid GraphQL document");
@@ -131,7 +137,6 @@ pub fn unbound_required_variables(document: &str, variables: &Value) -> Vec<(Str
         })
         .filter(|declared| {
             matches!(declared.var_type, Type::NonNullType(_))
-                && declared.default_value.is_none()
                 && variables.get(&declared.name).is_none_or(Value::is_null)
         })
         .map(|declared| (declared.name.clone(), declared.var_type.to_string()))

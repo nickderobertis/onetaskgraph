@@ -202,6 +202,16 @@ NOT_A_STORE = {
         "plugin's own lookup over a loopback board holding carriers whose origin differs from "
         "the one asked for by a suffix and by a prefix, and has to leave both out."
     ),
+    "crates/onetaskgraph-github-projects/tests/fixtures/search-cursor-v3.json": (
+        "Not a store: it holds no items and no query is answered from it. It is the golden of "
+        "the opaque `--page` token a bounded board-scoped search hands back — its version and "
+        "where GitHub's own connection stopped — and `tests/plugin.rs` holds it to what the "
+        "plugin emits in "
+        "`narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps`, and "
+        "its version to `SEARCH_CURSOR_VERSION` in "
+        "`the_published_paging_contract_matches_its_constants_and_both_documents`, so a token "
+        "that changed shape fails there by an exact equality rather than by two rows differing."
+    ),
     "crates/onetaskgraph-linear/tests/fixtures/comments.json": (
         "Not a store: no query filters or titles what it holds. It pins the shape Linear answers "
         "an issue's `comments` connection in — a comment has an id and a body and no title, and "

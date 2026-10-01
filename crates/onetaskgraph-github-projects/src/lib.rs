@@ -957,11 +957,11 @@ pub mod graphql {
     /// Updates an existing draft's user-visible fields.
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
-    pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean=false,$priorityName:String!="Priority"){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
+    pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
     /// Writes up to three board fields and an optional clear in one ordered mutation.
     pub const UPDATE_FIELDS: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$second:UpdateProjectV2ItemFieldValueInput!,$third:UpdateProjectV2ItemFieldValueInput!,$clear:ClearProjectV2ItemFieldValueInput!,$writeSecond:Boolean!,$writeThird:Boolean!,$writeClear:Boolean!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}} second:updateProjectV2ItemFieldValue(input:$second) @include(if:$writeSecond){projectV2Item{id}} third:updateProjectV2ItemFieldValue(input:$third) @include(if:$writeThird){projectV2Item{id}} cleared:clearProjectV2ItemFieldValue(input:$clear) @include(if:$writeClear){projectV2Item{id}}}"#;
     /// Clears one project item's value of one field, which is what a `none` priority is.
-    pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean=false,$priorityName:String!="Priority"){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
+    pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
     /// Creates one single-select field with its options. Only the guarded field setup may use
     /// this document, and only for a field the board lacks.
     pub const CREATE_FIELD: &str = r#"mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id name options{id name color description}}}}}"#;
@@ -5315,7 +5315,8 @@ impl GitHubProjectsSource {
                 let data = self
                     .graphql(
                         graphql::CLEAR_FIELD,
-                        json!({"input":{"projectId":board_id,"itemId":item_id,"fieldId":field}}),
+                        json!({"input":{"projectId":board_id,"itemId":item_id,"fieldId":field},
+                            "readPriority":false,"priorityName":PRIORITY_FIELD}),
                     )
                     .await?;
                 let returned = data
@@ -5393,7 +5394,10 @@ impl GitHubProjectsSource {
             ),
         };
         let data = self
-            .graphql(document, json!({"input":input,"readPriority":true}))
+            .graphql(
+                document,
+                json!({"input":input,"readPriority":true,"priorityName":PRIORITY_FIELD}),
+            )
             .await?;
         let returned = data
             .get(root)
@@ -5796,7 +5800,7 @@ impl GitHubProjectsSource {
                 graphql::UPDATE_FIELD,
                 json!({"input":{
                     "projectId":board_id,"itemId":item_id,"fieldId":field_id,"value":value
-                }}),
+                },"readPriority":false,"priorityName":PRIORITY_FIELD}),
             )
             .await?;
         let returned = data
