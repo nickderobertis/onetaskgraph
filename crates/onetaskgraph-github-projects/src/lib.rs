@@ -4172,13 +4172,8 @@ impl GitHubProjectsSource {
     /// many rows of the page starting there were already handed out, and the own-write ids
     /// already observed, including across a new source instance.
     ///
-    /// Every page is sent at one fixed size, [`SEARCH_PAGE_SIZE`], whatever the caller's
-    /// limit, and a limit smaller than a page is sliced from it. GitHub orders one search differently at different page sizes (its
-    /// relevance ties are broken per request), so a walk that sized its pages by the rows
-    /// still needed asked GitHub a different question on every page and reached rows in a
-    /// different order from one whole page, or twice, or not at all. At one size a paged walk
-    /// and a whole read send the very same requests, so the answer's order is the one those
-    /// pages arrive in. A page of fewer than twenty would cost what twenty does.
+    /// Every page is sent at [`SEARCH_PAGE_SIZE`] whatever the caller's limit, and a limit is
+    /// sliced from the pages it needs; why is the module documentation's paging contract.
     async fn search_tasks(
         &self,
         query: &TaskQuery,
