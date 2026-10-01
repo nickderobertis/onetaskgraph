@@ -14590,6 +14590,133 @@ async fn narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps()
 }
 
 #[tokio::test]
+async fn a_partial_narrowing_failure_can_retry_without_truncating_the_cached_page() {
+    let fixture = board(
+        (0..130)
+            .map(|index| Item::issue(&format!("I_{index:03}"), "widget").status("Todo"))
+            .collect(),
+    );
+    let source = source(&fixture);
+    let query = TaskQuery {
+        text: text("widget", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    fixture.refuse_after("search", 1);
+    let error = source.query_tasks(&query, &page(100)).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("search is refused by this board")
+    );
+    // Bindings record answered calls; the refused second page has no answer to cache.
+    assert_eq!(search_sizes(&fixture), [20]);
+    assert_eq!(fixture.requests("search"), 2);
+    fixture.state.lock().unwrap().refuse_after.remove("search");
+    let answer = walk_tasks(source.as_ref(), &query, 100).await;
+    assert_eq!(
+        answer,
+        (0..130)
+            .map(|index| format!("I_{index:03}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(search_sizes(&fixture), [20, 80, 100]);
+    assert_eq!(fixture.requests("search"), 4);
+}
+
+#[tokio::test]
+async fn resumed_pending_writes_handle_a_missing_node_and_retry_a_refused_node() {
+    for missing in [false, true] {
+        let fixture = board(vec![]);
+        let writer = source(&fixture);
+        let mut created = Vec::new();
+        for title in ["widget first", "widget second"] {
+            created.push(
+                writer
+                    .write_task(&write(task(
+                        "ignored",
+                        title,
+                        status(StatusCategory::Todo, "Todo"),
+                    )))
+                    .await
+                    .unwrap(),
+            );
+        }
+        fixture.read_behind(2);
+        let query = TaskQuery {
+            text: text("widget", TextFields::Title),
+            ..TaskQuery::default()
+        };
+        let first = writer.query_tasks(&query, &page(1)).await.unwrap();
+        assert_eq!(first.items[0].id, created[0]);
+        let request = resume(&first.next.unwrap().0, 1);
+        let fresh = source(&fixture);
+        if missing {
+            source(&fixture).delete_task(&created[1]).await.unwrap();
+        }
+        let reads_before = fixture.requests("issue");
+        if !missing {
+            fixture.script_for("issue", vec![Refusal::unavailable()]);
+            assert!(fresh.query_tasks(&query, &request).await.is_err());
+        }
+        let answer = fresh.query_tasks(&query, &request).await.unwrap();
+        assert_eq!(answer.next, None);
+        if missing {
+            assert!(answer.items.is_empty());
+        } else {
+            assert_eq!(answer.items.len(), 1);
+            assert_eq!(answer.items[0].id, created[1]);
+        }
+        assert_eq!(search_sizes(&fixture), [1]);
+        assert_eq!(
+            fixture.requests("issue") - reads_before,
+            if missing { 1 } else { 2 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn project_name_searches_stop_at_the_exact_match_or_connection_end() {
+    for count in [0, 3, 21, 130] {
+        for exact in [false, true] {
+            let mut items = (0..count)
+                .map(|index| {
+                    Item::issue(&format!("I_{index}"), &format!("Plan extra {index}")).sub_issues(1)
+                })
+                .collect::<Vec<_>>();
+            if exact && count > 0 {
+                items[count - 1] = Item::issue("I_exact", "Plan").sub_issues(1);
+                items.push(
+                    Item::issue("I_child", "child")
+                        .parent("I_exact")
+                        .status("Todo"),
+                );
+            }
+            let fixture = board(items);
+            let query = TaskQuery {
+                project: ProjectFilter::Is(native("Plan")),
+                ..TaskQuery::default()
+            };
+            assert_eq!(
+                selected_tasks(source(&fixture).as_ref(), &query).await,
+                if exact && count > 0 {
+                    vec!["I_child"]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(
+                search_sizes(&fixture),
+                match count {
+                    0 | 3 => vec![20],
+                    21 => vec![20, 100],
+                    _ => vec![20, 100, 100],
+                }
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_project_name_on_a_later_search_page_is_found() {
     let mut items = (0..130)
         .map(|index| {

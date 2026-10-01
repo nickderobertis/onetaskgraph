@@ -200,6 +200,8 @@
 //! duplicates or gaps. Own writes replace stale index copies and complete missing rows at
 //! exhaustion. Cache entries include requested size, so a small answer cannot truncate a
 //! wider question. Origin pages remain three; whole-board sizing is unchanged.
+//! Read-after-write is a per-process guarantee. A cursor resumed in a new process is
+//! not required to include the original process's writes still omitted by the index.
 //! <!-- github-search-paging:end -->
 //!
 //! The board half of an issue — its board item's id, its `Status` option and this
