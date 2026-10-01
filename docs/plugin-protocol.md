@@ -1495,8 +1495,9 @@ confirmation can require more candidates than matching rows. Walking all pages
 returns the whole answer. The opaque version-4 source cursor carries GitHub's page
 cursor and how far into that page the last answer stopped, and resumes in the same
 process or a new one, without duplicates or gaps. It carries no rows: one process
-sends each page's search once, and a new process sends again the search of each page
-its rows lie in, the same request the whole read sent for it. Own writes replace stale index
+sends each page's search once, and a new process re-reads only the page it resumes
+in, then sends a further page once, never as a re-read, only when its limit still
+needs rows. Every request either walk sends is the one a whole read sends for that page. Own writes replace stale index
 copies and complete missing rows at exhaustion. Cache entries are whole GitHub pages,
 so a small answer cannot truncate a wider question. Origin pages remain three; whole-board sizing is unchanged.
 Read-after-write is a per-process guarantee. A cursor resumed in a new process is
