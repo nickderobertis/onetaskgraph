@@ -9,11 +9,13 @@ use std::fs;
 use std::path::Path;
 
 use onetaskgraph_core::{
-    Answers, Body, Config, DocumentCreate, Engine, EngineError, GlobalId, LoaderDocument,
-    RenderRequest, RenderTemplate, RenderedRecord, RenderedTemplate, TaskCreate, TemplateError,
-    TemplateInput, TemplateProvenance,
+    Answers, Body, Config, CopyItems, CopyRequest, CopyScope, DocumentCreate, Engine, EngineError,
+    GlobalId, LoaderDocument, RenderRequest, RenderTemplate, RenderedRecord, RenderedTemplate,
+    TaskCreate, TemplateError, TemplateInput, TemplateProvenance,
 };
-use onetaskgraph_plugin_api::{MetadataKey, NativeId, SecretResolver, SourceName, StatusCategory};
+use onetaskgraph_plugin_api::{
+    Location, MetadataKey, NativeId, SecretResolver, SourceName, StatusCategory,
+};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -721,4 +723,103 @@ fn a_rendering_assembled_by_hand_with_no_digest_cannot_become_a_body() {
             .contains("\"not a digest\" is not a digest"),
         "{refused}"
     );
+}
+
+/// The path a folder of Markdown reports for one of its tasks.
+async fn task_path(engine: &Engine, id: &GlobalId) -> String {
+    match task(engine, id).await.location {
+        Some(Location::Path(path)) => path,
+        other => panic!("a folder of Markdown reports a path for {id}, not {other:?}"),
+    }
+}
+
+/// `Engine::copy` of `item` into the folder called `back`, under `scope`.
+async fn copy_into_back(
+    engine: &Engine,
+    item: &str,
+    scope: CopyScope,
+) -> onetaskgraph_core::CopyReport {
+    engine
+        .copy(&CopyRequest {
+            items: CopyItems::new(vec![item.parse().unwrap()]).unwrap(),
+            scope,
+            destination: name("back"),
+            match_by: None,
+            recreate: false,
+            dry_run: false,
+        })
+        .await
+        .expect("the copy runs")
+}
+
+#[tokio::test]
+async fn a_copy_that_rewrites_a_renderings_references_records_the_digest_of_what_it_wrote() {
+    let fixture = Fixture::new();
+    let back = tempfile::tempdir().expect("a second folder");
+    fs::create_dir_all(fixture.root.path().join("projects")).unwrap();
+    fs::write(
+        fixture.root.path().join("projects/launch.md"),
+        "---\ntitle: Launch\nstatus: todo\n---\nWhy.\n",
+    )
+    .unwrap();
+    let engine = Engine::build(
+        &Config::from_document(json!({"sources": {
+            "work": {"plugin": "local-md", "config": {"root": fixture.root.path()}},
+            "back": {"plugin": "local-md", "config": {"root": back.path()}},
+        }}))
+        .expect("a valid configuration"),
+        &NoSecrets,
+    );
+    let template = TemplateInput::Loader(fixture.loader(BASE));
+    let step = fixture
+        .create(&template, &answers(json!({"goal": "Step"})))
+        .await;
+    let location = task_path(&engine, &step).await;
+    let rendered = template
+        .load()
+        .unwrap()
+        .render(&answers(json!({"goal": format!("`{location}`")})))
+        .unwrap();
+    let design = engine
+        .create_document(&DocumentCreate {
+            source: name("work"),
+            project: NativeId::from("launch"),
+            title: "Design".to_owned(),
+            id: Some(NativeId::from("design")),
+            body: Body::rendered(&template, rendered).unwrap(),
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            metadata: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+    let authored = TemplateProvenance::read(&design.item.metadata)
+        .unwrap()
+        .unwrap();
+
+    let project = copy_into_back(&engine, "work:launch", CopyScope::Projects { tasks: true }).await;
+    let counterpart = project
+        .items
+        .iter()
+        .find(|outcome| outcome.source == step)
+        .and_then(|outcome| outcome.destination().cloned())
+        .expect("the task was copied");
+    let there = task_path(&engine, &counterpart).await;
+
+    let copied = copy_into_back(&engine, "work:design", CopyScope::Documents).await;
+    assert_eq!(copied.references_rewritten, 1);
+    let landed = engine
+        .document(copied.items[0].destination().expect("the document landed"))
+        .await
+        .unwrap()
+        .items
+        .remove(0)
+        .item;
+    let content = landed.content.as_deref().unwrap();
+    assert!(content.contains(&format!("Goal: `{there}`")), "{content}");
+    let recorded = TemplateProvenance::read(&landed.metadata).unwrap().unwrap();
+    assert_eq!(recorded.body_digest.as_str(), sha256(content));
+    assert_eq!(recorded.template, authored.template);
+    assert_eq!(recorded.digest, authored.digest);
+    assert_eq!(recorded.answers_digest, authored.answers_digest);
 }

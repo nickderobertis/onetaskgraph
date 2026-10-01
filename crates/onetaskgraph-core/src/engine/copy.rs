@@ -52,6 +52,7 @@ use serde_json::Value;
 
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
+use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
 
 use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
@@ -1808,8 +1809,13 @@ impl Engine {
     /// exited. Reading the destination is also what makes a document copied on its own
     /// work, which a same-run mapping never could.
     ///
-    /// Tasks and projects are not touched. Only a document's content is rewritten, and
-    /// nothing else about it changes.
+    /// Tasks and projects are not touched. A document's content is rewritten, and so is
+    /// one thing beside it: when this substitutes at least one reference into a rendering
+    /// that still hashes to the `body_digest` its [`TemplateProvenance`] records, the copy
+    /// records the `body_digest` of the content as rewritten — see [`restamped`]. The
+    /// answers that rendering was made from, and the `answers_digest` naming them, still
+    /// hold the pre-copy locations, so the copy is not a fresh rendering of them and a
+    /// regenerate from them reproduces the pre-copy content.
     async fn rewrite_references(
         &self,
         destination: &ResolvedSource,
@@ -1843,6 +1849,13 @@ impl Engine {
                 continue;
             };
             let (rewritten, made) = substitute(content, &table_for(&referents, &counterparts));
+            if made.rewritten > 0
+                && let Some(provenance) = restamped(&document.metadata, content, &rewritten)
+            {
+                document
+                    .metadata
+                    .insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
+            }
             document.content = Some(rewritten);
             counts.add(made);
         }
@@ -3263,6 +3276,30 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
         at += character.len_utf8();
     }
     (written, counts)
+}
+
+/// The provenance a document whose references were rewritten from `read` to `written`
+/// records, when it is a rendering this copy may vouch for.
+///
+/// Only a rendering that still hashes to the `body_digest` its entry records: then the one
+/// change between it and `written` is this copy's own, and the entry is re-stamped with the
+/// digest of exactly what the destination is given, `template`, `digest` and
+/// `answers_digest` carried as they were. A rendering edited by hand after it was rendered,
+/// an entry [`TemplateProvenance::read`] refuses, and no entry at all answer `None`, so the
+/// entry — or its absence — is carried verbatim and a hand edit stays visible at the
+/// destination rather than laundered by a copy.
+fn restamped(
+    metadata: &BTreeMap<String, Value>,
+    read: &str,
+    written: &str,
+) -> Option<TemplateProvenance> {
+    let mut provenance = TemplateProvenance::read(metadata).ok().flatten()?;
+    if provenance.body_digest.as_str() != body_digest(read) {
+        return None;
+    }
+    provenance.body_digest =
+        Sha256Digest::parse(body_digest(written)).expect("`body_digest` spells a digest");
+    Some(provenance)
 }
 
 /// The origin one item records, when it records a usable one.
