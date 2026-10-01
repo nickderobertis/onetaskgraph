@@ -574,6 +574,7 @@ struct State {
     /// each one asked for, which is the only place a test can see that a read scoped to one
     /// project never asked the board for its items.
     documents: Vec<String>,
+    bindings: Vec<(String, Value)>,
     /// The search string of every board-scoped search this board answered, in order.
     searches: Vec<String>,
     /// The field filter of every origin lookup this board answered, in order.
@@ -1133,6 +1134,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         stuck_membership_cursor: None,
         seen: Vec::new(),
         documents: Vec::new(),
+        bindings: Vec::new(),
         searches: Vec::new(),
         origin_filters: Vec::new(),
         unbound_variables: Vec::new(),
@@ -1300,6 +1302,9 @@ fn repository_node_id(slug: &str) -> String {
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let mut state = state.lock().unwrap();
+    state
+        .bindings
+        .push((operation_name(query).to_owned(), variables.clone()));
     // Which read this is, taken from the document itself: every label this board answers
     // with hangs on the content, and which path asked is what lets one case make a single
     // path disagree.
@@ -14468,7 +14473,7 @@ async fn what_this_process_wrote_is_returned_while_the_index_is_behind_it() {
 }
 
 #[tokio::test]
-async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on() {
+async fn a_narrowed_search_fetches_only_the_rows_each_page_needs() {
     let items = (0..130)
         .map(|index| {
             Item::issue(&format!("I_{index:03}"), &format!("widget {index}")).status("Todo")
@@ -14482,6 +14487,7 @@ async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on()
     };
     let first = source.query_tasks(&query, &page(100)).await.unwrap();
     assert_eq!(first.items.len(), 100);
+    assert_eq!(search_sizes(&fixture), [20, 80]);
     let next = first.next.expect("a cursor to the rest");
     let rest = source
         .query_tasks(&query, &resume(&next.0, 100))
@@ -14491,11 +14497,312 @@ async fn a_narrowed_search_is_paged_at_githubs_maximum_and_its_answer_walks_on()
     assert_eq!(rest.next, None);
     assert_eq!(
         fixture.requests("search"),
-        2,
-        "the search walks GitHub's pages of 100 once, and the second page of the answer is \
-         read from what this command already asked"
+        3,
+        "20 then 80 fill the first answer; only resuming asks for the rest"
     );
     assert_eq!(fixture.requests("board"), 0);
+}
+
+async fn walk_tasks(source: &dyn TaskSource, query: &TaskQuery, limit: u32) -> Vec<String> {
+    let mut request = page(limit);
+    let mut ids = Vec::new();
+    loop {
+        let answer = source.query_tasks(query, &request).await.unwrap();
+        ids.extend(answer.items.into_iter().map(|task| task.id.0));
+        match answer.next {
+            Some(cursor) => request = resume(&cursor.0, limit),
+            None => return ids,
+        }
+    }
+}
+
+fn search_sizes(fixture: &Fixture) -> Vec<u64> {
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter(|(operation, _)| operation == "search")
+        .map(|(_, variables)| variables["first"].as_u64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn narrowing_pages_are_bounded_and_resume_on_a_fresh_source_without_gaps() {
+    for count in [0, 3, 21, 130] {
+        for metadata in [false, true] {
+            let fixture = board(
+                (0..count)
+                    .map(|index| {
+                        Item::issue(&format!("I_{index:03}"), &format!("widget {index}"))
+                            .status("Todo")
+                            .body(&slotted("", &json!({"team.owner":"ada"})))
+                    })
+                    .collect(),
+            );
+            let query = if metadata {
+                metadata_query("team.owner", &[], "ada")
+            } else {
+                TaskQuery {
+                    text: text("widget", TextFields::Title),
+                    ..TaskQuery::default()
+                }
+            };
+            let source = source(&fixture);
+            let first = source.query_tasks(&query, &page(3)).await.unwrap();
+            assert_eq!(first.items.len(), count.min(3));
+            assert_eq!(search_sizes(&fixture), [3]);
+            assert_eq!(source.query_tasks(&query, &page(3)).await.unwrap(), first);
+            assert_eq!(search_sizes(&fixture), [3]);
+            if count > 3 {
+                assert_eq!(
+                    serde_json::from_str::<Value>(&first.next.as_ref().unwrap().0).unwrap(),
+                    serde_json::from_str::<Value>(include_str!("fixtures/search-cursor-v3.json"))
+                        .unwrap()
+                );
+            }
+            let mut ids = first
+                .items
+                .iter()
+                .map(|task| task.id.0.clone())
+                .collect::<Vec<_>>();
+            let mut next = first.next;
+            while let Some(cursor) = next {
+                let fresh = self::source(&fixture);
+                let answer = fresh
+                    .query_tasks(&query, &resume(&cursor.0, 20))
+                    .await
+                    .unwrap();
+                ids.extend(answer.items.into_iter().map(|task| task.id.0));
+                next = answer.next;
+            }
+            assert_eq!(
+                ids,
+                (0..count)
+                    .map(|index| format!("I_{index:03}"))
+                    .collect::<Vec<_>>()
+            );
+            // A wider ask cannot use the three-row cache entry as a complete answer.
+            assert_eq!(walk_tasks(source.as_ref(), &query, 100).await, ids);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_project_name_on_a_later_search_page_is_found() {
+    let mut items = (0..130)
+        .map(|index| {
+            Item::issue(&format!("I_{index}"), &format!("Plan extra {index}")).sub_issues(1)
+        })
+        .collect::<Vec<_>>();
+    items.push(Item::issue("I_exact", "Plan").sub_issues(1));
+    items.push(
+        Item::issue("I_child", "child")
+            .parent("I_exact")
+            .status("Todo"),
+    );
+    let fixture = board(items);
+    let query = TaskQuery {
+        project: ProjectFilter::Is(native("Plan")),
+        ..TaskQuery::default()
+    };
+    assert_eq!(
+        selected_tasks(source(&fixture).as_ref(), &query).await,
+        ["I_child"]
+    );
+    assert_eq!(search_sizes(&fixture), [20, 100, 100]);
+}
+
+#[tokio::test]
+async fn comment_search_pages_stop_when_the_matching_answer_is_full() {
+    for count in [0, 3, 21, 130] {
+        let fixture = board(
+            (0..count)
+                .map(|index| {
+                    Item::issue(&format!("I_{index:03}"), "activity")
+                        .status("Todo")
+                        .updated("2026-09-23T09:00:00Z")
+                })
+                .collect(),
+        );
+        for index in 0..count {
+            fixture.commented_at(
+                &format!("I_{index:03}"),
+                "2026-09-23T09:00:00Z",
+                "2026-09-23T09:00:00Z",
+            );
+        }
+        let source = source(&fixture);
+        let query = commented_since(Vec::new());
+        let first = source.query_tasks(&query, &page(100)).await.unwrap();
+        assert_eq!(first.items.len(), count.min(100));
+        assert_eq!(
+            search_sizes(&fixture),
+            if count > 20 { vec![20, 80] } else { vec![20] }
+        );
+        if let Some(next) = first.next {
+            assert_eq!(
+                source
+                    .query_tasks(&query, &resume(&next.0, 100))
+                    .await
+                    .unwrap()
+                    .items
+                    .len(),
+                count - 100
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn own_writes_win_exactly_once_on_each_side_of_a_page_boundary() {
+    for count in [3, 21, 130] {
+        for stale in [false, true] {
+            let fixture = board(
+                (0..count)
+                    .map(|index| {
+                        Item::issue(&format!("I_{index:03}"), &format!("widget old {index}"))
+                            .status("Todo")
+                    })
+                    .collect(),
+            );
+            let source = source(&fixture);
+            // Updates at the start, a page edge, and the end keep their index positions.
+            for index in [0, count / 2, count - 1] {
+                let id = format!("I_{index:03}");
+                fixture.indexes_behind(&id);
+                source
+                    .write_task(&ItemWrite {
+                        target: Some(native(&id)),
+                        item: task(&id, "widget fresh", status(StatusCategory::Todo, "Todo")),
+                        depends_on: vec![],
+                    })
+                    .await
+                    .unwrap();
+            }
+            let created = source
+                .write_task(&write(task(
+                    "ignored",
+                    "widget created",
+                    status(StatusCategory::Todo, "Todo"),
+                )))
+                .await
+                .unwrap();
+            if !stale {
+                fixture.read_behind(1);
+            } else {
+                fixture.indexes_behind(&created.0);
+            }
+            let query = TaskQuery {
+                text: text("widget", TextFields::Title),
+                ..TaskQuery::default()
+            };
+            let mut request = page(3);
+            let mut tasks = Vec::new();
+            loop {
+                let answer = source.query_tasks(&query, &request).await.unwrap();
+                tasks.extend(answer.items);
+                match answer.next {
+                    Some(cursor) => request = resume(&cursor.0, 3),
+                    None => break,
+                }
+            }
+            assert_eq!(tasks.len(), count + 1);
+            let ids = tasks
+                .iter()
+                .map(|task| task.id.0.clone())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(ids.len(), count + 1);
+            for index in [0, count / 2, count - 1] {
+                assert_eq!(
+                    tasks
+                        .iter()
+                        .find(|task| task.id.0 == format!("I_{index:03}"))
+                        .unwrap()
+                        .title,
+                    "widget fresh"
+                );
+            }
+            assert!(ids.contains(&created.0));
+            let before = fixture.requests("search");
+            assert_eq!(
+                walk_tasks(source.as_ref(), &query, 3).await.len(),
+                count + 1
+            );
+            assert_eq!(fixture.requests("search"), before);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_search_cursor_with_an_unknown_version_is_refused_without_a_request() {
+    let fixture = narrowing_board();
+    let query = TaskQuery {
+        text: text("ship", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let error = source(&fixture)
+        .query_tasks(
+            &query,
+            &resume(r#"{"version":99,"connection":{"state":"exhausted"}}"#, 3),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("page cursor is invalid"));
+    assert_eq!(fixture.requests("search"), 0);
+}
+
+#[tokio::test]
+async fn metadata_accounting_names_only_search_and_needed_membership_recovery() {
+    for overflow in [false, true] {
+        let boards = if overflow {
+            boards_ahead_of_this_one()
+        } else {
+            vec![]
+        };
+        let fixture = board(vec![
+            Item::issue("I_match", "match")
+                .status("Todo")
+                .body(&slotted("", &json!({"team.owner":"ada"})))
+                .also_on(&boards),
+        ]);
+        let ledger = Arc::new(Accounting::new());
+        let source = recording(&fixture.endpoint, &ledger);
+        let query = metadata_query("team.owner", &[], "ada");
+        assert_eq!(selected_tasks(source.as_ref(), &query).await, ["I_match"]);
+        let session = ledger.snapshot();
+        assert_eq!(session.total_requests(), if overflow { 2 } else { 1 });
+        assert_eq!(fixture.membership_walks(), usize::from(overflow));
+        assert_eq!(search_sizes(&fixture), [10]);
+        let report = session.report();
+        assert!(report.contains("searching this board's issues"));
+        assert_eq!(
+            report.contains("reading one issue's board memberships past the page it came with"),
+            overflow
+        );
+        // The report's unreported prices are lower bounds. Price the actual bindings too.
+        let bindings = fixture.state.lock().unwrap().bindings.clone();
+        for ((_, variables), document) in bindings.iter().zip(fixture.documents()) {
+            let sizes = variables
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .as_u64()
+                        .map(|value| (key.clone(), u32::try_from(value).unwrap()))
+                })
+                .collect();
+            assert_eq!(
+                github_graphql_node_count::point_cost(&document, &sizes).unwrap(),
+                1
+            );
+        }
+        for request in session.requests() {
+            assert_eq!(request.spend().amount(), 1);
+        }
+    }
 }
 
 #[tokio::test]
@@ -14665,6 +14972,11 @@ async fn an_origin_lookup_walks_each_of_its_connections_past_its_first_page() {
     // Nine carriers at three a page is three pages of the field filter; the four the search
     // finds are two pages of it, walked alongside.
     assert_eq!(fixture.requests("originItems"), 3);
+    for (operation, variables) in &fixture.state.lock().unwrap().bindings {
+        if operation == "originItems" {
+            assert_eq!(variables["originFirst"], json!(3));
+        }
+    }
     assert_eq!(fixture.requests("board"), 0);
 }
 
@@ -15047,4 +15359,160 @@ async fn a_carrier_filed_by_something_else_is_seen_by_the_next_source_and_not_by
     found.sort();
     assert_eq!(found, ["I_first", "I_later"]);
     assert_eq!(fixture.requests("originItems"), 2);
+}
+
+#[test]
+fn the_published_paging_contract_matches_its_constants_and_both_documents() {
+    fn contract(document: &str) -> &str {
+        document
+            .split_once("<!-- github-search-paging:start -->")
+            .unwrap()
+            .1
+            .split_once("<!-- github-search-paging:end -->")
+            .unwrap()
+            .0
+            .trim()
+    }
+    let source_docs = include_str!("../src/lib.rs")
+        .lines()
+        .filter_map(|line| line.strip_prefix("//! "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let protocol = include_str!("../../../docs/plugin-protocol.md");
+    assert_eq!(contract(&source_docs), contract(protocol));
+    let stated = contract(protocol);
+    for clause in [
+        format!(
+            "first = min(rows still needed, {})",
+            onetaskgraph_github_projects::SEARCH_FIRST_PAGE_SIZE
+        ),
+        format!(
+            "first = min(rows still needed, {})",
+            onetaskgraph_github_projects::MAX_PAGE_SIZE
+        ),
+        format!(
+            "version-{} source cursor",
+            onetaskgraph_github_projects::SEARCH_CURSOR_VERSION
+        ),
+    ] {
+        assert!(
+            stated.contains(&clause),
+            "published contract is missing {clause}"
+        );
+    }
+    let golden: Value =
+        serde_json::from_str(include_str!("fixtures/search-cursor-v3.json")).unwrap();
+    assert_eq!(
+        golden["version"],
+        onetaskgraph_github_projects::SEARCH_CURSOR_VERSION
+    );
+}
+
+#[tokio::test]
+async fn inconsistent_search_cursor_states_are_refused_without_a_request() {
+    let fixture = narrowing_board();
+    let query = TaskQuery {
+        text: text("ship", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    for connection in [
+        json!({"state":"continuing","after":""}),
+        json!({"state":"exhausted","after":"3"}),
+        json!({"state":"initial"}),
+    ] {
+        let token = json!({"version":onetaskgraph_github_projects::SEARCH_CURSOR_VERSION,"connection":connection}).to_string();
+        assert!(
+            source(&fixture)
+                .query_tasks(&query, &resume(&token, 3))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(fixture.requests("search"), 0);
+}
+
+#[tokio::test]
+async fn a_fresh_source_resumes_own_writes_missing_from_the_index() {
+    let fixture = board(
+        (0..3)
+            .map(|index| Item::issue(&format!("I_{index}"), "widget").status("Todo"))
+            .collect(),
+    );
+    let writer = source(&fixture);
+    let mut created = Vec::new();
+    for title in ["widget first", "widget second"] {
+        created.push(
+            writer
+                .write_task(&write(task(
+                    "ignored",
+                    title,
+                    status(StatusCategory::Todo, "Todo"),
+                )))
+                .await
+                .unwrap(),
+        );
+    }
+    fixture.read_behind(2);
+    let query = TaskQuery {
+        text: text("widget", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let first = writer.query_tasks(&query, &page(4)).await.unwrap();
+    assert_eq!(first.items.len(), 4);
+    assert_eq!(first.items[3].id, created[0]);
+    let before = fixture.documents().len();
+    let fresh = source(&fixture);
+    let rest = fresh
+        .query_tasks(&query, &resume(&first.next.unwrap().0, 1))
+        .await
+        .unwrap();
+    assert_eq!(rest.items.len(), 1);
+    assert_eq!(rest.items[0].id, created[1]);
+    assert_eq!(rest.next, None);
+    assert_eq!(
+        &fixture.documents()[before..],
+        &[onetaskgraph_github_projects::graphql::ISSUE]
+    );
+}
+
+#[tokio::test]
+async fn a_fresh_source_resumes_stale_written_rows_with_the_current_record() {
+    for moved_out in [false, true] {
+        let fixture = board(
+            (0..3)
+                .map(|index| Item::issue(&format!("I_{index}"), "widget old").status("Todo"))
+                .collect(),
+        );
+        fixture.indexes_behind("I_2");
+        let writer = source(&fixture);
+        writer
+            .write_task(&ItemWrite {
+                target: Some(native("I_2")),
+                item: task(
+                    "I_2",
+                    if moved_out { "Parked" } else { "widget fresh" },
+                    status(StatusCategory::Todo, "Todo"),
+                ),
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+        let query = TaskQuery {
+            text: text("widget", TextFields::Title),
+            ..TaskQuery::default()
+        };
+        let first = writer.query_tasks(&query, &page(1)).await.unwrap();
+        assert_eq!(first.items[0].id, native("I_0"));
+        let fresh = source(&fixture);
+        let rest = fresh
+            .query_tasks(&query, &resume(&first.next.unwrap().0, 100))
+            .await
+            .unwrap();
+        assert_eq!(rest.items.len(), if moved_out { 1 } else { 2 });
+        assert_eq!(rest.items[0].id, native("I_1"));
+        if !moved_out {
+            assert_eq!(rest.items[1].title, "widget fresh");
+        }
+        assert_eq!(rest.next, None);
+    }
 }

@@ -1477,3 +1477,18 @@ simply held one task, which is the failure no test above the plugin can catch.
   at the user's explicit request, names its destination, goes through that source's own
   write interface into that source's own store, and is never read back to answer a
   query. A cache is a write nobody asked for that the engine reads back.
+
+### GitHub Projects narrowing-search paging
+
+<!-- github-search-paging:start -->
+Board-scoped text, metadata, project-name and comment-activity searches start at
+`first = min(rows still needed, 20)`, the SEARCH_ISSUES document's one-point ceiling.
+Later pages use `first = min(rows still needed, 100)`, only when `hasNextPage` is true
+and the caller still needs rows. Project-name lookup continues until an exact match
+or exhaustion. A task limit bounds returned and fetched rows; local confirmation can
+require more candidates than matching rows. Walking all pages returns the whole answer.
+The opaque version-3 source cursor resumes in the same process or a new one, without
+duplicates or gaps. Own writes replace stale index copies and complete missing rows at
+exhaustion. Cache entries include requested size, so a small answer cannot truncate a
+wider question. Origin pages remain three; whole-board sizing is unchanged.
+<!-- github-search-paging:end -->

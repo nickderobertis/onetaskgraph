@@ -641,3 +641,99 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
          session-cost.md what moved it"
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This real CLI paging regression uses the existing loopback board and local Markdown only: both copy_cost tests together took 0.70 seconds. It adds no service session or toolchain; the binary crate owns CLI process resumption, which a plugin test cannot drive without the forbidden engine dependency.
+#[test]
+fn a_narrowed_cli_list_limits_fetches_and_resumes_in_a_new_process() {
+    let plan = Plan::of(130);
+    for step in 0..130 {
+        let path = plan.root.join(format!("tasks/T-{step}.md"));
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            path,
+            contents.replace("project: P\n", "project: P\nmetadata: {team.owner: ada}\n"),
+        )
+        .unwrap();
+    }
+    plan.copy(&[]);
+    for predicate in [["--search", "Step"], ["--metadata", "team.owner=ada"]] {
+        let mut ids = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut args = vec![
+                "task", "list", "--source", "board", "--limit", "20", "--json",
+            ];
+            args.extend(predicate);
+            if let Some(ref token) = token {
+                args.extend(["--page", token]);
+            }
+            let (_, served, report) = plan.measure(&args);
+            let searches = served
+                .iter()
+                .filter(|(query, _)| query == onetaskgraph_github_projects::graphql::SEARCH_ISSUES)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                searches.len(),
+                1,
+                "each CLI process fetches exactly one needed page"
+            );
+            assert_eq!(searches[0].1["first"], json!(20));
+            ids.extend(
+                report["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["id"].clone()),
+            );
+            token = report["next"].as_str().map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ids.len(), 130);
+        let mut whole = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut args = vec![
+                "task", "list", "--source", "board", "--limit", "100", "--json",
+            ];
+            args.extend(predicate);
+            if let Some(ref token) = token {
+                args.extend(["--page", token]);
+            }
+            let (_, _, report) = plan.measure(&args);
+            whole.extend(
+                report["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["id"].clone()),
+            );
+            token = report["next"].as_str().map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            ids, whole,
+            "resuming CLI processes return the whole walk's order"
+        );
+        let output = plan
+            .sandbox
+            .command()
+            .args([
+                "task",
+                "list",
+                "--source",
+                "board",
+                predicate[0],
+                predicate[1],
+                "--page",
+                "invalid",
+            ])
+            .assert()
+            .get_output()
+            .clone();
+        assert_ne!(output.status.code(), Some(0));
+    }
+}

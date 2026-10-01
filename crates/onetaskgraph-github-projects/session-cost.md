@@ -763,3 +763,36 @@ Every line of the record that moved, and nothing else moved:
 | `reading a task's comments` | 2 → 4 (+2) | 200 → 400 (+200) | the comment-activity read now also considers the existing items this source wrote; the loopback board reports no `updatedAt` for an issue nobody commented on, so neither is ruled out without reading its comments. GitHub always reports one, and an item written before the instant is ruled out without a read |
 | `node-count and point-cost reconciliation while looking up the items copied from one origin` | 0 → 1 (+1) | 0 → 915 (+915) | a new line: the one reconciliation of the new `graphql::ORIGIN_LOOKUP` document, as every other document has one |
 | **total** | **126 → 128 (+2)** | **280,490 → 352,105 (+71,615)** | |
+
+## Bounded narrowing searches
+
+The paging contract is stated in the plugin's cost table and
+[plugin protocol](../../docs/plugin-protocol.md#github-projects-narrowing-search-paging),
+reconciled by `the_published_paging_contract_matches_its_constants_and_both_documents`.
+The opaque cursor's golden is `tests/fixtures/search-cursor-v3.json`; version 3 replaces
+the initial draft's independent nullable position and exhaustion flag with a tagged
+connection state and carries pending own-write ids for a new process to resolve by
+node id only when its page needs them. Empty own-write ids are omitted.
+
+The loopback live-journey session golden moves only these lines:
+
+| Line | Requests | Nodes | Why |
+|---|---|---|---|
+| `searching this board's issues` | 10 → 16 | 204,000 → 90,984 | bounded searches use smaller pages; differently sized asks have distinct cache entries, and exact-sized pages can require a resume to complete own writes absent from the index |
+| **total** | **128 → 134** | **352,105 → 239,089** | six additional small reads, 113,016 fewer declared nodes |
+
+The document maximum-price and maximum-node records remain unchanged: later search
+pages can still reach one hundred. The copy-cost record is unchanged because its origin
+lookup remains three rows and its whole-board reads retain their sizing.
+
+`metadata_accounting_names_only_search_and_needed_membership_recovery` records a metadata
+query through the plugin's own accounting and checks its session report against the
+loopback board's actual documents and bindings. A matching issue whose initial membership
+page contains this board costs only one search request, at one declared point for ten
+requested rows. There is no fixed extra metadata-list request. When this board's entry
+is beyond the three memberships the search carries, it additionally sends
+`ISSUE_BOARD_ITEMS`, at one declared point even with `first: 100`; the issue's board item
+id and fields are needed to answer. Two matching issues requiring recovery explain two
+extra points. The shared-counter measurement alone cannot establish whether those
+recoveries or other traffic produced its extra two points. Recovery was already skipped
+when the search's own memberships answered, and no unnecessary request was found.

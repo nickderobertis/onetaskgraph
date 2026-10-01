@@ -184,10 +184,23 @@
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
-//! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — paged at [`MAX_PAGE_SIZE`] | the issues that match |
+//! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — bounded by the caller’s remaining rows | the issues that match |
 //! | which tasks were copied from one origin | [`graphql::ORIGIN_LOOKUP`] — the board's own `items` under its field filter on the origin field, and the same board-scoped search for the id `in:body`, in one request, each paged at three | the carriers of that origin, which is one item |
 //! | every task, every document, every label, when nothing above narrows the question | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
+//!
+//! <!-- github-search-paging:start -->
+//! Board-scoped text, metadata, project-name and comment-activity searches start at
+//! `first = min(rows still needed, 20)`, the SEARCH_ISSUES document's one-point ceiling.
+//! Later pages use `first = min(rows still needed, 100)`, only when `hasNextPage` is true
+//! and the caller still needs rows. Project-name lookup continues until an exact match
+//! or exhaustion. A task limit bounds returned and fetched rows; local confirmation can
+//! require more candidates than matching rows. Walking all pages returns the whole answer.
+//! The opaque version-3 source cursor resumes in the same process or a new one, without
+//! duplicates or gaps. Own writes replace stale index copies and complete missing rows at
+//! exhaustion. Cache entries include requested size, so a small answer cannot truncate a
+//! wider question. Origin pages remain three; whole-board sizing is unchanged.
+//! <!-- github-search-paging:end -->
 //!
 //! The board half of an issue — its board item's id, its `Status` option and this
 //! source's origin text field — rides along on `Issue.projectItems` in the first three, so
@@ -487,6 +500,8 @@ use accounting::Accounting;
 pub const KIND: &str = "github-projects";
 /// GitHub's maximum connection page size.
 pub const MAX_PAGE_SIZE: u32 = 100;
+/// First narrowing-search page: at most 20 rows keeps SEARCH_ISSUES at one point.
+pub const SEARCH_FIRST_PAGE_SIZE: u32 = 20;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -2127,6 +2142,7 @@ pub struct GitHubProjectsSource {
     /// narrowed question twice — a wait polling for its own items, a listing repeated after a
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
+    search_next: Mutex<BTreeMap<String, Option<String>>>,
     /// The board's own id and field definitions as this process last read them on their
     /// own, for the length of one command.
     ///
@@ -3080,6 +3096,7 @@ impl GitHubProjectsSource {
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
+            search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
@@ -3984,14 +4001,25 @@ impl GitHubProjectsSource {
     /// what GitHub sends, and this source decides what it names.
     async fn project_by_name(&self, name: &str) -> Result<Option<NativeId>, SourceError> {
         let search = self.board_search(Some(&title_qualifier(name)));
-        let (candidates, _) = self.search_page(&search, MAX_PAGE_SIZE, None).await?;
-        Ok(candidates
-            .into_iter()
-            .find(|item| {
+        let mut after = None;
+        loop {
+            let first = if after.is_none() {
+                SEARCH_FIRST_PAGE_SIZE
+            } else {
+                MAX_PAGE_SIZE
+            };
+            let (candidates, next) = self.search_page(&search, first, after.as_deref()).await?;
+            if let Some(item) = candidates.into_iter().find(|item| {
                 item.kind == BoardKind::Work(ItemKind::Project)
                     && item.title.eq_ignore_ascii_case(name)
-            })
-            .map(|item| item.id))
+            }) {
+                return Ok(Some(item.id));
+            }
+            match next {
+                Some(next) => after = Some(next),
+                None => return Ok(None),
+            }
+        }
     }
 
     /// Everything filed under one project of this board: the sub-issues of the issue that
@@ -4042,7 +4070,7 @@ impl GitHubProjectsSource {
     }
 
     /// Every issue of this board GitHub's issue search reports for the board-scoped search
-    /// narrowed by `also`, walked to exhaustion at [`MAX_PAGE_SIZE`].
+    /// narrowed by `also`, starting at [`SEARCH_FIRST_PAGE_SIZE`] then [`MAX_PAGE_SIZE`].
     ///
     /// Uncompleted: what this process wrote is added by the caller, which knows whether its
     /// own record is the fresher of the two.
@@ -4052,13 +4080,172 @@ impl GitHubProjectsSource {
         let mut found = Vec::new();
         loop {
             let (page, next) = self
-                .search_page(&search, MAX_PAGE_SIZE, after.as_deref())
+                .search_page(
+                    &search,
+                    if after.is_none() {
+                        SEARCH_FIRST_PAGE_SIZE
+                    } else {
+                        MAX_PAGE_SIZE
+                    },
+                    after.as_deref(),
+                )
                 .await?;
             found.extend(page);
             match next {
                 Some(next) => after = Some(next),
                 None => return Ok(found),
             }
+        }
+    }
+
+    /// A bounded task answer; the versioned cursor carries the connection position and
+    /// the own-write ids already observed, including across a new source instance.
+    async fn search_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+        also: &str,
+    ) -> Result<Page<Task>, SourceError> {
+        let mut position = match &page.cursor {
+            None => SearchPosition::default(),
+            Some(cursor) => serde_json::from_str::<SearchPosition>(&cursor.0)
+                .ok()
+                .filter(|position| {
+                    position.version == SEARCH_CURSOR_VERSION && position.connection.valid_resume()
+                })
+                .ok_or_else(|| SourceError::Config {
+                    message: "page cursor is invalid".into(),
+                })?,
+        };
+        let search = self.board_search(Some(also));
+        let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
+        let own = self.with_own_writes(Vec::new())?;
+        for item in &own {
+            if !position.own.contains(&item.id) {
+                position.own.push(item.id.clone());
+            }
+        }
+        let mut tasks = Vec::new();
+        while !position.connection.exhausted() && tasks.len() < limit {
+            let first = (limit - tasks.len()) as u32;
+            let first = first.min(if position.connection.after().is_none() {
+                SEARCH_FIRST_PAGE_SIZE
+            } else {
+                MAX_PAGE_SIZE
+            });
+            // Page size is part of the key: a short cached answer cannot answer a wider ask.
+            let key =
+                serde_json::to_string(&("page", &search, &position.connection.after(), first))
+                    .expect("search page key is serializable");
+            let cached = if query.commented_since.is_none() {
+                self.narrowed_cache()?.get(&key).cloned()
+            } else {
+                None
+            };
+            let (found, next) = match cached {
+                Some(found) => {
+                    let next = self
+                        .search_next
+                        .lock()
+                        .map_err(|_| SourceError::Unavailable {
+                            message:
+                                "search pagination was left inconsistent; run the command again"
+                                    .into(),
+                        })?
+                        .get(&key)
+                        .cloned()
+                        .flatten();
+                    (found, next)
+                }
+                None => {
+                    let (found, next) = self
+                        .search_page(&search, first, position.connection.after())
+                        .await?;
+                    if query.commented_since.is_none() {
+                        self.search_next
+                            .lock()
+                            .map_err(|_| SourceError::Unavailable {
+                                message:
+                                    "search pagination was left inconsistent; run the command again"
+                                        .into(),
+                            })?
+                            .insert(key.clone(), next.clone());
+                        self.narrowed_cache()?.insert(key, found.clone());
+                    }
+                    (found, next)
+                }
+            };
+            for mut item in found {
+                if position.own.contains(&item.id) {
+                    if position.seen.contains(&item.id) {
+                        continue;
+                    }
+                    position.seen.push(item.id.clone());
+                    let updated_at = item.updated_at;
+                    let Some(written) = self.search_written(&own, &item.id).await? else {
+                        continue;
+                    };
+                    item = written;
+                    item.updated_at = item.updated_at.max(updated_at);
+                }
+                if item.kind == BoardKind::Work(ItemKind::Task) {
+                    let task = item.task()?;
+                    if task_matches(&task, query, &query.project)
+                        && self.commented_since(&item, query.commented_since).await?
+                    {
+                        tasks.push(task);
+                    }
+                }
+            }
+            position.connection = match next {
+                Some(after) => SearchConnection::Continuing {
+                    after: Cursor(after),
+                },
+                None => SearchConnection::Exhausted {},
+            };
+        }
+        if position.connection.exhausted() {
+            for id in position.own.clone() {
+                if position.seen.contains(&id) {
+                    continue;
+                }
+                if tasks.len() == limit {
+                    break;
+                }
+                position.seen.push(id.clone());
+                let Some(item) = self.search_written(&own, &id).await? else {
+                    continue;
+                };
+                if item.kind == BoardKind::Work(ItemKind::Task) {
+                    let task = item.task()?;
+                    if task_matches(&task, query, &query.project)
+                        && self.commented_since(&item, query.commented_since).await?
+                    {
+                        tasks.push(task);
+                    }
+                }
+            }
+        }
+        let more = !position.connection.exhausted()
+            || position.own.iter().any(|id| !position.seen.contains(id));
+        Ok(Page {
+            items: tasks,
+            next: more.then(|| {
+                Cursor(serde_json::to_string(&position).expect("search position is serializable"))
+            }),
+        })
+    }
+
+    /// A resumed process has the ids but no write records; resolve only a record the
+    /// current page needs, by its uncached node read rather than the lagging search index.
+    async fn search_written(
+        &self,
+        own: &[Resolved],
+        id: &NativeId,
+    ) -> Result<Option<Resolved>, SourceError> {
+        match own.iter().find(|item| item.id == *id) {
+            Some(item) => Ok(Some(item.clone())),
+            None => self.item_by_id(id).await,
         }
     }
 
@@ -7521,6 +7708,18 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
         refuse_unsearchable(query)?;
+        if query.origin.is_none() && !matches!(query.project, ProjectFilter::Is(_)) {
+            let qualifiers = match (narrowing_qualifiers(query), query.commented_since) {
+                (Some(also), Some(since)) => Some(format!("{} {also}", updated_qualifier(since))),
+                (Some(also), None) => Some(also),
+                (None, Some(since)) => Some(updated_qualifier(since)),
+                (None, None) => None,
+            };
+            if let Some(also) = qualifiers {
+                return self.search_tasks(query, page, &also).await;
+            }
+        }
+
         // A read narrowed to one project asks that project for its own tasks, so nothing
         // about it costs what the rest of the board holds. A read carrying a text, metadata
         // or origin predicate asks GitHub the narrower question those predicates are, and a
@@ -8718,6 +8917,57 @@ fn validate_cursor_progress(previous: Option<&str>, next: &str) -> Result<(), So
         Ok(())
     }
 }
+/// The version of this plugin's opaque narrowing-search cursor.
+pub const SEARCH_CURSOR_VERSION: u32 = 3;
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+enum SearchConnection {
+    Initial {},
+    Continuing { after: Cursor },
+    Exhausted {},
+}
+impl SearchConnection {
+    fn after(&self) -> Option<&str> {
+        match self {
+            Self::Continuing { after } => Some(&after.0),
+            _ => None,
+        }
+    }
+    fn exhausted(&self) -> bool {
+        matches!(self, Self::Exhausted { .. })
+    }
+    fn valid_resume(&self) -> bool {
+        match self {
+            Self::Initial { .. } => false,
+            Self::Continuing { after } => !after.0.is_empty(),
+            Self::Exhausted { .. } => true,
+        }
+    }
+}
+
+/// Versioned source cursor. Empty own-write ids are omitted.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchPosition {
+    version: u32,
+    connection: SearchConnection,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    seen: Vec<NativeId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    own: Vec<NativeId>,
+}
+impl Default for SearchPosition {
+    fn default() -> Self {
+        Self {
+            version: SEARCH_CURSOR_VERSION,
+            connection: SearchConnection::Initial {},
+            seen: Vec::new(),
+            own: Vec::new(),
+        }
+    }
+}
+
 fn numeric_cursor(cursor: Option<&Cursor>) -> Result<usize, SourceError> {
     cursor.map_or(Ok(0), |c| {
         c.0.parse().map_err(|_| SourceError::Config {
