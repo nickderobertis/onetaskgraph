@@ -782,7 +782,8 @@ The loopback live-journey session golden moves only these lines:
 | **total** | **128 → 134** | **352,105 → 239,089** | six additional small reads, 113,016 fewer declared nodes |
 
 The document maximum-price and maximum-node records remain unchanged: later search
-pages can still reach one hundred. The copy-cost record is unchanged because its origin
+pages can still reach one hundred. The paging change alone leaves the copy-cost record
+unchanged (the write changes below move it), because its origin
 lookup remains three rows and its whole-board reads retain their sizing.
 
 `metadata_accounting_names_only_search_and_needed_membership_recovery` records a metadata
