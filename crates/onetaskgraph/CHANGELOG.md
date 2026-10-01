@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.54](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.53...v0.2.54) - 2026-10-01
+
+### Added
+
+- *(github-projects)* size a board search's pages to the answer it needs ([#3058](https://github.com/nickderobertis/onetaskgraph/pull/3058))
+
 ## [0.2.53](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.52...v0.2.53) - 2026-10-01
 
 ### Fixed
