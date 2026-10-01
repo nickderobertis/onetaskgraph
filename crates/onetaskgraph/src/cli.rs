@@ -274,7 +274,7 @@ pub enum TaskCommand {
     /// List tasks across the selected sources.
     List(TaskListArgs),
     /// Show one task by its qualified id, `<source>:<native-id>`.
-    Show(ShowArgs),
+    Show(TaskShowArgs),
     /// Walk one task's dependency edges.
     Deps(DependencyArgs),
     /// Copy tasks into another configured source, by qualified id.
@@ -1086,6 +1086,16 @@ pub struct LabelListArgs {
 
     #[command(flatten)]
     pub paging: PageArgs,
+}
+
+/// `onetaskgraph task show`, optionally reading only the record.
+#[derive(Debug, Args)]
+pub struct TaskShowArgs {
+    #[command(flatten)]
+    pub item: ShowArgs,
+    /// Read the record without requesting its comments.
+    #[arg(long)]
+    pub no_comments: bool,
 }
 
 /// `onetaskgraph task show` and `onetaskgraph project show`.

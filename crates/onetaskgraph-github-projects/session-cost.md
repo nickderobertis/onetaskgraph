@@ -674,8 +674,8 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      9 |                     8 |
-| **node count**     |                  22121 |                  1009 |
+| **requests**       |                      7 |                     6 |
+| **node count**     |                  21918 |                   806 |
 
 (h) asks the board once for the item whose origin is the task (`looking up the items copied
 from one origin`, the lookup described under *Asking GitHub the narrower question* below)
@@ -796,3 +796,60 @@ id and fields are needed to answer. Two matching issues requiring recovery expla
 extra points. The shared-counter measurement alone cannot establish whether those
 recoveries or other traffic produced its extra two points. Recovery was already skipped
 when the search's own memberships answered, and no unnecessary request was found.
+
+## Reusing resolved items and combining copy field writes
+
+The real CLI and both SDKs are driven against the HTTP board in
+`detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks`.
+A detail read sends one `ISSUE` and one `ISSUE_COMMENTS`, two declared points;
+`--no-comments` sends just `ISSUE`, one. The existing optional comments member
+is omitted, so this adds no serialized member or schema change.
+
+`follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields` pins the
+requests and declared points for a standalone ticket, with status, priority,
+content and namespaced metadata changed on its bound re-copy. Each issue id is
+resolved at most once per invocation. The before column below was obtained by
+running that same fixture journey with the preserved pre-optimization plugin;
+it is offline declared cost, not a measurement against GitHub's account.
+
+| Verb | Before declared points | After declared points |
+|---|---:|---:|
+| New ticket copy | 8 | 6 |
+| Bound re-copy | 8 | 5 |
+| Comment addition | 2 | 2 |
+| Detail recount | 3 | 2 |
+| Comment plus recount | 5 | 4 |
+| Status set | 3 | 2 |
+| Priority set | 3 | 2 |
+| Content set | 2 | 2 |
+| Metadata set | 2 | 2 |
+
+The manager's 0.2.52 account measurements were 8 for a new ticket, 9 for a
+bound re-copy and 8 for comment plus recount. The create measurement agrees with this fixture. The bound fixture previously
+resolved its issue twice, while the manager recorded three resolutions, and its
+comment measurement exceeds this fixture's five declared points. Board
+membership recovery or concurrent traffic can add to an account observation;
+this loopback record cannot identify which caused that difference.
+
+The copy field mutation accepts one value per field, as GitHub requires, and
+uses aliases to send those field mutations together. The three-field create
+and two-field re-copy each send one field request. A bound record is reused
+rather than read again by the write. Priority's mutation response supplies the
+stored priority, preserving the existing dropped-write test without an extra
+issue read. Malformed alias answers and retry after a refused field request
+are covered by `every_batched_field_answer_is_validated_and_a_failed_write_can_retry`.
+
+The session golden moves from 134 requests and 239,089 nodes to 123 requests
+and 238,074 nodes: five issue reads (1,015 nodes) are removed, and six empty
+origin writes are removed. This journey does not set copy origins, so its field
+writes remain individual requests. The new alias mutation adds no read-document
+probe and reuses the existing mutation input and payload types.
+
+The copy golden moves only (a), (c), (d), (g), (h) and (j). Whole creation (a)
+combines 22 field requests into 11, reducing 67 requests to 56 without changing
+nodes. Member copies (c)/(d) remove one issue read and one unchanged origin write,
+9 requests/1,209 nodes to 7/1,006. Linked and origin-found task re-copies (g)/(h)
+remove the same two requests, 8/1,009 to 6/806 and 9/22,121 to 7/21,918.
+New task creation (j) combines two field writes, 7 requests to 6, with nodes
+unchanged. Other copy rows are unchanged. The (g)/(h) comparison table above is
+updated to these figures, as its existing drift test requires.

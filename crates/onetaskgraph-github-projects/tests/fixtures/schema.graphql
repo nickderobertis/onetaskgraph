@@ -15,6 +15,9 @@
 # /input-objects, /enums and /objects), retrieved 2026-09-26, reduced to the members this plugin
 # sends and selects. The first is sent only by the guarded field setup, for a `Priority` field a
 # board lacks; the second clears one item's `Priority` value, which is what a `none` priority is.
+# `ProjectV2Item.fieldValueByName(name: String!): ProjectV2ItemFieldValue` is pinned from
+# https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
+# Priority writes select that value from their mutation payload instead of reading the issue again.
 schema {
   query: Query
   mutation: Mutation
@@ -272,6 +275,7 @@ type ProjectV2Item implements Node {
   id: ID!
   project: ProjectV2!
   fieldValues(first: Int, after: String): ProjectV2ItemFieldValueConnection!
+  fieldValueByName(name: String!): ProjectV2ItemFieldValue
   content: ProjectV2ItemContent
 }
 union ProjectV2ItemContent = DraftIssue | Issue | PullRequest | RedactedProjectV2Item

@@ -1494,3 +1494,26 @@ wider question. Origin pages remain three; whole-board sizing is unchanged.
 Read-after-write is a per-process guarantee. A cursor resumed in a new process is
 not required to include the original process's writes still omitted by the index.
 <!-- github-search-paging:end -->
+
+### GitHub Projects item records and writes
+
+`task show ID` includes comments by default. `task show ID --no-comments` reads
+only the item record and omits the optional `comments` member. The Python SDK
+exposes the same choice as `task_show(id=ID, no_comments=True)`; TypeScript uses
+`taskShow(ID, { noComments: true })`. Rust callers already have `Engine::task`
+for the record and `Engine::task_detail` for the record with comments. The
+response shape and schema version are unchanged: comments were already optional.
+
+A GitHub Projects source reuses records resolved in its own instance for writes
+and reuses their identity for comments. Explicit item reads still fetch fresh
+records. A mutation invalidates its target's binding before sending, and a
+successful write replaces it; a retry after a partial failure therefore resolves
+the target again. Comment mutations preserve the binding because they change no
+item fields. These records stay inside the plugin and are never persisted.
+
+A copy combines changed board fields in one GraphQL mutation request using
+aliases, including a priority clear. Unchanged origin and status fields need no
+mutation. A standalone priority write selects the stored priority in its mutation
+response, so its answer remains a read-back, including when the host did not keep
+the requested value, without resolving the issue a second time. The plugin's cost
+table records the requests and declared prices proved by the loopback journeys.

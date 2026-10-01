@@ -189,6 +189,25 @@
 //! | every task, every document, every label, when nothing above narrows the question | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
+//! The following standalone-ticket requests are pinned by the real CLI fixture journey
+//! `follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields`. They include the
+//! origin lookup and field/repository discovery a create needs. A bound re-copy changes
+//! status, priority, content and metadata; comment recount means a subsequent detail read.
+//! Each request here costs one declared point. A membership beyond the embedded page can
+//! additionally require the one-point membership recovery described above.
+//!
+//! | Verb | Requests / points | Documents |
+//! | --- | --- | --- |
+//! | new copy | 6 | ORIGIN_LOOKUP, BOARD_FIELDS, REPOSITORY, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
+//! | bound copy | 5 | ISSUE, BOARD_FIELDS, ISSUE_DEPENDENCIES, UPDATE_ISSUE, UPDATE_FIELDS |
+//! | comment | 2 | ISSUE, ADD_COMMENT |
+//! | recount | 2 | ISSUE, ISSUE_COMMENTS |
+//! | status | 2 | ISSUE, UPDATE_FIELD; a terminal status additionally updates issue state |
+//! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
+//! | content | 2 | ISSUE, UPDATE_ISSUE |
+//! | metadata | 2 | ISSUE, UPDATE_ISSUE |
+//! | record only | 1 | ISSUE |
+//!
 //! <!-- github-search-paging:start -->
 //! Board-scoped text, metadata, project-name and comment-activity searches start at
 //! `first = min(rows still needed, 20)`, the SEARCH_ISSUES document's one-point ceiling.
@@ -938,9 +957,11 @@ pub mod graphql {
     /// Updates an existing draft's user-visible fields.
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
-    pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
+    pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean=false,$priorityName:String!="Priority"){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
+    /// Writes up to three board fields and an optional clear in one ordered mutation.
+    pub const UPDATE_FIELDS: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$second:UpdateProjectV2ItemFieldValueInput!,$third:UpdateProjectV2ItemFieldValueInput!,$clear:ClearProjectV2ItemFieldValueInput!,$writeSecond:Boolean!,$writeThird:Boolean!,$writeClear:Boolean!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}} second:updateProjectV2ItemFieldValue(input:$second) @include(if:$writeSecond){projectV2Item{id}} third:updateProjectV2ItemFieldValue(input:$third) @include(if:$writeThird){projectV2Item{id}} cleared:clearProjectV2ItemFieldValue(input:$clear) @include(if:$writeClear){projectV2Item{id}}}"#;
     /// Clears one project item's value of one field, which is what a `none` priority is.
-    pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}"#;
+    pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean=false,$priorityName:String!="Priority"){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
     /// Creates one single-select field with its options. Only the guarded field setup may use
     /// this document, and only for a field the board lacks.
     pub const CREATE_FIELD: &str = r#"mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id name options{id name color description}}}}}"#;
@@ -1022,7 +1043,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 29] = [
+    pub const DOCUMENTS: [(&str, &str); 30] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1041,6 +1062,7 @@ pub mod graphql {
         (UPDATE_ISSUE, "updating an issue"),
         (UPDATE_DRAFT, "updating a draft item"),
         (UPDATE_FIELD, "writing a board field"),
+        (UPDATE_FIELDS, "writing board fields together"),
         (CLEAR_FIELD, "clearing a board field"),
         (
             CREATE_FIELD,
@@ -2145,6 +2167,9 @@ pub struct GitHubProjectsSource {
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
     search_next: Mutex<BTreeMap<String, Option<String>>>,
+    /// Records already resolved in this source instance, reused by writes and
+    /// for comment identity. Explicit item reads still reach GitHub. Nothing is persisted.
+    resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// The board's own id and field definitions as this process last read them on their
     /// own, for the length of one command.
     ///
@@ -3098,6 +3123,7 @@ impl GitHubProjectsSource {
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
+            resolved_cache: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
@@ -3128,6 +3154,28 @@ impl GitHubProjectsSource {
     /// attempt. A duplicate write would come from replaying one of those, and none is
     /// replayed.
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        if is_mutation(query)
+            && ![
+                graphql::ADD_COMMENT,
+                graphql::UPDATE_COMMENT,
+                graphql::DELETE_COMMENT,
+            ]
+            .contains(&query)
+        {
+            let mut cache = self.resolved_cache()?;
+            for argument in ["input", "second", "third", "clear"] {
+                if let Some(input) = variables.get(argument) {
+                    cache.retain(|id, item| {
+                        !["id", "issueId", "subjectId", "itemId"].iter().any(|key| {
+                            input
+                                .get(key)
+                                .and_then(Value::as_str)
+                                .is_some_and(|value| value == id.0 || value == item.item_id)
+                        })
+                    });
+                }
+            }
+        }
         let doing = operation_description(query);
         let mut waited = Duration::ZERO;
         let mut waits = 0_u32;
@@ -3757,6 +3805,27 @@ impl GitHubProjectsSource {
         }
     }
 
+    fn resolved_cache(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<NativeId, Resolved>>, SourceError> {
+        self.resolved_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "resolved item records were left inconsistent; run the command again"
+                    .into(),
+            })
+    }
+
+    /// Reuse a record this invocation already resolved. The mutation sender invalidates
+    /// it before writing, so a partial failure cannot leave a pre-write binding behind.
+    async fn bound_item(&self, id: &NativeId) -> Result<Option<Resolved>, SourceError> {
+        let cached = self.resolved_cache()?.get(id).cloned();
+        match cached {
+            Some(item) => Ok(Some(item)),
+            None => self.item_by_id(id).await,
+        }
+    }
+
     /// One board draft by its own id, with the board item it sits in — or `None` when no
     /// item of this board is that draft's.
     ///
@@ -4189,6 +4258,7 @@ impl GitHubProjectsSource {
                     };
                     item = written;
                     item.updated_at = item.updated_at.max(updated_at);
+                    self.resolved_cache()?.insert(item.id.clone(), item.clone());
                 }
                 if item.kind == BoardKind::Work(ItemKind::Task) {
                     let task = item.task()?;
@@ -4398,6 +4468,7 @@ impl GitHubProjectsSource {
             .cloned()
             .collect();
         for mut own in own {
+            self.resolved_cache()?.insert(own.id.clone(), own.clone());
             match found.iter_mut().find(|read| read.id == own.id) {
                 Some(read) => {
                     own.updated_at = own.updated_at.max(read.updated_at);
@@ -4533,6 +4604,7 @@ impl GitHubProjectsSource {
     /// source is least able to re-read, so leaving it out would put the stale title back on
     /// the only items the completion in [`Self::board`] exists for.
     fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
+        self.resolved_cache()?.insert(item.id.clone(), item.clone());
         if created {
             self.created()?.push(item);
             return Ok(());
@@ -4571,6 +4643,7 @@ impl GitHubProjectsSource {
 
     /// Forget one item this process has just deleted, from every half of its own view.
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.resolved_cache()?.remove(id);
         self.created()?.retain(|own| own.id != *id);
         self.updated()?.retain(|own| own.id != *id);
         if let Some(board) = self.board_cache()?.as_mut() {
@@ -4759,7 +4832,7 @@ impl GitHubProjectsSource {
         };
         let (option, closed, reason) = Self::status_parts(nodes, content)?;
         let priority = self.held_priority(nodes)?;
-        Ok(Some(Resolved {
+        let resolved = Resolved {
             item_id: required_str(item, "id")?.to_owned(),
             id,
             content_kind,
@@ -4799,7 +4872,10 @@ impl GitHubProjectsSource {
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned),
             fields: field_definitions(nodes),
-        }))
+        };
+        self.resolved_cache()?
+            .insert(resolved.id.clone(), resolved.clone());
+        Ok(Some(resolved))
     }
 
     /// What one board item's `Priority` field says, through this instance's mapping.
@@ -4942,7 +5018,7 @@ impl GitHubProjectsSource {
         // Refused before anything is read, in the words a write of the same status is.
         let target = self.resolved_target(category)?;
         let Some(mut item) = self
-            .item_by_id(id)
+            .bound_item(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
@@ -4962,6 +5038,9 @@ impl GitHubProjectsSource {
                     self.name
                 ),
             })?;
+        if item.status.category == category && item.option.as_deref() == Some(&name) {
+            return Ok(Some(item.status));
+        }
         match &target {
             StatusTarget::Terminal(_, reason) => {
                 if item.content_kind == ContentKind::DraftIssue {
@@ -5034,7 +5113,7 @@ impl GitHubProjectsSource {
         )
         .map_err(|message| SourceError::Refused { message })?;
         let Some(mut item) = self
-            .item_by_id(id)
+            .bound_item(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
@@ -5065,7 +5144,7 @@ impl GitHubProjectsSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Resolved>, SourceError> {
-        let Some(mut item) = self.item_by_id(id).await?.filter(|item| item.kind == kind) else {
+        let Some(mut item) = self.bound_item(id).await?.filter(|item| item.kind == kind) else {
             return Ok(None);
         };
         if item.slot.get(key.as_str()) == Some(value) {
@@ -5279,8 +5358,8 @@ impl GitHubProjectsSource {
         if self.priorities.is_none() {
             return Err(self.holds_no_priority());
         }
-        let Some(item) = self
-            .item_by_id(id)
+        let Some(mut item) = self
+            .bound_item(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
@@ -5294,28 +5373,59 @@ impl GitHubProjectsSource {
         let board = match item.named_board() {
             Some(id) if item.defines(PRIORITY_FIELD) => BoardFields {
                 id,
-                fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+                fields: json!({"nodes": item.fields.clone(), "pageInfo": {"hasNextPage": false}}),
             },
             _ => self.board_fields().await?,
         };
         let Some(write) = self.priority_write(&board.fields, Some(&item), priority)? else {
             return Ok(Some(priority));
         };
-        self.write_priority(board.id.as_str(), &item.item_id, &write)
+        let (document, root, input) = match write {
+            PriorityWrite::Select { field, option } => (
+                graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+                json!({"projectId":board.id.as_str(),"itemId":item.item_id,"fieldId":field,"value":{"singleSelectOptionId":option}}),
+            ),
+            PriorityWrite::Clear { field } => (
+                graphql::CLEAR_FIELD,
+                "clearProjectV2ItemFieldValue",
+                json!({"projectId":board.id.as_str(),"itemId":item.item_id,"fieldId":field}),
+            ),
+        };
+        let data = self
+            .graphql(document, json!({"input":input,"readPriority":true}))
             .await?;
-        // Read back rather than echoed: the answer is what the board now holds, read by the
-        // item's own id — strongly consistent, unlike a search — and past what this run
-        // remembers writing, so a write the board did not keep is reported as it stands.
-        let read = match self.reach(id).await? {
-            Reached::Held(item) => Some(*item),
-            Reached::Draft => self.draft_by_id(id).await?,
-            Reached::Nothing => None,
+        let returned = data
+            .get(root)
+            .and_then(|value| value.get("projectV2Item"))
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub priority write returned no project item".into(),
+            })?;
+        if required_str(returned, "id")? != item.item_id {
+            return Err(SourceError::Malformed {
+                message: "GitHub priority write returned the wrong project item".into(),
+            });
         }
-        .ok_or_else(|| SourceError::Malformed {
-            message: format!("task {id} was written and then could not be read back"),
-        })?;
-        let answer = read.task()?.priority;
-        self.remember_written(read, false)?;
+        let value = returned
+            .get("fieldValueByName")
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub priority write returned no priority read-back".into(),
+            })?;
+        if !value.is_null()
+            && value.pointer("/field/name").and_then(Value::as_str) != Some(PRIORITY_FIELD)
+        {
+            return Err(SourceError::Malformed {
+                message: "GitHub priority read-back is not a Priority field value".into(),
+            });
+        }
+        let values = if value.is_null() {
+            Vec::new()
+        } else {
+            vec![value.clone()]
+        };
+        item.priority = self.held_priority(&values)?;
+        let answer = item.task()?.priority;
+        self.remember_written(item, false)?;
         Ok(Some(answer))
     }
 
@@ -5332,7 +5442,7 @@ impl GitHubProjectsSource {
         content: &str,
     ) -> Result<Option<()>, SourceError> {
         let Some(mut item) = self
-            .item_by_id(id)
+            .bound_item(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
@@ -5420,7 +5530,7 @@ impl GitHubProjectsSource {
             .map(|status| self.resolved_target(status.category))
             .transpose()?;
         let Some(mut item) = self
-            .item_by_id(id)
+            .bound_item(id)
             .await?
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
@@ -5644,7 +5754,7 @@ impl GitHubProjectsSource {
         content: &str,
         provenance: &Value,
     ) -> Result<Option<()>, SourceError> {
-        let Some(mut item) = self.item_by_id(id).await?.filter(|item| item.kind == kind) else {
+        let Some(mut item) = self.bound_item(id).await?.filter(|item| item.kind == kind) else {
             return Ok(None);
         };
         let held = item.raw_body.clone().unwrap_or_default();
@@ -5698,6 +5808,68 @@ impl GitHubProjectsSource {
             return Err(SourceError::Malformed {
                 message: "GitHub field update returned the wrong project item".into(),
             });
+        }
+        Ok(())
+    }
+
+    /// GitHub accepts one value per field mutation; aliases combine those mutations in
+    /// one request. Every returned item id is checked, including optional aliases.
+    async fn set_item_fields(
+        &self,
+        board: &str,
+        item: &str,
+        fields: &[(String, Value)],
+        clear: Option<&str>,
+    ) -> Result<(), SourceError> {
+        if fields.len() <= 1 && clear.is_none() {
+            if let Some((field, value)) = fields.first() {
+                self.set_item_field(board, item, field, value.clone())
+                    .await?;
+            }
+            return Ok(());
+        }
+        if fields.is_empty() {
+            if let Some(field) = clear {
+                self.write_priority(
+                    board,
+                    item,
+                    &PriorityWrite::Clear {
+                        field: field.to_owned(),
+                    },
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        let input = |index: usize| {
+            let (field, value) = fields.get(index).unwrap_or(&fields[0]);
+            json!({"projectId":board,"itemId":item,"fieldId":field,"value":value})
+        };
+        let data = self.graphql(graphql::UPDATE_FIELDS, json!({
+            "input":input(0),"second":input(1),"third":input(2),
+            "writeSecond":fields.len()>1,"writeThird":fields.len()>2,"writeClear":clear.is_some(),
+            "clear":{"projectId":board,"itemId":item,"fieldId":clear.unwrap_or(&fields[0].0)}
+        })).await?;
+        for alias in [
+            Some("updateProjectV2ItemFieldValue"),
+            (fields.len() > 1).then_some("second"),
+            (fields.len() > 2).then_some("third"),
+            clear.map(|_| "cleared"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let returned = data
+                .get(alias)
+                .and_then(|value| value.get("projectV2Item"))
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("GitHub field update {alias} returned no project item"),
+                })?;
+            if required_str(returned, "id")? != item {
+                return Err(SourceError::Malformed {
+                    message: format!("GitHub field update {alias} returned the wrong project item"),
+                });
+            }
         }
         Ok(())
     }
@@ -5873,7 +6045,7 @@ impl GitHubProjectsSource {
                 metadata_body(body.as_str().map(str::to_owned))?.1
             }
             _ => {
-                let Some(item) = self.item_by_id(id).await? else {
+                let Some(item) = self.bound_item(id).await? else {
                     return Ok(Vec::new());
                 };
                 item.slot
@@ -5930,7 +6102,7 @@ impl GitHubProjectsSource {
             )
         };
         let parent = match incoming.parent {
-            Some(parent) => Some(self.item_by_id(parent).await?.ok_or_else(|| {
+            Some(parent) => Some(self.bound_item(parent).await?.ok_or_else(|| {
                 SourceError::Refused {
                     message: format!(
                         "GitHub project issue {} was not found on the board of source {}, so {} \
@@ -6100,7 +6272,7 @@ impl GitHubProjectsSource {
         let existing = match target {
             Some(target) => {
                 Some(
-                    self.item_by_id(target)
+                    self.bound_item(target)
                         .await?
                         .ok_or_else(|| SourceError::Refused {
                             message: format!("GitHub destination item {} was not found", target.0),
@@ -6255,7 +6427,9 @@ impl GitHubProjectsSource {
         };
 
         let written_option = column.as_ref().map(|(_, _, name)| name.clone());
-        let column = column.map(|(field, option, _)| (field, option));
+        let column = column
+            .filter(|(_, _, name)| existing.is_none_or(|item| item.option.as_ref() != Some(name)))
+            .map(|(field, option, _)| (field, option));
         // Creating an item here is several calls — `createIssue`, `addProjectV2ItemById`,
         // then each board field, the parent and the dependencies — and GitHub can fail at
         // any of them. Everything this source can refuse *before* the first of those is
@@ -6387,24 +6561,27 @@ impl GitHubProjectsSource {
         priority: Option<&PriorityWrite>,
         native: &[String],
     ) -> Result<(), SourceError> {
-        if let Some(field_id) = origin_field {
-            self.set_item_field(board_id, item_id, field_id, json!({"text":origin}))
-                .await?;
+        let mut fields = Vec::new();
+        if let Some(field_id) = origin_field
+            && existing.map_or(!origin.is_empty(), |item| {
+                item.origin.as_deref().unwrap_or("") != origin
+            })
+        {
+            fields.push((field_id.to_owned(), json!({"text":origin})));
         }
-
         if let Some((field_id, option_id)) = column {
-            self.set_item_field(
-                board_id,
-                item_id,
-                &field_id,
-                json!({"singleSelectOptionId":option_id}),
-            )
+            fields.push((field_id, json!({"singleSelectOptionId":option_id})));
+        }
+        let clear = match priority {
+            Some(PriorityWrite::Select { field, option }) => {
+                fields.push((field.clone(), json!({"singleSelectOptionId":option})));
+                None
+            }
+            Some(PriorityWrite::Clear { field }) => Some(field.as_str()),
+            None => None,
+        };
+        self.set_item_fields(board_id, item_id, &fields, clear)
             .await?;
-        }
-
-        if let Some(priority) = priority {
-            self.write_priority(board_id, item_id, priority).await?;
-        }
 
         if content_kind == ContentKind::Issue
             && matches!(status_target, Some(StatusTarget::Terminal(_, _)))
@@ -6464,7 +6641,7 @@ impl GitHubProjectsSource {
     /// reading that as *already gone* would leave behind the very item this was asked to
     /// take back.
     async fn delete_item(&self, id: &NativeId) -> Result<(), SourceError> {
-        let Some(item) = self.item_by_id(id).await? else {
+        let Some(item) = self.bound_item(id).await? else {
             return Ok(());
         };
         if item.content_kind == ContentKind::DraftIssue {
@@ -6499,11 +6676,12 @@ impl GitHubProjectsSource {
     /// issues and a draft is not one. It is refused rather than answered with an empty page,
     /// which would read as a task nobody has commented on yet.
     async fn commented_issue(&self, task: &NativeId) -> Result<Option<NativeId>, SourceError> {
-        let Some(item) = self
-            .item_by_id(task)
-            .await?
-            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
-        else {
+        let cached = self.resolved_cache()?.get(task).cloned();
+        let Some(item) = (match cached {
+            Some(item) => Some(item),
+            None => self.item_by_id(task).await?,
+        })
+        .filter(|item| item.kind == BoardKind::Work(ItemKind::Task)) else {
             return Ok(None);
         };
         if item.content_kind == ContentKind::DraftIssue {

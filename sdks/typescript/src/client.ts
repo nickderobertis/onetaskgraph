@@ -31,8 +31,8 @@ import type {
   TemplateAnswers,
   TemplateVariables,
 } from "./generated/models.ts";
-import { runtimeSchemas } from "./generated/schemas.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
+import { runtimeSchemas } from "./generated/schemas.ts";
 
 export type QueryOptions = {
   sources?: string[];
@@ -749,8 +749,18 @@ export class OnetaskgraphClient {
     }
     return this.run("task list", args);
   }
-  taskShow(id: string, options: Pick<QueryOptions, "allowPartial"> = {}): Promise<TaskDetail> {
-    return this.run("task show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
+  taskShow(
+    id: string,
+    options: Pick<QueryOptions, "allowPartial"> & { noComments?: boolean } = {},
+  ): Promise<TaskDetail> {
+    if (options.noComments !== undefined && typeof options.noComments !== "boolean") {
+      throw new TypeError("taskShow: noComments must be a boolean");
+    }
+    return this.run("task show", [
+      id,
+      ...(options.allowPartial ? ["--allow-partial"] : []),
+      ...(options.noComments ? ["--no-comments"] : []),
+    ]);
   }
   taskCommentAdd(id: string, options: CommentAddOptions): Promise<Comment> {
     const { args, input } = bodyArguments(options);

@@ -1301,6 +1301,45 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
+        let mut result = serde_json::Map::new();
+        for (alias, variable, enabled, document, key) in [
+            (
+                "updateProjectV2ItemFieldValue",
+                "input",
+                true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "second",
+                "second",
+                variables["writeSecond"] == true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "third",
+                "third",
+                variables["writeThird"] == true,
+                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                "cleared",
+                "clear",
+                variables["writeClear"] == true,
+                onetaskgraph_github_projects::graphql::CLEAR_FIELD,
+                "clearProjectV2ItemFieldValue",
+            ),
+        ] {
+            if enabled {
+                let answer = answer(state, document, &json!({"input":variables[variable]}));
+                result.insert(alias.to_owned(), answer[key].clone());
+            }
+        }
+        return Value::Object(result);
+    }
     let mut state = state.lock().unwrap();
     state
         .bindings
@@ -8259,7 +8298,6 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
                 board_fields.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
-                ok_field.clone(),
                 json!({"data":{"removeSubIssue":{"issue":{"id":"I_old"}}}}),
             ],
             "sub-issue update returned no sub-issue",
@@ -8270,7 +8308,6 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
                 board_fields.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
-                ok_field.clone(),
                 json!({"data":{"removeSubIssue":{"subIssue":{"id":"I_1"}}}}),
             ],
             "sub-issue update returned no issue",
@@ -8280,7 +8317,6 @@ async fn every_write_mutation_that_answers_about_the_wrong_item_is_refused_as_ma
                 held_one.clone(),
                 board_fields.clone(),
                 ok_update.clone(),
-                ok_field.clone(),
                 ok_field.clone(),
                 json!({"data":{"removeSubIssue":{"issue":{"id":"I_wrong"},"subIssue":{"id":"I_1"}}}}),
             ],
@@ -8330,7 +8366,6 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
                 held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
-                ok_field.clone(),
                 json!({"data":{"node":{"__typename":"Issue"}}}),
             ],
             "no blockedBy connection",
@@ -8341,7 +8376,6 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
                 board_fields.clone(),
                 held_two.clone(),
                 ok_update.clone(),
-                ok_field.clone(),
                 ok_field.clone(),
                 json!({"data":{"node":{"__typename":"Issue",
                     "blockedBy":{"nodes":"no","pageInfo":{"hasNextPage":false}}}}}),
@@ -8355,7 +8389,6 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
                 held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
-                ok_field.clone(),
                 held.clone(),
                 json!({"data":{"addBlockedBy":{"blockingIssue":{"id":"I_2"}}}}),
             ],
@@ -8368,7 +8401,6 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
                 held_two.clone(),
                 ok_update.clone(),
                 ok_field.clone(),
-                ok_field.clone(),
                 held.clone(),
                 json!({"data":{"addBlockedBy":{"issue":{"id":"I_1"}}}}),
             ],
@@ -8380,7 +8412,6 @@ async fn a_malformed_dependency_mutation_or_reconciliation_read_is_refused() {
                 board_fields.clone(),
                 held_two.clone(),
                 ok_update.clone(),
-                ok_field.clone(),
                 ok_field.clone(),
                 held.clone(),
                 json!({"data":{"addBlockedBy":{"issue":{"id":"I_1"},"blockingIssue":{"id":"I_9"}}}}),
@@ -8420,7 +8451,6 @@ async fn a_blocked_by_connection_answered_in_pages_is_walked_before_it_is_reconc
         held_issue("I_1", "one", None),
         fields_json("PVT_board", usable_fields()),
         json!({"data":{"updateIssue":{"issue":{"id":"I_1"}}}}),
-        ok_field.clone(),
         ok_field,
         json!({"data":{"node":{"__typename":"Issue",
             "blockedBy":{"nodes":[{"id":"I_a"}],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}},
@@ -8643,7 +8673,11 @@ async fn a_write_that_fails_part_way_takes_back_only_the_item_it_created() {
     let held = board(vec![Item::issue("I_1", "one").body("first").status("Todo")]);
     let holder = source(&held);
     held.refuse("updateProjectV2ItemFieldValue");
-    let mut revised = task("T-1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    let mut revised = task(
+        "T-1",
+        "one, revised",
+        status(StatusCategory::InProgress, "In Progress"),
+    );
     revised.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
     let message = refusal(
         holder
@@ -9083,7 +9117,7 @@ async fn an_update_its_own_item_cannot_describe_reads_the_boards_fields_and_neve
         let written = fixture.item("I_1");
         assert_eq!(written.status.as_deref(), Some("In Progress"), "{what}");
         assert_eq!(written.title, "one", "{what}");
-        assert_eq!(written.origin.as_deref(), Some(""), "{what}");
+        assert_eq!(written.origin.as_deref().unwrap_or(""), "", "{what}");
         assert_eq!(fixture.requests("boardFields"), 1, "{what}");
         assert_eq!(fixture.requests("board"), 0, "{what}");
         assert_eq!(
@@ -9888,7 +9922,7 @@ async fn the_shipped_budget_bounds_a_wait_no_configuration_asked_for() {
 async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped_rate() {
     // Driven at the *shipped* default rather than a configured one, because the shipped
     // default is what a board on github.com meets. A source with no pacing at all sends
-    // these four mutations inside a millisecond of each other, so every gap below fails.
+    // these three mutations inside a millisecond of each other, so every gap below fails.
     let fixture = board(vec![]);
     let source = configured(&fixture.endpoint, json!({"pacing": null}));
     source
@@ -9901,7 +9935,7 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
         .expect("one task");
     let gaps = fixture.mutation_gaps();
     assert!(
-        gaps.len() >= 3,
+        gaps.len() == 2,
         "a created task is several mutations, and this saw {}",
         gaps.len() + 1
     );
@@ -9969,7 +10003,7 @@ async fn the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_
         .expect("one task");
     let gaps = fixture.mutation_gaps();
     assert!(
-        gaps.len() >= 3,
+        gaps.len() == 2,
         "a created task is several mutations, and this saw {}",
         gaps.len() + 1
     );
@@ -15642,4 +15676,139 @@ async fn a_fresh_source_resumes_stale_written_rows_with_the_current_record() {
         }
         assert_eq!(rest.next, None);
     }
+}
+
+#[tokio::test]
+async fn every_batched_field_answer_is_validated_and_a_failed_write_can_retry() {
+    for alias in [
+        "updateProjectV2ItemFieldValue",
+        "second",
+        "third",
+        "cleared",
+    ] {
+        for response in [Value::Null, json!({"projectV2Item":{"id":"wrong"}})] {
+            let mut fields = usable_fields();
+            let priority_field = json!({"__typename":"ProjectV2SingleSelectField","id":"FIELD_priority","name":"Priority","options":[{"id":"urgent","name":"Urgent"}]});
+            fields["nodes"]
+                .as_array_mut()
+                .unwrap()
+                .push(priority_field.clone());
+            let mut held = held_issue("I_1", "one", None);
+            if alias == "cleared" {
+                held["data"]["node"]["projectItems"]["nodes"][0]["fieldValues"]["nodes"] =
+                    json!([{"name":"Urgent","field":priority_field}]);
+            }
+            let mut answer = json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}},"second":{"projectV2Item":{"id":"PVTI_1"}},"third":{"projectV2Item":{"id":"PVTI_1"}},"cleared":{"projectV2Item":{"id":"PVTI_1"}}});
+            answer[alias] = response;
+            let endpoint = sequence_server(vec![
+                held,
+                fields_json("PVT_board", fields),
+                json!({"data":{"updateIssue":{"issue":{"id":"I_1"}}}}),
+                json!({"data":answer}),
+            ]);
+            let mut item = task("I_1", "revised", status(StatusCategory::Todo, "Todo"));
+            if alias == "third" {
+                item.priority = Priority::Urgent;
+            }
+            item.metadata
+                .insert("onetaskgraph.origin".into(), json!("notes:T-1"));
+            item.repositories =
+                vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+            let error = configured(&endpoint, json!({"priority_mapping":{}}))
+                .write_task(&ItemWrite {
+                    target: Some(native("I_1")),
+                    item,
+                    depends_on: vec![],
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(&format!("field update {alias}")),
+                "{alias}: {error}"
+            );
+        }
+    }
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    let source = source(&fixture);
+    source.get_task(&native("I_1")).await.unwrap();
+    let mut item = task(
+        "I_1",
+        "revised",
+        status(StatusCategory::InProgress, "In Progress"),
+    );
+    item.metadata
+        .insert("onetaskgraph.origin".into(), json!("notes:T-1"));
+    item.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let write = ItemWrite {
+        target: Some(native("I_1")),
+        item,
+        depends_on: vec![],
+    };
+    fixture.refuse_after("updateProjectV2ItemFieldValue", 0);
+    assert!(source.write_task(&write).await.is_err());
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .refuse_after
+        .remove("updateProjectV2ItemFieldValue");
+    source.write_task(&write).await.unwrap();
+    assert_eq!(
+        fixture.requests("issue"),
+        2,
+        "the failed mutation invalidates the original binding"
+    );
+    assert_eq!(fixture.item("I_1").origin.as_deref(), Some("notes:T-1"));
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+}
+
+#[tokio::test]
+async fn a_status_already_held_reuses_its_record_and_sends_no_mutation() {
+    let fixture = board(vec![Item::issue("I_1", "one").status("Todo")]);
+    let source = source(&fixture);
+    for _ in 0..2 {
+        let result = source
+            .set_task_status(&native("I_1"), StatusCategory::Todo)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, status(StatusCategory::Todo, "Todo"));
+    }
+    assert_eq!(fixture.requests("issue"), 1);
+    assert_eq!(fixture.requests("boardFields"), 0);
+    assert!(fixture.seen().is_empty());
+}
+
+#[tokio::test]
+async fn a_write_after_a_stale_search_preserves_this_processs_newer_metadata() {
+    let fixture = board(vec![Item::issue("I_1", "widget").status("Todo")]);
+    fixture.indexes_behind("I_1");
+    let source = source(&fixture);
+    source
+        .set_task_metadata(
+            &native("I_1"),
+            &MetadataKey::try_from("team.keep".to_owned()).unwrap(),
+            &json!("new"),
+        )
+        .await
+        .unwrap();
+    let query = TaskQuery {
+        text: text("widget", TextFields::Title),
+        ..TaskQuery::default()
+    };
+    let answer = source.query_tasks(&query, &page(1)).await.unwrap();
+    assert_eq!(answer.items[0].metadata["team.keep"], "new");
+    source
+        .set_task_metadata(
+            &native("I_1"),
+            &MetadataKey::try_from("team.next".to_owned()).unwrap(),
+            &json!("also new"),
+        )
+        .await
+        .unwrap();
+    let held = fixture.item("I_1");
+    let slot = raw_slot(held.body.as_deref().unwrap());
+    assert_eq!(slot["team.keep"], "new");
+    assert_eq!(slot["team.next"], "also new");
+    assert_eq!(fixture.requests("issue"), 1);
 }

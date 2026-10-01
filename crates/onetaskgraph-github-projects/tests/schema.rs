@@ -321,6 +321,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::UPDATE_ISSUE, None, None),
         (graphql::UPDATE_DRAFT, None, None),
         (graphql::UPDATE_FIELD, None, None),
+        (graphql::UPDATE_FIELDS, None, None),
         (graphql::CLEAR_FIELD, None, None),
         (graphql::CREATE_FIELD, None, None),
         (graphql::STATUS_OPTIONS_UPDATE, None, None),

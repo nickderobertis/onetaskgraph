@@ -52,6 +52,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::UPDATE_ISSUE, 1),
     (graphql::UPDATE_DRAFT, 1),
     (graphql::UPDATE_FIELD, 1),
+    (graphql::UPDATE_FIELDS, 1),
     (graphql::CLEAR_FIELD, 1),
     (graphql::CREATE_FIELD, 1),
     (graphql::ADD_SUB_ISSUE, 1),

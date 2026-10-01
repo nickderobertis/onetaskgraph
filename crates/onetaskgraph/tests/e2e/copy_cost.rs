@@ -200,6 +200,7 @@ fn per_node(document: &str) -> bool {
         graphql::UPDATE_ISSUE,
         graphql::UPDATE_DRAFT,
         graphql::UPDATE_FIELD,
+        graphql::UPDATE_FIELDS,
         graphql::ADD_SUB_ISSUE,
         graphql::REMOVE_SUB_ISSUE,
         graphql::ADD_BLOCKED_BY,
@@ -736,4 +737,230 @@ fn a_narrowed_cli_list_limits_fetches_and_resumes_in_a_new_process() {
             .clone();
         assert_ne!(output.status.code(), Some(0));
     }
+}
+
+#[test]
+fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks() {
+    use onetaskgraph_github_projects::graphql;
+    let plan = Plan::of(1);
+    let (_, _, copied) = plan.copy(&[]);
+    let id = landed(&copied)
+        .into_iter()
+        .find(|(source, _)| source == "plans:T-0")
+        .unwrap()
+        .1
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for comments in [true, false] {
+        let mut arguments = vec!["task", "show", &id, "--json"];
+        if !comments {
+            arguments.push("--no-comments");
+        }
+        let (_, sent, shown) = plan.measure(&arguments);
+        assert_eq!(
+            sent.iter()
+                .filter(|(query, _)| query == graphql::ISSUE)
+                .count(),
+            1
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|(query, _)| query == graphql::ISSUE_COMMENTS)
+                .count(),
+            usize::from(comments)
+        );
+        assert_eq!(shown.get("comments").is_some(), comments);
+    }
+    plan.sandbox
+        .command()
+        .args(["task", "comment", "add", &id])
+        .write_stdin("Human-visible evidence")
+        .assert()
+        .success();
+    let full = plan
+        .sandbox
+        .command()
+        .args(["task", "show", &id])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(stdout(&full).contains("Human-visible evidence"));
+    let before = plan.board.served().len();
+    let record = plan
+        .sandbox
+        .command()
+        .args(["task", "show", &id, "--no-comments"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(stdout(&record).contains("Step 0"));
+    assert!(!stdout(&record).contains("Human-visible evidence"));
+    assert_eq!(plan.board.served().len() - before, 1);
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for typescript in [false, true] {
+        for comments in [true, false] {
+            let before = plan.board.served().len();
+            let mut command = if typescript {
+                let mut command = std::process::Command::new("bun");
+                command.args(["-e", &format!(
+                    "import {{ OnetaskgraphClient }} from {}; const client = new OnetaskgraphClient({{binaryPath: process.env.DISPATCH_BINARY,cwd:process.cwd()}}); const id = process.env.DISPATCH_ITEM; if (id === undefined) throw new Error('missing fixture item'); const result = await client.taskShow(id, {{noComments:{}}}); console.log(JSON.stringify(result)); try {{ await client.taskShow('board:missing', {{noComments:true}}); throw new Error('missing task passed'); }} catch (error) {{ if (!(error instanceof Error) || !error.message.includes('no task')) throw error; }}",
+                    serde_json::to_string(&workspace.join("sdks/typescript/src/client.ts")).unwrap(), !comments,
+                )]);
+                command
+            } else {
+                let mut command = std::process::Command::new("uv");
+                command.args(["run", "--frozen", "--project"])
+                    .arg(workspace.join("sdks/python"))
+                    .args(["python", "-c", &format!(
+                        "import asyncio,os,json\nfrom onetaskgraph_sdk import Client,OnetaskgraphError\nasync def run():\n c=Client(os.environ['DISPATCH_BINARY'],cwd=os.getcwd())\n result=await c.task_show(id=os.environ['DISPATCH_ITEM'],no_comments={})\n print(result.model_dump_json(exclude_none=True))\n try:\n  await c.task_show(id='board:missing',no_comments=True)\n except OnetaskgraphError:\n  pass\n else:\n  raise AssertionError('missing task passed')\nasyncio.run(run())", if comments { "False" } else { "True" },
+                    )]);
+                command
+            };
+            for (key, _) in std::env::vars() {
+                if key.starts_with("ONETASKGRAPH_") {
+                    command.env_remove(key);
+                }
+            }
+            let output = command
+                .current_dir(plan.sandbox.project())
+                .env("XDG_CONFIG_HOME", plan.sandbox.config_home())
+                .env_remove("HOME")
+                .env("DISPATCH_BINARY", env!("CARGO_BIN_EXE_onetaskgraph"))
+                .env("DISPATCH_ITEM", &id)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", stderr(&output));
+            let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
+            assert_eq!(shown.get("comments").is_some(), comments);
+            let served = plan.board.served();
+            let sent = &served[before..];
+            // One successful detail/record read and one missing-item failure.
+            assert_eq!(
+                sent.iter()
+                    .filter(|(query, _)| query == graphql::ISSUE)
+                    .count(),
+                2
+            );
+            assert_eq!(
+                sent.iter()
+                    .filter(|(query, _)| query == graphql::ISSUE_COMMENTS)
+                    .count(),
+                usize::from(comments)
+            );
+        }
+    }
+}
+
+#[test]
+fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
+    use onetaskgraph_github_projects::graphql;
+    let plan = Plan::of(1);
+    let path = plan.root.join("tasks/T-0.md");
+    let body = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("project: P\n", "priority: urgent\n");
+    std::fs::write(&path, body).unwrap();
+    let (_, new_calls, report) =
+        plan.measure(&["task", "copy", "plans:T-0", "--to", "board", "--json"]);
+    let id = report["items"][0]["destination"].as_str().unwrap();
+    std::fs::write(&path, format!("---\ntitle: Revised ticket\nstatus: Doing\npriority: high\nmetadata: {{onetaskgraph.origin: {id}, myapp.owner: ada}}\n---\nRevised body.\n")).unwrap();
+    let (_, bound_calls, _) =
+        plan.measure(&["task", "copy", "plans:T-0", "--to", "board", "--json"]);
+    let evidence_file = plan.root.join("evidence.txt");
+    std::fs::write(&evidence_file, "Evidence").unwrap();
+    let evidence_path = evidence_file.to_str().unwrap();
+    let content_file = plan.root.join("content.txt");
+    std::fs::write(&content_file, "Final body").unwrap();
+    let content_path = content_file.to_str().unwrap();
+    let (_, comment_calls, _) = plan.measure(&[
+        "task",
+        "comment",
+        "add",
+        id,
+        "--body-file",
+        evidence_path,
+        "--json",
+    ]);
+    let (_, recount_calls, _) = plan.measure(&["task", "show", id, "--json"]);
+    let (_, status_calls, _) = plan.measure(&["task", "status", "set", id, "todo", "--json"]);
+    let (_, priority_calls, _) = plan.measure(&["task", "priority", "set", id, "medium", "--json"]);
+    let (_, content_calls, _) = plan.measure(&[
+        "task",
+        "content",
+        "set",
+        id,
+        "--file",
+        content_path,
+        "--json",
+    ]);
+    let (_, metadata_calls, _) = plan.measure(&[
+        "task",
+        "metadata",
+        "set",
+        id,
+        "myapp.owner",
+        "\"grace\"",
+        "--json",
+    ]);
+    for (verb, sent, expected) in [
+        ("new copy", &new_calls, 6),
+        ("bound copy", &bound_calls, 5),
+        ("comment", &comment_calls, 2),
+        ("recount", &recount_calls, 2),
+        ("status", &status_calls, 2),
+        ("priority", &priority_calls, 2),
+        ("content", &content_calls, 2),
+        ("metadata", &metadata_calls, 2),
+    ] {
+        let mut reads = std::collections::BTreeMap::<String, usize>::new();
+        for (_, variables) in sent.iter().filter(|(query, _)| query == graphql::ISSUE) {
+            *reads
+                .entry(variables["id"].as_str().unwrap().to_owned())
+                .or_default() += 1;
+        }
+        assert!(reads.values().all(|count| *count <= 1), "{verb}: {sent:#?}");
+        let points: u64 = sent
+            .iter()
+            .map(|(document, _)| {
+                onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
+            })
+            .sum();
+        assert_eq!(sent.len(), expected, "{verb}: {sent:#?}");
+        assert_eq!(points, expected as u64, "{verb}");
+        assert!(
+            include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
+                .contains(&format!("//! | {verb} | {expected} |")),
+            "cost table: {verb}"
+        );
+        println!("{verb}: {} requests, {points} declared points", sent.len());
+    }
+    assert_eq!(
+        new_calls
+            .iter()
+            .filter(|(query, _)| query == graphql::UPDATE_FIELDS)
+            .count(),
+        1
+    );
+    assert_eq!(
+        bound_calls
+            .iter()
+            .filter(|(query, _)| query == graphql::UPDATE_FIELDS)
+            .count(),
+        1
+    );
+    assert!(
+        !new_calls
+            .iter()
+            .chain(&bound_calls)
+            .any(|(query, _)| query == graphql::UPDATE_FIELD)
+    );
+    let (_, _, shown) = plan.measure(&["task", "show", id, "--no-comments", "--json"]);
+    assert_eq!(shown["items"][0]["item"]["content"], "Final body");
+    assert_eq!(
+        shown["items"][0]["item"]["metadata"]["myapp.owner"],
+        "grace"
+    );
 }

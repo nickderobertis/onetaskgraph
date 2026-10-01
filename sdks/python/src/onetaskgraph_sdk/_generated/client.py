@@ -1054,6 +1054,7 @@ class GeneratedClient:
         allow_partial: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
+        no_comments: bool | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetail:
@@ -1065,6 +1066,7 @@ class GeneratedClient:
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
+            no_comments=no_comments,
             page_size=page_size,
             set=set,
         )

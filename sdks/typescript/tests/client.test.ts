@@ -12,17 +12,17 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
+import type { CopyReport } from "../src/generated/models.ts";
+import { runtimeSchemas } from "../src/generated/schemas.ts";
 import {
+  assertCompleteCommandSurface,
+  clientCommands,
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
-  assertCompleteCommandSurface,
-  clientCommands,
   taskUpdateFlags,
   taskUpdateOptionFlags,
 } from "../src/index.ts";
-import type { CopyReport } from "../src/generated/models.ts";
-import { runtimeSchemas } from "../src/generated/schemas.ts";
 import { CONFIGURATION_PREFIX } from "./ambient.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
@@ -575,6 +575,12 @@ test("comments are added, listed, edited and deleted through the real binary", a
       deleted: second.id,
     });
     const shown = await commentClient.taskShow("notes:T-1");
+    const record = await commentClient.taskShow("notes:T-1", { noComments: true });
+    expect(() =>
+      commentClient.taskShow("notes:T-1", { noComments: JSON.parse('"false"') }),
+    ).toThrow("noComments must be a boolean");
+    expect("comments" in record).toBe(false);
+    expect(record.items).toEqual(shown.items);
     expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
     expect(shown.items[0]?.item.content).toBe("Long-form task content.");
 
