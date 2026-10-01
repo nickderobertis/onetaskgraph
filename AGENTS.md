@@ -642,7 +642,13 @@ them do; this is the inventory of what is owed, not a status board.
     byte-for-byte and is counted unresolved. A location string occurring inside a longer
     location-like string is left alone, every copy reports what it rewrote, what it left
     unresolved and how many of those were ambiguous, and a dry run reports the same figures
-    and writes nothing.
+    and writes nothing. A rendered document whose references a copy rewrote arrives with
+    `body_digest` the digest of the rendering as the copy rewrote its references, its other
+    three provenance fields carried; its stored answers and `answers_digest` still name the
+    pre-copy locations, so the copy is not a fresh rendering of them. A hand-edited
+    rendering, a missing or foreign entry, and a copy that rewrote nothing carry the entry
+    verbatim, and a later copy of an unchanged source repairs an earlier release's stale
+    digest.
 38. A comment is added to a task, listed, edited and deleted through the binary on every
     source that keeps what it is given — a folder of Markdown, a GitHub board, a Linear
     workspace — over the in-process boundary and the stdio plugin protocol alike: its body
@@ -788,7 +794,11 @@ them do; this is the inventory of what is owed, not a status board.
 
 ## What a copied document's references are pointed at
 
-Only a **document** is rewritten, and only its `content`. A reference is a literal
+Only a **document** is rewritten, and only its `content` — together with the
+`body_digest` of its `onetaskgraph.template` entry when the rewrite changed a rendering that
+still matched it, so that entry stays true of what landed (the stored answers and
+`answers_digest` still name the pre-copy locations, so the copy is not a fresh rendering of
+them; see the README's "Creating and regenerating from a template"). A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
 `String` inside `Location::Path` or `Location::Url` — and it becomes the location string
 the *destination* reports for that record's counterpart. Both ends come from the plugins'
