@@ -14684,11 +14684,19 @@ async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
             "one whole page holds every match once"
         );
         for limit in [1, 3] {
+            let before = search_requests(&fixture).len();
             assert_eq!(
                 walk_tasks(source(&fixture).as_ref(), &query, limit).await,
                 whole,
                 "a walk in pages of {limit} in one process"
             );
+            assert_eq!(
+                search_requests(&fixture)[before..],
+                asked[..],
+                "a walk in pages of {limit} in one process sends each of the whole read's \
+                 requests exactly once"
+            );
+            let before = search_requests(&fixture).len();
             let mut walked = Vec::new();
             let mut request = page(limit);
             loop {
@@ -14707,19 +14715,22 @@ async fn a_paged_walk_reaches_one_whole_page_when_github_orders_by_page_size() {
                 walked, whole,
                 "a walk in pages of {limit}, each in a new process"
             );
+            // A new process holds nothing, so it asks again for each page its rows lie in —
+            // the very request the whole read sent for that page, and no other. Nothing it
+            // was handed is answered from the token: see the module's paging contract.
+            let pages_per_process = (0..count.div_ceil(limit as usize)).map(|process| {
+                let rows = process * limit as usize..((process + 1) * limit as usize).min(count);
+                (rows.start / 20..=(rows.end - 1) / 20)
+                    .map(|page| asked[page].clone())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                search_requests(&fixture)[before..],
+                pages_per_process.flatten().collect::<Vec<_>>()[..],
+                "a walk in pages of {limit}, each in a new process, sends each process the \
+                 whole read's requests for the pages its rows lie in, once each"
+            );
         }
-        // Every walk asked GitHub exactly the questions the whole read asked, each one page
-        // of twenty: a process that resumes inside a page asks for that page again.
-        let mut once = Vec::new();
-        for request in search_requests(&fixture) {
-            if !once.contains(&request) {
-                once.push(request);
-            }
-        }
-        assert_eq!(
-            once, asked,
-            "the walks sent the whole read's requests and no other"
-        );
         assert_eq!(asked.len(), count.div_ceil(20));
         assert!(asked.iter().all(|(first, _)| *first == 20));
     }

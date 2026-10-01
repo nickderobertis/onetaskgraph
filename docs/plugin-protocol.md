@@ -1494,7 +1494,9 @@ returned and fetched pages: a limit is sliced from the pages it needs, and local
 confirmation can require more candidates than matching rows. Walking all pages
 returns the whole answer. The opaque version-4 source cursor carries GitHub's page
 cursor and how far into that page the last answer stopped, and resumes in the same
-process or a new one, without duplicates or gaps. Own writes replace stale index
+process or a new one, without duplicates or gaps. It carries no rows: one process
+sends each page's search once, and a new process sends again the search of each page
+its rows lie in, the same request the whole read sent for it. Own writes replace stale index
 copies and complete missing rows at exhaustion. Cache entries are whole GitHub pages,
 so a small answer cannot truncate a wider question. Origin pages remain three; whole-board sizing is unchanged.
 Read-after-write is a per-process guarantee. A cursor resumed in a new process is
