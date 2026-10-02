@@ -811,6 +811,17 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
     assert!(!stdout(&record).contains("Human-visible evidence"));
     assert_eq!(plan.board.served().len() - before, 1);
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // The SDK's interpreter is resolved here, with the caller's environment intact,
+    // because the run below removes HOME: a `uv` that is a version-manager shim reads
+    // its version from HOME and refuses without it.
+    let resolved = std::process::Command::new("uv")
+        .args(["run", "--frozen", "--project"])
+        .arg(workspace.join("sdks/python"))
+        .args(["python", "-c", "import sys; print(sys.executable)"])
+        .output()
+        .unwrap();
+    assert!(resolved.status.success(), "{}", stderr(&resolved));
+    let python = stdout(&resolved).trim().to_owned();
     for typescript in [false, true] {
         for comments in [true, false] {
             let before = plan.board.served().len();
@@ -822,10 +833,8 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
                 )]);
                 command
             } else {
-                let mut command = std::process::Command::new("uv");
-                command.args(["run", "--frozen", "--project"])
-                    .arg(workspace.join("sdks/python"))
-                    .args(["python", "-c", &format!(
+                let mut command = std::process::Command::new(&python);
+                command.args(["-c", &format!(
                         "import asyncio,os,json\nfrom onetaskgraph_sdk import Client,OnetaskgraphError\nasync def run():\n c=Client(os.environ['DISPATCH_BINARY'],cwd=os.getcwd())\n result=await c.task_show(id=os.environ['DISPATCH_ITEM'],no_comments={})\n print(result.model_dump_json(exclude_none=True))\n try:\n  await c.task_show(id='board:missing',no_comments=True)\n except OnetaskgraphError:\n  pass\n else:\n  raise AssertionError('missing task passed')\nasyncio.run(run())", if comments { "False" } else { "True" },
                     )]);
                 command
