@@ -403,9 +403,10 @@ live:
   different source from the home and from the others: `["hellopatient:a1b2c3"]`.
 - `onetaskgraph.member_of`, on a member, is the qualified id of its home: `"plans:42"`.
 
-Both are written by a routed copy alone — a member's `member_of` when the copy creates it, and
-the home's `members` once the whole copy has landed, through the home's own project write and
-undone with the rest of the copy if it cannot finish. `metadata set` refuses either, as it
+Both are written by a routed write alone — a copy, or a `task create` routed away from the
+source its project is in: a member's `member_of` when the write creates it, and the home's
+`members` once the member exists, through the home's own project write, and taken back with
+the rest of the write if it cannot finish. `metadata set` refuses either, as it
 refuses every key in the namespace, and a copy never carries either onto a destination: a
 destination project keeps the ones it holds, which describe *its* plan. `task list --project
 <home> --members` reads `members` off the home on every request, and nothing else is kept.

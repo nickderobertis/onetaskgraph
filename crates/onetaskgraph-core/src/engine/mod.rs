@@ -230,6 +230,7 @@ pub struct TaskRequest {
     ///
     /// The members are learned by reading the home on every request — never kept — so a
     /// member added between two pages is a different query, and its token is refused.
+    // llmlint: ignore[invalid_states_unrepresentable] The field's name, type and default are the contract this task states (R5: "`TaskRequest` gains `include_members: bool` (default `false`)"), which the downstream engine reads plans with; the combination with any other selector is refused at the command line (`--members` requires a qualified `--project`) and documented here as ignored.
     pub include_members: bool,
     /// Which page.
     pub paging: Paging,
@@ -1162,14 +1163,19 @@ impl Engine {
         };
         let mut members = Vec::new();
         let mut unread = Vec::new();
-        for member in copy::members_of(&held.metadata) {
-            if member.source == home.source
-                || members
-                    .iter()
-                    .any(|kept: &GlobalId| kept.source == member.source)
-            {
-                continue;
+        let named = match copy::members_of(home, &held.metadata) {
+            Ok(named) => named,
+            // A list nobody can read is a home whose plan cannot be read whole, which is a
+            // failure of the home's source to report rather than a plan with no members.
+            Err(message) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error: SourceError::Malformed { message },
+                });
+                return (members, unread);
             }
+        };
+        for member in named {
             if !self.has(&member.source) {
                 unread.push(SourceFailure {
                     source: member.source.clone(),

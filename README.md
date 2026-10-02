@@ -895,7 +895,8 @@ ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__REPOSITORIES='github.com/petsinc/*' \
 ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__TO=hellopatient  onetaskgraph sources route plans
 ```
 
-A comma in either value makes it a list of patterns, as everywhere else. Entries are
+A comma in a `repositories` value makes it a list of patterns, as a comma does everywhere
+else. Entries are
 numbered from 0 with no gaps, and an entry one layer sets replaces the whole `routes` a lower
 layer set rather than merging into it. `config show` prints `routes` with the layer it came
 from — the document's list as one row, a flag's or a variable's entries one row per field.

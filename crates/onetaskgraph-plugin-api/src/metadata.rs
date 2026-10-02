@@ -60,14 +60,16 @@ impl MetadataKey {
     /// qualified project ids, each in a different source from the home and from the others,
     /// so a home has at most one member per source.
     ///
-    /// Store-owned, like every key in the namespace: only the engine's routed copy writes it,
-    /// through the home's own project write, and nothing a caller types can name it. A plugin
+    /// Store-owned, like every key in the namespace: only the engine's routed writes keep it —
+    /// a copy, or a `task create` routed away from its project's source — through the home's
+    /// own project write, and nothing a caller types can name it. A plugin
     /// only puts it where its metadata lives.
     pub const MEMBERS_KEY: &'static str = "onetaskgraph.members";
 
     /// The reserved key a **member** project records its home under: the home's qualified id.
     ///
-    /// Written once, when the routed copy creates the member, and never by a caller.
+    /// Written once, when a routed write — a copy or a `task create` — creates the member, and
+    /// never by a caller.
     pub const MEMBER_OF_KEY: &'static str = "onetaskgraph.member_of";
 
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.

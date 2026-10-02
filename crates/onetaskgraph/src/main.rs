@@ -695,9 +695,6 @@ fn show_rendered<T>(
     }
 }
 
-/// The configured `github-projects` source a guarded board setup verb names, and its
-/// configuration, refused with `verb` as the failure's kind when there is no such source or it
-/// is not a `github-projects` one.
 /// Where an item with `repositories`, written to the source named `source`, would land.
 fn source_route(
     loaded: &Loaded,
@@ -726,6 +723,9 @@ fn source_route(
     })
 }
 
+/// The configured `github-projects` source a guarded board setup verb names, and its
+/// configuration, refused with `verb` as the failure's kind when there is no such source or it
+/// is not a `github-projects` one.
 fn github_projects_source(
     loaded: &Loaded,
     source: &str,

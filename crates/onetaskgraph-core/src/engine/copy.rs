@@ -838,37 +838,66 @@ struct Home {
 impl Home {
     /// A home as its source holds it, with the members it already names.
     ///
-    /// An entry that is not a qualified id, or names a second member in one source, is not
-    /// one this copy can file into, so it is left out — and replaced, should a member be
-    /// created for that source.
-    fn of(id: GlobalId, held: &Project) -> Self {
-        let mut members: Vec<GlobalId> = Vec::new();
-        for named in members_of(&held.metadata) {
-            if named.source != id.source && !members.iter().any(|kept| kept.source == named.source)
-            {
-                members.push(named);
-            }
-        }
-        Self {
+    /// # Errors
+    ///
+    /// The home's own source refusing, as malformed, a member list [`members_of`] cannot
+    /// read: a copy filing into a plan it cannot read whole would add a second member beside
+    /// one it failed to see.
+    fn of(id: GlobalId, held: &Project) -> Result<Self, EngineError> {
+        let members =
+            members_of(&id, &held.metadata).map_err(|message| EngineError::SourceRefused {
+                name: id.source.to_string(),
+                error: SourceError::Malformed { message },
+            })?;
+        Ok(Self {
             id,
             title: held.title.clone(),
             status: held.status.clone(),
             members,
             grew: false,
-        }
+        })
     }
 }
 
-/// The member projects a home records at [`MetadataKey::MEMBERS_KEY`], each one that is a
-/// qualified id.
-pub(crate) fn members_of(metadata: &BTreeMap<String, Value>) -> Vec<GlobalId> {
-    metadata
-        .get(MetadataKey::MEMBERS_KEY)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|member| member.as_str()?.parse::<GlobalId>().ok())
-        .collect()
+/// The member projects the home `home` records at [`MetadataKey::MEMBERS_KEY`]; none when it
+/// records the key not at all.
+///
+/// # Errors
+///
+/// Why, when the key holds anything but a list of qualified ids, each in a different source
+/// from the home and from the others — the one shape the routed write that keeps it writes.
+pub(crate) fn members_of(
+    home: &GlobalId,
+    metadata: &BTreeMap<String, Value>,
+) -> Result<Vec<GlobalId>, String> {
+    let Some(value) = metadata.get(MetadataKey::MEMBERS_KEY) else {
+        return Ok(Vec::new());
+    };
+    let refuse = |why: String| {
+        format!(
+            "{home} records {key} as {value}, which {why}; a home's member list is a list of \
+             qualified project ids, at most one per source and none in the home's own",
+            key = MetadataKey::MEMBERS_KEY
+        )
+    };
+    let Value::Array(entries) = value else {
+        return Err(refuse("is not a list".to_owned()));
+    };
+    let mut members: Vec<GlobalId> = Vec::new();
+    for entry in entries {
+        let member = entry
+            .as_str()
+            .and_then(|entry| entry.parse::<GlobalId>().ok())
+            .ok_or_else(|| refuse(format!("holds {entry}, which is not a qualified id")))?;
+        if member.source == home.source || members.iter().any(|kept| kept.source == member.source) {
+            return Err(refuse(format!(
+                "names {member}, a second project in {}",
+                member.source
+            )));
+        }
+        members.push(member);
+    }
+    Ok(members)
 }
 
 /// One item a copy landed, and what settling its `onetaskgraph.copies` link needs.
@@ -3086,7 +3115,7 @@ impl Engine {
             };
             running
                 .homes
-                .insert(key.clone(), Home::of(home.clone(), &held));
+                .insert(key.clone(), Home::of(home.clone(), &held)?);
         }
         let named = running.homes[&key]
             .members
