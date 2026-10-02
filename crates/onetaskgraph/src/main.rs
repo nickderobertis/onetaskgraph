@@ -1252,10 +1252,12 @@ fn schema_bundle() -> Result<String, Failure> {
     )?;
     bundle["roots"]["FieldsReport"] =
         json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The schema is the Linear plugin's own `WorkflowStatesReport`, not restated here; what lives here is its registration as the root of what `sources fields` prints for a Linear source, beside the two GitHub Projects reports that verb already registers above. `sources fields` is this binary's verb, the engine crate names no binary output, and a plugin may not depend on the engine (AGENTS.md), so the binary is the one crate that can join a plugin's report to the bundle both SDKs are generated from.
     bundle["roots"]["WorkflowStatesReport"] = json_value(
         schemars::schema_for!(onetaskgraph_linear::WorkflowStatesReport),
         "the workflow states schema",
     )?;
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }
