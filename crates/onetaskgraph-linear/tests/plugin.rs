@@ -985,6 +985,7 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
                     StatusCategory::Queued,
                     StatusCategory::Todo,
                     StatusCategory::Draft,
+                    StatusCategory::Unknown,
                 ],
                 ..TaskQuery::default()
             },
@@ -6939,8 +6940,8 @@ async fn the_follow_up_searches_are_narrowed_by_linear_and_confirmed_in_process(
             {"priority":{"in":[2]}},
             {"comments":{"some":{"or":[{"createdAt":{"gte":"2026-10-01T00:00:00Z"}},
                                        {"updatedAt":{"gte":"2026-10-01T00:00:00Z"}}]}}},
-            {"description":{"contains":"\"caller.key\":\"v\""}},
-            {"description":{"contains":"\"onetaskgraph.origin\":\"elsewhere:O-1\""}},
+            {"description":{"contains":"\"v\""}},
+            {"description":{"contains":"\"elsewhere:O-1\""}},
             {"title":{"containsIgnoreCase":"ALPHA"}}]})
     );
 }
@@ -6964,13 +6965,13 @@ async fn the_cross_source_edge_scan_is_narrowed_to_this_source_and_the_far_ends_
         (
             serde_json::json!({}),
             serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-                {"description":{"contains":"\"onetaskgraph.origin\":\"plan:F-1\""}}]}),
+                {"description":{"contains":"\"plan:F-1\""}}]}),
         ),
         (
             serde_json::json!({"project":"P-SCOPE"}),
             serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
                 {"project":{"id":{"eq":"P-SCOPE"}}},
-                {"description":{"contains":"\"onetaskgraph.origin\":\"plan:F-1\""}}]}),
+                {"description":{"contains":"\"plan:F-1\""}}]}),
         ),
     ] {
         // The one issue the scan answers holds the phrase in prose, not as its origin.
@@ -7258,4 +7259,54 @@ async fn a_malformed_code_span_slot_is_refused_rather_than_read_past() {
             "{description:?}: {refused:?}"
         );
     }
+}
+
+/// With a mapping, `unknown` narrows to the issues it reads as — at the state it is mapped to,
+/// or at a state of a type none of the five a category stands for (`Triage`) — and a metadata
+/// value an encoder might spell otherwise is not sent to Linear at all, leaving the
+/// confirmation to decide.
+#[tokio::test]
+async fn unknown_narrows_by_type_and_an_escapable_value_is_left_to_the_confirmation() {
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"issues":{"nodes":[],
+        "pageInfo":{"hasNextPage":false,"endCursor":null}}})]);
+    configured_source(&endpoint, eng_mapping())
+        .query_tasks(
+            &TaskQuery {
+                statuses: vec![StatusCategory::Unknown],
+                metadata: vec![
+                    onetaskgraph_plugin_api::MetadataMatch::new(
+                        "caller.site",
+                        Vec::new(),
+                        "github.com/a/b",
+                    )
+                    .unwrap(),
+                ],
+                ..TaskQuery::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    let mut excluded = vec![serde_json::json!({"state":{"type":{"nin":
+        ["backlog","unstarted","started","completed","canceled"]}}})];
+    for name in [
+        "Backlog",
+        "Proposed",
+        "Todo",
+        "Queued",
+        "In Progress",
+        "Done",
+        "Canceled",
+        "Needs Attention",
+    ] {
+        excluded.push(serde_json::json!({"state":{"name":{"neqIgnoreCase":name}}}));
+    }
+    assert_eq!(
+        sent(&wire.recv().unwrap())["variables"]["filter"],
+        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
+            {"or":[{"state":{"name":{"eqIgnoreCase":"Needs Attention"}}},{"and":excluded}]}]})
+    );
 }

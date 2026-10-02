@@ -31,7 +31,7 @@
 //! | `priority` | **Supported,** as Linear's own `Issue.priority`: read on every issue, written by `issueCreate`/`issueUpdate` through `IssueCreateInput.priority`/`IssueUpdateInput.priority`, and set on its own by an `issueUpdate` carrying nothing else. See the ruling below on the scale. |
 //! | `filter_by_priority` | **Supported and proven.** `issues(filter:{priority:{in:[…]}})` over Linear's own `0`–`4` scale, confirmed against each issue read. |
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
-//! | `filter_by_metadata` | **Supported and proven.** `description:{contains:"\"<key>\":\"<value>\""}` for each match — the bytes a string value is encoded as in the metadata slot — and every candidate confirmed over the parsed slot, so prose carrying the phrase and a slot holding another value are both kept out. |
+//! | `filter_by_metadata` | **Supported and proven.** `description:{contains:"\"<value>\""}` for each match — the value as every JSON encoder writes it, which a slot holding it contains however it spaces or spells its keys — and every candidate confirmed over the parsed slot, so prose carrying the phrase and a slot holding another value are both kept out. A value with a character an encoder may escape is not sent, and the confirmation decides alone. |
 //! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin`. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
@@ -59,10 +59,11 @@
 //!   `"caller.key":"needle-…"` was returned for `contains` of that exact phrase, and of the
 //!   `"onetaskgraph.origin":"…"` pair beside it; the same description's prose, upper-cased,
 //!   was returned for `containsIgnoreCase` and *not* for `contains`. So a metadata match or an
-//!   origin is sent as the phrase its value is encoded as — `"<key>":"<value>"`, the key being
-//!   the last segment of a nested path — and confirmed over the parsed slot. The slot's code
-//!   span is what makes that phrase the stored bytes: a slot in the old multi-line spelling
-//!   whose key Linear autolinked is not found by it, and could not be read as that key anyway.
+//!   origin is sent as its value in quotes, `"<value>"` — the bytes any JSON encoder writes a
+//!   string as, which a slot holding it contains whether it is the code span this source
+//!   writes, the multi-line slot it wrote before, or one a person spaced by hand — and
+//!   confirmed over the parsed slot. A value holding a character an encoder may escape is not
+//!   sent, and the confirmation decides alone.
 //! - **`IssueFilter.title.containsIgnoreCase` and `description.containsIgnoreCase` match
 //!   regardless of case** — the title `… Alpha Title` was returned for `alpha TITLE`, and not
 //!   for `contains` of it. They are the two text searches; the content search is confirmed
@@ -704,6 +705,29 @@ enum WorkflowType {
 }
 
 impl WorkflowType {
+    /// Every type this source writes, which is every type that reads as a category other than
+    /// `unknown`: a state of any other type — `triage`, `duplicate`, or one Linear adds — reads
+    /// as `unknown`. Held complete by the assertion beside [`Self::position`].
+    const ALL: [Self; 5] = [
+        Self::Backlog,
+        Self::Unstarted,
+        Self::Started,
+        Self::Completed,
+        Self::Canceled,
+    ];
+
+    /// Where this type sits in [`Self::ALL`] — an exhaustive match, so a type added here and
+    /// left out of that list fails to compile.
+    const fn position(self) -> usize {
+        match self {
+            Self::Backlog => 0,
+            Self::Unstarted => 1,
+            Self::Started => 2,
+            Self::Completed => 3,
+            Self::Canceled => 4,
+        }
+    }
+
     /// The type a category reads back as and is written as, or `None` for one no type stands
     /// for — `draft`, `queued` and `unknown`.
     const fn of(category: StatusCategory) -> Option<Self> {
@@ -728,6 +752,14 @@ impl WorkflowType {
         }
     }
 }
+
+const _: () = {
+    let mut index = 0;
+    while index < WorkflowType::ALL.len() {
+        assert!(WorkflowType::ALL[index].position() == index);
+        index += 1;
+    }
+};
 
 /// Where one category is written, as this instance's `status_mapping` resolves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1381,11 +1413,10 @@ impl LinearSource {
             ]}}}));
         }
         for wanted in &query.metadata {
-            let at = wanted.path().last().map_or(wanted.key(), String::as_str);
-            parts.push(slot_phrase(at, wanted.value())?);
+            parts.extend(slot_phrase(wanted.value()));
         }
         if let Some(origin) = &query.origin {
-            parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, origin)?);
+            parts.extend(slot_phrase(origin));
         }
         if let Some(text) = &query.text {
             let title = json!({"title": {"containsIgnoreCase": text.terms}});
@@ -1440,8 +1471,17 @@ impl LinearSource {
             // as `backlog`, and with `cancelled` set to `null` an issue at `Canceled` still
             // reads as `cancelled`, which a write can no longer move it to but a read reports.
             let types = workflow_state_types(category);
-            if !types.is_empty() {
-                let mut parts = vec![json!({"state": {"type": {"in": types}}})];
+            // `unknown` has no type of its own: a state reads as it when its type is none of
+            // the five a category stands for — `Triage`'s `triage`, a `duplicate` state.
+            let by_type = if *category == StatusCategory::Unknown {
+                Some(
+                    json!({"state": {"type": {"nin": WorkflowType::ALL.map(WorkflowType::as_str)}}}),
+                )
+            } else {
+                (!types.is_empty()).then(|| json!({"state": {"type": {"in": types}}}))
+            };
+            if let Some(by_type) = by_type {
+                let mut parts = vec![by_type];
                 parts.extend(
                     self.statuses
                         .named()
@@ -2110,7 +2150,7 @@ impl LinearSource {
                     WriteKind::Project => Self::narrowed(self.project_scope()),
                     WriteKind::Task => {
                         let mut parts = self.issue_scope();
-                        parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, edge.to.id())?);
+                        parts.extend(slot_phrase(edge.to.id()));
                         Self::narrowed(parts)
                     }
                 };
@@ -4239,15 +4279,23 @@ fn metadata_description(
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
 }
 
-/// The narrowing that asks Linear for the issues whose description holds `"<key>":"<value>"`
-/// — the bytes a string `value` under `key` is encoded as in this source's metadata slot.
+/// The narrowing that asks Linear for the issues whose description holds `"<value>"` — a
+/// string `value` as any JSON encoder writes it, quotes included — or `None` when `value` holds
+/// a character an encoder may write another way, and only the confirmation decides.
 ///
 /// A candidate set rather than the answer: the phrase can sit in the visible prose, or under
-/// another key's object, and both are kept out by the confirmation over the parsed slot that
-/// follows every read. What it cannot do is miss an issue whose slot holds the value, which is
-/// what makes sending it sound.
-fn slot_phrase(key: &str, value: &str) -> Result<Value, SourceError> {
-    Ok(json!({"description": {"contains": format!("{}:{}", slot_json(&key)?, slot_json(&value)?)}}))
+/// another key, and both are kept out by the confirmation over the parsed slot that follows
+/// every read. What it cannot do is miss an issue whose slot holds the value — in the code span
+/// this source writes, in the multi-line slot it wrote before, or in one a person spaced or
+/// re-encoded by hand — which is what makes sending it sound. So it names the value alone, never
+/// the key beside it, whose spacing a slot is free to vary; and only a value of printable ASCII
+/// none of whose characters any encoder escapes — not `"`, `\`, `/`, `<`, `>`, `&`, `'` or a
+/// backtick — because one that is escaped would be spelled in a stored slot otherwise than here.
+fn slot_phrase(value: &str) -> Option<Value> {
+    let verbatim = value.chars().all(|character| {
+        (character.is_ascii_graphic() && !"\"\\/<>&'`".contains(character)) || character == ' '
+    });
+    verbatim.then(|| json!({"description": {"contains": format!("\"{value}\"")}}))
 }
 
 /// Whether `title`/`content` satisfies `query`, case-insensitively — the contract's own rule,

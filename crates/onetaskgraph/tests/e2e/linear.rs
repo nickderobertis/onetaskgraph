@@ -295,6 +295,11 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
         ["L-REVIEW"],
         "a state the mapping leaves out reads, and narrows, by its type"
     );
+    assert_eq!(
+        listed(&sandbox, &["--source", "linear", "--status", "unknown"]),
+        ["L-TRIAGE"],
+        "`Triage` reads as unknown by its type, and the filter returns it"
+    );
 
     for category in CATEGORIES {
         let state = named(category);
@@ -549,6 +554,12 @@ fn a_partly_mapped_linear_source_writes_every_category_it_leaves_out_as_an_unmap
     assert_eq!(
         listed(&sandbox, &["--source", "linear", "--status", "cancelled"]),
         ["L-CANCELED"]
+    );
+    // `unknown`, which no type stands for, narrows to the states of a type none of the five
+    // categories stand for — `Triage` here — which is what reads as it.
+    assert_eq!(
+        listed(&sandbox, &["--source", "linear", "--status", "unknown"]),
+        ["L-TRIAGE"]
     );
 }
 
@@ -1227,7 +1238,13 @@ fn searched_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
             r#"{"caller.key":"w","onetaskgraph.origin":"plan:ORIG-2","orchestrator.follow-up":{"root_cause":"other"}}"#
         )
     ));
-    let mut workspace = held(vec![matching, prose, other], Vec::new(), Vec::new());
+    // A slot in the multi-line spelling, spaced by hand: readable, and so a match.
+    let mut legacy = issue("S-LEGACY", "Todo", json!({"title": "Fourth"}));
+    legacy["_linear_description"] = json!(
+        "Legacy body.\n\n<!-- onetaskgraph.metadata\n{\"caller.key\": \"v\", \
+         \"onetaskgraph.origin\": \"plan:ORIG-1\"}\n-->"
+    );
+    let mut workspace = held(vec![matching, prose, other, legacy], Vec::new(), Vec::new());
     workspace["comments"] = json!([
         {"task": "S-MATCH", "comment": {"id": "C-1", "body": "recent",
             "created_at": "2026-09-01T00:00:00Z", "updated_at": "2026-10-01T12:00:00Z"}},
@@ -1250,7 +1267,7 @@ fn the_follow_up_searches_are_pushed_to_linear_and_return_exactly_what_matches()
         (
             vec!["--metadata", "caller.key=v"],
             "metadata",
-            vec!["S-MATCH"],
+            vec!["S-MATCH", "S-LEGACY"],
         ),
         (
             vec![
@@ -1260,7 +1277,11 @@ fn the_follow_up_searches_are_pushed_to_linear_and_return_exactly_what_matches()
             "metadata",
             vec!["S-MATCH"],
         ),
-        (vec!["--origin", "plan:ORIG-1"], "origin", vec!["S-MATCH"]),
+        (
+            vec!["--origin", "plan:ORIG-1"],
+            "origin",
+            vec!["S-MATCH", "S-LEGACY"],
+        ),
         (vec!["--priority", "high"], "priority", vec!["S-MATCH"]),
         (
             vec!["--commented-since", "2026-10-01T00:00:00Z"],

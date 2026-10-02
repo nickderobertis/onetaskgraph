@@ -3554,7 +3554,7 @@ fn valid_linear_filter(value: &Value) -> bool {
                 value.is_string()
             }
             // A list of names, or — under `priority` alone — of Linear's priority numbers.
-            "in" => value.as_array().is_some_and(|values| {
+            "in" | "nin" => value.as_array().is_some_and(|values| {
                 values.iter().all(Value::is_string) || values.iter().all(Value::is_number)
             }),
             "null" => value.is_boolean(),
@@ -4747,6 +4747,9 @@ fn linear_compares(held: Option<&str>, comparator: &Value) -> bool {
             ("in", Some(held)) => wanted
                 .as_array()
                 .is_some_and(|values| values.iter().any(|value| value == held)),
+            ("nin", Some(held)) => wanted
+                .as_array()
+                .is_some_and(|values| values.iter().all(|value| value != held)),
             ("contains", Some(held)) => held.contains(text),
             ("containsIgnoreCase", Some(held)) => {
                 held.to_lowercase().contains(&text.to_lowercase())

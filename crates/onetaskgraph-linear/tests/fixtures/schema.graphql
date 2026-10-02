@@ -71,7 +71,8 @@
 # it: the plugin declares `filter_by_priority` unsupported and the engine narrows.
 #
 # The follow-up searches carry a ninth date. `IssueFilter.title`, `.description`, `.priority`
-# and `.comments`; `StringComparator.containsIgnoreCase`; `NullableStringComparator` with its
+# and `.comments`; `StringComparator.containsIgnoreCase` and `.nin`, the second what a mapped
+# source narrows `unknown` with — a state of a type none of the five a category stands for; `NullableStringComparator` with its
 # `contains` and `containsIgnoreCase`; `NullableNumberComparator.in`; `CommentCollectionFilter`
 # with `some`; `CommentFilter` with `createdAt`, `updatedAt` and `or`; `DateComparator.gte` and
 # its `DateTimeOrDuration` scalar are pinned 2026-10-02 from the real API's own introspection,
@@ -428,6 +429,7 @@ input StringComparator {
   eqIgnoreCase: String
   neqIgnoreCase: String
   in: [String!]
+  nin: [String!]
   containsIgnoreCase: String
 }
 input NullableTeamFilter {
