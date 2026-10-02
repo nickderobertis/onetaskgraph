@@ -33,7 +33,11 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--no-interactive",
         ],
     ),
-    (&["help", "sources"], &["list", "fields"]),
+    (&["help", "sources"], &["list", "fields", "route"]),
+    (
+        &["help", "sources", "route"],
+        &["<SOURCE>", "--repository", "--json"],
+    ),
     (
         &["help", "sources", "fields"],
         &["<SOURCE>", "--apply", "--json"],
@@ -47,6 +51,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--status",
             "--priority",
             "--project",
+            "--members",
             "--no-project",
             "--search",
             "--in",
@@ -263,7 +268,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 28);
+    assert_eq!(bundle["version"], 29);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -276,6 +281,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "sources list",
             "sources status-options",
             "sources fields",
+            "sources route",
             "task list",
             "task show",
             "task show-many",
@@ -836,6 +842,8 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         ItemKind::METADATA_KEY,
         MetadataKey::TEMPLATE_KEY,
         MetadataKey::COPIES_KEY,
+        MetadataKey::MEMBERS_KEY,
+        MetadataKey::MEMBER_OF_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -859,7 +867,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         .collect();
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
-        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
@@ -940,6 +948,7 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
 /// the README, or dropped from one and not the other, fails here.
 const README_COMMAND_LINES: &[(&[&str], Option<&str>)] = &[
     (&["sources", "fields"], None),
+    (&["sources", "route"], None),
     (&["task", "list"], Some("--priority")),
     (&["task", "priority", "set"], Some("<PRIORITY>")),
     (&["task", "content", "set"], None),

@@ -35,14 +35,14 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
     MetadataMatch, MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery,
-    TextFields, TextQuery,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, StatusCategory, Task,
+    TaskQuery, TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::GlobalId;
-use crate::config::Config;
+use crate::config::{Config, Placement, Routes};
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 
@@ -224,6 +224,14 @@ pub struct TaskRequest {
     /// The copy origin to keep: a task matches when it was copied from this item. `None`
     /// means unfiltered.
     pub origin: Option<GlobalId>,
+    /// With a [`ProjectSelector::Qualified`] project, whether the tasks of every member
+    /// project that project names at `onetaskgraph.members` are read beside its own, each
+    /// under its own source. Ignored for any other selector.
+    ///
+    /// The members are learned by reading the home on every request — never kept — so a
+    /// member added between two pages is a different query, and its token is refused.
+    // llmlint: ignore[invalid_states_unrepresentable] The field's name, type and default are the contract this task states (R5: "`TaskRequest` gains `include_members: bool` (default `false`)"), which the downstream engine reads plans with; the combination with any other selector is refused at the command line (`--members` requires a qualified `--project`) and documented here as ignored.
+    pub include_members: bool,
     /// Which page.
     pub paging: Paging,
 }
@@ -815,6 +823,27 @@ pub enum EngineError {
         destination: SourceName,
     },
 
+    /// A routed copy found an item's existing counterpart in a source other than the one its
+    /// repositories route it to now.
+    ///
+    /// Refused before anything is written. A repository changed after a copy is a person's
+    /// decision about where the work lives, and moving it silently would leave the
+    /// counterpart where it was, unlinked, beside a second one.
+    #[error(
+        "{item} was copied to {counterpart}, but its repositories now route it to {route}\n\
+         next: move or remove {counterpart} by hand and copy again, or restore {item}'s \
+         repositories so it routes to {source} again.",
+        source = .counterpart.source
+    )]
+    Misrouted {
+        /// The item being copied.
+        item: GlobalId,
+        /// The counterpart it already has.
+        counterpart: GlobalId,
+        /// The source it routes to now.
+        route: SourceName,
+    },
+
     /// A source refused something the copy asked of it.
     ///
     /// Distinct from a [`SourceFailure`], which leaves the other sources' results
@@ -937,6 +966,9 @@ pub struct Engine {
     sources: Vec<ConfiguredSource>,
     /// Which sources answer when a request names none.
     selection: Vec<SourceName>,
+    /// Where an item written to a source goes instead. Read from configuration and never
+    /// from a source, so it holds nothing of anybody's work.
+    routes: Routes,
 }
 
 impl Engine {
@@ -958,13 +990,34 @@ impl Engine {
                 .collect(),
             config.selected_sources(),
         )
+        .with_routes(config.routes())
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
     /// source it did not resolve from a configuration document.
     #[must_use]
     pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
-        Self { sources, selection }
+        Self {
+            sources,
+            selection,
+            routes: Routes::default(),
+        }
+    }
+
+    /// The same engine, placing what is written to each source by `routes`.
+    ///
+    /// [`build`](Self::build) takes them from the configuration; a caller holding sources
+    /// it built itself states them here, checked by [`Routes::new`].
+    #[must_use]
+    pub fn with_routes(mut self, routes: Routes) -> Self {
+        self.routes = routes;
+        self
+    }
+
+    /// Where an item with `repositories`, written to `source`, lands.
+    #[must_use]
+    pub fn place(&self, source: &SourceName, repositories: &[Repository]) -> Placement {
+        self.routes.place(source, repositories)
     }
 
     /// Every source that built, in configured-name order.
@@ -1033,10 +1086,27 @@ impl Engine {
         // hold a task in it. Narrowing here means the plan reports the source that was
         // actually asked rather than a row of empty entries for sources that could not
         // have answered.
+        let mut members: Vec<GlobalId> = Vec::new();
+        let mut unread: Vec<SourceFailure> = Vec::new();
         if let ProjectSelector::Qualified(id) = &request.project {
             self.known(&id.source)?;
             names.retain(|name| name == &id.source);
+            // Its members join it, each asked for in its own source: a home has at most one
+            // member per source, so one source still answers for one project.
+            if request.include_members {
+                (members, unread) = self.members(id).await;
+                names.extend(members.iter().map(|member| member.source.clone()));
+            }
         }
+        let selector = |name: &SourceName| -> ProjectSelector {
+            members
+                .iter()
+                .find(|member| &member.source == name)
+                .map_or_else(
+                    || request.project.clone(),
+                    |member| ProjectSelector::Qualified(member.clone()),
+                )
+        };
         let query = shape(
             "task-list",
             &names,
@@ -1047,6 +1117,7 @@ impl Engine {
                 &request.commented_since,
                 &request.metadata,
                 &request.origin,
+                &members,
             ),
         );
         let states = resumption(
@@ -1058,6 +1129,7 @@ impl Engine {
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
+        answer.errors.extend(unread);
         let (ready, starts) = walking(answer.split(self, &names), &states, StreamKind::Items);
 
         let shapes: Vec<TaskShape> = ready
@@ -1066,7 +1138,7 @@ impl Engine {
                 shape_tasks(
                     &source.source().capabilities(),
                     &request.filters,
-                    &project_filter(&request.project),
+                    &project_filter(&selector(source.name())),
                     &request.priorities,
                     request.commented_since,
                     &request.metadata,
@@ -1101,6 +1173,98 @@ impl Engine {
                 delivery::qualified_task(GlobalId::new(name.clone(), task.id.clone()), task)
             },
         )
+    }
+
+    /// The member projects `home` names at `onetaskgraph.members` that can be read, and a
+    /// failure for each that cannot.
+    ///
+    /// Read from the home on every call and kept nowhere. A member in a source nothing
+    /// configures, one its source does not hold, and one whose source fails the read are
+    /// each reported rather than left out, because a plan missing a member without saying
+    /// so reads exactly like a plan that has none. So is a home its source fails to read or
+    /// does not hold: its members cannot be learned, and a page of its own tasks alone must
+    /// not pass for the whole plan. A home whose source did not build is reported by the
+    /// walk, as any unavailable source is.
+    async fn members(&self, home: &GlobalId) -> (Vec<GlobalId>, Vec<SourceFailure>) {
+        let mut members = Vec::new();
+        let mut unread = Vec::new();
+        let Some(source) = self.ready().find(|source| source.name() == &home.source) else {
+            return (members, unread);
+        };
+        let held = match source.source().get_project(&home.native).await {
+            Ok(Some(held)) => held,
+            Ok(None) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error: SourceError::Refused {
+                        message: format!(
+                            "{home} names no project {} holds, so its member projects cannot \
+                             be read",
+                            home.source
+                        ),
+                    },
+                });
+                return (members, unread);
+            }
+            Err(error) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error,
+                });
+                return (members, unread);
+            }
+        };
+        let named = match copy::members_of(home, &held.metadata) {
+            Ok(named) => named,
+            // A list nobody can read is a home whose plan cannot be read whole, which is a
+            // failure of the home's source to report rather than a plan with no members.
+            Err(message) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error: SourceError::Malformed { message },
+                });
+                return (members, unread);
+            }
+        };
+        for member in named {
+            if !self.has(&member.source) {
+                unread.push(SourceFailure {
+                    source: member.source.clone(),
+                    error: SourceError::Config {
+                        message: format!(
+                            "{home} names {member} as a member project, but no source named \
+                             {} is configured",
+                            member.source
+                        ),
+                    },
+                });
+                continue;
+            }
+            // A member whose source did not build is reported by the walk, as any
+            // unavailable source is.
+            let Some(there) = self.ready().find(|source| source.name() == &member.source) else {
+                members.push(member);
+                continue;
+            };
+            match there.source().get_project(&member.native).await {
+                Ok(Some(_)) => members.push(member),
+                Ok(None) => unread.push(SourceFailure {
+                    source: member.source.clone(),
+                    error: SourceError::Refused {
+                        message: format!(
+                            "{home} names {member} as a member project, and {} holds no such \
+                             project",
+                            member.source
+                        ),
+                    },
+                }),
+                Err(error) => unread.push(SourceFailure {
+                    source: member.source.clone(),
+                    error,
+                }),
+            }
+        }
+        (members, unread)
     }
 
     /// One page of projects.

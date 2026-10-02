@@ -482,14 +482,34 @@ impl Engine {
     /// cannot be reached, [`EngineError::NotCreatable`] for one with no write side — neither is
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
-        let source = self.creatable(&request.source, MetadataRecord::Task)?;
+        // A task goes where its repositories route it from the source named. Routed away, it
+        // is filed under the named project's member project in the source it lands in.
+        let placement = self.place(&request.source, &request.repositories);
+        let near = &placement.destination;
+        let source = self.creatable(near, MetadataRecord::Task)?;
+        let filed = if near == &request.source {
+            None
+        } else {
+            let home = GlobalId::new(request.source.clone(), request.project.clone());
+            self.creatable(&request.source, MetadataRecord::Task)?;
+            let filed = self.member_project(&home, near).await?;
+            if filed.project.is_none() {
+                return Err(EngineError::NoSuchProject {
+                    id: home.to_string(),
+                });
+            }
+            Some(filed)
+        };
+        let project = filed
+            .as_ref()
+            .and_then(|filed| filed.project.clone())
+            .unwrap_or_else(|| request.project.clone());
         let Parts {
             content,
             metadata,
             answers,
         } = request.body.parts(&request.metadata);
         let category = request.status.unwrap_or(StatusCategory::Todo);
-        let near = &request.source;
         let id = NativeId::from(slug(&request.title, "task").as_str());
         let depends_on = request
             .depends_on
@@ -513,7 +533,7 @@ impl Engine {
                 },
                 priority: Priority::None,
                 labels: labels(&request.labels),
-                project: Some(request.project.clone()),
+                project: Some(project),
                 url: None,
                 location: None,
                 created_at: None,
@@ -529,11 +549,19 @@ impl Engine {
             },
             depends_on,
         };
-        let written = match answers {
+        let written = match match answers {
             Some(answers) => source.source().write_task_rendered(&write, answers).await,
             None => source.source().write_task(&write).await,
-        }
-        .map_err(|error| source_failed(source, error))?;
+        } {
+            Ok(written) => written,
+            Err(error) => {
+                let error = source_failed(source, error);
+                return Err(match filed {
+                    Some(filed) => self.unfile(filed, error).await,
+                    None => error,
+                });
+            }
+        };
         let id = GlobalId::new(near.clone(), written);
         let task = source
             .source()

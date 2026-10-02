@@ -29,6 +29,7 @@ from .rendered_template import RenderedTemplate as RenderedTemplate
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
+from .source_route import SourceRoute as SourceRoute
 from .status_category import StatusCategory as StatusCategory
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .task_content_set import TaskContentSet as TaskContentSet
@@ -82,6 +83,7 @@ __all__ = [
     "SourceFailure",
     "SourceListing",
     "SourceName",
+    "SourceRoute",
     "StatusCategory",
     "StatusOptionsReport",
     "TaskContentSet",

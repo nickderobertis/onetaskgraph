@@ -383,6 +383,66 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     assert "sealed cannot be written" in str(refused.value)
 
 
+def test_sources_route_and_a_home_read_with_its_members_drive_the_binary(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Ask where an item would land, copy a mixed plan, and read its home with its member."""
+    plan = tmp_path / "plan"
+    for kind, name, front in [
+        ("projects", "goal", "title: Goal\nstatus: todo"),
+        (
+            "tasks",
+            "lib",
+            "title: Lib\nstatus: todo\nproject: goal\nrepositories: [github.com/me/lib]",
+        ),
+        (
+            "tasks",
+            "app",
+            "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+        ),
+    ]:
+        (plan / kind).mkdir(parents=True, exist_ok=True)
+        (plan / kind / f"{name}.md").write_text(f"---\n{front}\n---\n", encoding="utf-8")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "team").mkdir()
+    folder = {"status_mapping": {"todo": "todo"}}
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "plan": {"plugin": "local-md", "config": {"root": str(plan), **folder}},
+                    "notes": {
+                        "plugin": "local-md",
+                        "config": {"root": str(tmp_path / "notes"), **folder},
+                        "routes": [{"repositories": ["github.com/petsinc/*"], "to": "team"}],
+                    },
+                    "team": {
+                        "plugin": "local-md",
+                        "config": {"root": str(tmp_path / "team"), **folder},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=tmp_path)
+
+    routed = run(client.sources_route("notes", repository=["github.com/petsinc/api"]))
+    assert (routed.source.root, routed.destination.root, routed.route) == ("notes", "team", 0)
+    stays = run(client.sources_route(SourceName(root="notes")))
+    assert (stays.destination.root, stays.route) == ("notes", None)
+
+    copied = run(client.project_copy(id="plan:goal", to="notes"))
+    placed = {item.root.source.root: item.root.placed for item in copied.items}
+    assert placed["plan:app"] is not None and placed["plan:app"].destination.root == "team"
+    assert placed["plan:lib"] is not None and placed["plan:lib"].route is None
+
+    both = run(client.task_list(project="notes:goal", members=True))
+    assert sorted(task.id.root.split(":")[0] for task in both.items) == ["notes", "team"]
+    own = run(client.task_list(project="notes:goal"))
+    assert [task.id.root.split(":")[0] for task in own.items] == ["notes"]
+
+
 def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """`create=True` creates without looking, and is refused where it cannot be true."""
     client = Client(binary, cwd=folders(tmp_path))

@@ -82,6 +82,7 @@ fn request(sources: &[&str], statuses: Vec<StatusCategory>) -> TaskRequest {
         commented_since: Some(since()),
         metadata: Vec::new(),
         origin: None,
+        include_members: false,
         paging: Paging {
             limit: std::num::NonZeroU32::new(1).expect("not zero"),
             token: None,

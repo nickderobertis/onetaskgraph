@@ -405,6 +405,7 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: onetaskgraph_core::Paging {
                 limit: std::num::NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,

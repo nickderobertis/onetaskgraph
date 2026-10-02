@@ -49,6 +49,8 @@ RESPONSE_ROOTS = {
     "sources_list": "SourceListing",
     "sources_status_options": "StatusOptionsReport",
     "sources_fields": "FieldsReport",
+    # Where an item written to a source would land, read from configuration alone.
+    "sources_route": "SourceRoute",
     "config_show": "EffectiveConfig",
     "template_variables": "TemplateVariables",
     "template_render": "RenderedTemplate",
@@ -138,6 +140,7 @@ OPTION_TYPES = {
     "limit": "int",
     "match_by": "str",
     "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+    "members": "bool",
     "metadata": "list[str] | tuple[str, ...]",
     "no_delivers": "bool",
     "no_depends_on": "bool",
@@ -188,6 +191,7 @@ OPTION_PLACEHOLDERS = {
     "limit": "N",
     "match_by": "KEY",
     "member": "TASK-ID",
+    "members": None,
     "metadata": "KEY=JSON",
     "no_delivers": None,
     "no_depends_on": None,
@@ -630,7 +634,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields"):
+        case ("sources", "status-options" | "fields" | "route"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many"):
             return ("ids",)

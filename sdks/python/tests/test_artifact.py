@@ -269,7 +269,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 28
+    assert emitted_bundle["version"] == 29
+    # Version 29 published routing: what `sources route` answers with, and the placement it and
+    # every outcome of a routed copy's report name.
+    assert generate.RESPONSE_ROOTS["sources_route"] == "SourceRoute"
+    for root in ("SourceRoute", "Placement"):
+        assert root in bundle["roots"], root
+    assert '"placed"' in json.dumps(emitted_bundle["roots"]["CopyOutcome"])
     # Version 28 published a `linear` source's configuration as a root of its own, carrying the
     # `status_mapping` and the `project` the host's Linear work is written with — and the
     # generated package models it.

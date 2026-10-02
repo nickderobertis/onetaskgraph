@@ -110,6 +110,7 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1070,6 +1071,7 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: paging(),
         })
         .await
@@ -3857,6 +3859,58 @@ async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_refere
     assert!(
         pages.load(Ordering::Relaxed) <= 6,
         "the walk stopped early rather than cycling"
+    );
+}
+
+#[tokio::test]
+async fn routes_a_rust_caller_builds_place_a_copy_exactly_as_a_configuration_does() {
+    // A caller holding sources it built itself states the routes in code, and they are
+    // checked by the same rules a document's are.
+    let configured = [name("from"), name("into"), name("team")];
+    let refused = onetaskgraph_core::config::Routes::new(
+        std::collections::BTreeMap::from([(
+            name("into"),
+            vec![(
+                vec!["github.com/nickderobertis/*".to_owned()],
+                name("nowhere"),
+            )],
+        )]),
+        &configured,
+    )
+    .expect_err("a route to no configured source is refused");
+    assert!(
+        refused.to_string().contains("sources.into.routes.0.to"),
+        "{refused}"
+    );
+
+    let routes = onetaskgraph_core::config::Routes::new(
+        std::collections::BTreeMap::from([(
+            name("into"),
+            vec![(vec!["github.com/nickderobertis/*".to_owned()], name("team"))],
+        )]),
+        &configured,
+    )
+    .expect("valid routes");
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [task("T-1", "Alpha engine")]}},
+        "into": {"plugin": "in-memory", "config": {}},
+        "team": {"plugin": "in-memory", "config": {}},
+    }))
+    .with_routes(routes);
+    let report = engine.copy(&one("from:T-1")).await.expect("the copy lands");
+    let outcome = &report.items[0];
+    assert_eq!(
+        outcome.destination().map(|landed| landed.source.as_str()),
+        Some("team"),
+        "{report:?}"
+    );
+    let placed = outcome
+        .placed
+        .as_ref()
+        .expect("a routed copy names its placement");
+    assert_eq!(
+        (placed.destination.as_str(), placed.route),
+        ("team", Some(0))
     );
 }
 

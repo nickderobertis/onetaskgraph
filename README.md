@@ -62,10 +62,13 @@ onetaskgraph sources fields <SOURCE> [--apply] [--json]
 # refused there, because workflow states are team settings people own.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 # The Status-only form of `sources fields`, which supersedes it; kept as it was.
+onetaskgraph sources route <SOURCE> [--repository R]... [--json]
+# Where an item with these repositories, written to SOURCE, would land by its routes —
+# read from configuration alone, never from a source. See "Routing" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--priority none|urgent|high|medium|low]...
-                       [--project P | --no-project] [--commented-since RFC3339]
+                       [--project P [--members] | --no-project] [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
@@ -895,6 +898,106 @@ log line.
 There is exactly one name per credential everywhere — in that file, in the configuration,
 in the documentation and in CI: `LINEAR_API_KEY` and `GH_PROJECTS_TOKEN`. Nothing anywhere
 translates between spellings.
+
+## Routing, and plans that span sources
+
+A source may send what is written to it somewhere else, chosen by the repositories the item
+concerns. `routes` sits beside `plugin` and `config` — it is the engine's, not the plugin's:
+
+```yaml
+sources:
+  plans:
+    plugin: github-projects
+    config: { owner: nickderobertis, project_number: 2 }
+    routes:
+      - repositories: ["github.com/petsinc/*"]
+        to: hellopatient
+  hellopatient:
+    plugin: linear
+    config: { api_key_env: LINEAR_API_KEY, team: ENG }
+```
+
+**An entry matches an item when every one of the item's repositories matches at least one of
+its patterns.** A pattern is a normalized origin, `host/owner/name`, where `*` matches exactly
+one whole segment. An item naming no repository matches nothing. The first entry that
+matches wins, and an item no entry matches stays in the source itself. A configuration with
+no `routes` writes exactly where it always did.
+
+Each of these is refused when the configuration loads, naming the source and the entry: a
+`to` naming no configured source, a `to` naming the source itself, a `to` naming a source
+that has routes of its own (a route never chains), an entry whose `repositories` is empty,
+and a malformed pattern.
+
+`routes` is set at every layer. A document writes it as a list; `--set` and the environment
+address one entry by its index, because neither can spell a list of objects:
+
+```bash
+onetaskgraph --set 'sources.plans.routes.0.repositories=github.com/petsinc/*' \
+             --set sources.plans.routes.0.to=hellopatient  task copy plan:T-1 --to plans
+ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__REPOSITORIES='github.com/petsinc/*' \
+ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__TO=hellopatient  onetaskgraph sources route plans
+```
+
+A comma in a `repositories` value makes it a list of patterns, as a comma does everywhere
+else. Entries are
+numbered from 0 with no gaps, and an entry one layer sets replaces the whole `routes` a lower
+layer set rather than merging into it. `config show` prints `routes` with the layer it came
+from — the document's list as one row, a flag's or a variable's entries one row per field.
+
+`onetaskgraph sources route <SOURCE> --repository <R>...` answers where an item would go —
+`{"source": "plans", "destination": "hellopatient", "route": 0}`, with `route` null when no
+entry matched — from configuration alone.
+
+### Which writes route, and where each item lands
+
+`task create <SOURCE>`, `task copy --to <SOURCE>`, `project copy --to <SOURCE>` (with or
+without its tasks, and with `--member`) and `document copy --to <SOURCE>` all place each item
+by the named source's routes. So does the engine's own member copy, which is what a running
+engine's write-back uses.
+
+- **A task** goes where its own repositories route it.
+- **A project's home** goes to a routed source only when every task the copy carries routes
+  there, and so do the project's own repositories when it names any. Any other project's home
+  is the named destination. With `--no-tasks`, the project's own repositories alone decide.
+  **A home that already exists stays where it is**: a task added later that routes back to
+  the named destination goes into a member project there.
+- **A task routed away from its home's source** goes into the home's **member project** in
+  that source, found through the home's `onetaskgraph.members` — or created, with the home's
+  title and status and `onetaskgraph.member_of` naming the home, and recorded on the home in
+  the same copy. A home has at most one member per source. `task create` files a routed task
+  the same way, under the member of the project it names.
+- **A document** goes with its project's home.
+
+A task's project is still a native id of its own source: a plan spanning two sources is a
+home plus a member project in the other, never a project holding another source's tasks. An
+edge between two items that land in different sources is recorded as a cross-source edge on
+its near end, either way round.
+
+Every outcome of a routed copy's report carries `placed`: the source it landed in and the
+index of the route entry that placed it, or `null` — a dry run's included, so a would-be
+create says where it would go. A copy into a source with no routes reports no `placed`, and
+its output is what it always was. A copy across several sources is still complete or never
+happened: its undo covers every source it wrote. The `onetaskgraph.copies` link a copy
+records is keyed by the source the item really landed in.
+
+**An item whose counterpart already sits in another source than the one it routes to now is
+refused before anything is written**, naming both: a repository changed after a copy is a
+person's decision about where the work lives, not a silent move. What finds a counterpart
+there is its link or its origin; a counterpart neither names is looked for only in the
+source the item routes to.
+
+### Reading a home with its members
+
+```bash
+onetaskgraph task list --project plans:42 --members
+```
+
+reads the home's tasks and the tasks of every project its `onetaskgraph.members` names, each
+under its own source, paged across all of them as one walk. The members are read off the home
+on every request — nothing about them is kept — and a member that cannot be read is reported
+in the response's errors, as any source failure is, never left out in silence. `project show`
+of a home prints its members, and of a member its home. The SDKs spell it
+`task_list(project=..., members=True)` and `taskList({ project, members: true })`.
 
 ## Addressing
 

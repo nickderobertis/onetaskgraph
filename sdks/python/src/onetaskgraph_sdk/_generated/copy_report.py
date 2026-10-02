@@ -93,76 +93,6 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
-class CopyOutcomeCreatedOrWouldCreate(BaseModel):
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    action: Literal["created"]
-    destination: Annotated[
-        GlobalId | None,
-        Field(
-            description="The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
-        ),
-    ] = None
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
-        ),
-    ] = None
-    via: Annotated[
-        NoCounterpart,
-        Field(
-            description="That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
-        ),
-    ] = NoCounterpart.NoCounterpartCreated
-
-
-class CopyOutcomeUpdated(BaseModel):
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    action: Literal["updated"]
-    destination: Annotated[GlobalId, Field(description="The item that was updated.")]
-    link: Annotated[
-        CopyLink | None,
-        Field(description="What the copy did to the copied item's link; absent for a dry run."),
-    ] = None
-    via: Annotated[CopyVia, Field(description="Which rule found it.")]
-
-
-class CopyOutcomeUnchanged(BaseModel):
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    action: Literal["unchanged"]
-    destination: Annotated[GlobalId, Field(description="The item that already said it.")]
-    link: Annotated[
-        CopyLink | None,
-        Field(description="What the copy did to the copied item's link; absent for a dry run."),
-    ] = None
-    via: Annotated[CopyVia, Field(description="Which rule found it.")]
-
-
-class CopyOutcomeOrphaned(BaseModel):
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    action: Literal["orphaned"]
-    destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
-
-
-class CopyOutcome(
-    RootModel[
-        CopyOutcomeCreatedOrWouldCreate
-        | CopyOutcomeUpdated
-        | CopyOutcomeUnchanged
-        | CopyOutcomeOrphaned
-    ]
-):
-    root: Annotated[
-        CopyOutcomeCreatedOrWouldCreate
-        | CopyOutcomeUpdated
-        | CopyOutcomeUnchanged
-        | CopyOutcomeOrphaned,
-        Field(
-            description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report."
-        ),
-    ]
-
-
 class DeliveredWritten(BaseModel):
     deliverer: Annotated[
         GlobalId,
@@ -251,6 +181,114 @@ class Failure(BaseModel):
     source: Annotated[
         SourceName | None,
         Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
+
+
+class Placement(BaseModel):
+    destination: Annotated[
+        SourceName,
+        Field(description="The source the item lands in: the routed one, or the source itself."),
+    ]
+    route: Annotated[
+        int | None,
+        Field(
+            description="The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+            ge=0,
+        ),
+    ] = None
+
+
+class CopyOutcomeCreatedOrWouldCreate(BaseModel):
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    action: Literal["created"]
+    destination: Annotated[
+        GlobalId | None,
+        Field(
+            description="The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
+        ),
+    ] = None
+    link: Annotated[
+        CopyLink | None,
+        Field(
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
+        ),
+    ] = None
+    via: Annotated[
+        NoCounterpart,
+        Field(
+            description="That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
+        ),
+    ] = NoCounterpart.NoCounterpartCreated
+
+
+class CopyOutcomeUpdated(BaseModel):
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    action: Literal["updated"]
+    destination: Annotated[GlobalId, Field(description="The item that was updated.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
+
+
+class CopyOutcomeUnchanged(BaseModel):
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    action: Literal["unchanged"]
+    destination: Annotated[GlobalId, Field(description="The item that already said it.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
+
+
+class CopyOutcomeOrphaned(BaseModel):
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    action: Literal["orphaned"]
+    destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
+
+
+class CopyOutcome(
+    RootModel[
+        CopyOutcomeCreatedOrWouldCreate
+        | CopyOutcomeUpdated
+        | CopyOutcomeUnchanged
+        | CopyOutcomeOrphaned
+    ]
+):
+    root: Annotated[
+        CopyOutcomeCreatedOrWouldCreate
+        | CopyOutcomeUpdated
+        | CopyOutcomeUnchanged
+        | CopyOutcomeOrphaned,
+        Field(
+            description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report."
+        ),
     ]
 
 

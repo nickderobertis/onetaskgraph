@@ -244,6 +244,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::CreateCarried { .. } => ("create-carried".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
+        EngineError::Misrouted { .. } => ("misrouted".to_owned(), None, None),
         EngineError::DestinationUnavailable { name, error }
         | EngineError::SourceRefused { name, error }
         | EngineError::SourceUnavailable { name, error }

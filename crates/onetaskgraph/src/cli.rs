@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{GlobalId, OutputFormat, PluginKind, SearchKind};
 use onetaskgraph_plugin_api::{
-    Direction, MetadataMatch, NativeId, Priority, StatusCategory, TextFields,
+    Direction, MetadataMatch, NativeId, Priority, Repository, StatusCategory, TextFields,
 };
 use serde_json::Value;
 
@@ -252,6 +252,28 @@ pub enum SourcesCommand {
     /// Priority field holding the mapped options, preserves every existing option's id,
     /// name, color and description, and verifies every item's values afterwards.
     Fields(SetupArgs),
+    /// Say where an item written to a source would land, by that source's `routes`.
+    ///
+    /// Reads configuration alone, never a source: the destination is the source a route
+    /// sends an item with these repositories to, or SOURCE itself when none matches.
+    Route(RouteArgs),
+}
+
+/// `onetaskgraph sources route`.
+#[derive(Debug, Args)]
+pub struct RouteArgs {
+    /// The configured source the item would be written to.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
+    /// One repository the item concerns, as a normalized origin `host/owner/name`. Repeat
+    /// for several; none at all matches no route.
+    #[arg(long = "repository", value_name = "R", value_parser = repository)]
+    pub repository: Vec<Repository>,
+}
+
+/// A repository origin as a command line hands one over.
+fn repository(value: &str) -> Result<Repository, String> {
+    Repository::try_from(value.to_owned())
 }
 
 /// Which configured source a guarded board setup inspects, and whether to apply its plan.
@@ -976,6 +998,13 @@ pub struct TaskListArgs {
     /// Keep only tasks belonging to no project at all.
     #[arg(long = "no-project")]
     pub no_project: bool,
+
+    /// With a qualified --project, read the tasks of every member project it names in
+    /// other sources as well, each under its own source.
+    #[arg(long = "members", requires = "project")]
+    // llmlint: ignore[invalid_states_unrepresentable] A presence-only CLI flag is
+    // intrinsically boolean; it maps straight onto `TaskRequest::include_members`.
+    pub members: bool,
 
     /// Keep tasks with this priority. Repeat for several; a task matching any one is kept.
     #[arg(long = "priority", value_name = "PRIORITY")]

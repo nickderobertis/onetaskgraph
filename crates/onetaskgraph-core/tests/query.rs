@@ -137,6 +137,7 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         commented_since: None,
         metadata: Vec::new(),
         origin: None,
+        include_members: false,
         paging,
     }
 }
@@ -426,6 +427,7 @@ async fn a_request_naming_a_source_nothing_configures_is_refused_with_the_names_
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: page(10),
         })
         .await

@@ -19,13 +19,15 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly eight keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly ten keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
   `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
-  (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`) and
-  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`) in the contract crate, and
+  (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`),
+  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.members`
+  (`MetadataKey::MEMBERS_KEY`) and `onetaskgraph.member_of` (`MetadataKey::MEMBER_OF_KEY`)
+  in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
   interprets, though `github-projects` routes the key itself into a text field of its own.
@@ -421,4 +423,36 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
 | `linear` | the trailing metadata slot of the issue's or project's `description`, or the document's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### `onetaskgraph.members` and `onetaskgraph.member_of`: a plan that spans sources
+
+A routed copy can land one plan in two sources: a **home** project, and at most one **member** project in each other source a
+task of it routes to. The two keys are what tie them together, and the store is where they
+live:
+
+- `onetaskgraph.members`, on a home, is a JSON list of qualified project ids, each in a
+  different source from the home and from the others: `["hellopatient:a1b2c3"]`.
+- `onetaskgraph.member_of`, on a member, is the qualified id of its home: `"plans:42"`.
+
+Both are written by a routed write alone — a copy, or a `task create` routed away from the
+source its project is in: a member's `member_of` when the write creates it, and the home's
+`members` once the member exists, through the home's own project write, and taken back with
+the rest of the write if it cannot finish. `metadata set` refuses either, as it
+refuses every key in the namespace, and a copy never carries either onto a destination: a
+destination project keeps the ones it holds, which describe *its* plan. `task list --project
+<home> --members` reads `members` off the home on every request, and nothing else is kept.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour, row by
+     row: `crates/onetaskgraph/tests/e2e/routes.rs` writes and reads both keys back through a
+     folder of Markdown, a GitHub board home with a Linear member, and a Linear home with a
+     folder member; the in-memory row is the engine's own write path, driven by
+     `crates/onetaskgraph/tests/e2e/no_persistence.rs`. -->
+| source | where it keeps `onetaskgraph.members` and `onetaskgraph.member_of` |
+| --- | --- |
+| `local-md` | entries of the project file's front matter `metadata:` block |
+| `in-memory` | beside its other metadata, for the life of its process |
+| `github-projects` | the trailing metadata slot of the project issue's body, beside the caller's keys |
+| `linear` | the trailing metadata slot of the project's description, beside the caller's keys |
+| a stdio plugin | wherever it keeps a project's metadata, through its project write |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
