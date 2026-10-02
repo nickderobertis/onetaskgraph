@@ -549,6 +549,12 @@ the same `params` and returns `result.project`, a `Project` or `null`.
 `{"kind": "refused"}` for an id that simply does not exist makes an ordinary lookup
 look like a failure of the source.
 
+`TaskSource::get_task_details` — several tasks, each with the first page of its comments — is
+not a message of this protocol. For a hosted source the engine answers it the way the trait's
+default does, with one `get_task` per id and, for a source whose tasks have comments, one
+`task_comments` for the first page of each task found, so a plugin written against this
+document implements nothing more for `task show-many` to reach it.
+
 ### 4.5 `query_tasks`
 
 ```json
@@ -1513,6 +1519,15 @@ exposes the same choice as `task_show(id=ID, no_comments=True)`; TypeScript uses
 for the record and `Engine::task_detail` for the record with comments. The
 response shape and schema version are unchanged: comments were already optional.
 
+`task show-many ID... [--no-comments]` — `task_show_many(ids, no_comments=...)` in Python,
+`taskShowMany(ids, { noComments })` in TypeScript, `Engine::task_details` for a Rust caller —
+answers `{"details": [...]}`: one `TaskDetail` per id, in request order, each exactly what
+`task show ID --json` prints. An id that cannot be read carries its failure in its own
+`errors` and does not refuse the others; the command exits 4 exactly when some detail does.
+The engine asks each source for its ids together through `TaskSource::get_task_details`,
+which a plugin may override and which defaults to `get_task` and `task_comments` item by item.
+It is not a message of this protocol: a subprocess plugin answers it through those two.
+
 A GitHub Projects source reuses records resolved in its own instance for writes
 and reuses their identity for comments. Explicit item reads still fetch fresh
 records. A mutation invalidates its target's binding before sending, and a
@@ -1526,3 +1541,82 @@ mutation. A standalone priority write selects the stored priority in its mutatio
 response, so its answer remains a read-back, including when the host did not keep
 the requested value, without resolving the issue a second time. The plugin's cost
 table records the requests and declared prices proved by the loopback journeys.
+
+`task copy --create` — `task_copy(..., create=True)` in Python, `taskCopy(ids, to, { create:
+true })` in TypeScript, `CopyRequest::create` for a Rust caller — creates each task at the
+destination without the correspondence lookup, so a GitHub Projects destination is sent no
+`ORIGIN_LOOKUP`. The caller asserts the destination holds no carrier of the task, and that is
+sound for a caller that has just run the origin query itself: the query reads GitHub's issue
+search and the board's field filter, both of which lag a fresh write, and they lag it by the
+same amount whoever repeats them — a copy asking again could find nothing the caller's own
+question did not. It is a rule of the copy engine rather than of any plugin. It is refused
+beside `--match-by` and `--recreate`, which are ways of looking, and for a task whose own
+`onetaskgraph.copies` link or origin already names an item at the destination, naming that
+item. The copy report is the one any copy prints, and a created item answers this process's
+later reads exactly as any created item does.
+
+### GitHub Projects request costs
+
+Every request below is one GraphQL document priced at one point by the node-count model, so a
+row's requests are its points. `crates/onetaskgraph/tests/e2e/copy_cost.rs` pins each row
+against the requests the loopback board served, and holds this table and the one in the
+plugin's crate documentation to the same figures.
+
+| Verb | Requests / points | Documents |
+| --- | --- | --- |
+| new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
+| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
+| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
+| bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
+| bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it costs nothing |
+| comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
+| detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
+| batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time |
+| update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body and state) last |
+
+`DETAIL_BATCH` is 24, the largest batch of `ISSUE_DETAILS` the node-count model prices at one
+point: each aliased `node(id:)` item is six of GitHub's aggregate, so 24 come to 144, which
+rounds to one point, and 25 to 150, which rounds to two. The document is fixed-size aliased
+`node(id:)` fields rather than `nodes(ids:)`, which the model cannot see under.
+
+A bound re-copy is 3 requests for a task under no project that names no dependency it does not
+already carry. A project parent adds one: the engine reads the destination project its link
+names by its own id, once per command, to confirm the link still holds. The dependencies a
+re-copy newly names are read together — the item's own read already answered every far end
+that blocks it — `DETAIL_BATCH` to one `ISSUE_DETAILS` request, rather than one request each;
+recording each new edge is then one `addBlockedBy`.
+
+An existing item is written body last. A bound re-copy and a `task update` send its board
+fields first, then its parent and its `blockedBy`, and its title, body and state in one
+`updateIssue` last. GitHub runs no two requests as one, and runs a document's mutation fields
+in order without undoing an earlier field when a later one fails, so that order is what makes
+a write refused part-way leave the item's body and metadata exactly as they stood; an origin
+a copy re-points, the one metadata key written before the body, is put back when a later write
+is refused, and when putting it back is refused too, the write's own refusal — its kind
+unchanged — names that key, what it now holds and what it held, and the step that restores it.
+When the refused write was the board-field write that carries the origin itself, GitHub does
+not say which of its fields ran, so the refusal names both values the key may hold.
+
+Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
+(<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in
+`crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql`, the first then put to
+GitHub itself:
+
+- `createIssue` accepts the board at creation — `CreateIssueInput.projectV2Ids: [ID!]`, "An
+  array of Node IDs for Projects V2 associated with this issue" — but does not answer with the
+  board item. The credentialed journey run against a real board on 2026-10-01 with a create
+  sending the board there saw every one of its four creates answer with no item in
+  `Issue.projectItems`, and the `addProjectV2ItemById` that then had to follow was refused
+  "Content already exists in this project": GitHub filed the issue after answering, and
+  refuses a second filing rather than answering with the item it holds. So a create sends no
+  `projectV2Ids` and files the issue with `addProjectV2ItemById`, whose answer names the item;
+  what a new copy saves is the read before it, the board's fields and the repository's id in
+  one `CREATION_CONTEXT` request.
+- A comment cannot skip its target's read: `AddCommentInput.subjectId` admits
+  `Issue` and `PullRequest`, so GitHub refuses a draft but accepts a project's issue, a
+  document's issue, an issue on no board and a pull request alike. There is no refusal to map
+  into "that is not a task of this board", so the target is read first.
+
+No field or repository id is kept past one command: the store holds no work data outside a
+plugin, and an option id kept between runs would write the wrong `Status` once `sources
+fields --apply` re-mints the options.

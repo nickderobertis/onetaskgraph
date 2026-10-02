@@ -86,6 +86,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         destination: name("into"),
         match_by: None,
         recreate: false,
+        create: false,
         dry_run: false,
     }
 }
@@ -3911,4 +3912,99 @@ async fn routes_a_rust_caller_builds_place_a_copy_exactly_as_a_configuration_doe
         (placed.destination.as_str(), placed.route),
         ("team", Some(0))
     );
+}
+
+/// `create` creates each task without asking the destination for a single page, and refuses
+/// what contradicts the caller's assertion: a flag that is a way of looking, and an item that
+/// itself names a counterpart at the destination — by its link or by its origin.
+#[tokio::test]
+async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a_counterpart() {
+    let mut linked = task("T-2", "Linked");
+    linked["metadata"] = json!({"onetaskgraph.copies": {"into": "into:HELD"}});
+    let mut copied_back = task("T-3", "Copied back");
+    copied_back["metadata"] = json!({GlobalId::ORIGIN_KEY: "into:ORIGINAL"});
+    let from = json!({"tasks": [task("T-1", "Alpha engine"), linked, copied_back]});
+
+    // Without it, the origin rule scans the destination for a carrier first.
+    let (engine, task_pages) = into_counting(from.clone(), json!({}));
+    engine.copy(&one("from:T-1")).await.expect("a copy");
+    assert!(
+        task_pages.load(Ordering::Relaxed) > 0,
+        "an ordinary copy looks"
+    );
+
+    // With it, the destination is asked for nothing and the task is created, carrying its
+    // origin as any created item does.
+    let (engine, task_pages) = into_counting(from.clone(), json!({}));
+    let created = engine
+        .copy(&CopyRequest {
+            create: true,
+            ..one("from:T-1")
+        })
+        .await
+        .expect("--create creates");
+    assert_eq!(
+        landed(&created.items[0]),
+        (Some("into:T-1".to_owned()), "created".to_owned())
+    );
+    assert_eq!(
+        task_pages.load(Ordering::Relaxed),
+        0,
+        "--create looks for nothing"
+    );
+    assert_eq!(listed(&engine, "into").await, ["into:T-1"]);
+
+    // Beside a way of looking, refused before anything is read or written.
+    for (request, flag) in [
+        (
+            CopyRequest {
+                create: true,
+                match_by: Some(MatchBy::Title),
+                ..one("from:T-1")
+            },
+            "--match-by",
+        ),
+        (
+            CopyRequest {
+                create: true,
+                recreate: true,
+                ..one("from:T-1")
+            },
+            "--recreate",
+        ),
+    ] {
+        let (engine, task_pages) = into_counting(from.clone(), json!({}));
+        let Err(refused) = engine.copy(&request).await else {
+            panic!("--create with {flag} must refuse");
+        };
+        assert!(
+            matches!(&refused, EngineError::CreateWith { flag: named } if named.to_string() == flag),
+            "{refused:?}"
+        );
+        assert!(refused.to_string().contains("next:"), "{refused}");
+        assert_eq!(task_pages.load(Ordering::Relaxed), 0);
+        assert!(listed(&engine, "into").await.is_empty(), "nothing written");
+    }
+
+    // An item naming a counterpart at the destination is refused naming it, and nothing is
+    // written — a link and an origin alike.
+    for (item, carrier) in [("from:T-2", "into:HELD"), ("from:T-3", "into:ORIGINAL")] {
+        let (engine, _) = into_counting(from.clone(), json!({}));
+        let Err(refused) = engine
+            .copy(&CopyRequest {
+                create: true,
+                ..one(item)
+            })
+            .await
+        else {
+            panic!("{item} names {carrier}, so --create must refuse it");
+        };
+        assert!(
+            matches!(&refused, EngineError::CreateCarried { item: named, carrier: held }
+                if named.to_string() == item && held.to_string() == carrier),
+            "{refused:?}"
+        );
+        assert!(refused.to_string().contains(carrier), "{refused}");
+        assert!(listed(&engine, "into").await.is_empty(), "nothing written");
+    }
 }

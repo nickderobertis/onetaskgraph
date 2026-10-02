@@ -461,6 +461,7 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         destination: SourceName::new(into).expect("a name"),
         match_by: None,
         recreate: false,
+        create: false,
         dry_run: false,
     }
 }

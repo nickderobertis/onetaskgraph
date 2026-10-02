@@ -33,6 +33,7 @@ from .models import (
     StatusOptionsReport,
     TaskContentSet,
     TaskDetail,
+    TaskDetails,
     TaskPrioritySet,
     TaskStatusSet,
     TaskUpdated,
@@ -68,6 +69,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "priority", "set"): ("id", "priority"),
     ("task", "render"): ("id",),
     ("task", "show"): ("id",),
+    ("task", "show-many"): ("ids",),
     ("task", "status", "set"): ("id", "category"),
     ("task", "update"): ("id",),
     ("template", "render"): ("file",),
@@ -827,6 +829,7 @@ class GeneratedClient:
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
         *,
+        create: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         match_by: str | None = None,
@@ -840,6 +843,7 @@ class GeneratedClient:
             ["task", "copy"],
             CopyReport,
             ids=ids,
+            create=create,
             default_sources=default_sources,
             dry_run=dry_run,
             match_by=match_by,
@@ -1090,6 +1094,26 @@ class GeneratedClient:
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
+            no_comments=no_comments,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_show_many(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetails:
+        """Run ``onetaskgraph task show-many``."""
+        return await self._invoke(
+            ["task", "show-many"],
+            TaskDetails,
+            ids=ids,
+            default_sources=default_sources,
             no_comments=no_comments,
             page_size=page_size,
             set=set,

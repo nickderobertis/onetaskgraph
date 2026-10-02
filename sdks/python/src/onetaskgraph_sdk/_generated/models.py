@@ -33,6 +33,7 @@ from .status_category import StatusCategory as StatusCategory
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .task_content_set import TaskContentSet as TaskContentSet
 from .task_detail import TaskDetail as TaskDetail
+from .task_details import TaskDetails as TaskDetails
 from .task_priority_set import TaskPrioritySet as TaskPrioritySet
 from .task_ref import TaskRef as TaskRef
 from .task_status_set import TaskStatusSet as TaskStatusSet
@@ -84,6 +85,7 @@ __all__ = [
     "StatusOptionsReport",
     "TaskContentSet",
     "TaskDetail",
+    "TaskDetails",
     "TaskPrioritySet",
     "TaskRef",
     "TaskStatusSet",

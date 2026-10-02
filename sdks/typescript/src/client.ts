@@ -26,6 +26,7 @@ import type {
   StatusOptionsReport,
   TaskContentSet,
   TaskDetail,
+  TaskDetails,
   TaskPrioritySet,
   TaskStatusSet,
   TaskUpdated,
@@ -59,6 +60,9 @@ export type CopyOptions = {
   recreate?: boolean;
   dryRun?: boolean;
 };
+// `create` asserts the destination holds no counterpart of any task named, so each is created
+// without the correspondence lookup. Only `task copy` takes it.
+export type TaskCopyOptions = CopyOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = { body: string } | { bodyFile: string };
@@ -166,6 +170,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources route": "SourceRoute",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
+  // One `TaskDetail` per id, in request order.
+  "task show-many": "TaskDetails",
   "task deps": "QueryResponseOfQualifiedEdge",
   "task copy": "CopyReport",
   "task comment add": "Comment",
@@ -780,6 +786,15 @@ export class OnetaskgraphClient {
       ...(options.noComments ? ["--no-comments"] : []),
     ]);
   }
+  // Several tasks at once, each as `taskShow` answers it, in the order given. An id that
+  // cannot be read carries why in its own detail's `errors`, which the binary reports with
+  // exit 4 — a whole answer with part of it missing — so this resolves rather than throws.
+  taskShowMany(ids: string[], options: { noComments?: boolean } = {}): Promise<TaskDetails> {
+    if (options.noComments !== undefined && typeof options.noComments !== "boolean") {
+      throw new TypeError("taskShowMany: noComments must be a boolean");
+    }
+    return this.run("task show-many", [...ids, ...(options.noComments ? ["--no-comments"] : [])]);
+  }
   taskCommentAdd(id: string, options: CommentAddOptions): Promise<Comment> {
     const { args, input } = bodyArguments(options);
     if (options.author !== undefined) args.push("--author", options.author);
@@ -819,8 +834,17 @@ export class OnetaskgraphClient {
     if (options.direction) args.push("--direction", options.direction);
     return this.run("task deps", args);
   }
-  taskCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
-    return this.run("task copy", [...ids, "--to", to, ...copyFlags(options)]);
+  taskCopy(ids: string[], to: string, options: TaskCopyOptions = {}): Promise<CopyReport> {
+    if (options.create !== undefined && typeof options.create !== "boolean") {
+      throw new TypeError("taskCopy: create must be a boolean");
+    }
+    return this.run("task copy", [
+      ...ids,
+      "--to",
+      to,
+      ...copyFlags(options),
+      ...(options.create ? ["--create"] : []),
+    ]);
   }
   projectList(options: FilterOptions = {}): Promise<QueryResponseOfQualifiedProject> {
     const args: string[] = [];

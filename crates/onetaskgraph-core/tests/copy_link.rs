@@ -313,6 +313,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         destination: name("into"),
         match_by: None,
         recreate: false,
+        create: false,
         dry_run: false,
     }
 }

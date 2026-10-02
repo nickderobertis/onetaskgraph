@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.55](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.54...onetaskgraph-plugin-api-v0.2.55) - 2026-10-02
+
+### Added
+
+- *(store)* read items in batches and copy without repeating a lookup ([#3105](https://github.com/nickderobertis/onetaskgraph/pull/3105))
+
 ## [0.2.52](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.2.51...onetaskgraph-plugin-api-v0.2.52) - 2026-09-29
 
 ### Added

@@ -42,6 +42,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         destination: SourceName::new(destination).expect("a name"),
         match_by: None,
         recreate: false,
+        create: false,
         dry_run: false,
     }
 }
