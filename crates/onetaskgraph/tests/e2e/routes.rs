@@ -2156,6 +2156,75 @@ fn a_routed_copy_whose_home_member_list_write_fails_takes_back_the_member_and_it
 }
 
 #[test]
+fn a_routed_task_create_whose_home_member_list_write_fails_takes_back_the_member_it_made() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    record(
+        &plan,
+        "projects",
+        "goal",
+        "title: One goal\nstatus: Todo\nrepositories: [github.com/nickderobertis/onetaskgraph]",
+    );
+    let linear = linear_empty_workspace(&sandbox);
+    let (board, _) = crate::fixtures::github_projects_with_board_failing(
+        &sandbox,
+        &["updateIssue(input:$input)"],
+    );
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        BOARD: {
+            "plugin": "github-projects",
+            "config": board,
+            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+        },
+        LINEAR: {"plugin": "linear", "config": linear},
+    })));
+    let first = answer(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--no-tasks", "--to", BOARD],
+    );
+    let home = landed(&first, "plan:goal");
+    let home_before = answer(&sandbox, &["project", "show", &home])["items"][0]["item"].clone();
+    let body = sandbox.subdirectory("bodies").join("body.md");
+    std::fs::write(&body, "What to do.\n").expect("a body");
+
+    // The member lands in Linear, and then the board refuses the home's new member list.
+    let refusal = refused(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            BOARD,
+            "--project",
+            &home,
+            "--title",
+            "App consumes it",
+            "--repository",
+            "github.com/petsinc/app",
+            "--body-file",
+            &body.display().to_string(),
+        ],
+        1,
+    );
+    assert!(
+        refusal.contains("updateIssue") && !refusal.contains("could not be undone"),
+        "the home's write failed and the member was taken back:\n{refusal}"
+    );
+    for verb in ["task", "project"] {
+        let left = answer(&sandbox, &[verb, "list", "--source", LINEAR]);
+        assert_eq!(
+            left["items"],
+            json!([]),
+            "no {verb} the create made remains in Linear"
+        );
+    }
+    let home_after = answer(&sandbox, &["project", "show", &home])["items"][0]["item"].clone();
+    assert_eq!(home_after["metadata"], home_before["metadata"]);
+    assert_eq!(home_after["title"], home_before["title"]);
+}
+
+#[test]
 fn what_a_routed_copy_spent_includes_the_source_it_was_routed_to() {
     // The named destination is a Linear workspace, which meters nothing; the board it routes
     // to meters every request. A report that counted only the named source would say nothing.
@@ -2306,7 +2375,13 @@ fn a_copy_carries_no_member_keys_of_its_own_and_keeps_the_destinations() {
     );
 
     // The member copied onto a project that is itself a member keeps the destination's own
-    // `member_of`, never the one the member carries.
+    // `member_of`, never the one the member carries. The home is retitled first, so the
+    // title the member is matched by names that project alone.
+    let home_file = sandbox.project().join(NOTES).join("projects/goal.md");
+    let home_text = std::fs::read_to_string(&home_file).expect("the home");
+    let retitled = home_text.replacen("title: Goal\n", "title: The home\n", 1);
+    assert_ne!(retitled, home_text, "the home is retitled: {home_text}");
+    std::fs::write(&home_file, retitled).expect("the retitled home");
     record(
         &sandbox.project().join(NOTES),
         "projects",
@@ -2327,11 +2402,15 @@ fn a_copy_carries_no_member_keys_of_its_own_and_keeps_the_destinations() {
         ],
     );
     let landed_on = landed(&across, &member);
+    assert_eq!(
+        landed_on, "notes:other-member",
+        "the copy updated the project its title matched: {across:#}"
+    );
     let held = answer(&sandbox, &["project", "show", &landed_on]);
-    assert_ne!(
+    assert_eq!(
         held["items"][0]["item"]["metadata"]["onetaskgraph.member_of"],
-        json!("notes:goal"),
-        "the member's own home does not travel: {held:#}"
+        json!("plan:elsewhere"),
+        "the member's own home does not travel, and the destination keeps its own: {held:#}"
     );
 }
 

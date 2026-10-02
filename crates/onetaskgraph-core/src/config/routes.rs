@@ -30,23 +30,16 @@ impl RepositoryPattern {
     ///
     /// # Errors
     ///
-    /// Returns why when the pattern is not three or more `/`-separated segments, when a
-    /// segment is empty, `.` or `..`, or holds a `*` beside other characters, or when it
-    /// carries a scheme, a `.git` suffix or whitespace — anything a normalized origin
-    /// could never match.
+    /// Returns why when the pattern is not itself spelled as a normalized origin — the
+    /// shape [`Repository`] holds every origin to, so a pattern no origin could match is
+    /// refused by the one rule that defines an origin rather than by a restatement of it —
+    /// or when a segment holds a `*` beside other characters.
     pub fn new(pattern: impl Into<String>) -> Result<Self, String> {
         let pattern = pattern.into();
-        let segments: Vec<&str> = pattern.split('/').collect();
-        let valid = !pattern.contains("://")
-            && !pattern.ends_with(".git")
-            && !pattern.chars().any(char::is_whitespace)
-            && segments.len() >= 3
-            && segments.iter().all(|segment| {
-                !segment.is_empty()
-                    && *segment != "."
-                    && *segment != ".."
-                    && (*segment == "*" || !segment.contains('*'))
-            });
+        let valid = Repository::try_from(pattern.clone()).is_ok()
+            && pattern
+                .split('/')
+                .all(|segment| segment == "*" || !segment.contains('*'));
         valid.then_some(Self(pattern.clone())).ok_or_else(|| {
             format!(
                 "{pattern:?} is not a repository pattern: a pattern is host/owner/name, each \
