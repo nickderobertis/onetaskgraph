@@ -155,6 +155,39 @@ async fn graphql_variables(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, String> {
+    graphql_answer(token, query, query_name, variables)
+        .await
+        .map_err(Refusal::into_message)
+}
+
+/// How one GraphQL call failed, kept apart by whether GitHub answered it at all.
+///
+/// The distinction is what a retry is decided on, so it is a type rather than a reading of
+/// the message: a call GitHub never answered — no response, or a 5xx from its gateway — says
+/// nothing about whether a mutation landed behind it, and one it answered does.
+enum Refusal {
+    /// No response, or a server error: whatever the call asked for may or may not have
+    /// happened.
+    Unanswered(String),
+    /// GitHub answered, refusing; the parsed response when it was one, for the `data` a
+    /// GraphQL refusal may still carry beside its `errors`.
+    Answered(String, Option<Value>),
+}
+
+impl Refusal {
+    fn into_message(self) -> String {
+        match self {
+            Refusal::Unanswered(message) | Refusal::Answered(message, _) => message,
+        }
+    }
+}
+
+async fn graphql_answer(
+    token: &str,
+    query: &str,
+    query_name: &str,
+    variables: Value,
+) -> Result<Value, Refusal> {
     let sending =
         |reported_cost| Request::graphql(query, &variables, Some(query_name), reported_cost);
     let response = match reqwest::Client::new()
@@ -170,9 +203,9 @@ async fn graphql_variables(
             // A request that never reached GitHub carries no headers to read, and is a
             // refusal rather than a rate limit: nothing said it was one.
             SESSION.record(sending(None).finished(Outcome::Refused, RateLimit::default()));
-            return Err(format!(
+            return Err(Refusal::Unanswered(format!(
                 "{query_name} query could not reach GitHub: {error}"
-            ));
+            )));
         }
     };
     let status = response.status();
@@ -183,27 +216,36 @@ async fn graphql_variables(
         Ok(body) => body,
         Err(error) => {
             SESSION.record(outcome(Outcome::Refused));
-            return Err(format!(
+            return Err(Refusal::Unanswered(format!(
                 "{query_name} query returned no readable body: {error}"
-            ));
+            )));
         }
     };
     let ended = Outcome::of_response(status, exhausted, &body);
     if !status.is_success() {
         SESSION.record(outcome(ended));
-        return Err(format!("{query_name} query failed: HTTP {status}"));
+        let problem = format!("{query_name} query failed: HTTP {status}");
+        return Err(if status.is_server_error() {
+            Refusal::Unanswered(problem)
+        } else {
+            Refusal::Answered(problem, None)
+        });
     }
     let response: Value = match serde_json::from_str(&body) {
         Ok(response) => response,
         Err(error) => {
             SESSION.record(outcome(Outcome::Refused));
-            return Err(format!("{query_name} query returned invalid JSON: {error}"));
+            return Err(Refusal::Answered(
+                format!("{query_name} query returned invalid JSON: {error}"),
+                None,
+            ));
         }
     };
     if let Some(errors) = response.get("errors") {
         SESSION.record(outcome(Outcome::Refused));
-        return Err(format!(
-            "{query_name} query was rejected by GitHub: {errors}"
+        return Err(Refusal::Answered(
+            format!("{query_name} query was rejected by GitHub: {errors}"),
+            Some(response.clone()),
         ));
     }
     // GitHub reports what a call cost only when the document asked it to, and the allowance
@@ -732,22 +774,23 @@ async fn remove_live_artifacts(
 
 /// Deletes the issue behind a board item this run has just taken off the board.
 ///
-/// **A gateway that failed is not an answer about the issue, so it is asked again.** GitHub
-/// has answered this very mutation `504 Gateway Timeout` on a run whose journey had passed,
-/// and a timeout says nothing about whether the delete landed behind it. The board cannot
-/// settle it either, because the item is already off the board and no listing names the
-/// issue again. So only a failure that never reached an answer — a 5xx, or no response at
-/// all — is retried, and a retry that GitHub answers `NOT_FOUND` is the earlier attempt
-/// having landed. Anything else GitHub refuses fails the cleanup at once, as it always did,
-/// and so does a gateway still failing after every attempt.
+/// **A call GitHub never answered is not an answer about the issue, so it is asked again.**
+/// GitHub has answered this very mutation `504 Gateway Timeout` on a run whose journey had
+/// passed, and a timeout says nothing about whether the delete landed behind it. The board
+/// cannot settle it either, because the item is already off the board and no listing names
+/// the issue again. So a [`Refusal::Unanswered`] call is retried, and once one has been, what
+/// decides is the repository: [`issue_is_gone`] reads the issue back, and an issue that is no
+/// longer there is the outcome this delete was asking for, whichever attempt took it.
 ///
-/// `NOT_FOUND` is read only *after* this cleanup's own unanswered attempt: on a first
-/// attempt it would be an issue this run never saw removed, which is a failure to report.
+/// A refusal GitHub answered on the *first* attempt fails the cleanup at once, as it always
+/// did — an issue this run never saw a delete of go is not one to explain away — and so does
+/// an issue still there after every attempt, naming what each kind of failure said.
 async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
     const ATTEMPTS: u64 = 3;
     let mut unanswered = None;
+    let mut answered = None;
     for attempt in 1..=ATTEMPTS {
-        match graphql_variables(
+        match graphql_answer(
             token,
             "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
             "live artifact issue cleanup",
@@ -756,30 +799,60 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
         .await
         {
             Ok(_) => return Ok(()),
-            Err(problem) if unanswered.is_some() && problem.contains(r#""type":"NOT_FOUND""#) => {
-                return Ok(());
+            Err(Refusal::Answered(problem, _)) if unanswered.is_none() => return Err(problem),
+            Err(Refusal::Answered(problem, _)) => {
+                answered = Some(problem);
+                break;
             }
-            Err(problem) if never_answered(&problem) && attempt < ATTEMPTS => {
+            Err(Refusal::Unanswered(problem)) => {
                 unanswered = Some(problem);
-                tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
-            }
-            Err(problem) => {
-                return Err(match unanswered {
-                    Some(earlier) if earlier != problem => {
-                        format!("{problem} (an earlier attempt: {earlier})")
-                    }
-                    _ => problem,
-                });
+                if attempt < ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+                }
             }
         }
     }
-    unreachable!("the last attempt returns whatever it was answered")
+    if issue_is_gone(token, issue_id).await? {
+        return Ok(());
+    }
+    let unanswered = unanswered.unwrap_or_default();
+    Err(match answered {
+        Some(answered) => format!(
+            "issue {issue_id} is still in the repository: {answered}, after an attempt GitHub \
+             never answered ({unanswered})"
+        ),
+        None => format!(
+            "issue {issue_id} is still in the repository after {ATTEMPTS} attempts GitHub never \
+             answered; the last: {unanswered}"
+        ),
+    })
 }
 
-/// Whether a failure [`graphql_variables`] reported is one GitHub never answered: a server
-/// error, or a request that never reached it.
-fn never_answered(problem: &str) -> bool {
-    problem.contains(" query failed: HTTP 5") || problem.contains(" query could not reach GitHub")
+/// Whether the repository no longer holds the issue `issue_id`, read rather than inferred.
+///
+/// `Query.node` is nullable and answers null for an id naming no object, which is the
+/// schema's own statement of "not there" — so nothing here reads how GitHub words or types
+/// the error it sends beside that null. An answer with no `data.node` at all, or a call
+/// GitHub did not answer, settles nothing and is reported as the failure it is.
+async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
+    let response = match graphql_answer(
+        token,
+        "query($id:ID!){node(id:$id){id}}",
+        "live artifact issue presence",
+        json!({"id":issue_id}),
+    )
+    .await
+    {
+        Ok(response) | Err(Refusal::Answered(_, Some(response))) => response,
+        Err(refusal) => return Err(refusal.into_message()),
+    };
+    match response.pointer("/data/node") {
+        Some(Value::Null) => Ok(true),
+        Some(_) => Ok(false),
+        None => Err(format!(
+            "live artifact issue presence of {issue_id} answered no data.node: {response}"
+        )),
+    }
 }
 
 /// A live assertion that returns rather than panics.

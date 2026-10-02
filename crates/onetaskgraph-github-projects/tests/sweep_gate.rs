@@ -319,10 +319,22 @@ struct Board {
     /// What this board has already refused a delete for, so a test can assert the tolerance
     /// was exercised rather than that nothing was ever deleted.
     refused: Vec<String>,
-    /// Issue ids whose next delete this board answers `504 Gateway Timeout`, each with
-    /// whether that delete landed behind the timeout. One timeout per entry.
-    timing_out: Vec<(String, bool)>,
+    /// Issue deletes this board does not answer, each consumed by the next delete of its
+    /// issue: the issue id, how the answer fails to arrive, and whether the delete landed
+    /// behind it.
+    unanswered: Vec<(String, NoAnswer, bool)>,
 }
+
+/// How a call goes unanswered: GitHub's gateway timing out, or the connection dropped
+/// before any response at all.
+#[derive(Clone, Copy)]
+enum NoAnswer {
+    GatewayTimeout,
+    HungUp,
+}
+
+/// The status line the stand-in sends for a dropped connection, which it sends nothing for.
+const HANG_UP: &str = "";
 
 impl Board {
     /// Take everything `vanishing_items` names off the board, as another deleter would.
@@ -443,7 +455,7 @@ impl Drive {
             vanishing_labels,
             immortal,
             refused: Vec::new(),
-            timing_out: Vec::new(),
+            unanswered: Vec::new(),
         };
         Self {
             _exclusive: exclusive,
@@ -467,13 +479,13 @@ impl Drive {
             .clone()
     }
 
-    /// Answer the next delete of issue `id` with a gateway timeout, landing it or not.
-    fn time_out_issue_delete(&self, id: &str, lands: bool) {
+    /// Leave the next delete of issue `id` unanswered, `how`, landing it or not.
+    fn leave_issue_delete_unanswered(&self, id: &str, how: NoAnswer, lands: bool) {
         STANDIN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .timing_out
-            .push((id.to_owned(), lands));
+            .unanswered
+            .push((id.to_owned(), how, lands));
     }
 
     /// Whether the repository still holds the issue `id`.
@@ -754,46 +766,137 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
 }
 
 #[tokio::test]
-async fn a_gateway_timeout_on_an_issue_delete_is_asked_again_rather_than_failing_the_run() {
+async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failing_the_run() {
     // GitHub has answered this lane's `deleteIssue` with `504 Gateway Timeout` on a run whose
-    // journey had passed. A timeout is not an answer: the delete may have landed behind it or
-    // not, and the board can no longer say, because the item is already off it.
-    let landed = artifact_title(RUNS.mine, NOW);
-    let lost = artifact_title(RUNS.mine, NOW + 1);
+    // journey had passed. An unanswered call is not an answer: the delete may have landed
+    // behind it or not, and the board can no longer say, because the item is already off it.
+    // Both ways of going unanswered, and both outcomes behind each.
+    let cases = [
+        (
+            "PVTI_timed_landed",
+            "I_timed_landed",
+            NoAnswer::GatewayTimeout,
+            true,
+        ),
+        (
+            "PVTI_timed_lost",
+            "I_timed_lost",
+            NoAnswer::GatewayTimeout,
+            false,
+        ),
+        ("PVTI_hung_landed", "I_hung_landed", NoAnswer::HungUp, true),
+        ("PVTI_hung_lost", "I_hung_lost", NoAnswer::HungUp, false),
+    ];
     let drive = Drive::plant(
-        vec![
-            ("PVTI_landed", Some("I_landed"), landed),
-            ("PVTI_lost", Some("I_lost"), lost),
-        ],
+        cases
+            .iter()
+            .enumerate()
+            .map(|(at, (item, issue, _, _))| {
+                (
+                    *item,
+                    Some(*issue),
+                    artifact_title(RUNS.mine, NOW + at as u64),
+                )
+            })
+            .collect(),
         vec![],
         vec![],
         vec![],
         vec![],
     );
-    drive.time_out_issue_delete("I_landed", true);
-    drive.time_out_issue_delete("I_lost", false);
+    for (_, issue, how, lands) in cases {
+        drive.leave_issue_delete_unanswered(issue, how, lands);
+    }
     let _in_flight = session_in_flight();
 
     journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
         .await
-        .expect("a delete that timed out is asked again, and either answer settles it");
+        .expect("a delete GitHub never answered is asked again, and the repository settles it");
 
-    let (titles, _) = drive.left();
-    assert!(titles.is_empty(), "{titles:?}");
-    assert!(
-        !drive.holds_issue("I_landed") && !drive.holds_issue("I_lost"),
-        "an issue whose delete timed out is still in the repository"
-    );
-    // Both timeouts really happened, and the one that had landed was then refused as gone.
+    let (left, _) = drive.left();
+    assert!(left.is_empty(), "{left:?}");
+    for (_, issue, _, _) in cases {
+        assert!(
+            !drive.holds_issue(issue),
+            "{issue}, whose delete went unanswered, is still in the repository"
+        );
+    }
+    // Every unanswered delete really happened, and each that had landed was then refused as
+    // gone — which is why the repository, not that refusal, is what decided.
     assert_eq!(
         sorted(drive.refused()),
-        sorted(vec![
-            "I_landed".to_owned(),
-            "I_landed".to_owned(),
-            "I_lost".to_owned()
-        ]),
-        "the board did not time out the deletes this case is about"
+        sorted(
+            [
+                "I_timed_landed",
+                "I_timed_landed",
+                "I_timed_lost",
+                "I_hung_landed",
+                "I_hung_landed",
+                "I_hung_lost",
+            ]
+            .map(str::to_owned)
+            .to_vec()
+        ),
+        "the board did not leave unanswered the deletes this case is about"
     );
+}
+
+#[tokio::test]
+async fn an_issue_delete_github_never_answers_fails_the_cleanup_after_its_attempts() {
+    // The retry is bounded: a gateway that goes on failing leaves the issue there, and the
+    // cleanup says so rather than retrying for ever or passing.
+    let drive = Drive::plant(
+        vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    );
+    for _ in 0..4 {
+        drive.leave_issue_delete_unanswered("I_mine", NoAnswer::GatewayTimeout, false);
+    }
+    let _in_flight = session_in_flight();
+
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        .await
+        .expect_err("an issue still there after every attempt fails the cleanup");
+
+    assert!(
+        refusal.contains("I_mine")
+            && refusal.contains("still in the repository after 3 attempts")
+            && refusal.contains("504 Gateway Timeout"),
+        "{refusal}"
+    );
+    assert!(drive.holds_issue("I_mine"));
+    assert_eq!(drive.refused(), vec!["I_mine".to_owned(); 3]);
+}
+
+#[tokio::test]
+async fn an_issue_delete_refused_after_an_unanswered_attempt_fails_naming_both() {
+    // A refusal GitHub did answer, after one it did not, is settled by the repository too:
+    // this issue is still there, so the cleanup fails naming both what GitHub said and the
+    // attempt that went unanswered before it.
+    let drive = Drive::plant(
+        vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
+        vec![],
+        vec![],
+        vec![],
+        vec!["I_mine".to_owned()],
+    );
+    drive.leave_issue_delete_unanswered("I_mine", NoAnswer::GatewayTimeout, false);
+    let _in_flight = session_in_flight();
+
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        .await
+        .expect_err("an issue a delete was refused for, still there, fails the cleanup");
+
+    assert!(
+        refusal.contains("issue I_mine is still in the repository")
+            && refusal.contains("will not part with I_mine")
+            && refusal.contains("504 Gateway Timeout"),
+        "{refusal}"
+    );
+    assert!(drive.holds_issue("I_mine"));
 }
 
 #[tokio::test]
@@ -846,6 +949,10 @@ fn serve(board: Arc<Mutex<Board>>) -> String {
             } else {
                 rest(&board, &method, &path)
             };
+            if status == HANG_UP {
+                // The request was read whole; closing now is a connection that never answered.
+                continue;
+            }
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  x-ratelimit-limit: 5000\r\nx-ratelimit-used: 1\r\n\
@@ -910,13 +1017,28 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
     }
     if query.contains("deleteIssue(input:$input)") {
         let issue = input["issueId"].as_str().expect("an issue id").to_owned();
-        if let Some(at) = board.timing_out.iter().position(|(held, _)| *held == issue) {
-            let (_, lands) = board.timing_out.remove(at);
+        if let Some(at) = board
+            .unanswered
+            .iter()
+            .position(|(held, _, _)| *held == issue)
+        {
+            let (_, how, lands) = board.unanswered.remove(at);
             if lands {
                 board.issues.retain(|held| *held != issue);
             }
             board.refused.push(issue);
-            return ("504 Gateway Timeout", "{}".to_owned());
+            return match how {
+                NoAnswer::GatewayTimeout => ("504 Gateway Timeout", "{}".to_owned()),
+                NoAnswer::HungUp => (HANG_UP, String::new()),
+            };
+        }
+        if board.immortal(&issue) {
+            board.refused.push(issue.clone());
+            return (
+                "200 OK",
+                json!({"errors":[{"message":format!("this repository will not part with {issue}")}]})
+                    .to_string(),
+            );
         }
         if !board.holds_issue(&issue) {
             board.refused.push(issue.clone());
@@ -924,6 +1046,21 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
         }
         board.issues.retain(|held| *held != issue);
         return answered(json!({"deleteIssue":{"repository":{"id":"REPO_1"}}}));
+    }
+    if query.contains("node(id:$id){id}") {
+        let id = request
+            .pointer("/variables/id")
+            .and_then(Value::as_str)
+            .expect("a node id")
+            .to_owned();
+        if board.holds_issue(&id) {
+            return answered(json!({"node":{"id":id}}));
+        }
+        // GitHub's answer for an id naming nothing: `node` null, beside an error.
+        let (status, payload) = gone(&id);
+        let mut payload: Value = serde_json::from_str(&payload).expect("gone() is JSON");
+        payload["data"] = json!({"node":null});
+        return (status, payload.to_string());
     }
     (
         "400 Bad Request",
