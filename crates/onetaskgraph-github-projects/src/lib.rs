@@ -218,7 +218,8 @@
 //! undoing an earlier field when a later one fails, so that order is what makes a write
 //! refused part-way leave the item's body, and every metadata key in it, exactly as it stood;
 //! the one piece of metadata written before the body, an origin a copy re-points, is put back
-//! when a later write is refused. `crates/onetaskgraph/tests/e2e/write_order.rs` refuses each
+//! when a later write is refused — and when putting it back is refused too, the write's own
+//! refusal names that key, what it now holds and what it held. `crates/onetaskgraph/tests/e2e/write_order.rs` refuses each
 //! of those writes in turn, whole and as one aliased field failing after the one before it.
 //!
 //! **Two facts about GitHub the write rows rest on, each read off GitHub's published schema
@@ -5161,6 +5162,14 @@ impl GitHubProjectsSource {
         };
         let (option, closed, reason) = Self::status_parts(nodes, content)?;
         let priority = self.held_priority(nodes)?;
+        // Present when the item was reached through its own issue, whose board entry
+        // names the board; a read of the board's own items has the board already. An
+        // empty id names nothing a field write could address, so it is read as absent and
+        // the write goes back to reading the board.
+        let board_id = item
+            .pointer("/project/id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
         let resolved = Resolved {
             item_id: required_str(item, "id")?.to_owned(),
             id,
@@ -5191,17 +5200,9 @@ impl GitHubProjectsSource {
             own_repository,
             repositories,
             slot,
-            // Present when the item was reached through its own issue, whose board entry
-            // names the board; a read of the board's own items has the board already. An
-            // empty id names nothing a field write could address, so it is read as absent and
-            // the write goes back to reading the board.
-            board_id: item
-                .pointer("/project/id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned),
+            board_id: board_id.map(str::to_owned),
             fields: field_definitions(nodes),
-            board_fields: self.carried_board_fields(content)?,
+            board_fields: Self::carried_board_fields(content, board_id)?,
             blocked_by: carried_blocked_by(content)?,
         };
         self.resolved_cache()?
@@ -5209,17 +5210,27 @@ impl GitHubProjectsSource {
         Ok(Some(resolved))
     }
 
-    /// The field definitions of this board, off the `boards` page a read of an issue by its
-    /// own id carries — or `None` when the read carried none, or carried no entry for this
-    /// board, which a write then answers by reading the board's fields itself.
-    fn carried_board_fields(&self, content: &Value) -> Result<Option<Value>, SourceError> {
-        let Some(nodes) = content.pointer("/boards/nodes").and_then(Value::as_array) else {
+    /// The field definitions of the board `board_id` names — the project this issue's own
+    /// board item is on — off the `boards` page a read of an issue by its own id carries, or
+    /// `None` when the read carried none, carried no entry for that board, or the board item
+    /// named no board, which a write then answers by reading the board's fields itself.
+    ///
+    /// Matched by the board's node id and never by its number alone: a project number is
+    /// unique only within its owner, so another owner's board numbered alike can sit on the
+    /// same page, and its field and option ids address nothing on this one.
+    fn carried_board_fields(
+        content: &Value,
+        board_id: Option<&str>,
+    ) -> Result<Option<Value>, SourceError> {
+        let (Some(nodes), Some(board_id)) = (
+            content.pointer("/boards/nodes").and_then(Value::as_array),
+            board_id,
+        ) else {
             return Ok(None);
         };
         let Some(board) = nodes.iter().find_map(|node| {
             let project = node.get("project")?;
-            (project.get("number").and_then(Value::as_u64) == Some(u64::from(self.project_number)))
-                .then_some(project)
+            (project.get("id").and_then(Value::as_str) == Some(board_id)).then_some(project)
         }) else {
             return Ok(None);
         };
@@ -6895,20 +6906,33 @@ impl GitHubProjectsSource {
                     let _ = self.delete_issue(&content_id).await;
                 }
                 // The origin field is the one piece of an existing item's metadata written
-                // before its body, so a write refused after it puts it back as it was.
+                // before its body, so a write refused after it puts it back as it was. When
+                // that is refused too, the write's own failure is still what the caller is
+                // told — with what it left behind added, because the item's metadata is then
+                // not as it stood and a caller retrying has to know which key moved.
                 Some(item) => {
                     let before = item.origin.as_deref().unwrap_or("");
                     if let Some(field) = origin_field.as_deref()
                         && before != origin
-                    {
-                        let _ = self
+                        && let Err(restore) = self
                             .set_item_field(
                                 board.id.as_str(),
                                 &item.item_id,
                                 field,
                                 json!({"text": before}),
                             )
-                            .await;
+                            .await
+                    {
+                        return Err(noting(
+                            error,
+                            &format!(
+                                "; its {ORIGIN_KEY} was moved to {origin:?} before that and could \
+                                 not be put back to {before:?} ({restore}), so item {} still \
+                                 holds {origin:?} there; next: set {ORIGIN_KEY} on it back to \
+                                 {before:?}, or run the write again",
+                                item.id.0
+                            ),
+                        ));
                     }
                 }
             }
@@ -7766,6 +7790,36 @@ enum Reached {
 /// off the refusal GitHub sent, never guessed from the shape of the string: this source
 /// does not define the syntax of a GitHub node id and would be wrong about it.
 const UNRESOLVABLE_NODE: &str = "could not resolve to a node";
+
+/// `error` with `note` added to the end of what it says, its kind and every other member
+/// unchanged — so a caller still branches on the failure that happened, and reads beside it
+/// what that failure left behind.
+fn noting(error: SourceError, note: &str) -> SourceError {
+    match error {
+        SourceError::Config { message } => SourceError::Config {
+            message: message + note,
+        },
+        SourceError::Auth { message } => SourceError::Auth {
+            message: message + note,
+        },
+        SourceError::Refused { message } => SourceError::Refused {
+            message: message + note,
+        },
+        SourceError::RateLimited {
+            retry_after_seconds,
+            message,
+        } => SourceError::RateLimited {
+            retry_after_seconds,
+            message: Some(message.unwrap_or_default() + note),
+        },
+        SourceError::Unavailable { message } => SourceError::Unavailable {
+            message: message + note,
+        },
+        SourceError::Malformed { message } => SourceError::Malformed {
+            message: message + note,
+        },
+    }
+}
 
 /// The variables of one [`graphql::ISSUE_DETAILS`] request over `batch` — at most
 /// [`DETAIL_BATCH`] ids — each item with the first page of its comments when `comments` asks

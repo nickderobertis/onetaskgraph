@@ -211,6 +211,13 @@ struct Item {
     /// The board's real id unless a case has made the entry name something no write could
     /// address, which is what an update reading its board off the item has to refuse.
     board_entry_id: &'static str,
+    /// Whether the read of this issue by its own id carries, ahead of this board's field
+    /// definitions, those of another owner's board that shares this board's project number.
+    ///
+    /// A project number is unique only within its owner, so a number alone does not say
+    /// which entry of `boards` holds this board's fields; the board item's own project id
+    /// does.
+    fields_of_a_namesake_ahead: bool,
     /// Whether GitHub's own enumerations of the board — `ProjectV2.items` and the
     /// board-scoped issue search — list this item yet.
     ///
@@ -275,6 +282,7 @@ impl Item {
             other_boards: Vec::new(),
             on_this_board: true,
             board_entry_id: "PVT_board",
+            fields_of_a_namesake_ahead: false,
             listed: true,
             origin_value: true,
             updated_at: None,
@@ -350,6 +358,13 @@ impl Item {
     /// Make this issue's entry for the board under test name `id` as the board's node id.
     fn board_entry_names(mut self, id: &'static str) -> Self {
         self.board_entry_id = id;
+        self
+    }
+    /// Carry another owner's board numbered as this one is, with fields of its own, ahead of
+    /// this board in the read of this issue by its own id. See
+    /// [`Item::fields_of_a_namesake_ahead`].
+    fn namesake_board_ahead(mut self) -> Self {
+        self.fields_of_a_namesake_ahead = true;
         self
     }
     /// Leave this item out of every listing of the board while every read of it by id still
@@ -1945,6 +1960,22 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             }
             json!({"project":project})
         }).take(asked.board_items).collect::<Vec<_>>()});
+        if item.fields_of_a_namesake_ahead {
+            let options = state
+                .options
+                .iter()
+                .map(|(id, name)| json!({"id":format!("{id}_elsewhere"),"name":name}))
+                .collect::<Vec<_>>();
+            node["boards"]["nodes"].as_array_mut().unwrap().insert(
+                0,
+                json!({"project":{"id":"PVT_elsewhere","number":7,"fields":{"nodes":[
+                    {"__typename":"ProjectV2SingleSelectField","id":"FIELD_status_elsewhere",
+                     "name":"Status","options":options},
+                    {"__typename":"ProjectV2Field","id":"FIELD_origin_elsewhere",
+                     "name":"onetaskgraph.origin"}
+                ],"pageInfo":{"hasNextPage":false}}}}),
+            );
+        }
         node["blockedBy"] = json!({"nodes":related_issues(&state, state.blocked_by.get(&id).cloned().unwrap_or_default()),
             "pageInfo":{"hasNextPage":false,"endCursor":null}});
         return json!({ "node": node });
@@ -9325,6 +9356,36 @@ async fn an_update_its_own_values_cannot_describe_takes_the_boards_fields_from_i
 }
 
 #[tokio::test]
+async fn an_update_takes_its_fields_from_the_board_its_item_sits_on_and_not_a_namesake() {
+    // A project number is unique within its owner only, so the read of an issue by its own id
+    // can carry two boards numbered alike. The one whose fields a write uses is the one the
+    // issue's own board item names by id: the other's field and option ids address nothing on
+    // this board.
+    let fixture = board(vec![
+        Item::issue("I_1", "before")
+            .status("Todo")
+            .namesake_board_ahead(),
+    ]);
+    move_to_in_progress(source(&fixture).as_ref()).await;
+    assert_eq!(fixture.item("I_1").status.as_deref(), Some("In Progress"));
+    let sent = fixture
+        .seen()
+        .into_iter()
+        .filter(|call| call[0] == "updateProjectV2ItemFieldValue")
+        .collect::<Vec<_>>();
+    assert!(!sent.is_empty(), "the update wrote no board field");
+    for call in &sent {
+        assert_eq!(call[1]["projectId"], "PVT_board", "{sent:#?}");
+        assert!(
+            !call[1].to_string().contains("elsewhere"),
+            "a field write used another board's ids: {sent:#?}"
+        );
+    }
+    // This board's entry was on the page the read carried, so its fields were not read again.
+    assert_eq!(fixture.requests("boardFields"), 0);
+}
+
+#[tokio::test]
 async fn an_update_whose_item_names_an_empty_board_id_takes_the_boards_id_from_its_fields() {
     // The board id an update writes its fields against comes from a third party's answer,
     // and an empty one addresses no board. Taken as given, every field write of the update
@@ -16416,4 +16477,47 @@ async fn a_write_refused_after_it_moved_the_origin_puts_the_origin_back() {
     let held = fixture.item("I_1");
     assert_eq!(held.origin.as_deref(), Some("plans:OLD"));
     assert_eq!(held.title, "one");
+}
+
+/// When putting the origin back is refused as well, the write's own refusal is still what the
+/// caller is told, and it says what was left behind: the one key that moved, what it holds,
+/// and what it held — the body, and every key in it, as they stood.
+#[tokio::test]
+async fn a_write_whose_origin_cannot_be_put_back_says_which_key_it_left_moved() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one")
+            .body("as it stood")
+            .status("Todo")
+            .carrying("plans:OLD"),
+    ]);
+    fixture.refuse("updateIssue");
+    // The batched field write moving the origin lands; the one putting it back is refused.
+    fixture.refuse_after("updateProjectV2ItemFieldValue", 1);
+    let mut item = task("I_1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("a body that must not land".to_owned());
+    item.metadata
+        .insert("onetaskgraph.origin".to_owned(), json!("plans:NEW"));
+    item.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let error = source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(native("I_1")),
+            item,
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the content update is refused");
+    let said = refusal(error);
+    assert!(said.contains("updateIssue is refused"), "{said}");
+    assert!(
+        said.contains(
+            "its onetaskgraph.origin was moved to \"plans:NEW\" before that and could not be put \
+             back to \"plans:OLD\""
+        ) && said.contains("item I_1 still holds \"plans:NEW\" there")
+            && said.contains("next: set onetaskgraph.origin on it back to \"plans:OLD\""),
+        "{said}"
+    );
+    let held = fixture.item("I_1");
+    assert_eq!(held.origin.as_deref(), Some("plans:NEW"));
+    assert_eq!(held.title, "one");
+    assert_eq!(held.body.as_deref(), Some("as it stood"));
 }
