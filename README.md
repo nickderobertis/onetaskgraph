@@ -57,7 +57,9 @@ onetaskgraph sources fields <SOURCE> [--apply] [--json]
 # Priority field and its options when priority_mapping is set. --apply adds the missing
 # options and creates a missing Priority field, sending every existing option back with its
 # id, then verifies every pre-existing option and every item's values of both fields and
-# prints recovery data if GitHub drifted.
+# prints recovery data if GitHub drifted. For a Linear source it reports each workflow state
+# its status_mapping names as present on the team, with its type, or missing; --apply is
+# refused there, because workflow states are team settings people own.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 # The Status-only form of `sources fields`, which supersedes it; kept as it was.
 
@@ -154,10 +156,11 @@ those candidates' comments and no others' — exact for new and for edited comme
 repository the board's items live in, because GitHub moves an issue's `updatedAt` when one of
 its comments is added or edited, which the board's credentialed journey re-takes on every
 run. That search is an index that lags a write by a second or two, so when you ask again from
-the time you last asked, overlap the two instants by more than that. A source that does not
-apply it itself — Linear, today — is narrowed by the engine, which **reads that source's
-comments task by task** for every task the other filters kept: correct, and as costly as
-that sounds on a large workspace.
+the time you last asked, overlap the two instants by more than that. Linear asks for the
+issues with a comment created or last edited at or after the instant, by the same two times a
+comment read reports. A source that does not apply it itself is narrowed by the engine, which
+**reads that source's comments task by task** for every task the other filters kept: correct,
+and as costly as that sounds on a large workspace.
 
 `task list --metadata <KEY>[/<SEGMENT>…]=<VALUE>` keeps the tasks whose caller-defined
 metadata holds the string `VALUE` at that location. `/` splits the top-level key — which may
@@ -168,8 +171,10 @@ and the first `=` splits the location from the value, so
 string equal to `VALUE`, case-sensitively. Repeat the flag and a task is kept only when it
 holds every one. `task list --origin <SOURCE>:<ID>` keeps the tasks copied from that item:
 those whose `onetaskgraph.origin` is exactly that qualified id — never one it only begins or
-ends with. A folder of Markdown and an in-memory source apply both themselves; a source that
-does not, Linear today, is narrowed by the engine over each task's own metadata.
+ends with. A folder of Markdown and an in-memory source apply both themselves; Linear asks for
+the issues whose description holds each value as its metadata slot spells it and confirms every
+one over the parsed slot; a source that applies neither is narrowed by the engine over each
+task's own metadata.
 
 A GitHub Projects board answers `--search`, `--metadata` and `--origin` **without listing the
 board**, which is what keeps a large board affordable:
@@ -204,7 +209,8 @@ answers with the status as the source reads it back. `queued` is the category fo
 claimed by something that will do it and not yet started, between `todo` (ready, and nothing
 has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`; a GitHub
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
-another; Linear, which has no such state, refuses it by name.
+another; Linear writes it to the workflow state its source's `status_mapping.queued` names, and
+refuses it by name when that source maps none.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This user-facing summary is required to describe the GitHub projection; the loopback plugin tests and shared live journey drive the resolved mapping, mutations, and observed read-back together. -->
 On GitHub Projects, terminal writes keep both GitHub representations aligned: `done`
@@ -253,8 +259,9 @@ and the record's location. Metadata is not status, so no task it delivers is re-
 A folder of Markdown edits the one entry of its `metadata:` block and no other byte, and
 refuses by name a block it cannot edit that narrowly; a GitHub Projects board sends one
 update of the issue body that changes only its metadata slot; the in-memory source holds the
-value for the life of its process; and Linear, which has nowhere to put one key on its own,
-refuses with `the linear plugin cannot write a task's metadata on its own`. A source with no
+value for the life of its process; and Linear sends one update of the issue's or the
+project's description, or the document's content, that changes only the metadata slot at its
+end. A source with no
 write side, a record the source does not hold, and a stdio plugin whose handshake does not
 declare the write are each refused by name.
 
@@ -768,6 +775,31 @@ sources:
   notes:
     plugin: local-md
     config: { root: ~/notes/tasks }
+```
+
+A `linear` source writes a status category as the workflow state its `status_mapping` names,
+and reads an issue at that state as the category — which is how a team with two states of one
+type, `Todo` and `Queued`, keeps them apart; a category it does not name is written as the
+team's first state of the matching type, as without the key, and `null` disables one. Its
+`project`, the id of one Linear project of the team, scopes the source to that project: every
+read is narrowed to it and a task written with no project is placed in it.
+
+```yaml
+sources:
+  hellopatient:
+    plugin: linear
+    config:
+      team: ENG
+      project: 986a467e-775a-4f8f-80dd-aca405063cf4   # optional
+      status_mapping:
+        backlog: Proposed
+        draft: Backlog
+        todo: Todo
+        queued: Queued
+        in-progress: In Progress
+        unknown: Needs Attention
+        done: Done
+        cancelled: Canceled
 ```
 
 Every setting is reachable at three layers, lowest precedence first: **the file, then the

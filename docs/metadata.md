@@ -265,9 +265,15 @@ and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape
 update of the item's `description` (a document's `content`) that differs from what Linear
 holds only inside the slot.
 
-**`github-projects` uses the multi-line spelling of that encoding, in the issue body, for the
-same reason plus one of its own: length** — GitHub keeps a body byte for byte, so it needs no
-code span. A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
+**So the slot is one slot in two spellings, and each source writes the one its host keeps byte
+for byte.** Linear writes the code span and reads both. `github-projects` writes and reads the
+multi-line spelling, because GitHub keeps an issue body as it was written and so needs no code
+span. `scripts/check-metadata-slot-encoding.sh` holds every source that keeps a slot to the
+one multi-line spelling, any source that writes the code span to the one code-span spelling,
+and both to the same opening marker, so a third spelling cannot appear in silence.
+
+**`github-projects` keeps its slot in the issue body for the same reason plus one of its own:
+length.** A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
 `SINGLE_SELECT`, `MULTI_SELECT` or `ITERATION`, a `TEXT` value is length-bounded, and a
 board's `shortDescription` is capped at 300 characters — of which the metadata comment
 spends about 110 before any content, so a project carrying an ordinary 278-character goal

@@ -7053,10 +7053,9 @@ async fn the_states_report_names_each_mapped_state_present_or_missing_with_its_t
 
 /// The slot is written on one line, its JSON inside a code span, with `<`, `>` and backticks
 /// escaped — the spelling Linear keeps byte for byte — and a value holding what would close
-/// the span or the comment reads back exactly; a slot in the multi-line spelling this source
-/// wrote before still reads, in either of the closes Linear hands it back with.
+/// the span or the comment reads back exactly.
 #[tokio::test]
-async fn the_slot_is_written_in_the_one_spelling_linear_keeps_and_the_old_one_still_reads() {
+async fn the_slot_is_written_in_the_one_spelling_linear_keeps_byte_for_byte() {
     let key = MetadataKey::new("caller.live").unwrap();
     let hostile = serde_json::json!(["a --> b <!-- c", "`tick`", "github.com/a/b", "_y_ [z]"]);
     let (endpoint, wire) = response_server(vec![
@@ -7093,10 +7092,17 @@ async fn the_slot_is_written_in_the_one_spelling_linear_keeps_and_the_old_one_st
         .expect("held");
     assert_eq!(task.metadata.get("caller.live"), Some(&hostile));
     assert_eq!(task.content.as_deref(), Some("Prose."));
+}
 
+/// An issue written before the slot was a code span still parses: the multi-line spelling, in
+/// the close this source wrote and in the escaped close Linear hands it back with, reads as the
+/// metadata, the delivery lists and the content it held — and the next narrow write of that
+/// issue writes the code span, every byte above the slot as it was.
+#[tokio::test]
+async fn a_slot_in_the_multi_line_spelling_written_before_still_parses() {
     for old in [
-        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1}\n-->",
-        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1}\n\\-->",
+        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1,\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}\n-->",
+        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1,\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}\n\\-->",
     ] {
         let (endpoint, _) = response_server(vec![prioritised_issue(
             "i1",
@@ -7113,6 +7119,34 @@ async fn the_slot_is_written_in_the_one_spelling_linear_keeps_and_the_old_one_st
             Some(&serde_json::json!(1)),
             "{old:?}"
         );
+        assert_eq!(
+            task.delivered_by,
+            vec![TaskRef::new("plan:T-1").unwrap()],
+            "{old:?}"
+        );
         assert_eq!(task.content.as_deref(), Some("Prose."), "{old:?}");
+
+        let (endpoint, wire) = response_server(vec![
+            prioritised_issue("i1", Some(old), serde_json::json!(0)),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+            prioritised_issue("i1", Some(old), serde_json::json!(0)),
+        ]);
+        writable_source(&endpoint)
+            .set_task_metadata(
+                &"i1".into(),
+                &MetadataKey::new("caller.added").unwrap(),
+                &serde_json::json!(true),
+            )
+            .await
+            .unwrap();
+        let requests = wire
+            .try_iter()
+            .map(|request| sent(&request))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requests[1]["variables"]["input"]["description"],
+            "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.added\":true,\"caller.kept\":1,\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}` -->",
+            "{old:?}"
+        );
     }
 }
