@@ -177,6 +177,15 @@ fn landed(report: &Value, source: &str) -> String {
         .to_owned()
 }
 
+/// The location string a folder reports for one of its tasks — the string a reference to
+/// that task is, and which on Windows is a canonical path rather than the one written.
+fn task_path(sandbox: &Sandbox, task: &str) -> String {
+    answer(sandbox, &["task", "show", task])["items"][0]["item"]["location"]["path"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{task} reports a path"))
+        .to_owned()
+}
+
 fn source_of(id: &str) -> &str {
     id.split_once(':').expect("a qualified id").0
 }
@@ -2137,15 +2146,14 @@ fn a_routed_document_copy_points_its_references_at_the_source_its_project_landed
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
     petsinc_plan(&plan);
-    let task_path = plan.join("tasks/pets-a.md");
+    let authored = task_path(&sandbox, "plan:pets-a");
     record(
         &plan,
         "documents",
         "pets-design",
         &format!(
             "title: Pets design\nproject: pets\nrepositories: [github.com/petsinc/api]\n---\n\
-             Start at `{}`.\n\n<!-- -->",
-            task_path.display()
+             Start at `{authored}`.\n\n<!-- -->"
         ),
     );
     let copied = answer(&sandbox, &["project", "copy", "plan:pets", "--to", NOTES]);
@@ -2162,9 +2170,9 @@ fn a_routed_document_copy_points_its_references_at_the_source_its_project_landed
     let content = held["items"][0]["item"]["content"]
         .as_str()
         .expect("content");
-    let there = sandbox.project().join(TEAM).join("tasks/pets-a.md");
+    let there = task_path(&sandbox, &landed_task);
     assert!(
-        content.contains(&there.display().to_string()),
+        content.contains(&there) && !content.contains(&authored),
         "the reference names the task in the routed source:\n{content}"
     );
 }
@@ -2191,7 +2199,7 @@ fn documents_one_copy_lands_in_two_sources_each_point_at_the_records_where_they_
             name,
             &format!(
                 "title: {name}\nproject: {project}\n---\nStart at `{}`.\n\n<!-- -->",
-                plan.join(format!("tasks/{task}.md")).display()
+                task_path(&sandbox, &format!("plan:{task}"))
             ),
         );
     }
@@ -2239,12 +2247,10 @@ fn documents_one_copy_lands_in_two_sources_each_point_at_the_records_where_they_
         let content = held["items"][0]["item"]["content"]
             .as_str()
             .expect("content");
-        let shown = answer(&sandbox, &["task", "show", &tasks[task]]);
-        let there = shown["items"][0]["item"]["location"]["path"]
-            .as_str()
-            .expect("a folder task's path");
+        let there = task_path(&sandbox, &tasks[task]);
+        let here = task_path(&sandbox, task);
         assert!(
-            content.contains(there) && !content.contains(&plan.display().to_string()),
+            content.contains(&there) && !content.contains(&here),
             "{document} names {task} where it landed, {there}:\n{content}"
         );
     }
