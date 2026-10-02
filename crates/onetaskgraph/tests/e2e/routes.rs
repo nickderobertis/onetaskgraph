@@ -2390,3 +2390,99 @@ fn a_dry_run_into_an_existing_home_that_needs_a_member_makes_none() {
     );
     assert!(members_of(&sandbox, "notes:goal").is_empty());
 }
+
+#[test]
+fn a_task_copied_on_its_own_into_a_home_in_another_source_is_filed_under_its_member() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    for (id, repository) in [
+        ("pets", "github.com/petsinc/api"),
+        ("pets2", "github.com/petsinc/web"),
+    ] {
+        record(
+            &plan,
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\nproject: goal\nrepositories: [{repository}]"),
+        );
+    }
+    // The home lands in `notes` on its own, before any of its tasks.
+    let home = landed(
+        &answer(
+            &sandbox,
+            &["project", "copy", "plan:goal", "--no-tasks", "--to", NOTES],
+        ),
+        "plan:goal",
+    );
+    assert_eq!(home, "notes:goal");
+
+    let first = answer(&sandbox, &["task", "copy", "plan:pets", "--to", NOTES]);
+    let pets = landed(&first, "plan:pets");
+    assert_eq!(source_of(&pets), TEAM, "{first:#}");
+    let members = members_of(&sandbox, &home);
+    assert_eq!(
+        members.len(),
+        1,
+        "the member was created and recorded on the home"
+    );
+    assert_eq!(filed_under(&sandbox, &pets), members[0]);
+
+    let second = answer(&sandbox, &["task", "copy", "plan:pets2", "--to", NOTES]);
+    assert_eq!(
+        filed_under(&sandbox, &landed(&second, "plan:pets2")),
+        members[0]
+    );
+    assert_eq!(members_of(&sandbox, &home), members, "the member is reused");
+}
+
+#[test]
+fn a_members_read_reports_a_home_its_source_fails_to_read() {
+    let sandbox = Sandbox::new();
+    folders(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    // A project file the folder refuses to read — `priority` belongs to a task — while every
+    // task of it still lists.
+    record(
+        &notes,
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\npriority: high\nmetadata:\n  onetaskgraph.members: [team:goal]",
+    );
+    record(
+        &notes,
+        "tasks",
+        "t",
+        "title: T\nstatus: todo\nproject: goal",
+    );
+    let plain = answer(&sandbox, &["task", "list", "--project", "notes:goal"]);
+    assert_eq!(
+        plain["errors"],
+        json!([]),
+        "listing the home's own tasks succeeds"
+    );
+    let output = run(
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--project",
+            "notes:goal",
+            "--members",
+            "--json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let partial: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    assert!(
+        partial["errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .any(|error| {
+                error["source"] == NOTES && error.to_string().contains("belongs to a task")
+            }),
+        "the home's failed read is reported, not passed off as a plan without members: \
+         {partial:#}"
+    );
+}

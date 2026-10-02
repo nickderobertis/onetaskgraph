@@ -394,8 +394,7 @@ before, and the copy reports the link `unrecorded` rather than failing.
 
 ### `onetaskgraph.members` and `onetaskgraph.member_of`: a plan that spans sources
 
-A routed copy (see "Routing, and plans that span sources" in the README) can land one plan in
-two sources: a **home** project, and at most one **member** project in each other source a
+A routed copy can land one plan in two sources: a **home** project, and at most one **member** project in each other source a
 task of it routes to. The two keys are what tie them together, and the store is where they
 live:
 
