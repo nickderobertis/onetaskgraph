@@ -214,13 +214,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                         ),
                     ));
                 }
-                let report = onetaskgraph_status_options::linear_workflow_states(
-                    &name,
-                    config,
-                    &loaded.secrets,
-                )
-                .await
-                .map_err(|error| Failure::decided("fields", format!("source {name}: {error}")))?;
+                let report = onetaskgraph_linear::workflow_states(&name, config, &loaded.secrets)
+                    .await
+                    .map_err(|error| {
+                        Failure::decided("fields", format!("source {name}: {error}"))
+                    })?;
                 let rendered = match loaded.config.output() {
                     OutputFormat::Json => json(&report, "the fields report")?,
                     OutputFormat::Text => render::workflow_states(&report),
@@ -759,7 +757,7 @@ fn github_projects_source(
 fn linear_source(
     loaded: &Loaded,
     source: &str,
-) -> Result<Option<(SourceName, onetaskgraph_status_options::LinearConfig)>, Failure> {
+) -> Result<Option<(SourceName, onetaskgraph_linear::LinearConfig)>, Failure> {
     let Ok(name) = SourceName::try_from(source.to_owned()) else {
         return Ok(None);
     };
@@ -1255,7 +1253,7 @@ fn schema_bundle() -> Result<String, Failure> {
     bundle["roots"]["FieldsReport"] =
         json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
     bundle["roots"]["WorkflowStatesReport"] = json_value(
-        schemars::schema_for!(onetaskgraph_status_options::WorkflowStatesReport),
+        schemars::schema_for!(onetaskgraph_linear::WorkflowStatesReport),
         "the workflow states schema",
     )?;
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;

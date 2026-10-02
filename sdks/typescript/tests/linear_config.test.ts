@@ -15,4 +15,6 @@ test("a linear source's configuration is modelled with its status mapping and it
   expect(validate(configured)).toBe(true);
   expect(validate({ ...configured, status_mapping: { queued: 7 } })).toBe(false);
   expect(validate({ ...configured, unknown_key: true })).toBe(false);
+  // A key that names no status category is refused, as the binary refuses it.
+  expect(validate({ ...configured, status_mapping: { shipped: "Done" } })).toBe(false);
 });

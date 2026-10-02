@@ -86,11 +86,12 @@ pub fn fields(report: &FieldsReport) -> String {
 
 /// What `sources fields` reports for a `linear` source: one line per workflow state its
 /// `status_mapping` names, present on the team with its type or missing from it.
-pub fn workflow_states(report: &onetaskgraph_status_options::WorkflowStatesReport) -> String {
+pub fn workflow_states(report: &onetaskgraph_linear::WorkflowStatesReport) -> String {
     if report.states.is_empty() {
         return format!(
             "{}: status_mapping names no workflow state of team {}\n",
-            report.source, report.team
+            report.source,
+            report.team()
         );
     }
     let mut rendered = String::new();
@@ -100,8 +101,8 @@ pub fn workflow_states(report: &onetaskgraph_status_options::WorkflowStatesRepor
             .and_then(|word| word.as_str().map(str::to_owned))
             .unwrap_or_default();
         let found = match &state.state_type {
-            Some(kind) if state.present => format!("present on team {} ({kind})", report.team),
-            _ => format!("missing from team {}", report.team),
+            Some(kind) if state.present => format!("present on team {} ({kind})", report.team()),
+            _ => format!("missing from team {}", report.team()),
         };
         rendered.push_str(&format!(
             "{}: {category} -> {}: {found}\n",

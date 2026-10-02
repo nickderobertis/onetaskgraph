@@ -1229,7 +1229,6 @@ name = "onetaskgraph-status-options"
 version = "0.2.54"
 dependencies = [
  "onetaskgraph-github-projects",
- "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "secrecy",
  "serde_json",

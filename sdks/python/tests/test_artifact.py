@@ -283,8 +283,21 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     configured = LinearConfig.model_validate(
         {"team": "ENG", "project": "P-1", "status_mapping": {"queued": "Queued", "draft": None}}
     )
-    assert configured.status_mapping == {"queued": "Queued", "draft": None}
-    assert configured.project == "P-1"
+    # Keyed by the status category itself, valued by a named workflow-state type.
+    assert {
+        key.value: None if name is None else name.root
+        for key, name in configured.status_mapping.items()
+    } == {"queued": "Queued", "draft": None}
+    assert configured.project is not None and configured.project.root == "P-1"
+    # A key that names no status category is refused, as the binary refuses it.
+    import pydantic
+
+    try:
+        LinearConfig.model_validate({"status_mapping": {"shipped": "Done"}})
+    except pydantic.ValidationError:
+        pass
+    else:
+        raise AssertionError("a status_mapping key naming no category was accepted")
     # Version 27 published what `task show-many` answers with: one `TaskDetail` per id.
     task_details = bundle["roots"]["TaskDetails"]
     assert isinstance(task_details, dict)

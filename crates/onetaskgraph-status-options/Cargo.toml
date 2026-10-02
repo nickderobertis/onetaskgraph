@@ -1,6 +1,6 @@
 [package]
 name = "onetaskgraph-status-options"
-description = "The guarded, plugin-specific field setup: GitHub Projects Status options and Priority field, and the Linear workflow-state report."
+description = "The guarded GitHub Projects Status-option operation."
 version = "0.2.54"
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,6 @@ authors.workspace = true
 
 [dependencies]
 onetaskgraph-github-projects.workspace = true
-onetaskgraph-linear.workspace = true
 onetaskgraph-plugin-api.workspace = true
 
 [dev-dependencies]

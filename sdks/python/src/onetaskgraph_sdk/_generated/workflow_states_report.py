@@ -10,6 +10,10 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
+class LinearTeam(RootModel[str]):
+    root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -57,4 +61,4 @@ class WorkflowStatesReport(BaseModel):
             description="Every workflow state `status_mapping` names, in category order. Empty when the mapping\nnames none."
         ),
     ]
-    team: Annotated[str, Field(description="The configured team, as `team` names it.")]
+    team: Annotated[LinearTeam, Field(description="The configured team, as `team` names it.")]

@@ -4,13 +4,8 @@
 //!
 //! Keeping this orchestration outside the CLI preserves the repository's project boundary:
 //! the binary wraps commands, while this independently selectable project owns the commands
-//! that construct and invoke the GitHub Projects and Linear adapters directly. The crate keeps
-//! its name from when Status was the one field it set up.
-//!
-//! For a `linear` source, `sources fields` is a report and never a setup: it names each
-//! workflow state the source's `status_mapping` names as present on the team, with its type,
-//! or missing from it. Workflow states are team settings the people who own the team decide,
-//! so there is nothing here to apply.
+//! that construct and invoke the GitHub Projects adapter directly. The crate keeps its name
+//! from when Status was the one field it set up.
 
 use onetaskgraph_github_projects::GitHubProjectsSource;
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName};
@@ -19,21 +14,6 @@ pub use onetaskgraph_github_projects::{
     BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, SetupMode,
     StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
 };
-pub use onetaskgraph_linear::{LinearConfig, MappedWorkflowState, WorkflowStatesReport};
-
-/// Report each workflow state one `linear` source's `status_mapping` names, present on its
-/// team with its type or missing from it. It writes nothing.
-///
-/// # Errors
-///
-/// As [`onetaskgraph_linear::workflow_states`].
-pub async fn linear_workflow_states(
-    name: &SourceName,
-    config: LinearConfig,
-    secrets: &impl SecretResolver,
-) -> Result<WorkflowStatesReport, SourceError> {
-    onetaskgraph_linear::workflow_states(name, config, secrets).await
-}
 
 /// Plan or apply the guarded setup of every board field one configured source names: its
 /// Status options always, and its Priority field and options when it sets

@@ -511,7 +511,6 @@ pub struct LinearConfig {
     #[schemars(with = "String")]
     api_key_env: EnvName,
     /// Linear team key/id used to narrow reads and required for item writes.
-    #[schemars(with = "Option<String>")]
     team: Option<Team>,
     /// GraphQL endpoint override, primarily for fixture servers.
     #[schemars(with = "String")]
@@ -530,24 +529,38 @@ pub struct LinearConfig {
     /// `queued` and `unknown` are disabled. A name the team lacks is refused before any
     /// write, and two categories mapped to one name are refused when this configuration is
     /// read.
-    #[schemars(with = "std::collections::BTreeMap<String, Option<String>>")]
-    status_mapping: std::collections::BTreeMap<String, Option<StateName>>,
+    #[schemars(schema_with = "status_mapping_schema")]
+    status_mapping: std::collections::HashMap<StatusCategory, Option<StateName>>,
     /// The id of one Linear project of the configured team, scoping this source to it.
     ///
     /// When set, every task read is narrowed to that project's issues, project and document
     /// reads return only that project and its documents, a task or a document written with
     /// no project is placed in it, and one naming another project is refused. Absent, the
     /// source reads and writes team-wide.
-    #[schemars(with = "Option<String>")]
     project: Option<ProjectScope>,
 }
 
-/// The name of one workflow state of the configured team, as `status_mapping` names it.
+/// The schema of `status_mapping`: an object whose values are workflow state names or `null`,
+/// and whose keys are the contract's own `StatusCategory`.
+///
+/// Built here rather than derived, because the derived schema of a map says nothing of its
+/// keys; the key schema is the contract's own, referenced rather than restated.
+fn status_mapping_schema(generator: &mut schemars::SchemaGenerator) -> Schema {
+    let mut schema = <std::collections::HashMap<StatusCategory, Option<StateName>> as schemars::JsonSchema>::json_schema(generator);
+    schema.insert(
+        "propertyNames".to_owned(),
+        generator.subschema_for::<StatusCategory>().to_value(),
+    );
+    schema
+}
+
+/// The name of one workflow state of a Linear team.
 ///
 /// Validated on the way in rather than checked later, so a blank name — which no workflow
 /// state can have — is a state this type cannot hold.
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String", into = "String")]
+#[schemars(rename = "LinearWorkflowStateName", extend("minLength" = 1))]
 struct StateName(String);
 impl From<StateName> for String {
     fn from(value: StateName) -> Self {
@@ -565,9 +578,10 @@ impl TryFrom<String> for StateName {
     }
 }
 
-/// The id of the one Linear project a scoped source holds.
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+/// The id of one Linear project, which a scoped source holds alone.
+#[derive(Debug, Clone, Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String", into = "String")]
+#[schemars(rename = "LinearProjectId", extend("minLength" = 1))]
 struct ProjectScope(String);
 impl From<ProjectScope> for String {
     fn from(value: ProjectScope) -> Self {
@@ -608,8 +622,10 @@ impl TryFrom<String> for EnvName {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+/// A Linear team's key or id.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(try_from = "String", into = "String")]
+#[schemars(rename = "LinearTeam", extend("minLength" = 1))]
 struct Team(String);
 impl From<Team> for String {
     fn from(value: Team) -> Self {
@@ -652,85 +668,119 @@ impl Default for LinearConfig {
             api_key_env: EnvName("LINEAR_API_KEY".into()),
             team: None,
             endpoint: Endpoint(DEFAULT_ENDPOINT.into()),
-            status_mapping: std::collections::BTreeMap::new(),
+            status_mapping: std::collections::HashMap::new(),
             project: None,
         }
     }
 }
 
-/// Every status category, in the contract's own order.
-const CATEGORIES: [StatusCategory; 8] = [
-    StatusCategory::Draft,
-    StatusCategory::Backlog,
-    StatusCategory::Todo,
-    StatusCategory::Queued,
-    StatusCategory::InProgress,
-    StatusCategory::Done,
-    StatusCategory::Cancelled,
-    StatusCategory::Unknown,
-];
+/// Where `category` sits in the contract's own order — the order a mapping is reported in.
+///
+/// An exhaustive match, so a status category the contract adds fails to compile here rather
+/// than going unordered, and the order is the contract's rather than a list restated beside it.
+const fn category_position(category: StatusCategory) -> usize {
+    match category {
+        StatusCategory::Draft => 0,
+        StatusCategory::Backlog => 1,
+        StatusCategory::Todo => 2,
+        StatusCategory::Queued => 3,
+        StatusCategory::InProgress => 4,
+        StatusCategory::Done => 5,
+        StatusCategory::Cancelled => 6,
+        StatusCategory::Unknown => 7,
+    }
+}
+
+/// A `WorkflowState.type` a status category is written as when the mapping names no state for
+/// it — the closed set this source writes, which Linear's open vocabulary of read types
+/// (`triage`, `duplicate`, …) is wider than.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowType {
+    Backlog,
+    Unstarted,
+    Started,
+    Completed,
+    Canceled,
+}
+
+impl WorkflowType {
+    /// The type a category reads back as and is written as, or `None` for one no type stands
+    /// for — `draft`, `queued` and `unknown`.
+    const fn of(category: StatusCategory) -> Option<Self> {
+        match category {
+            StatusCategory::Backlog => Some(Self::Backlog),
+            StatusCategory::Todo => Some(Self::Unstarted),
+            StatusCategory::InProgress => Some(Self::Started),
+            StatusCategory::Done => Some(Self::Completed),
+            StatusCategory::Cancelled => Some(Self::Canceled),
+            StatusCategory::Draft | StatusCategory::Queued | StatusCategory::Unknown => None,
+        }
+    }
+
+    /// The type as Linear spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Backlog => "backlog",
+            Self::Unstarted => "unstarted",
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Canceled => "canceled",
+        }
+    }
+}
 
 /// Where one category is written, as this instance's `status_mapping` resolves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StateTarget<'a> {
     /// The team's workflow state of exactly this name.
-    Named(&'a str),
-    /// The team's first workflow state of this `WorkflowState.type`: a category the mapping
-    /// does not mention, as a source without the key writes it.
-    FirstOfType(&'static str),
-    /// No state: the mapping sets the category to `null` (`configured`), or leaves out a
-    /// category no workflow state type stands for.
-    Disabled { configured: bool },
+    Named(&'a StateName),
+    /// The team's first workflow state of this type: a category the mapping does not mention,
+    /// as a source without the key writes it.
+    FirstOfType(WorkflowType),
+    /// No state, because the mapping sets the category to `null`.
+    DisabledByMapping,
+    /// No state, because the mapping leaves out a category no workflow state type stands for.
+    NoWorkflowType,
 }
 
 /// This instance's `status_mapping`, read in both directions.
 ///
-/// One entry per category the configuration names, at most once each, and no two of them
-/// naming one state — a state that read back as two categories would answer a status filter
-/// for either with the other's rows.
+/// One entry per category the configuration names, at most once each and in the contract's
+/// category order, and no two of them naming one state — a state that read back as two
+/// categories would answer a status filter for either with the other's rows.
 #[derive(Debug, Clone, Default)]
 struct StatusMapping {
-    entries: Vec<(StatusCategory, Option<String>)>,
+    entries: Vec<(StatusCategory, Option<StateName>)>,
 }
 
 impl StatusMapping {
     fn resolve(
-        configured: std::collections::BTreeMap<String, Option<StateName>>,
+        configured: std::collections::HashMap<StatusCategory, Option<StateName>>,
         instance: &SourceName,
     ) -> Result<Self, SourceError> {
-        let mut entries: Vec<(StatusCategory, Option<String>)> = Vec::new();
-        for (key, value) in configured {
-            let category = CATEGORIES
-                .into_iter()
-                .find(|category| category_word(*category) == key)
-                .ok_or_else(|| SourceError::Config {
-                    message: format!(
-                        "source {instance}: status_mapping names {key:?}, which is not a status \
-                         category; the categories are {}",
-                        CATEGORIES.map(category_word).join(", ")
-                    ),
-                })?;
-            let name = value.map(|name| name.0);
+        let mut configured: Vec<_> = configured.into_iter().collect();
+        configured.sort_by_key(|(category, _)| category_position(*category));
+        let mut entries: Vec<(StatusCategory, Option<StateName>)> = Vec::new();
+        for (category, name) in configured {
             if let Some(name) = &name
                 && let Some((other, _)) = entries.iter().find(|(_, held)| {
-                    held.as_deref()
-                        .is_some_and(|held| held.eq_ignore_ascii_case(name))
+                    held.as_ref()
+                        .is_some_and(|held| held.0.eq_ignore_ascii_case(&name.0))
                 })
             {
                 return Err(SourceError::Config {
                     message: format!(
                         "source {instance}: status_mapping sends both {} and {} to the workflow \
-                         state {name:?}; one state cannot read back as two categories, so map \
-                         one of them to another state or to null",
+                         state {:?}; one state cannot read back as two categories, so map one of \
+                         them to another state or to null",
                         category_word(*other),
-                        category_word(category)
+                        category_word(category),
+                        name.0
                     ),
                 });
             }
             entries.push((category, name));
         }
-        // In the contract's own category order, which is the order a report lists them in.
-        entries.sort_by_key(|(category, _)| CATEGORIES.iter().position(|held| held == category));
         Ok(Self { entries })
     }
 
@@ -741,19 +791,17 @@ impl StatusMapping {
     fn target(&self, category: StatusCategory) -> StateTarget<'_> {
         match self.entries.iter().find(|(held, _)| *held == category) {
             Some((_, Some(name))) => StateTarget::Named(name),
-            Some((_, None)) => StateTarget::Disabled { configured: true },
-            None => match workflow_state_types(&category).first() {
-                Some(kind) => StateTarget::FirstOfType(kind),
-                None => StateTarget::Disabled { configured: false },
-            },
+            Some((_, None)) => StateTarget::DisabledByMapping,
+            None => WorkflowType::of(category)
+                .map_or(StateTarget::NoWorkflowType, StateTarget::FirstOfType),
         }
     }
 
     /// The category a workflow state of this name reads as, when the mapping names it.
     fn category_of(&self, state: &str) -> Option<StatusCategory> {
         self.entries.iter().find_map(|(category, name)| {
-            name.as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case(state))
+            name.as_ref()
+                .is_some_and(|name| name.0.eq_ignore_ascii_case(state))
                 .then_some(*category)
         })
     }
@@ -762,7 +810,7 @@ impl StatusMapping {
     fn named(&self) -> impl Iterator<Item = (StatusCategory, &str)> {
         self.entries
             .iter()
-            .filter_map(|(category, name)| name.as_deref().map(|name| (*category, name)))
+            .filter_map(|(category, name)| name.as_ref().map(|name| (*category, name.0.as_str())))
     }
 }
 
@@ -802,12 +850,18 @@ pub struct WorkflowStatesReport {
     /// The configured source name.
     pub source: SourceName,
     /// The configured team, as `team` names it.
-    // llmlint: ignore[invalid_states_unrepresentable] Echoed verbatim from the validated
-    // `team` the source was built with, so a reader matches the report to the configuration.
-    pub team: String,
+    team: Team,
     /// Every workflow state `status_mapping` names, in category order. Empty when the mapping
     /// names none.
     pub states: Vec<MappedWorkflowState>,
+}
+
+impl WorkflowStatesReport {
+    /// The configured team, as `team` names it.
+    #[must_use]
+    pub fn team(&self) -> &str {
+        &self.team.0
+    }
 }
 
 /// One workflow state `status_mapping` names, and whether the configured team has it.
@@ -1297,7 +1351,8 @@ impl LinearSource {
     /// what reads as it: the issues at its named state, by name, when it is mapped; and the
     /// issues of its type *at no state the mapping names*, because those read as the category
     /// they are mapped to — a `todo` filter returning an issue at `Queued` would be a row that
-    /// reads back as another category. A category set to `null` asks for nothing.
+    /// reads back as another category. A category set to `null` is never written, and still
+    /// asks for the issues of its type, which read as it.
     fn status_narrowing(&self, statuses: &[StatusCategory]) -> Value {
         if self.statuses.is_empty() {
             return json!({"state": {"type": {"in": statuses
@@ -1309,13 +1364,15 @@ impl LinearSource {
         for category in statuses {
             let target = self.statuses.target(*category);
             if let StateTarget::Named(name) = target {
-                alternatives.push(json!({"state": {"name": {"eqIgnoreCase": name}}}));
+                alternatives.push(json!({"state": {"name": {"eqIgnoreCase": name.0}}}));
             }
             // Every issue that reads as this category by its type — at a state of the type and
-            // of no name the mapping claims — whether or not the category is mapped: with
-            // `backlog` mapped to `Proposed`, an issue at `Backlog` still reads as `backlog`.
+            // of no name the mapping claims — whether the category is mapped, left out or set
+            // to `null`: with `backlog` mapped to `Proposed` an issue at `Backlog` still reads
+            // as `backlog`, and with `cancelled` set to `null` an issue at `Canceled` still
+            // reads as `cancelled`, which a write can no longer move it to but a read reports.
             let types = workflow_state_types(category);
-            if !types.is_empty() && !matches!(target, StateTarget::Disabled { .. }) {
+            if !types.is_empty() {
                 let mut parts = vec![json!({"state": {"type": {"in": types}}})];
                 parts.extend(
                     self.statuses
@@ -2163,9 +2220,7 @@ impl TaskSource for LinearSource {
             TaskRef::listed(key, near, Some(&self.name), entries.clone())
                 .map_err(|message| SourceError::Refused { message })?;
         }
-        if let StateTarget::Disabled { configured: true } =
-            self.statuses.target(write.item.status.category)
-        {
+        if self.statuses.target(write.item.status.category) == StateTarget::DisabledByMapping {
             return Err(self.disabled(write.item.status.category, true));
         }
         let project = self.filed_in(write.item.project.as_ref(), "task")?;
@@ -2177,8 +2232,14 @@ impl TaskSource for LinearSource {
         // was called where it came from; one the mapping leaves out keeps the lookup a source
         // without the key has always made, by the status's own name.
         let state = match self.statuses.target(write.item.status.category) {
-            StateTarget::Named(name) => self.named_state(name, write.item.status.category).await?.0,
-            StateTarget::FirstOfType(_) | StateTarget::Disabled { .. } => {
+            StateTarget::Named(name) => {
+                self.named_state(&name.0, write.item.status.category)
+                    .await?
+                    .0
+            }
+            StateTarget::FirstOfType(_)
+            | StateTarget::DisabledByMapping
+            | StateTarget::NoWorkflowType => {
                 self.one_id(Lookup::IssueState {
                     name: &write.item.status.name,
                     team: &team,
@@ -2841,7 +2902,10 @@ impl TaskSource for LinearSource {
         };
         let (_, mut slot) = metadata_description(description.clone())?;
         slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
-        let rewritten = self.rendered_field(content, &slot)?;
+        // No read-back check, unlike a content write: this slot is never empty, it is written
+        // after the content, and a read takes the last slot off first, so the content reads
+        // back as itself whatever it ends in.
+        let rewritten = Self::described(Some(content), &slot)?;
         if rewritten != description {
             self.write_description_alone(&task.id, rewritten.as_deref())
                 .await?;
@@ -2862,7 +2926,7 @@ impl TaskSource for LinearSource {
         };
         let (_, mut slot) = metadata_description(held.clone())?;
         slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
-        let rewritten = self.rendered_field(content, &slot)?;
+        let rewritten = Self::described(Some(content), &slot)?;
         if rewritten != held {
             self.write_document_content(&document.id, rewritten.as_deref())
                 .await?;
@@ -2878,6 +2942,21 @@ impl TaskSource for LinearSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
     }
+}
+
+/// Refuse a narrow project or document write whose payload names another item than the one it
+/// was sent for, on the terms [`written_is`] refuses an issue's.
+fn acknowledged(item: &Value, asked: &NativeId, root: MutationRoot) -> Result<(), SourceError> {
+    let written = backend_id(item, "id")?;
+    if written == asked.0 {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "{} for {asked} answered with the item {written}",
+            root.as_str()
+        ),
+    })
 }
 
 /// Refuse a narrow write's payload naming an issue other than the one it was sent for.
@@ -2922,7 +3001,8 @@ impl LinearSource {
     /// because nothing Linear could answer changes it.
     fn writable(&self, category: StatusCategory) -> Result<(), SourceError> {
         match self.statuses.target(category) {
-            StateTarget::Disabled { configured } => Err(self.disabled(category, configured)),
+            StateTarget::DisabledByMapping => Err(self.disabled(category, true)),
+            StateTarget::NoWorkflowType => Err(self.disabled(category, false)),
             StateTarget::Named(_) | StateTarget::FirstOfType(_) => Ok(()),
         }
     }
@@ -3122,8 +3202,7 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing projectUpdate.project".into(),
             })?;
-        backend_id(project, "id")?;
-        Ok(())
+        acknowledged(project, id, MutationRoot::ProjectUpdate)
     }
 
     /// Send one document's new `content` alone.
@@ -3144,30 +3223,7 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing documentUpdate.document".into(),
             })?;
-        backend_id(document, "id")?;
-        Ok(())
-    }
-
-    /// One long-form field holding `content` and a slot of exactly `slot`, refused before
-    /// anything is sent when a read would not report that content and that slot back.
-    fn rendered_field(
-        &self,
-        content: &str,
-        slot: &std::collections::BTreeMap<String, Value>,
-    ) -> Result<Option<String>, SourceError> {
-        let written = Self::described(Some(content), slot)?;
-        let (reads, read) = metadata_description(written.clone())?;
-        if reads.as_deref().unwrap_or_default() != content || &read != slot {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "this content would read back from source {} as something other than \
-                     itself, or ends in what it reads as its own metadata slot; next: change \
-                     how the template's content ends",
-                    self.name
-                ),
-            });
-        }
-        Ok(written)
+        acknowledged(document, id, MutationRoot::DocumentUpdate)
     }
 
     /// The configured team's workflow states, every one with its type, in Linear's order.
@@ -3186,7 +3242,8 @@ impl LinearSource {
             .map(|node| {
                 Ok(TeamState {
                     id: NativeId(backend_id(node, "id")?.into()),
-                    name: str_at(node, "name")?.to_owned(),
+                    name: StateName::try_from(str_at(node, "name")?.to_owned())
+                        .map_err(|message| SourceError::Malformed { message })?,
                     kind: str_at(node, "type")?.to_owned(),
                 })
             })
@@ -3203,8 +3260,8 @@ impl LinearSource {
         self.team_states()
             .await?
             .into_iter()
-            .find(|state| state.name.eq_ignore_ascii_case(name))
-            .map(|state| (state.id, state.name))
+            .find(|state| state.name.0.eq_ignore_ascii_case(name))
+            .map(|state| (state.id, state.name.0))
             .ok_or_else(|| SourceError::Refused {
                 message: format!(
                     "source {} maps status {} to the workflow state {name:?}, which team {} \
@@ -3226,9 +3283,10 @@ impl LinearSource {
         task: &NativeId,
     ) -> Result<(NativeId, String), SourceError> {
         match self.statuses.target(category) {
-            StateTarget::Named(name) => self.named_state(name, category).await,
-            StateTarget::FirstOfType(kind) => self.state_of(category, kind, task).await,
-            StateTarget::Disabled { configured } => Err(self.disabled(category, configured)),
+            StateTarget::Named(name) => self.named_state(&name.0, category).await,
+            StateTarget::FirstOfType(kind) => self.state_of(category, kind.as_str(), task).await,
+            StateTarget::DisabledByMapping => Err(self.disabled(category, true)),
+            StateTarget::NoWorkflowType => Err(self.disabled(category, false)),
         }
     }
 
@@ -3242,7 +3300,7 @@ impl LinearSource {
             .map(|(category, name)| {
                 let found = held
                     .iter()
-                    .find(|state| state.name.eq_ignore_ascii_case(name));
+                    .find(|state| state.name.0.eq_ignore_ascii_case(name));
                 MappedWorkflowState {
                     category,
                     state: name.to_owned(),
@@ -3251,13 +3309,16 @@ impl LinearSource {
                 }
             })
             .collect();
+        // `team_states` has just resolved the configured team, so there is one.
+        let team = self.team.clone().ok_or_else(|| SourceError::Refused {
+            message: format!(
+                "source {} needs config.team to report its states",
+                self.name
+            ),
+        })?;
         Ok(WorkflowStatesReport {
             source: self.name.clone(),
-            team: self
-                .team
-                .as_ref()
-                .map(|team| team.0.clone())
-                .unwrap_or_default(),
+            team,
             states,
         })
     }
@@ -3266,7 +3327,7 @@ impl LinearSource {
 /// One workflow state of the configured team.
 struct TeamState {
     id: NativeId,
-    name: String,
+    name: StateName,
     kind: String,
 }
 
@@ -3495,22 +3556,17 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 /// Linear's workflow states are triage, backlog, unstarted, started, completed and
 /// canceled. None of them is a draft, so `Draft` narrows to nothing exactly as `Unknown`
 /// does rather than filtering on a state Linear does not have.
+///
+/// Linear has no type for work that is claimed and not yet started: `unstarted` is `todo` and
+/// `started` is `in-progress`, and a Linear issue reads back as one of those. So `queued`
+/// narrows to nothing by type, exactly as `draft` does — mapping it onto either neighbour would
+/// have a `queued` filter return an item that reads back as `todo` or `in-progress`, which is
+/// capability rule 1 broken. A state `status_mapping` names is what reads as either.
 fn workflow_state_types(s: &StatusCategory) -> Vec<&'static str> {
-    match s {
-        StatusCategory::Draft => vec![],
-        StatusCategory::Backlog => vec!["backlog"],
-        StatusCategory::Todo => vec!["unstarted"],
-        // Linear has no state for work that is claimed and not yet started: `unstarted` is
-        // `todo` and `started` is `in-progress`, and a Linear issue reads back as one of
-        // those. So `queued` narrows to nothing, exactly as `draft` does — mapping it onto
-        // either neighbour would have a `queued` filter return an item that reads back as
-        // `todo` or `in-progress`, which is capability rule 1 broken.
-        StatusCategory::Queued => vec![],
-        StatusCategory::InProgress => vec!["started"],
-        StatusCategory::Done => vec!["completed"],
-        StatusCategory::Cancelled => vec!["canceled"],
-        StatusCategory::Unknown => vec![],
-    }
+    WorkflowType::of(*s)
+        .map(WorkflowType::as_str)
+        .into_iter()
+        .collect()
 }
 /// A category as `ProjectStatus.type` spells it — a **different** vocabulary, and a
 /// different enum: Linear declares that field `ProjectStatusType!`, whose members are
@@ -3992,16 +4048,10 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
 
 /// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment at the
 /// end of the long-form field, and writes it on one line with the canonical JSON inside a code
-/// span: ``<!-- onetaskgraph.metadata `{…}` -->``.
-///
-/// **The code span is what keeps the JSON byte for byte, and Linear is why it is needed.**
-/// Linear stores an issue's description and a document's content as Markdown and normalizes the
-/// text *inside* an HTML comment as it normalizes prose — observed 2026-10-02 against the
-/// scratch team: a domain-like key `caller.live` came back `[caller.live](<http://caller.live>)`,
-/// an array's `[`/`]` came back `\[`/`\]`, `\"` lost its backslash, `_y_` became `*y*`, and an
-/// autolink of `github.com/a/b` swallowed the JSON after it. The same payload inside a code span
-/// on one line came back identical, in an issue's description and in a document's content
-/// alike. See [`slot_json`] for the three characters escaped so the span cannot end early.
+/// span: ``<!-- onetaskgraph.metadata `{…}` -->``. The code span is the one spelling Linear keeps
+/// byte for byte in a description or a document — see the module documentation's ruling on what
+/// Linear does to an HTML comment — and [`slot_json`] escapes the three characters that could
+/// end it early.
 const METADATA_PREFIX: &str = "<!-- onetaskgraph.metadata";
 /// The opening of the slot this source writes.
 const METADATA_OPEN_SPAN: &str = "<!-- onetaskgraph.metadata `";
@@ -4123,15 +4173,12 @@ fn metadata_description(
 }
 
 /// The narrowing that asks Linear for the issues whose description holds `"<key>":"<value>"`
-/// — the bytes a string `value` under `key` is encoded as in this source's metadata slot,
-/// whose JSON [`described`](LinearSource::described) writes compact.
+/// — the bytes a string `value` under `key` is encoded as in this source's metadata slot.
 ///
 /// A candidate set rather than the answer: the phrase can sit in the visible prose, or under
 /// another key's object, and both are kept out by the confirmation over the parsed slot that
-/// follows every read. What it cannot do is miss an issue that holds the value, which is what
-/// makes sending it sound — `IssueFilter.description.contains` reads the whole stored
-/// description, the slot included, and is case-sensitive, both observed against Linear on
-/// 2026-10-02 and recorded in this crate's module documentation.
+/// follows every read. What it cannot do is miss an issue whose slot holds the value, which is
+/// what makes sending it sound.
 fn slot_phrase(key: &str, value: &str) -> Result<Value, SourceError> {
     Ok(json!({"description": {"contains": format!("{}:{}", slot_json(&key)?, slot_json(&value)?)}}))
 }

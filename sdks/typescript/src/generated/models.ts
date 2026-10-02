@@ -1567,6 +1567,22 @@ name: string
 export type Label = GeneratedLabel.Label;
 export namespace GeneratedLinearConfig {
 /**
+ * The id of one Linear project, which a scoped source holds alone.
+ */
+export type LinearProjectId = string
+/**
+ * The name of one workflow state of a Linear team.
+ *
+ * Validated on the way in rather than checked later, so a blank name — which no workflow
+ * state can have — is a state this type cannot hold.
+ */
+export type LinearWorkflowStateName = string
+/**
+ * A Linear team's key or id.
+ */
+export type LinearTeam = string
+
+/**
  * One `linear` source's configuration.
  *
  * It names the credential's environment variable, never its value. Serializable so the
@@ -1590,7 +1606,7 @@ endpoint?: string
  * no project is placed in it, and one naming another project is refused. Absent, the
  * source reads and writes team-wide.
  */
-project?: (string | null)
+project?: (LinearProjectId | null)
 /**
  * Per-instance mapping from a status category to the exact name of one workflow state
  * of the configured team, or `null` to disable that category.
@@ -1608,12 +1624,12 @@ project?: (string | null)
  * read.
  */
 status_mapping?: {
-[k: string]: (string | null)
+[k: string]: (LinearWorkflowStateName | null)
 }
 /**
  * Linear team key/id used to narrow reads and required for item writes.
  */
-team?: (string | null)
+team?: (LinearTeam | null)
 }
 
 }

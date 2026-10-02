@@ -211,6 +211,13 @@ pub fn schema_bundle() -> Value {
     // `plugin_config`: both SDKs are generated from the roots, and a caller writing a
     // configuration for the source this host's Linear work lands in — its `status_mapping`
     // and its `project` — needs the shape named rather than reachable only as a plugin's.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The schema is the plugin's own
+    // `LinearConfig`, not restated here; what lives here is its registration as a root, and
+    // the roots are what both SDK generators read and what `SCHEMA_BUNDLE_VERSION` and its
+    // golden track — a root registered anywhere else is one no SDK is generated against and
+    // no version moves for. The engine already depends on and names every plugin by feature
+    // (`registry.rs`), and reaching the root through `SourcePlugin` instead would change the
+    // api crate AGENTS.md asks be kept still.
     #[cfg(feature = "linear")]
     roots.insert(
         "LinearConfig",

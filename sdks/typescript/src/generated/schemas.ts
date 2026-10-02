@@ -2798,6 +2798,68 @@ export const runtimeSchemas = {
     "type": "object"
   },
   "LinearConfig": {
+    "$defs": {
+      "LinearProjectId": {
+        "description": "The id of one Linear project, which a scoped source holds alone.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "LinearTeam": {
+        "description": "A Linear team's key or id.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "LinearWorkflowStateName": {
+        "description": "The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
     "description": "One `linear` source's configuration.\n\nIt names the credential's environment variable, never its value. Serializable so the\nschema it is published under carries each member's default, which is what a configuration\nthat leaves the member out means.",
@@ -2813,31 +2875,46 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "project": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LinearProjectId"
+          },
+          {
+            "type": "null"
+          }
+        ],
         "default": null,
-        "description": "The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "description": "The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
       },
       "status_mapping": {
         "additionalProperties": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinearWorkflowStateName"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "default": {},
         "description": "Per-instance mapping from a status category to the exact name of one workflow state\nof the configured team, or `null` to disable that category.\n\nThe keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,\n`done`, `cancelled` and `unknown`. A mapped category is written as the named state by\nevery write — never as the first state of that state's type — and an issue at a state\nthe mapping names reads as that category, under that state's name; any other state\nreads by its type, and `--status` returns exactly the issues that read as the\ncategories it names. A category this does not mention keeps the\nbehaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and\n`cancelled` are written as the team's first state of the matching type, and `draft`,\n`queued` and `unknown` are disabled. A name the team lacks is refused before any\nwrite, and two categories mapped to one name are refused when this configuration is\nread.",
+        "propertyNames": {
+          "$ref": "#/$defs/StatusCategory"
+        },
         "type": "object"
       },
       "team": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LinearTeam"
+          },
+          {
+            "type": "null"
+          }
+        ],
         "default": null,
-        "description": "Linear team key/id used to narrow reads and required for item writes.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "description": "Linear team key/id used to narrow reads and required for item writes."
       }
     },
     "title": "LinearConfig",
@@ -15087,6 +15164,11 @@ export const runtimeSchemas = {
   },
   "WorkflowStatesReport": {
     "$defs": {
+      "LinearTeam": {
+        "description": "A Linear team's key or id.",
+        "minLength": 1,
+        "type": "string"
+      },
       "MappedWorkflowState": {
         "description": "One workflow state `status_mapping` names, and whether the configured team has it.",
         "properties": {
@@ -15183,8 +15265,8 @@ export const runtimeSchemas = {
         "type": "array"
       },
       "team": {
-        "description": "The configured team, as `team` names it.",
-        "type": "string"
+        "$ref": "#/$defs/LinearTeam",
+        "description": "The configured team, as `team` names it."
       }
     },
     "required": [

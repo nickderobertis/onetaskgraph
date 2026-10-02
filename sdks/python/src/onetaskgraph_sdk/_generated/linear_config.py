@@ -4,9 +4,45 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
+
+class LinearProjectId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The id of one Linear project, which a scoped source holds alone.",
+            min_length=1,
+        ),
+    ]
+
+
+class LinearTeam(RootModel[str]):
+    root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
+
+
+class LinearWorkflowStateName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
+            min_length=1,
+        ),
+    ]
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
 
 
 class LinearConfig(BaseModel):
@@ -21,18 +57,19 @@ class LinearConfig(BaseModel):
         Field(description="GraphQL endpoint override, primarily for fixture servers."),
     ] = "https://api.linear.app/graphql"
     project: Annotated[
-        str | None,
+        LinearProjectId | None,
         Field(
             description="The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
         ),
     ] = None
     status_mapping: Annotated[
-        dict[str, str | None],
+        dict[StatusCategory, LinearWorkflowStateName | None],
         Field(
-            description="Per-instance mapping from a status category to the exact name of one workflow state\nof the configured team, or `null` to disable that category.\n\nThe keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,\n`done`, `cancelled` and `unknown`. A mapped category is written as the named state by\nevery write — never as the first state of that state's type — and an issue at a state\nthe mapping names reads as that category, under that state's name; any other state\nreads by its type, and `--status` returns exactly the issues that read as the\ncategories it names. A category this does not mention keeps the\nbehaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and\n`cancelled` are written as the team's first state of the matching type, and `draft`,\n`queued` and `unknown` are disabled. A name the team lacks is refused before any\nwrite, and two categories mapped to one name are refused when this configuration is\nread."
+            description="Per-instance mapping from a status category to the exact name of one workflow state\nof the configured team, or `null` to disable that category.\n\nThe keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,\n`done`, `cancelled` and `unknown`. A mapped category is written as the named state by\nevery write — never as the first state of that state's type — and an issue at a state\nthe mapping names reads as that category, under that state's name; any other state\nreads by its type, and `--status` returns exactly the issues that read as the\ncategories it names. A category this does not mention keeps the\nbehaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and\n`cancelled` are written as the team's first state of the matching type, and `draft`,\n`queued` and `unknown` are disabled. A name the team lacks is refused before any\nwrite, and two categories mapped to one name are refused when this configuration is\nread.",
+            validate_default=True,
         ),
     ] = {}
     team: Annotated[
-        str | None,
+        LinearTeam | None,
         Field(description="Linear team key/id used to narrow reads and required for item writes."),
     ] = None

@@ -1285,7 +1285,7 @@ const TWENTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 92] = [
     ("ItemKind", 0x75db1aa08ed04b2f),
     ("ItemType", 0x417523fd8e62d46a),
     ("Label", 0x07555503d77a90c7),
-    ("LinearConfig", 0x026e099037a118e6),
+    ("LinearConfig", 0x8ec97f540618a4d5),
     ("Location", 0x0690620b049c989a),
     ("MetadataSet", 0x1aa477c3499d2a40),
     ("NewComment", 0xda981b6b61244e61),

@@ -2991,8 +2991,27 @@ impl LinearWorkspace {
 
     /// The project one held issue is filed under.
     pub fn project_of(&self, id: &str) -> Option<String> {
+        self.filed_under("tasks", id)
+    }
+
+    /// The project one held document is filed under.
+    pub fn document_project(&self, id: &str) -> Option<String> {
+        self.filed_under("documents", id)
+    }
+
+    /// The id of the held document titled `title`, for one a command created.
+    pub fn document_titled(&self, title: &str) -> Option<String> {
         let data = self.state.lock().unwrap();
-        data["tasks"]
+        data["documents"]
+            .as_array()?
+            .iter()
+            .find(|row| row["title"] == title)
+            .and_then(|row| row["id"].as_str().map(str::to_owned))
+    }
+
+    fn filed_under(&self, kind: &str, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        data[kind]
             .as_array()?
             .iter()
             .find(|row| row["id"] == id)

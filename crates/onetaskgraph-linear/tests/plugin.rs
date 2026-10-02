@@ -6525,12 +6525,12 @@ fn a_status_mapping_this_source_could_not_honour_is_refused_when_it_is_read() {
     };
     let unknown = build(serde_json::json!({"shipped":"Done"})).expect("an unknown category");
     assert!(
-        unknown.contains("\"shipped\"") && unknown.contains("in-progress"),
+        unknown.contains("`shipped`") && unknown.contains("`in-progress`"),
         "{unknown}"
     );
     let twice = build(serde_json::json!({"todo":"Todo","queued":"todo"})).expect("one name twice");
     assert!(
-        twice.contains("both queued and todo") && twice.contains("workflow state \"Todo\""),
+        twice.contains("both todo and queued") && twice.contains("workflow state \"todo\""),
         "{twice}"
     );
     let blank = build(serde_json::json!({"todo":" "})).expect("a blank name");

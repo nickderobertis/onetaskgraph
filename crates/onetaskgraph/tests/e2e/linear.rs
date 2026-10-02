@@ -228,6 +228,7 @@ fn mapped_workspace(sandbox: &Sandbox, mapping: Value) -> (Value, LinearWorkspac
                 issue("L-BACKLOG", "Backlog", json!({})),
                 issue("L-REVIEW", "In Review", json!({})),
                 issue("L-TRIAGE", "Triage", json!({})),
+                issue("L-CANCELED", "Canceled", json!({})),
             ],
             vec![project("LP-1")],
             Vec::new(),
@@ -299,7 +300,6 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
         let state = named(category);
         let expected = json!([category, state]);
 
-        // `task status set`.
         let set = answered(
             &sandbox,
             &[
@@ -318,7 +318,6 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
         );
         assert_eq!(status(&sandbox, "linear:L-CYCLE"), expected, "{category}");
 
-        // The targeted update.
         answered(
             &sandbox,
             &[
@@ -336,7 +335,6 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
             "{category}: task update"
         );
 
-        // `task create`.
         let title = format!("Created {category}");
         let file = body(&sandbox, "A created body.");
         answered(
@@ -370,7 +368,6 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
             "{category}: task create"
         );
 
-        // A copy.
         let copied = answered(
             &sandbox,
             &[
@@ -517,6 +514,16 @@ fn a_partly_mapped_linear_source_writes_every_category_it_leaves_out_as_an_unmap
         listed(&sandbox, &["--source", "linear", "--status", "backlog"]),
         ["L-PROPOSED", "L-BACKLOG"]
     );
+    // `cancelled`, set to null, is never written, and an issue already at a state of its type
+    // still reads as it — so `--status cancelled` returns that issue rather than nothing.
+    assert_eq!(
+        status(&sandbox, "linear:L-CANCELED"),
+        json!(["cancelled", "Canceled"])
+    );
+    assert_eq!(
+        listed(&sandbox, &["--source", "linear", "--status", "cancelled"]),
+        ["L-CANCELED"]
+    );
 }
 
 #[test]
@@ -546,7 +553,7 @@ fn a_mapped_state_the_team_lacks_and_one_state_mapped_twice_are_refused() {
     assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
     let said = stderr(&refused);
     assert!(
-        said.contains("status_mapping sends both queued and todo"),
+        said.contains("status_mapping sends both todo and queued"),
         "{said}"
     );
 }
@@ -576,6 +583,27 @@ fn sources_fields_reports_each_mapped_state_on_a_linear_team_and_refuses_to_appl
         "{text}"
     );
 
+    // A source whose mapping names no state reports so, in both renderings.
+    let sandbox_unmapped = Sandbox::new();
+    let (unmapped, _) = mapped_workspace(&sandbox_unmapped, Value::Null);
+    sandbox_unmapped.project_document(&document(&json!({ "linear": unmapped })));
+    assert_eq!(
+        answered(
+            &sandbox_unmapped,
+            &["--json", "sources", "fields", "linear"]
+        ),
+        json!({"source": "linear", "team": "FIX", "states": []})
+    );
+    assert_eq!(
+        stdout(&exits(
+            &sandbox_unmapped,
+            &["sources", "fields", "linear"],
+            0
+        ))
+        .trim_end(),
+        "linear: status_mapping names no workflow state of team FIX"
+    );
+
     let from = workspace.served().len();
     let refused = exits(&sandbox, &["sources", "fields", "linear", "--apply"], 1);
     let said = stderr(&refused);
@@ -593,6 +621,10 @@ fn sources_fields_reports_each_mapped_state_on_a_linear_team_and_refuses_to_appl
 /// The workspace a scoped source reads: two projects of the team, an issue and a document in
 /// each, and one issue in none.
 fn scoped_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
+    // LP-1 is the counterpart of the plan's project PX, so a copy of PX updates the one
+    // project a scoped source holds.
+    let mut scope = project("LP-1");
+    scope["metadata"] = json!({"onetaskgraph.origin": "plan:PX"});
     linear_workspace(
         sandbox,
         held(
@@ -601,7 +633,7 @@ fn scoped_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
                 issue("I-OUT", "Todo", json!({"project": "LP-2"})),
                 issue("I-NONE", "Todo", json!({})),
             ],
-            vec![project("LP-1"), project("LP-2")],
+            vec![scope, project("LP-2")],
             vec![
                 json!({"id": "D-IN", "title": "In", "content": "in", "project": "LP-1", "labels": []}),
                 json!({"id": "D-OUT", "title": "Out", "content": "out", "project": "LP-2", "labels": []}),
@@ -626,10 +658,21 @@ fn a_project_scoped_linear_source_reads_and_writes_that_project_alone() {
     let plan = folder(
         &sandbox,
         "plan",
-        &[(
-            "tasks/F-1.md",
-            "---\ntitle: From the plan\nstatus: todo\n---\nbody\n",
-        )],
+        &[
+            (
+                "tasks/F-1.md",
+                "---\ntitle: From the plan\nstatus: todo\n---\nbody\n",
+            ),
+            (
+                "projects/PX.md",
+                "---\ntitle: The scope's own\nstatus: todo\n---\nbody\n",
+            ),
+            (
+                "projects/PY.md",
+                "---\ntitle: Another project\nstatus: todo\n---\nbody\n",
+            ),
+            ("documents/D-1.md", "---\ntitle: A plan note\n---\nnote\n"),
+        ],
     );
     sandbox.project_document(&document(&json!({
         "scoped": linear(&config, json!({"project": "LP-1"})),
@@ -658,8 +701,30 @@ fn a_project_scoped_linear_source_reads_and_writes_that_project_alone() {
         )),
         ["scoped:D-IN"]
     );
-    // A read by id of anything filed elsewhere is no item of this source.
-    exits(&sandbox, &["task", "show", "scoped:I-OUT"], 1);
+    // A read by id of anything filed elsewhere is no item of this source, and a document
+    // query naming another project holds nothing.
+    for (verb, id) in [
+        ("task", "scoped:I-OUT"),
+        ("project", "scoped:LP-2"),
+        ("document", "scoped:D-OUT"),
+    ] {
+        exits(&sandbox, &[verb, "show", id], 1);
+    }
+    assert_eq!(
+        ids(&answered(
+            &sandbox,
+            &[
+                "--json",
+                "document",
+                "list",
+                "--source",
+                "scoped",
+                "--project",
+                "LP-2"
+            ]
+        )),
+        Vec::<String>::new()
+    );
 
     // Without the key, the same workspace reads team-wide.
     assert_eq!(
@@ -736,6 +801,83 @@ fn a_project_scoped_linear_source_reads_and_writes_that_project_alone() {
     );
     let said = stderr(&refused);
     assert!(said.contains("LP-1") && said.contains("LP-2"), "{said}");
+    assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
+
+    // A document copied in with no project is filed under the scope; one created naming
+    // another project is refused naming both.
+    let copied = answered(
+        &sandbox,
+        &["--json", "document", "copy", "plan:D-1", "--to", "scoped"],
+    );
+    let destination = copied["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .split_once(':')
+        .expect("source:native")
+        .1
+        .to_owned();
+    assert_eq!(
+        workspace.document_project(&destination).as_deref(),
+        Some("LP-1")
+    );
+    let from = workspace.served().len();
+    let refused = exits(
+        &sandbox,
+        &[
+            "document",
+            "create",
+            "scoped",
+            "--project",
+            "LP-2",
+            "--title",
+            "Elsewhere",
+            "--body-file",
+            &file,
+        ],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(said.contains("LP-1") && said.contains("LP-2"), "{said}");
+    assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
+    answered(
+        &sandbox,
+        &[
+            "--json",
+            "document",
+            "create",
+            "scoped",
+            "--project",
+            "LP-1",
+            "--title",
+            "Scoped note",
+            "--body-file",
+            &file,
+        ],
+    );
+    let created = workspace.document_titled("Scoped note").expect("created");
+    assert_eq!(
+        workspace.document_project(&created).as_deref(),
+        Some("LP-1")
+    );
+
+    // The one project it holds is updated by a copy of its counterpart; any other project is
+    // refused naming the scope, writing nothing.
+    let updated = answered(
+        &sandbox,
+        &["--json", "project", "copy", "plan:PX", "--to", "scoped"],
+    );
+    assert_eq!(
+        updated["items"][0]["destination"], "scoped:LP-1",
+        "{updated:#}"
+    );
+    let from = workspace.served().len();
+    let refused = exits(
+        &sandbox,
+        &["project", "copy", "plan:PY", "--to", "scoped"],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(said.contains("scoped to the Linear project LP-1"), "{said}");
     assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
 }
 
