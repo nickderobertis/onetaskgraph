@@ -241,6 +241,19 @@ The read side takes the slot off the visible description, so `content` is what t
 wrote. Only a comment at the very **end** of the description is a slot; one in the middle
 is visible content and is left alone.
 
+A task's `delivers` and `delivered_by` live in that same slot, under `onetaskgraph.delivers`
+and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape and the rules
+`github-projects` keeps in its body slot. A narrow write — `metadata set`, the store's
+`delivered_by`, a copy recording `onetaskgraph.copies`, a regenerated rendering — sends one
+update of the item's `description` (a document's `content`) that differs from what Linear
+holds only inside the slot.
+
+Linear stores the field as Markdown and escapes a line that opens with `-->`, so the slot it
+hands back closes `\-->` rather than `-->`; observed 2026-10-02 for an issue's description
+and a document's content alike, and a comment's body comes back unescaped. The read side
+takes either close. A marker that has to survive every field byte for byte belongs on one
+line, `<!-- … -->`, which Linear leaves alone.
+
 **`github-projects` uses that same encoding, in the issue body, and for the same reason
 plus one of its own: length.** A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
 `SINGLE_SELECT`, `MULTI_SELECT` or `ITERATION`, a `TEXT` value is length-bounded, and a
@@ -287,8 +300,8 @@ always the value it was handed, and the record's location when the source report
 | `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly |
 | `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label, status or field request, and nothing at all when the key already holds the value |
 | `in-memory` | holds the value for the life of its process |
-| `linear` | refuses: `the linear plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |
-| a stdio plugin | answers the three methods of `docs/plugin-protocol.md` §4.18 when its handshake declares `metadata_updates` (§3.7), and is refused in the words Linear uses, without being asked, when it does not |
+| `linear` | one update of the issue's or project's `description`, or the document's `content`, that changes only its trailing metadata slot — every byte above the slot as it was; nothing at all when the key already holds the value |
+| a stdio plugin | answers the three methods of `docs/plugin-protocol.md` §4.18 when its handshake declares `metadata_updates` (§3.7), and is refused, without being asked, when it does not: `the <kind> plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |
 
 A source with no write side is refused naming its plugin, a record the source does not hold is
 refused naming the id, and a source declaring it has no documents is never asked for a document
@@ -376,8 +389,9 @@ before, and the copy reports the link `unrecorded` rather than failing.
      `crates/onetaskgraph-core/tests/copy_link.rs` records it on an in-memory source;
      `the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind` in the
      github-projects plugin tests holds the body slot; the Linear plugin's
-     `a_metadata_key_is_refused_by_name_for_every_record_before_any_request` holds its refusal,
-     which the engine reads as not recorded; and
+     `a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record` holds its slot, and
+     `a_copy_into_linear_records_its_link_on_the_linear_item` in
+     `crates/onetaskgraph/tests/e2e/linear.rs` records one through the binary; and
      `a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked`
      with `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` hold the
      stdio row. -->
@@ -386,6 +400,6 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `local-md` | an entry of the front matter's `metadata:` block, one line of compact JSON; a record whose `metadata:` is written on one line, or that this source otherwise cannot edit one key of narrowly, cannot hold it |
 | `in-memory` | beside its other metadata, for the life of its process |
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
-| `linear` | nowhere: it cannot write one metadata key on its own, so a copy out of it reports the link `unrecorded` |
+| `linear` | the trailing metadata slot of the issue's or project's `description`, or the document's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->

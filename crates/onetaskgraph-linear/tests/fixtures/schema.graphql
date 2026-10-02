@@ -69,6 +69,17 @@
 # `Int`, as published, which is why the plugin reads `2` and `2.0` as one answer and sends a
 # whole number. `IssueFilter.priority` exists there too and stays out, because nothing sends
 # it: the plugin declares `filter_by_priority` unsupported and the engine narrows.
+#
+# The follow-up searches carry a ninth date. `IssueFilter.title`, `.description`, `.priority`
+# and `.comments`; `StringComparator.containsIgnoreCase`; `NullableStringComparator` with its
+# `contains` and `containsIgnoreCase`; `NullableNumberComparator.in`; `CommentCollectionFilter`
+# with `some`; `CommentFilter` with `createdAt`, `updatedAt` and `or`; `DateComparator.gte` and
+# its `DateTimeOrDuration` scalar are pinned 2026-10-02 from the real API's own introspection,
+# read with the live lane's credential, and each was sent to it against the scratch team `TES`
+# and answered as the plugin's module documentation records. The same introspection showed
+# every member of `ProjectUpdateInput` optional, which this file had carried as required for
+# `name`, `statusId` and `labelIds`: a narrow metadata write sends `description` alone, as
+# Linear's published schema allows. `IssueFilter.priority` therefore no longer stays out.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -302,8 +313,36 @@ input IssueFilter {
   labels: IssueLabelCollectionFilter
   state: WorkflowStateFilter
   project: NullableProjectFilter
+  title: StringComparator
+  description: NullableStringComparator
+  priority: NullableNumberComparator
+  comments: CommentCollectionFilter
   and: [IssueFilter!]
   or: [IssueFilter!]
+}
+# `contains` is case-sensitive and `containsIgnoreCase` is not, and both read the whole stored
+# description, the trailing metadata slot included — observed 2026-10-02. A metadata match and
+# an origin are sent as the exact phrase their value is encoded as; a content search ignores case.
+input NullableStringComparator {
+  contains: String
+  containsIgnoreCase: String
+}
+# A `Float` list over the same `0`-`4` scale `Issue.priority` reads, as published.
+input NullableNumberComparator {
+  in: [Float!]
+}
+input CommentCollectionFilter {
+  some: CommentFilter
+}
+input CommentFilter {
+  createdAt: DateComparator
+  updatedAt: DateComparator
+  or: [CommentFilter!]
+}
+# Linear's own scalar, which takes an ISO 8601 instant or a duration; this source sends an
+# RFC 3339 instant.
+input DateComparator {
+  gte: DateTimeOrDuration
 }
 # `state` is the one member here this source does not send, and it is pinned because it is
 # the trap: it exists, it is spelled exactly like the member of `IssueFilter` that carries
@@ -389,6 +428,7 @@ input StringComparator {
   eqIgnoreCase: String
   neqIgnoreCase: String
   in: [String!]
+  containsIgnoreCase: String
 }
 input NullableTeamFilter {
   id: IDComparator
@@ -429,10 +469,10 @@ input ProjectCreateInput {
   labelIds: [String!]!
 }
 input ProjectUpdateInput {
-  name: String!
+  name: String
   description: String
-  statusId: String!
-  labelIds: [String!]!
+  statusId: String
+  labelIds: [String!]
 }
 # Nullability as published: `title` alone is required of a create, and every member of an
 # update is optional.
@@ -471,3 +511,4 @@ input ProjectRelationCreateInput {
   relatedAnchorType: String!
 }
 scalar DateTime
+scalar DateTimeOrDuration
