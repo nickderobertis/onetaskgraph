@@ -907,6 +907,29 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         content_path,
         "--json",
     ]);
+    let update_body = plan.root.join("update.txt");
+    std::fs::write(&update_body, "Updated body").unwrap();
+    let (_, update_calls, updated) = plan.measure(&[
+        "task",
+        "update",
+        id,
+        "--title",
+        "Updated ticket",
+        "--body-file",
+        update_body.to_str().unwrap(),
+        "--status",
+        "in-progress",
+        "--priority",
+        "low",
+        "--metadata",
+        "myapp.reviewer=\"lin\"",
+        "--json",
+    ]);
+    assert_eq!(
+        updated["written"],
+        json!(["title", "content", "status", "priority", "metadata"]),
+        "{updated}"
+    );
     let (_, metadata_calls, _) = plan.measure(&[
         "task",
         "metadata",
@@ -919,7 +942,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
     for (verb, sent, expected) in [
         ("new copy", &new_calls, 4),
         ("copy --create", &create_calls, 3),
-        ("bound copy", &bound_calls, 5),
+        ("bound copy", &bound_calls, 3),
         ("comment", &comment_calls, 2),
         ("recount", &recount_calls, 1),
         ("detail", &detail_calls, 1),
@@ -927,6 +950,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         ("priority", &priority_calls, 2),
         ("content", &content_calls, 2),
         ("metadata", &metadata_calls, 2),
+        ("update", &update_calls, 3),
     ] {
         let mut reads = std::collections::BTreeMap::<String, usize>::new();
         for (_, variables) in sent
@@ -997,7 +1021,17 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             .any(|(query, _)| query == graphql::UPDATE_FIELD)
     );
     let (_, _, shown) = plan.measure(&["task", "show", id, "--no-comments", "--json"]);
-    assert_eq!(shown["items"][0]["item"]["content"], "Final body");
+    assert_eq!(shown["items"][0]["item"]["content"], "Updated body");
+    assert_eq!(shown["items"][0]["item"]["title"], "Updated ticket");
+    assert_eq!(shown["items"][0]["item"]["priority"], "low");
+    assert_eq!(
+        shown["items"][0]["item"]["status"]["category"],
+        "in-progress"
+    );
+    assert_eq!(
+        shown["items"][0]["item"]["metadata"]["myapp.reviewer"],
+        "lin"
+    );
     assert_eq!(
         shown["items"][0]["item"]["metadata"]["myapp.owner"],
         "grace"

@@ -109,3 +109,9 @@ mod templates;
 // it cannot sit behind one plugin crate's edge, which AGENTS.md forbids depending on the engine
 // at any depth; each plugin's own half is proven behind its own edge in its own tests.
 mod update;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against a folder of Markdown and
+// the loopback fixture board, with no credential and no network, in a few seconds. The update
+// and the copy it holds to their write order are the engine's verbs, so they cannot sit behind
+// a plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod write_order;

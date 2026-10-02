@@ -674,8 +674,8 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      7 |                     6 |
-| **node count**     |                  21918 |                   806 |
+| **requests**       |                      6 |                     4 |
+| **node count**     |                  21971 |                   912 |
 
 (h) asks the board once for the item whose origin is the task (`looking up the items copied
 from one origin`, the lookup described under *Asking GitHub the narrower question* below)

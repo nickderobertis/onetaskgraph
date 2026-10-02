@@ -938,6 +938,15 @@ struct GitHubBoard {
     /// that refusal is only reachable once a create has answered with no board item — which
     /// is when the source files the issue itself.
     creation_files_on_board: bool,
+    /// An alias of one batched field write this board fails, once, after performing every
+    /// alias before it — the way GitHub runs a document's mutation fields in order and answers
+    /// one that failed with `null` and an error, without undoing the ones before it.
+    failing_alias: Option<&'static str>,
+    /// The errors the request being answered owes beside its data.
+    owed_errors: Vec<String>,
+    /// Operations this board refuses, each once, named after it was built — so a journey
+    /// can set a board up through the same operations and only then have one refused.
+    refusing: Vec<&'static str>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
@@ -1021,6 +1030,17 @@ impl GitHubBoardFields {
             .cloned()
             .zip(board.variables.iter().cloned())
             .collect()
+    }
+
+    /// Refuse the next request carrying `operation`, once, from here on.
+    pub fn refuse_once(&self, operation: &'static str) {
+        self.board.lock().unwrap().refusing.push(operation);
+    }
+
+    /// Fail the field write aliased `alias` in the next batched field write, once, after
+    /// every alias before it in that document has landed.
+    pub fn fail_field_alias(&self, alias: &'static str) {
+        self.board.lock().unwrap().failing_alias = Some(alias);
     }
 
     /// Take one `Status` option off this board, as a person deleting a column would.
@@ -1750,6 +1770,9 @@ fn github_projects_board_at(
         comment_ticks: 0,
         pending: Vec::new(),
         creation_files_on_board: !fail_first.contains(&"addProjectV2ItemById(input:$input)"),
+        failing_alias: None,
+        owed_errors: Vec::new(),
+        refusing: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
@@ -1820,6 +1843,11 @@ fn github_projects_board_at(
                 served.documents.push(query.to_owned());
                 served.variables.push(variables.clone());
             }
+            {
+                // Refusals named after the board was built join the ones it was built with.
+                let mut held = board.lock().unwrap();
+                owed_failures.append(&mut held.refusing);
+            }
             let owed = owed_failures
                 .iter()
                 .position(|operation| query.contains(operation));
@@ -1833,7 +1861,16 @@ fn github_projects_board_at(
                            "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
             } else {
-                json!({ "data": github_answer(&board, query, &variables) }).to_string()
+                let data = github_answer(&board, query, &variables);
+                let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
+                if owed.is_empty() {
+                    json!({ "data": data }).to_string()
+                } else {
+                    json!({"data": data,
+                           "errors": owed.iter().map(|message| json!({"message": message}))
+                               .collect::<Vec<_>>()})
+                    .to_string()
+                }
             };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -2020,6 +2057,21 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             ),
         ] {
             if enabled {
+                let failing = {
+                    let mut held = board.lock().unwrap();
+                    let failing = held.failing_alias == Some(alias);
+                    if failing {
+                        held.failing_alias = None;
+                        held.owed_errors.push(format!(
+                            "Something went wrong while executing your query: {alias} failed"
+                        ));
+                    }
+                    failing
+                };
+                if failing {
+                    result.insert(alias.to_owned(), Value::Null);
+                    continue;
+                }
                 let answer = github_answer(board, document, &json!({"input":variables[variable]}));
                 result.insert(alias.to_owned(), answer[key].clone());
             }
@@ -2629,7 +2681,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                                          "pageInfo":{"hasNextPage":false,"endCursor":null}});
         return json!({ "node": draft });
     }
-    if query.contains("node(id:$id){__typename ...BoardIssue}") {
+    if query == onetaskgraph_github_projects::graphql::ISSUE {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
@@ -2639,7 +2691,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         if GitHubBoard::is_draft(item) {
             return json!({"node":{"__typename":"DraftIssue"}});
         }
-        return json!({ "node": board.as_issue(item) });
+        let mut node = board.as_issue(item);
+        // The board it sits on with that board's fields, and what blocks it, as the read of an
+        // item by its own id asks for beside the issue.
+        node["boards"] = json!({"nodes":[{"project":{"id":"PVT-board","number":7,
+                                                     "fields":board.fields()}}]});
+        node["blockedBy"] = json!({"nodes":board.related(&id, false),
+                                   "pageInfo":{"hasNextPage":false,"endCursor":null}});
+        return json!({ "node": node });
     }
     if query.contains("node(id:$id)") {
         let id = variables["id"].as_str().expect("dependency id").to_owned();

@@ -200,7 +200,7 @@
 //! | --- | --- | --- |
 //! | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
 //! | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
-//! | bound copy | 5 | ISSUE, BOARD_FIELDS, ISSUE_DEPENDENCIES, UPDATE_ISSUE, UPDATE_FIELDS |
+//! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS, then UPDATE_ISSUE last |
 //! | comment | 2 | ISSUE, ADD_COMMENT |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 //! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
@@ -209,6 +209,7 @@
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
 //! | content | 2 | ISSUE, UPDATE_ISSUE |
 //! | metadata | 2 | ISSUE, UPDATE_ISSUE |
+//! | update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body with its metadata slot, and state) last |
 //! | record only | 1 | ISSUE |
 //!
 //! <!-- github-search-paging:start -->
@@ -788,16 +789,41 @@ pub mod graphql {
         board_issue!()
     );
 
-    /// One issue by its own node id, which is what a qualified id names here.
+    /// What a dependency read selects of each far end: enough to say which kind of item it
+    /// is, its body included for the kind marker.
+    macro_rules! related_issue {
+        () => {
+            " fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"
+        };
+    }
+
+    /// One issue by its own node id, which is what a qualified id names here — with what a
+    /// write of it needs and the issue does not carry in [`board_issue!`]: the field
+    /// definitions of the boards it sits on, and the far ends of its `blockedBy`.
     ///
     /// Strongly consistent, unlike the search above: GitHub's issue search is an index and
     /// answers a write made moments ago with the value from before it, and resolving a node
     /// id does not.
+    ///
+    /// **Why those two ride here and not on the fragment.** A copy or an update of an item
+    /// reads it by its own id, and with them that one read answers everything the write
+    /// needs: which option ids the board's `Status` and `Priority` fields hold — so no
+    /// [`BOARD_FIELDS`] — and which issues block it, with each one's kind — so no
+    /// [`ISSUE_DEPENDENCIES`]. On [`board_issue!`] they would sit under the hundred-issue
+    /// pages of [`SEARCH_ISSUES`] and [`SUB_ISSUES`], multiplying both documents' price. Here
+    /// they sit under one item, and this read is still one point.
     pub const ISSUE: &str = concat!(
-        r#"query($id:ID!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
-      node(id:$id){__typename ...BoardIssue}
+        r#"query($id:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      node(id:$id){__typename ...BoardIssue ... on Issue{
+        boards:projectItems(first:$boardItems){nodes{project{id number fields(first:$nestedFirst){nodes{
+          ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+          ... on ProjectV2Field{__typename id name}
+        }pageInfo{hasNextPage}}}}}
+        blockedBy(first:$first){nodes{...Related}pageInfo{hasNextPage endCursor}}
+      }}
     }"#,
-        board_issue!()
+        board_issue!(),
+        related_issue!()
     );
 
     /// One project's tasks: the sub-issues of the issue that project is.
@@ -986,11 +1012,14 @@ pub mod graphql {
     /// Reads both dependency directions for one issue, with each far end's own kind — and
     /// the issue's own body, which is where an edge to another source is recorded, so that
     /// half of a dependency read needs no second read of the issue or of the board.
-    pub const ISSUE_DEPENDENCIES: &str = r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename
+    pub const ISSUE_DEPENDENCIES: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename
       ... on Issue{body
         blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
         blocking(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
-      }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
+      }}}"#,
+        related_issue!()
+    );
     /// Creates one issue, filed on the board at creation through
     /// `CreateIssueInput.projectV2Ids`, and answers with the board item that filing made.
     ///
@@ -3902,7 +3931,7 @@ impl GitHubProjectsSource {
         let asked = self
             .graphql(
                 graphql::ISSUE,
-                json!({"id":id.0,"nestedFirst":NESTED_PAGE_SIZE,
+                json!({"id":id.0,"first":MAX_PAGE_SIZE,"nestedFirst":NESTED_PAGE_SIZE,
                        "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
             )
             .await;
@@ -4158,6 +4187,9 @@ impl GitHubProjectsSource {
         writes_status: bool,
         selects_priority: bool,
     ) -> Result<BoardFields, SourceError> {
+        if let Some(board) = item.and_then(Resolved::carried_board) {
+            return Ok(board);
+        }
         if let Some(item) = item
             && let Some(board_id) = item.named_board()
             && item.defines(ORIGIN_FIELD)
@@ -5039,10 +5071,33 @@ impl GitHubProjectsSource {
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned),
             fields: field_definitions(nodes),
+            board_fields: self.carried_board_fields(content)?,
+            blocked_by: carried_blocked_by(content)?,
         };
         self.resolved_cache()?
             .insert(resolved.id.clone(), resolved.clone());
         Ok(Some(resolved))
+    }
+
+    /// The field definitions of this board, off the `boards` page a read of an issue by its
+    /// own id carries — or `None` when the read carried none, or carried no entry for this
+    /// board, which a write then answers by reading the board's fields itself.
+    fn carried_board_fields(&self, content: &Value) -> Result<Option<Value>, SourceError> {
+        let Some(nodes) = content.pointer("/boards/nodes").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        let Some(board) = nodes.iter().find_map(|node| {
+            let project = node.get("project")?;
+            (project.get("number").and_then(Value::as_u64) == Some(u64::from(self.project_number)))
+                .then_some(project)
+        }) else {
+            return Ok(None);
+        };
+        let Some(fields) = board.get("fields").filter(|fields| !fields.is_null()) else {
+            return Ok(None);
+        };
+        complete_connection(fields, "board fields", NESTED_PAGE_SIZE)?;
+        Ok(Some(fields.clone()))
     }
 
     /// What one board item's `Priority` field says, through this instance's mapping.
@@ -5165,6 +5220,9 @@ impl GitHubProjectsSource {
     /// does not say — no board id, or no `Status` value to read the field off — takes them
     /// from [`Self::board_fields`], which reads no item.
     async fn status_board(&self, item: &Resolved) -> Result<BoardFields, SourceError> {
+        if let Some(board) = item.carried_board() {
+            return Ok(board);
+        }
         if item.defines("Status")
             && let Some(board_id) = item.named_board()
         {
@@ -5538,8 +5596,9 @@ impl GitHubProjectsSource {
         }
         // The item's own read carries the field's definition whenever it holds a value of
         // it, which a clear always does; a select onto an item holding none reads the board.
-        let board = match item.named_board() {
-            Some(id) if item.defines(PRIORITY_FIELD) => BoardFields {
+        let board = match (item.carried_board(), item.named_board()) {
+            (Some(board), _) => board,
+            (None, Some(id)) if item.defines(PRIORITY_FIELD) => BoardFields {
                 id,
                 fields: json!({"nodes": item.fields.clone(), "pageInfo": {"hasNextPage": false}}),
             },
@@ -5647,13 +5706,17 @@ impl GitHubProjectsSource {
 
     /// Apply one targeted update to one task; see [`TaskSource::update_task`].
     ///
-    /// One read of the item, and then only what differs from it: at most one `updateIssue`
-    /// carrying the title, the body — visible content and metadata slot together — and a
-    /// state change, at most one `Status` option write and one `Priority` field write, and the
-    /// `blockedBy` additions and removals the named edges differ by. A terminal status selects
-    /// its option and then closes, as a whole write does; an open one reopens and then selects
-    /// its option, as [`Self::set_status`] does. The origin field is never written: an update
-    /// is of an item that already exists, whose origin is what it is.
+    /// One read of the item — which carries the board's field definitions and the issue's
+    /// `blockedBy`, so neither is read again — and then only what differs from it: the
+    /// `Status` option and the `Priority` field together in one request, the `blockedBy`
+    /// additions and removals the named edges differ by, and last one `updateIssue` carrying
+    /// the title, the body — visible content and metadata slot together — and a state change.
+    /// So an update naming any of title, body, metadata, status and priority is one read and
+    /// at most two writes. The body goes last so that a write refused part-way leaves it, and
+    /// the metadata in it, as it stood. A terminal status selects its option and then closes,
+    /// as a whole write does; an open one selects its option and then reopens. The origin
+    /// field is never written: an update is of an item that already exists, whose origin is
+    /// what it is.
     ///
     /// The task answered is the item as those writes left it, built from the read and what was
     /// sent rather than read again — the same record a later read in this run answers from.
@@ -5756,8 +5819,9 @@ impl GitHubProjectsSource {
             && self.priorities.is_some()
             && item.priority != HeldPriority::Read(priority)
         {
-            let board = match item.named_board() {
-                Some(board) if item.defines(PRIORITY_FIELD) => BoardFields {
+            let board = match (item.carried_board(), item.named_board()) {
+                (Some(board), _) => board,
+                (None, Some(board)) if item.defines(PRIORITY_FIELD) => BoardFields {
                     id: board,
                     fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
                 },
@@ -5772,8 +5836,13 @@ impl GitHubProjectsSource {
         // recorded in the slot, and the slot travels in the one body update below.
         let edges = match &update.depends_on {
             Some(edges) => Some(
-                self.partition_edges(BoardKind::Work(ItemKind::Task), item.content_kind, edges)
-                    .await?,
+                self.partition_edges(
+                    BoardKind::Work(ItemKind::Task),
+                    item.content_kind,
+                    item.blocked_by.as_deref(),
+                    edges,
+                )
+                .await?,
             ),
             None => None,
         };
@@ -5833,23 +5902,46 @@ impl GitHubProjectsSource {
         if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.state()) {
             fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
         }
-        let terminal = status_move
-            .as_ref()
-            .is_some_and(|moving| matches!(moving.target, StatusTarget::Terminal(_, _)));
-        // A terminal option is selected before the issue closes, so a close never lands on an
-        // item whose board cannot show it; an open one after the issue reopens.
-        if terminal {
-            self.select_option(&item, status_move.as_ref()).await?;
+        // **The body is written last, and that is the guarantee a refusal part-way keeps.**
+        // GitHub runs no two requests as one, and runs one document's mutation fields in order
+        // without undoing an earlier field when a later one fails — so a body written before a
+        // board field the board then refused would be left changed. Written after every other
+        // write has landed, a refusal anywhere leaves the item's body, and every metadata key
+        // it carries, exactly as they stood. So the `Status` option and the `Priority` field go
+        // first, together in one request — a terminal option selected before the issue
+        // closes, as a whole write does — then the `blockedBy` difference, then the body.
+        let mut board_writes: Vec<(&BoardId, (String, Value))> = Vec::new();
+        let mut clear: Option<(&BoardId, &str)> = None;
+        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.option()) {
+            board_writes.push((
+                &moving.board,
+                (
+                    moving.field.clone(),
+                    json!({"singleSelectOptionId": moving.option}),
+                ),
+            ));
         }
-        if !fields.is_empty() {
-            self.update_content(item.content_kind, &item.id, Value::Object(fields))
-                .await?;
+        match &priority_move {
+            Some((board, PriorityWrite::Select { field, option }, _)) => board_writes.push((
+                board,
+                (field.clone(), json!({"singleSelectOptionId": option})),
+            )),
+            Some((board, PriorityWrite::Clear { field }, _)) => clear = Some((board, field)),
+            None => {}
         }
-        if !terminal {
-            self.select_option(&item, status_move.as_ref()).await?;
-        }
-        if let Some((board, write, _)) = &priority_move {
-            self.write_priority(board.as_str(), &item.item_id, write)
+        let mut boards: Vec<&BoardId> = board_writes.iter().map(|(board, _)| *board).collect();
+        boards.extend(clear.map(|(board, _)| board));
+        boards.dedup_by(|one, other| one.as_str() == other.as_str());
+        for board in boards {
+            let writes = board_writes
+                .iter()
+                .filter(|(on, _)| on.as_str() == board.as_str())
+                .map(|(_, write)| write.clone())
+                .collect::<Vec<_>>();
+            let cleared = clear
+                .filter(|(on, _)| on.as_str() == board.as_str())
+                .map(|(_, field)| field);
+            self.set_item_fields(board.as_str(), &item.item_id, &writes, cleared)
                 .await?;
         }
         let mut blocked_by_moved = false;
@@ -5857,7 +5949,15 @@ impl GitHubProjectsSource {
             && item.content_kind == ContentKind::Issue
         {
             blocked_by_moved = self
-                .reconcile_blocked_by(&item.id, native, Issue::Existing)
+                .reconcile_blocked_by(
+                    &item.id,
+                    native,
+                    Issue::Existing(item.blocked_by.as_deref()),
+                )
+                .await?;
+        }
+        if !fields.is_empty() {
+            self.update_content(item.content_kind, &item.id, Value::Object(fields))
                 .await?;
         }
 
@@ -5890,24 +5990,6 @@ impl GitHubProjectsSource {
             written,
             delivers_before: before.delivers,
         }))
-    }
-
-    /// Select the `Status` option one targeted update moves an item to, when it moves it.
-    async fn select_option(
-        &self,
-        item: &Resolved,
-        moving: Option<&StatusMove>,
-    ) -> Result<(), SourceError> {
-        let Some(moving) = moving.filter(|moving| moving.moves.option()) else {
-            return Ok(());
-        };
-        self.set_item_field(
-            moving.board.as_str(),
-            &item.item_id,
-            &moving.field,
-            json!({"singleSelectOptionId": moving.option}),
-        )
-        .await
     }
 
     /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
@@ -6093,17 +6175,36 @@ impl GitHubProjectsSource {
         let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         let recorded = recorded_offset(cursor, direction)?;
+        // What this issue is blocked by, when a read of it by its own id in this command
+        // already carried the whole connection — a copy reads the item it writes before it
+        // reads its edges — and the page asked for is the whole of it, or the recorded tail
+        // after it. Answered from that read, in the shape the dependency read answers in;
+        // anything else is asked of GitHub.
+        let carried = match direction {
+            Direction::DependsOn => self
+                .resolved_cache()?
+                .get(id)
+                .filter(|item| item.content_kind == ContentKind::Issue)
+                .and_then(|item| Some((item.blocked_by.clone()?, item.raw_body.clone()))),
+            Direction::DependedOnBy => None,
+        }
+        .filter(|(nodes, _)| recorded.is_some() || (cursor.is_none() && nodes.len() <= limit));
         // Asked for even in the recorded phase, whose page reads nothing from the
         // connection: `__typename` is what says whether this item has a native
         // relationship at all, and that is what decides which far ends the reserved key is
         // allowed to hold.
-        let data = self
-            .graphql(
-                graphql::ISSUE_DEPENDENCIES,
-                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),
-                       "after":if recorded.is_some() {None} else {cursor}}),
-            )
-            .await?;
+        let data = match carried {
+            Some((nodes, body)) => json!({"node":{"__typename":"Issue","body":body,
+                "blockedBy":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+            None => {
+                self.graphql(
+                    graphql::ISSUE_DEPENDENCIES,
+                    json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),
+                           "after":if recorded.is_some() {None} else {cursor}}),
+                )
+                .await?
+            }
+        };
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())
@@ -6541,7 +6642,12 @@ impl GitHubProjectsSource {
             (None, None) => None,
         };
         let (native, fallback) = self
-            .partition_edges(incoming.written.kind(), content_kind, depends_on)
+            .partition_edges(
+                incoming.written.kind(),
+                content_kind,
+                existing.and_then(|item| item.blocked_by.as_deref()),
+                depends_on,
+            )
             .await?;
         let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
         let body = compose_body(incoming.content, &slot)?;
@@ -6595,16 +6701,13 @@ impl GitHubProjectsSource {
             url,
             number,
         } = match existing {
-            Some(item) => {
-                self.update_existing(item, incoming, &body, status_target.as_ref())
-                    .await?;
-                Landed {
-                    content_id: item.id.clone(),
-                    item_id: item.item_id.clone(),
-                    url: item.url.clone(),
-                    number: item.number,
-                }
-            }
+            // Its content is written last, below, once everything else has landed.
+            Some(item) => Landed {
+                content_id: item.id.clone(),
+                item_id: item.item_id.clone(),
+                url: item.url.clone(),
+                number: item.number,
+            },
             None => {
                 let target = creation_target
                     .as_ref()
@@ -6644,11 +6747,40 @@ impl GitHubProjectsSource {
                 &native,
             )
             .await;
+        // An existing item's title, body and state go last, in one `updateIssue`, once its board
+        // fields and its relationships have landed: a refusal of any of those then leaves its
+        // body — and the metadata slot inside it — exactly as it stood.
+        let landed = match (landed, existing) {
+            (Ok(()), Some(item)) => {
+                self.update_existing(item, incoming, &body, status_target.as_ref())
+                    .await
+            }
+            (landed, _) => landed,
+        };
         if let Err(error) = landed {
-            if existing.is_none() {
+            match existing {
                 // Best effort, and the write's own failure is what the caller is told: a
                 // refusal naming the tidy-up would hide why the write failed at all.
-                let _ = self.delete_issue(&content_id).await;
+                None => {
+                    let _ = self.delete_issue(&content_id).await;
+                }
+                // The origin field is the one piece of an existing item's metadata written
+                // before its body, so a write refused after it puts it back as it was.
+                Some(item) => {
+                    let before = item.origin.as_deref().unwrap_or("");
+                    if let Some(field) = origin_field.as_deref()
+                        && before != origin
+                    {
+                        let _ = self
+                            .set_item_field(
+                                board.id.as_str(),
+                                &item.item_id,
+                                field,
+                                json!({"text": before}),
+                            )
+                            .await;
+                    }
+                }
             }
             return Err(error);
         }
@@ -6721,6 +6853,10 @@ impl GitHubProjectsSource {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default(),
+            board_fields: Some(board.fields.clone()),
+            // What this write left the relationship holding is known by id alone, and a
+            // later read of its edges needs each far end's kind, so it reads them again.
+            blocked_by: None,
         };
         self.remember_written(remembered, existing.is_none())?;
         Ok(content_id)
@@ -6774,7 +6910,10 @@ impl GitHubProjectsSource {
         self.set_item_fields(board_id, item_id, &fields, clear)
             .await?;
 
-        if content_kind == ContentKind::Issue
+        // An existing issue closes in the `updateIssue` its write ends with; one created just
+        // now closes here, once its option is selected.
+        if existing.is_none()
+            && content_kind == ContentKind::Issue
             && matches!(status_target, Some(StatusTarget::Terminal(_, _)))
         {
             self.update_content(
@@ -6799,7 +6938,7 @@ impl GitHubProjectsSource {
             // asked for.
             if incoming.written.kind() != BoardKind::Document {
                 let issue = match existing {
-                    Some(_) => Issue::Existing,
+                    Some(item) => Issue::Existing(item.blocked_by.as_deref()),
                     None => Issue::Created,
                 };
                 self.reconcile_blocked_by(content_id, native, issue).await?;
@@ -7055,6 +7194,7 @@ impl GitHubProjectsSource {
         &self,
         near_kind: BoardKind,
         near_content: ContentKind,
+        carried: Option<&[Value]>,
         depends_on: &[DependencyEdge],
     ) -> Result<(Vec<String>, Vec<DependencyEdge>), SourceError> {
         let mut native = Vec::new();
@@ -7077,17 +7217,36 @@ impl GitHubProjectsSource {
                 edge.to.id()
             };
             // A same-source far end is read by its own id, exactly as the item it is a far end
-            // of is: whether this board holds it is that read's answer, never a listing's.
-            let far = if same_source {
-                Some(
-                    self.item_by_id(&NativeId(far_id.to_owned()))
+            // of is: whether this board holds it is that read's answer, never a listing's. One
+            // that already blocks the near issue was answered by that issue's own read, which
+            // carried each of its blockers' kinds — an issue every one — so it is not read again.
+            let blocking = carried.and_then(|nodes| {
+                nodes
+                    .iter()
+                    .find(|node| node.get("id").and_then(Value::as_str) == Some(far_id))
+            });
+            let far = match (same_source, blocking) {
+                (false, _) => None,
+                (true, Some(node)) => Some(FarEnd {
+                    kind: if required_str(node, "title")?.starts_with(DESIGN_TITLE_PREFIX) {
+                        BoardKind::Document
+                    } else {
+                        BoardKind::Work(related_kind(node)?)
+                    },
+                    content_kind: ContentKind::Issue,
+                }),
+                (true, None) => {
+                    let read = self
+                        .item_by_id(&NativeId(far_id.to_owned()))
                         .await?
                         .ok_or_else(|| SourceError::Refused {
                             message: format!("GitHub dependency item {far_id} was not found"),
-                        })?,
-                )
-            } else {
-                None
+                        })?;
+                    Some(FarEnd {
+                        kind: read.kind,
+                        content_kind: read.content_kind,
+                    })
+                }
             };
             let far = far.as_ref();
             // The caller says which kind the far end is, and this board holds the far end
@@ -7135,17 +7294,14 @@ impl GitHubProjectsSource {
         status_target: Option<&StatusTarget>,
     ) -> Result<(), SourceError> {
         let title = incoming.written_title();
-        let mut fields = match item.content_kind {
+        // A terminal status closes the issue here, in the same mutation as its body: its board
+        // option was selected before this, so a close never lands on an item whose board cannot
+        // show it.
+        let fields = match item.content_kind {
             ContentKind::DraftIssue => json!({"title":title,"body":body}),
             ContentKind::Issue => json!({"title":title,"body":body,
                                          "stateInput":state_input(status_target)}),
         };
-        if matches!(status_target, Some(StatusTarget::Terminal(_, _))) {
-            fields
-                .as_object_mut()
-                .expect("update fields are an object")
-                .remove("stateInput");
-        }
         self.update_content(item.content_kind, &item.id, fields)
             .await
     }
@@ -7353,11 +7509,15 @@ impl GitHubProjectsSource {
         &self,
         content_id: &NativeId,
         native: &[String],
-        issue: Issue,
+        issue: Issue<'_>,
     ) -> Result<bool, SourceError> {
         let current = match issue {
             Issue::Created => Vec::new(),
-            Issue::Existing => self.native_dependency_ids(content_id).await?,
+            Issue::Existing(Some(held)) => held
+                .iter()
+                .map(|far| required_str(far, "id").map(str::to_owned))
+                .collect::<Result<Vec<_>, _>>()?,
+            Issue::Existing(None) => self.native_dependency_ids(content_id).await?,
         };
         let mut changed = false;
         for (operation, far_id) in current
@@ -7404,13 +7564,21 @@ impl GitHubProjectsSource {
     }
 }
 
+/// What a write needs to know of one far end it names: which kind of item it is, and whether
+/// it is an issue a native relationship can name.
+struct FarEnd {
+    kind: BoardKind,
+    content_kind: ContentKind,
+}
+
 /// Whether the issue one write reconciles was created by that write or was already there.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Issue {
+enum Issue<'a> {
     /// Created by this write, so it holds no relationships yet.
     Created,
-    /// On the board before this write, holding whatever relationships it holds.
-    Existing,
+    /// On the board before this write, holding whatever relationships it holds — the far
+    /// ends of its whole `blockedBy`, when the read that reached it carried them.
+    Existing(Option<&'a [Value]>),
 }
 
 /// What resolving one node id reached; see [`GitHubProjectsSource::reach`].
@@ -7758,6 +7926,17 @@ struct Resolved {
     /// Only the fields this item has a value in: a field it holds nothing of is not here,
     /// which says nothing about whether the board has it.
     fields: Vec<Value>,
+    /// Every field the board this item sits on defines, as its own read of the board's
+    /// `fields` gives them — when the read that reached the item carried them, which a read
+    /// of it by its own id does. What a write of it needs of the board, then, needs no read
+    /// of the board.
+    board_fields: Option<Value>,
+    /// The far ends of this issue's whole `blockedBy` connection, each as a dependency read
+    /// selects one — when the read that reached it carried the connection to its end, which a
+    /// read of it by its own id does for any issue blocked by no more than a page. What a
+    /// write reconciles that relationship against, and what a read of its forward edges in
+    /// the same command answers with.
+    blocked_by: Option<Vec<Value>>,
 }
 
 impl Resolved {
@@ -7767,6 +7946,15 @@ impl Resolved {
         self.board_id
             .as_deref()
             .and_then(|id| BoardId::parse(id).ok())
+    }
+
+    /// The board's id and every field it defines, when the read that reached this item
+    /// carried both — which a read of it by its own id does.
+    fn carried_board(&self) -> Option<BoardFields> {
+        Some(BoardFields {
+            id: self.named_board()?,
+            fields: self.board_fields.clone()?,
+        })
     }
 
     /// Whether this item holds a value of the board field called `name`, and so carries
@@ -8556,8 +8744,8 @@ impl TaskSource for GitHubProjectsSource {
     }
 
     /// Apply a targeted update with one read of the item and a write only for what differs:
-    /// at most one `updateIssue` for title, body and state, one field write each for `Status`
-    /// and `Priority`, and the `blockedBy` difference. See `targeted_update`.
+    /// the `Status` and `Priority` field writes in one request, the `blockedBy` difference,
+    /// and last one `updateIssue` for title, body and state. See `targeted_update`.
     async fn update_task(
         &self,
         id: &NativeId,
@@ -8837,6 +9025,24 @@ fn comment_page(
         validate_cursor_progress(after, &next.0)?;
     }
     Ok(Page { items, next })
+}
+
+/// The far ends of an issue's whole `blockedBy` connection, when the read carried it to its
+/// end — `None` when it carried none, or a page with more past it.
+fn carried_blocked_by(content: &Value) -> Result<Option<Vec<Value>>, SourceError> {
+    let Some(connection) = content.get("blockedBy").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    if next_cursor(connection)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(
+        optional_nodes(Some(connection), "blocked-by issues")?
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
+    ))
 }
 
 /// Where the recorded tail of a dependency walk resumes; see
