@@ -137,6 +137,7 @@ fn tasks(filters: Filters, project: ProjectSelector, paging: Paging) -> TaskRequ
         commented_since: None,
         metadata: Vec::new(),
         origin: None,
+        include_members: false,
         paging,
     }
 }

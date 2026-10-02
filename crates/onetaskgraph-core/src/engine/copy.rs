@@ -2114,7 +2114,7 @@ impl Engine {
             let Some(content) = &document.content else {
                 continue;
             };
-            let (rewritten, made) = substitute(content, &table_for(&referents, &counterparts));
+            let (rewritten, made) = substitute(content, &table_for(&referents, counterparts));
             if made.rewritten > 0
                 && let Some(provenance) = restamped(&document.metadata, content, &rewritten)
             {
