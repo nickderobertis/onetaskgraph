@@ -8208,7 +8208,10 @@ team: string
 [k: string]: any
 }
 /**
- * One workflow state `status_mapping` names, and whether the configured team has it.
+ * [`MappedWorkflowState`] as it is written: `present`, and the state's `type` where it is.
+ *
+ * The wire shape of the report, spelled once for its serialization and its schema, so the
+ * public type can hold only the combinations [`Found`] allows.
  */
 export interface MappedWorkflowState {
 /**

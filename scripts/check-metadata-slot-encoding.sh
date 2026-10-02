@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # Fail when two sources spell the metadata slot's delimiters differently.
 #
-# `docs/metadata.md` settles one slot for caller metadata that a backend has no field for: a
-# canonical-JSON `<!-- onetaskgraph.metadata ... -->` comment at the end of the item's own
-# free text. Linear puts it in the description and github-projects at the end of the issue
-# body. The slot has two spellings and no more: the multi-line one, which every source that
-# keeps a slot reads, and the one-line code span, which a source writes when its host does
-# not keep the multi-line one byte for byte — Linear, whose Markdown normalization rewrites
-# JSON inside an HTML comment everywhere but a code span (observed 2026-10-02 and recorded in
-# that document). Each source writes the spelling its host preserves; a third spelling, or one
-# of these two spelled differently by two sources, is the thing the document exists to prevent.
+# `docs/metadata.md` settles one slot for caller metadata that a backend has no field for, in
+# two spellings — a multi-line one every source that keeps a slot reads, and a one-line code
+# span a source writes when its host does not keep the other byte for byte — and says why.
+# A third spelling, or one of those two spelled differently by two sources, is what it exists
+# to prevent.
 #
 # Neither can import the other's constants: a plugin crate depends on the contract crate
 # and nothing else of this workspace. So each restates the delimiters, and this reconciles

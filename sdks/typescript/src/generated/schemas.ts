@@ -15169,8 +15169,13 @@ export const runtimeSchemas = {
         "minLength": 1,
         "type": "string"
       },
+      "LinearWorkflowStateName": {
+        "description": "The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
+        "minLength": 1,
+        "type": "string"
+      },
       "MappedWorkflowState": {
-        "description": "One workflow state `status_mapping` names, and whether the configured team has it.",
+        "description": "[`MappedWorkflowState`] as it is written: `present`, and the state's `type` where it is.\n\nThe wire shape of the report, spelled once for its serialization and its schema, so the\npublic type can hold only the combinations [`Found`] allows.",
         "properties": {
           "category": {
             "$ref": "#/$defs/StatusCategory",
@@ -15181,8 +15186,8 @@ export const runtimeSchemas = {
             "type": "boolean"
           },
           "state": {
-            "description": "The state's name, as the mapping spells it.",
-            "type": "string"
+            "$ref": "#/$defs/LinearWorkflowStateName",
+            "description": "The state's name, as the mapping spells it."
           },
           "type": {
             "description": "The state's `WorkflowState.type` on the team — `backlog`, `unstarted`, `started`,\n`completed`, `canceled`, `triage` or another Linear names — absent when it is missing.",

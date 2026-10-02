@@ -807,10 +807,10 @@ impl StatusMapping {
     }
 
     /// Every workflow state name the mapping names, with its category.
-    fn named(&self) -> impl Iterator<Item = (StatusCategory, &str)> {
+    fn named(&self) -> impl Iterator<Item = (StatusCategory, &StateName)> {
         self.entries
             .iter()
-            .filter_map(|(category, name)| name.as_ref().map(|name| (*category, name.0.as_str())))
+            .filter_map(|(category, name)| name.as_ref().map(|name| (*category, name)))
     }
 }
 
@@ -865,25 +865,93 @@ impl WorkflowStatesReport {
 }
 
 /// One workflow state `status_mapping` names, and whether the configured team has it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedWorkflowState {
+    category: StatusCategory,
+    state: StateName,
+    found: Found,
+}
+
+/// Whether the configured team has a workflow state of the name the mapping gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    /// The team has it, of this `WorkflowState.type` — `backlog`, `unstarted`, `started`,
+    /// `completed`, `canceled`, `triage`, or another Linear names, reported verbatim because
+    /// Linear adds types (`duplicate` among them) this report must not refuse.
+    // llmlint: ignore[invalid_states_unrepresentable] Linear's own open `String!` vocabulary, reported verbatim; an enum here would refuse a type Linear adds, which a report must not.
+    Present(String),
+    /// The team has no state of that name.
+    Missing,
+}
+
+impl MappedWorkflowState {
     /// The category the mapping sends to the state.
-    pub category: StatusCategory,
+    #[must_use]
+    pub fn category(&self) -> StatusCategory {
+        self.category
+    }
+
     /// The state's name, as the mapping spells it.
-    // llmlint: ignore[invalid_states_unrepresentable] Echoed from a validated, non-blank
-    // `status_mapping` value.
-    pub state: String,
+    #[must_use]
+    pub fn state(&self) -> &str {
+        &self.state.0
+    }
+
+    /// Whether the team has it, and of which type.
+    #[must_use]
+    pub fn found(&self) -> &Found {
+        &self.found
+    }
+}
+
+/// [`MappedWorkflowState`] as it is written: `present`, and the state's `type` where it is.
+///
+/// The wire shape of the report, spelled once for its serialization and its schema, so the
+/// public type can hold only the combinations [`Found`] allows.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[schemars(rename = "MappedWorkflowState")]
+struct MappedWorkflowStateWire<'a> {
+    /// The category the mapping sends to the state.
+    category: StatusCategory,
+    /// The state's name, as the mapping spells it.
+    state: &'a StateName,
     /// Whether the configured team has a workflow state of that name.
-    // llmlint: ignore[invalid_states_unrepresentable] `present` beside an optional `type` is
-    // the report's wire shape: a state the team has carries its type, one it lacks has none,
-    // and `LinearSource::workflow_states` is the one constructor, deriving both from one lookup.
-    pub present: bool,
+    present: bool,
     /// The state's `WorkflowState.type` on the team — `backlog`, `unstarted`, `started`,
     /// `completed`, `canceled`, `triage` or another Linear names — absent when it is missing.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    // llmlint: ignore[invalid_states_unrepresentable] Linear's own `String!` field, reported
-    // verbatim: Linear adds types (`duplicate` among them) that this report must not refuse.
-    pub state_type: Option<String>,
+    state_type: Option<&'a str>,
+}
+
+impl<'a> From<&'a MappedWorkflowState> for MappedWorkflowStateWire<'a> {
+    fn from(mapped: &'a MappedWorkflowState) -> Self {
+        let state_type = match &mapped.found {
+            Found::Present(kind) => Some(kind.as_str()),
+            Found::Missing => None,
+        };
+        Self {
+            category: mapped.category,
+            state: &mapped.state,
+            present: state_type.is_some(),
+            state_type,
+        }
+    }
+}
+
+impl serde::Serialize for MappedWorkflowState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        MappedWorkflowStateWire::from(self).serialize(serializer)
+    }
+}
+
+impl schemars::JsonSchema for MappedWorkflowState {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        MappedWorkflowStateWire::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> Schema {
+        MappedWorkflowStateWire::json_schema(generator)
+    }
 }
 
 /// Report each workflow state one `linear` source's `status_mapping` names, as present on its
@@ -1377,7 +1445,7 @@ impl LinearSource {
                 parts.extend(
                     self.statuses
                         .named()
-                        .map(|(_, name)| json!({"state": {"name": {"neqIgnoreCase": name}}})),
+                        .map(|(_, name)| json!({"state": {"name": {"neqIgnoreCase": name.0}}})),
                 );
                 alternatives.push(Self::narrowed(parts));
             }
@@ -3300,12 +3368,11 @@ impl LinearSource {
             .map(|(category, name)| {
                 let found = held
                     .iter()
-                    .find(|state| state.name.0.eq_ignore_ascii_case(name));
+                    .find(|state| state.name.0.eq_ignore_ascii_case(&name.0));
                 MappedWorkflowState {
                     category,
-                    state: name.to_owned(),
-                    present: found.is_some(),
-                    state_type: found.map(|state| state.kind.clone()),
+                    state: name.clone(),
+                    found: found.map_or(Found::Missing, |state| Found::Present(state.kind.clone())),
                 }
             })
             .collect();

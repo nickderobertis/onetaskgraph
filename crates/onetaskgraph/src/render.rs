@@ -96,17 +96,20 @@ pub fn workflow_states(report: &onetaskgraph_linear::WorkflowStatesReport) -> St
     }
     let mut rendered = String::new();
     for state in &report.states {
-        let category = serde_json::to_value(state.category)
+        let category = serde_json::to_value(state.category())
             .ok()
             .and_then(|word| word.as_str().map(str::to_owned))
             .unwrap_or_default();
-        let found = match &state.state_type {
-            Some(kind) if state.present => format!("present on team {} ({kind})", report.team()),
-            _ => format!("missing from team {}", report.team()),
+        let found = match state.found() {
+            onetaskgraph_linear::Found::Present(kind) => {
+                format!("present on team {} ({kind})", report.team())
+            }
+            onetaskgraph_linear::Found::Missing => format!("missing from team {}", report.team()),
         };
         rendered.push_str(&format!(
             "{}: {category} -> {}: {found}\n",
-            report.source, state.state
+            report.source,
+            state.state()
         ));
     }
     rendered

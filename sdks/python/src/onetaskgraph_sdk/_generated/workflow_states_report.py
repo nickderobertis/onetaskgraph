@@ -14,6 +14,16 @@ class LinearTeam(RootModel[str]):
     root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
 
 
+class LinearWorkflowStateName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
+            min_length=1,
+        ),
+    ]
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -44,7 +54,10 @@ class MappedWorkflowState(BaseModel):
         bool,
         Field(description="Whether the configured team has a workflow state of that name."),
     ]
-    state: Annotated[str, Field(description="The state's name, as the mapping spells it.")]
+    state: Annotated[
+        LinearWorkflowStateName,
+        Field(description="The state's name, as the mapping spells it."),
+    ]
     type: Annotated[
         str | None,
         Field(

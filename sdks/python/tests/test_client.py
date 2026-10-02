@@ -30,6 +30,7 @@ from onetaskgraph_sdk import (
     TaskStatusSet,
     TaskUpdated,
     UpdatedField,
+    WorkflowStatesReport,
     __version__,
 )
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
@@ -893,6 +894,77 @@ def test_task_content_set_drives_the_binary(binary: Path, tmp_path: Path) -> Non
         run(client.task_content_set(id="work:T-1", file=str(tmp_path / "absent.md")))
     assert refused.value.exit_code == 1
     assert "--file" in str(refused.value)
+
+
+def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Decode a Linear source's mapped workflow states through the generated SDK model."""
+
+    class LinearHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
+            length = int(self.headers["content-length"])
+            query = json.loads(self.rfile.read(length))["query"]
+            if "teams(" in query:
+                data: dict[str, object] = {"teams": {"nodes": [{"id": "TEAM-1"}]}}
+            else:
+                data = {
+                    "workflowStates": {
+                        "nodes": [
+                            {"id": "S-1", "name": "Todo", "type": "unstarted"},
+                            {"id": "S-2", "name": "Queued", "type": "unstarted"},
+                        ]
+                    }
+                }
+            response = json.dumps({"data": data}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LinearHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        config = {
+            "sources": {
+                "team": {
+                    "plugin": "linear",
+                    "config": {
+                        "team": "FIX",
+                        "api_key_env": "TEST_LINEAR_KEY",
+                        "endpoint": f"http://127.0.0.1:{server.server_port}/graphql",
+                        "status_mapping": {"queued": "Queued", "done": "Shipped"},
+                    },
+                }
+            }
+        }
+        (tmp_path / "onetaskgraph.yaml").write_text(json.dumps(config), encoding="utf-8")
+        client = Client(
+            binary,
+            cwd=tmp_path,
+            environment={**os.environ, "TEST_LINEAR_KEY": "fixture-key"},
+        )
+        report = run(client.sources_fields("team"))
+        assert isinstance(report, WorkflowStatesReport)
+        assert (report.source.root, report.team.root) == ("team", "FIX")
+        assert [
+            (state.category.value, state.state.root, state.present, state.type)
+            for state in report.states
+        ] == [("queued", "Queued", True, "unstarted"), ("done", "Shipped", False, None)]
+
+        with pytest.raises(OnetaskgraphError) as refused:
+            run(client.sources_fields("team", apply=True))
+        assert refused.value.exit_code == 1
+        assert "workflow states are team settings" in str(refused.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path: Path) -> None:

@@ -7150,3 +7150,112 @@ async fn a_slot_in_the_multi_line_spelling_written_before_still_parses() {
         );
     }
 }
+
+/// A narrow write Linear acknowledges for another item, or after which the record cannot be
+/// read back, is not reported written: each is the malformed answer it is, naming what went
+/// wrong.
+#[tokio::test]
+async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_written() {
+    let key = MetadataKey::new("myapp.review").unwrap();
+    let value = serde_json::json!(true);
+    let (endpoint, _) = response_server(vec![
+        held_project("p1", "Prose."),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p-other"}}}),
+    ]);
+    let refused = writable_source(&endpoint)
+        .set_project_metadata(&"p1".into(), &key, &value)
+        .await
+        .expect_err("another project acknowledged");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message } if message.contains("projectUpdate for p1 answered with the item p-other")),
+        "{refused:?}"
+    );
+    let (endpoint, _) = response_server(vec![
+        held_document("d1", "Prose."),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d-other"}}}),
+    ]);
+    let refused = writable_source(&endpoint)
+        .set_document_metadata(&"d1".into(), &key, &value)
+        .await
+        .expect_err("another document acknowledged");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message } if message.contains("documentUpdate for d1 answered with the item d-other")),
+        "{refused:?}"
+    );
+
+    // Written, and then gone: the record a metadata write answers with is a read, and a read
+    // that finds nothing is not the record the write left.
+    for (record, held, acknowledged, gone) in [
+        (
+            "task",
+            prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+            serde_json::json!({"issue":null}),
+        ),
+        (
+            "project",
+            held_project("p1", "Prose."),
+            serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1"}}}),
+            serde_json::json!({"project":null}),
+        ),
+        (
+            "document",
+            held_document("d1", "Prose."),
+            serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1"}}}),
+            serde_json::json!({"document":null}),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![held, acknowledged, gone]);
+        let source = writable_source(&endpoint);
+        let refused = match record {
+            "task" => source
+                .set_task_metadata(&"i1".into(), &key, &value)
+                .await
+                .map(|_| ()),
+            "project" => source
+                .set_project_metadata(&"p1".into(), &key, &value)
+                .await
+                .map(|_| ()),
+            _ => source
+                .set_document_metadata(&"d1".into(), &key, &value)
+                .await
+                .map(|_| ()),
+        }
+        .expect_err("the record vanished after its write");
+        assert!(
+            matches!(&refused, SourceError::Malformed { message }
+                if message.contains(&format!("{record} ")) && message.contains("could not be read back")),
+            "{record}: {refused:?}"
+        );
+    }
+}
+
+/// A code-span slot that never closes, or holds what is not JSON, is a malformed field naming
+/// the slot rather than metadata read past.
+#[tokio::test]
+async fn a_malformed_code_span_slot_is_refused_rather_than_read_past() {
+    for (description, said) in [
+        (
+            "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":1}",
+            "unterminated onetaskgraph metadata slot",
+        ),
+        (
+            "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":` -->",
+            "invalid canonical JSON in Linear onetaskgraph metadata slot",
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![prioritised_issue(
+            "i1",
+            Some(description),
+            serde_json::json!(0),
+        )]);
+        let refused = source(&endpoint)
+            .get_task(&"i1".into())
+            .await
+            .expect_err("a malformed slot");
+        assert!(
+            matches!(&refused, SourceError::Malformed { message } if message.contains(said)),
+            "{description:?}: {refused:?}"
+        );
+    }
+}

@@ -77,8 +77,7 @@ RESPONSE_ROOTS = {
 # which a caller checking for a hand edit or a changed template reads by name. `UpdatedField` is
 # the vocabulary `task update` reports what it wrote in, which a caller branches on by name.
 # `LinearConfig` is a `linear` source's configuration — its `status_mapping` and its `project` —
-# which a caller writing one models by name. `WorkflowStatesReport` is what `sources fields`
-# writes for a `linear` source, beside the `FieldsReport` it writes for a board.
+# which a caller writing one models by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -100,8 +99,21 @@ CONTRACT_ROOTS = {
     "TemplateProvenance",
     "UpdatedField",
     "LinearConfig",
-    "WorkflowStatesReport",
 }
+# Commands that answer in more than one shape, by the plugin of the source they are asked
+# about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
+# fields` answers a `FieldsReport` for a GitHub Projects board and a `WorkflowStatesReport` for a
+# Linear team. The generated method returns the union and validates against it.
+ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {"sources_fields": ("WorkflowStatesReport",)}
+
+
+def response_roots() -> set[str]:
+    """Every root a command answers with: the primary one of each, and every alternate."""
+    return set(RESPONSE_ROOTS.values()) | {
+        root for alternates in ALTERNATE_ROOTS.values() for root in alternates
+    }
+
+
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
@@ -399,7 +411,7 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
     exports: list[str] = []
-    roots = sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS)
+    roots = sorted(response_roots() | CONTRACT_ROOTS)
     for root in roots:
         schema = bundle["roots"][root]
         add_variant_titles(schema, root)
@@ -716,8 +728,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[
             f"    {root},"
             for root in sorted(
-                set(RESPONSE_ROOTS.values())
-                | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
+                response_roots() | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
         ")",
@@ -875,7 +886,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     }
     for name, command in sorted(names.items()):
         root = RESPONSE_ROOTS[name]
-        return_type = RETURN_TYPES.get(name, root)
+        return_type = RETURN_TYPES.get(name, " | ".join((root, *ALTERNATE_ROOTS.get(name, ()))))
         taken = positionals.get(command, ())
         required = REQUIRED_OPTIONS.get(command, ())
         keywords = [
@@ -1234,7 +1245,7 @@ def nullability_disagreements(bundle: SchemaBundle, destination: Path) -> list[s
     and two such objects trading patterns with each other is not.
     """
     disagreements: list[str] = []
-    for root in sorted(set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS):
+    for root in sorted(response_roots() | CONTRACT_ROOTS):
         declared = schema_nullability(bundle["roots"][root])
         generated = model_nullability(destination / f"{camel_to_snake(root)}.py")
         for members in sorted(declared.keys() | generated.keys(), key=sorted):
@@ -1254,7 +1265,7 @@ def validate_schema_bundle(parsed: JsonValue) -> SchemaBundle:
     if not isinstance(parsed, dict) or not isinstance(parsed.get("roots"), dict):
         raise SystemExit("binary emitted an invalid schema bundle: expected an object with roots")
     bundle = TypeAdapter(SchemaBundle).validate_python(parsed)
-    required = set(RESPONSE_ROOTS.values()) | CONTRACT_ROOTS
+    required = response_roots() | CONTRACT_ROOTS
     missing = sorted(required - bundle["roots"].keys())
     malformed = sorted(
         name

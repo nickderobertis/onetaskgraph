@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
-import type { CopyReport } from "../src/generated/models.ts";
+import type { CopyReport, FieldsReport, WorkflowStatesReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
 import {
   assertCompleteCommandSurface,
@@ -1099,6 +1099,11 @@ test("sources fields names a source that is not backed by GitHub Projects", asyn
   );
 });
 
+/** Whether `sources fields` answered with a board's fields rather than a team's states. */
+function isFieldsReport(report: FieldsReport | WorkflowStatesReport): report is FieldsReport {
+  return "fields" in report;
+}
+
 test("sources fields forwards apply through the executable boundary", async () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-fields-"));
   try {
@@ -1126,6 +1131,7 @@ test("sources fields forwards apply through the executable boundary", async () =
       ]),
     });
     const answered = await applyClient.sourcesFields("board", { apply: true });
+    if (!isFieldsReport(answered)) throw new Error("a board answers with its fields");
     expect(answered.fields.map((field) => [field.field, field.outcome])).toEqual([
       ["Status", "unchanged"],
       ["Priority", "created"],
@@ -1139,6 +1145,45 @@ test("sources fields forwards apply through the executable boundary", async () =
     const refused = partialClient.sourcesFields("board");
     await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
     await expect(refused).rejects.toMatchObject({ exitCode: 4 });
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
+
+test("sources fields answers a Linear team's workflow states", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-states-"));
+  try {
+    const report = {
+      source: "team",
+      team: "FIX",
+      states: [
+        { category: "queued", state: "Queued", present: true, type: "unstarted" },
+        { category: "done", state: "Shipped", present: false },
+      ],
+    };
+    const statesClient = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "fields-linear", JSON.stringify(report), "", 0, [
+        "sources",
+        "fields",
+        "team",
+        "--json",
+        "--no-interactive",
+      ]),
+    });
+    const answered = await statesClient.sourcesFields("team");
+    if (isFieldsReport(answered)) throw new Error("a Linear team answers with its states");
+    expect(answered.states.map((state) => [state.state, state.present])).toEqual([
+      ["Queued", true],
+      ["Shipped", false],
+    ]);
+
+    // A shape neither root describes is still refused.
+    const strayClient = new OnetaskgraphClient({
+      binaryPath: executableFixture(fixtures, "fields-stray", JSON.stringify({ source: 7 }), "", 0),
+    });
+    await expect(strayClient.sourcesFields("team")).rejects.toBeInstanceOf(
+      OnetaskgraphValidationError,
+    );
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
   }

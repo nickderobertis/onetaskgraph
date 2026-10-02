@@ -31,6 +31,7 @@ import type {
   TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
+  WorkflowStatesReport,
 } from "./generated/models.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -201,6 +202,17 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "document create": "QueryResponseOfQualifiedDocument",
   "document render": "Regenerated",
   "document answers": "TemplateAnswers",
+};
+
+// Commands that answer in more than one shape, by the plugin of the source they are asked about:
+// each command's `commandResponseRoots` entry is one shape, and these are the others. `sources
+// fields` answers a `FieldsReport` for a GitHub Projects board and a `WorkflowStatesReport` for a
+// Linear team. A response is valid when it validates against any of them; the Python generator
+// keeps the same table, which tests/generator.test.ts holds this one to.
+export const commandAlternateRoots: Readonly<
+  Record<string, readonly (keyof typeof runtimeSchemas)[]>
+> = {
+  "sources fields": ["WorkflowStatesReport"],
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
@@ -721,7 +733,12 @@ export class OnetaskgraphClient {
   ): Promise<StatusOptionsReport> {
     return this.run("sources status-options", [source, ...(options.apply ? ["--apply"] : [])]);
   }
-  sourcesFields(source: string, options: { apply?: boolean } = {}): Promise<FieldsReport> {
+  // A board answers with its fields, and a Linear team with the workflow states its source's
+  // `status_mapping` names.
+  sourcesFields(
+    source: string,
+    options: { apply?: boolean } = {},
+  ): Promise<FieldsReport | WorkflowStatesReport> {
     return this.run("sources fields", [source, ...(options.apply ? ["--apply"] : [])]);
   }
   taskList(
@@ -1042,8 +1059,13 @@ export class OnetaskgraphClient {
             reject(new OnetaskgraphValidationError(command, "command has no response schema"));
             return;
           }
-          const validate = new Ajv2020({ strict: false }).compile(runtimeSchemas[root]);
-          if (!validate(value)) {
+          const ajv = new Ajv2020({ strict: false });
+          const validate = ajv.compile(runtimeSchemas[root]);
+          const alternates = commandAlternateRoots[command] ?? [];
+          if (
+            !validate(value) &&
+            !alternates.some((alternate) => ajv.compile(runtimeSchemas[alternate])(value))
+          ) {
             reject(new OnetaskgraphValidationError(command, validate.errors));
             return;
           }

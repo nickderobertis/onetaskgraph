@@ -501,6 +501,32 @@ fn a_partly_mapped_linear_source_writes_every_category_it_leaves_out_as_an_unmap
             );
         }
     }
+    // A create carries a status too, and one of a category set to null is refused the same
+    // way, before the issue is written.
+    let file = body(&sandbox, "A created body.");
+    let refused = exits(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            "linear",
+            "--project",
+            "LP-1",
+            "--title",
+            "Never written",
+            "--status",
+            "cancelled",
+            "--body-file",
+            &file,
+        ],
+        1,
+    );
+    assert!(
+        stderr(&refused).contains("its status_mapping sets cancelled to null"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(workspace.issue_titled("Never written"), None);
     assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
     assert_eq!(workspace.state_of("L-CYCLE").as_deref(), Some("Todo"));
 
@@ -926,7 +952,7 @@ fn split_slot(field: &str) -> (String, Value) {
 }
 
 #[test]
-fn metadata_and_renderings_rewrite_only_the_trailing_slot_of_a_linear_item() {
+fn a_metadata_set_moves_only_the_slot_and_a_render_only_the_body_and_its_provenance_on_linear() {
     let sandbox = Sandbox::new();
     let (config, workspace) = slotted_workspace(&sandbox);
     let plan = folder(&sandbox, "plan", &[]);
