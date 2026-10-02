@@ -82,6 +82,7 @@ mod priority;
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
 // crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod rendered;
+mod routes;
 mod source_host;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
 // the required real CLI boundary against a loopback board and completes nine journeys in
