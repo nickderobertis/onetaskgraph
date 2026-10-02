@@ -245,11 +245,6 @@ pub enum SourcesCommand {
     /// read-only plan. `--apply` preserves every existing option id and verifies every
     /// existing item assignment after GitHub replaces the option list.
     StatusOptions(SetupArgs),
-    /// Say where an item written to a source would land, by that source's `routes`.
-    ///
-    /// Reads configuration alone, never a source: the destination is the source a route
-    /// sends an item with these repositories to, or SOURCE itself when none matches.
-    Route(RouteArgs),
     /// Safely report or set up every board field a GitHub Projects source's configuration
     /// names: its Status options, and its Priority field when `priority_mapping` is set.
     ///
@@ -257,6 +252,11 @@ pub enum SourcesCommand {
     /// Priority field holding the mapped options, preserves every existing option's id,
     /// name, color and description, and verifies every item's values afterwards.
     Fields(SetupArgs),
+    /// Say where an item written to a source would land, by that source's `routes`.
+    ///
+    /// Reads configuration alone, never a source: the destination is the source a route
+    /// sends an item with these repositories to, or SOURCE itself when none matches.
+    Route(RouteArgs),
 }
 
 /// `onetaskgraph sources route`.

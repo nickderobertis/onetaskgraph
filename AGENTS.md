@@ -794,6 +794,27 @@ them do; this is the inventory of what is owed, not a status board.
     each predicate pushed down or applied locally; both SDKs answer what the command
     line answers; and a location with an empty key or segment, a value with no `=`, and an
     origin that is not a qualified id are each refused naming the flag.
+70. A source's `routes` are refused at load, naming the source and the entry, for an unknown
+    `to`, a `to` naming the source itself or a source with routes of its own, an empty
+    `repositories` and a malformed pattern; set by `--set` or the environment alone they route
+    `sources route` and a copy, and `config show` names their layer; `sources route` answers
+    from configuration alone and refuses an unknown source and a malformed origin by name.
+71. A mixed plan copied to a GitHub board routing `github.com/petsinc/*` to Linear lands its
+    home, its document and its other tasks on the board and its petsinc tasks in a Linear
+    member project, the two naming each other and their edges recorded both ways; an
+    all-petsinc plan lands wholly in Linear with its document; a member copy adding a petsinc
+    task creates the member once and reuses it; and a re-copy creates nothing.
+72. Over two folders of Markdown, `task create`, `task copy`, `document copy`, `project copy
+    --no-tasks` and `project copy --member` each place by the rule, a home wholly routed keeps
+    its place when a later task routes back, a project with no task left routing elsewhere
+    lands wholly in the routed source, a dry run reports the placement the copy then makes and
+    writes nothing, and every report names each outcome's destination and route entry.
+73. A routed copy refuses, before any write, an item whose counterpart sits where it no longer
+    routes, and `metadata set` refuses both member keys; a routed copy failing in its second
+    source after writing its first leaves both reading as they did.
+74. `task list --project <home> --members` reads the home's and every member's tasks under
+    their own sources across pages, drops and repeats nothing, and reports a member it cannot
+    read as an error; both SDKs answer what the command line answers.
 
 ## What a copied document's references are pointed at
 
