@@ -549,6 +549,12 @@ the same `params` and returns `result.project`, a `Project` or `null`.
 `{"kind": "refused"}` for an id that simply does not exist makes an ordinary lookup
 look like a failure of the source.
 
+`TaskSource::get_task_details` — several tasks, each with the first page of its comments — is
+not a message of this protocol. For a hosted source the engine answers it the way the trait's
+default does, with one `get_task` per id and, for a source whose tasks have comments, one
+`task_comments` for the first page of each task found, so a plugin written against this
+document implements nothing more for `task show-many` to reach it.
+
 ### 4.5 `query_tasks`
 
 ```json

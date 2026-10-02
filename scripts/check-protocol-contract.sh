@@ -85,6 +85,10 @@ NOT_METHODS = {
     "kind": "settled by the handshake response's `kind` field",
     "capabilities": "settled by the handshake response's `capabilities` field",
     "writes": "settled by the handshake response's `writes` field, which §3.3 specifies",
+    "get_task_details": (
+        "not a message: §4.4 says the engine answers it for a hosted source from `get_task` "
+        "and `task_comments`, which carry everything it reads"
+    ),
     "keeps_template_answers": NOT_CARRIED_REASON,
     "task_template_answers": NOT_CARRIED_REASON,
     "document_template_answers": NOT_CARRIED_REASON,
