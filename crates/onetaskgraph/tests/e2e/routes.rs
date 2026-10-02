@@ -430,3 +430,575 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
         "a malformed origin is refused by name:\n{malformed}"
     );
 }
+
+/// The folder a routed write is sent to by name.
+const NOTES: &str = "notes";
+/// The folder `notes` routes `github.com/petsinc/*` to.
+const TEAM: &str = "team";
+
+/// Three folders of Markdown: a plan, `notes` routing petsinc work to `team`, and `team`.
+fn folders(sandbox: &Sandbox) -> std::path::PathBuf {
+    let plan = sandbox.subdirectory(PLAN);
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        NOTES: {
+            "plugin": "local-md",
+            "config": {"root": sandbox.subdirectory(NOTES)},
+            "routes": [{"repositories": ["github.com/petsinc/*"], "to": TEAM}],
+        },
+        TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
+    })));
+    plan
+}
+
+/// Every file under `root`, by path, with its bytes: what "unchanged" is compared against.
+fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut held = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                held.insert(
+                    path.display().to_string(),
+                    std::fs::read(&path).expect("a readable file"),
+                );
+            }
+        }
+    }
+    held
+}
+
+/// The member a home names, read back through the binary.
+fn members_of(sandbox: &Sandbox, home: &str) -> Vec<String> {
+    let held = answer(sandbox, &["project", "show", home]);
+    held["items"][0]["item"]["metadata"]["onetaskgraph.members"]
+        .as_array()
+        .map(|members| {
+            members
+                .iter()
+                .map(|member| member.as_str().expect("a qualified id").to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The project a task is filed under, qualified by the task's own source.
+fn filed_under(sandbox: &Sandbox, task: &str) -> String {
+    let held = answer(sandbox, &["task", "show", task]);
+    format!(
+        "{}:{}",
+        source_of(task),
+        held["items"][0]["item"]["project"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{task} is filed: {held:#}"))
+    )
+}
+
+#[test]
+fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_other_in_the_named_one()
+ {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "lib",
+        "title: Lib\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "app",
+        "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "loose",
+        "title: Loose\nstatus: todo\nrepositories: [github.com/nickderobertis/x]",
+    );
+
+    // A task copied on its own goes where its repositories route it.
+    let copied = answer(
+        &sandbox,
+        &["task", "copy", "plan:app", "plan:loose", "--to", NOTES],
+    );
+    assert_eq!(source_of(&landed(&copied, "plan:app")), TEAM, "{copied:#}");
+    assert_eq!(
+        outcome(&copied, "plan:app")["placed"],
+        json!({"destination": TEAM, "route": 0})
+    );
+    assert_eq!(source_of(&landed(&copied, "plan:loose")), NOTES);
+    assert_eq!(
+        outcome(&copied, "plan:loose")["placed"],
+        json!({"destination": NOTES, "route": null})
+    );
+    let human = ok(&sandbox, &["task", "copy", "plan:app", "--to", NOTES]);
+    assert!(
+        human.contains("in team by route 0"),
+        "the human report names the placement too:\n{human}"
+    );
+
+    // `task create` names the project in the source it names; routed away, the task is
+    // filed under that project's member in the source it lands in, created on first need.
+    let home = landed(
+        &answer(
+            &sandbox,
+            &["project", "copy", "plan:goal", "--no-tasks", "--to", NOTES],
+        ),
+        "plan:goal",
+    );
+    assert_eq!(home, "notes:goal");
+    let body = sandbox.subdirectory("bodies").join("body.md");
+    std::fs::write(&body, "What to do.\n").expect("a body");
+    let body = body.display().to_string();
+    let created = answer(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            NOTES,
+            "--project",
+            "goal",
+            "--title",
+            "Pets work",
+            "--repository",
+            "github.com/petsinc/api",
+            "--body-file",
+            &body,
+        ],
+    );
+    let pets = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    assert_eq!(source_of(&pets), TEAM, "{created:#}");
+    let members = members_of(&sandbox, &home);
+    assert_eq!(members.len(), 1, "the home gained its member");
+    assert_eq!(filed_under(&sandbox, &pets), members[0]);
+    let created = answer(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            NOTES,
+            "--project",
+            "goal",
+            "--title",
+            "Own work",
+            "--repository",
+            "github.com/nickderobertis/lib",
+            "--body-file",
+            &body,
+        ],
+    );
+    let own = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    assert_eq!(source_of(&own), NOTES, "{created:#}");
+    assert_eq!(filed_under(&sandbox, &own), home);
+    // A second routed create reuses the member rather than adding one.
+    answer(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            NOTES,
+            "--project",
+            "goal",
+            "--title",
+            "More pets work",
+            "--repository",
+            "github.com/petsinc/web",
+            "--body-file",
+            &body,
+        ],
+    );
+    assert_eq!(members_of(&sandbox, &home), members);
+}
+
+#[test]
+fn a_project_copy_places_its_home_by_its_tasks_or_by_its_own_repositories_without_them() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    // Its tasks are every one of them nickderobertis work, but the project itself names
+    // petsinc: without its tasks, the project's own repositories alone decide.
+    record(
+        &plan,
+        "projects",
+        "pets-owned",
+        "title: Pets owned\nstatus: todo\nrepositories: [github.com/petsinc/app]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: pets-owned\n\
+         repositories: [github.com/nickderobertis/lib]",
+    );
+    record(&plan, "projects", "plain", "title: Plain\nstatus: todo");
+
+    let alone = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:pets-owned",
+            "--no-tasks",
+            "--to",
+            NOTES,
+        ],
+    );
+    assert_eq!(landed(&alone, "plan:pets-owned"), "team:pets-owned");
+    assert_eq!(
+        outcome(&alone, "plan:pets-owned")["placed"],
+        json!({"destination": TEAM, "route": 0})
+    );
+    assert_eq!(
+        alone["items"].as_array().expect("items").len(),
+        1,
+        "no task travels"
+    );
+    let plain = answer(
+        &sandbox,
+        &["project", "copy", "plan:plain", "--no-tasks", "--to", NOTES],
+    );
+    assert_eq!(landed(&plain, "plan:plain"), "notes:plain");
+    assert_eq!(
+        outcome(&plain, "plan:plain")["placed"],
+        json!({"destination": NOTES, "route": null})
+    );
+
+    // A copy into a source with no routes places nothing, and its report says nothing about
+    // placement — exactly the document it was before routes existed.
+    let whole = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:pets-owned",
+            "--to",
+            TEAM,
+            "--dry-run",
+        ],
+    );
+    assert!(
+        outcome(&whole, "plan:pets-owned").get("placed").is_none(),
+        "a copy into a source with no routes reports no placement, as before: {whole:#}"
+    );
+}
+
+#[test]
+fn a_member_copy_places_the_named_tasks_and_a_home_wholly_routed_keeps_its_place() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+
+    // Only the petsinc task is named, so every task copied routes to `team`: the home
+    // follows it there, wholly.
+    let first = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--member",
+            "plan:pets",
+            "--to",
+            NOTES,
+        ],
+    );
+    assert_eq!(landed(&first, "plan:goal"), "team:goal", "{first:#}");
+    assert_eq!(
+        outcome(&first, "plan:goal")["placed"],
+        json!({"destination": TEAM, "route": 0})
+    );
+    assert_eq!(source_of(&landed(&first, "plan:pets")), TEAM);
+    assert!(members_of(&sandbox, "team:goal").is_empty());
+
+    // A later task that routes back to the named destination goes into a member project
+    // there, and the home stays where it landed.
+    let second = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--member",
+            "plan:own",
+            "--to",
+            NOTES,
+        ],
+    );
+    assert_eq!(landed(&second, "plan:goal"), "team:goal", "{second:#}");
+    let own = landed(&second, "plan:own");
+    assert_eq!(source_of(&own), NOTES);
+    let members = members_of(&sandbox, "team:goal");
+    assert_eq!(members.len(), 1, "the home records its new member");
+    assert_eq!(source_of(&members[0]), NOTES);
+    assert_eq!(filed_under(&sandbox, &own), members[0]);
+    let member = answer(&sandbox, &["project", "show", &members[0]]);
+    assert_eq!(
+        member["items"][0]["item"]["metadata"]["onetaskgraph.member_of"],
+        json!("team:goal")
+    );
+
+    // A re-copy of the whole project finds every counterpart and creates nothing.
+    let again = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    for item in again["items"].as_array().expect("items") {
+        assert_ne!(item["action"], "created", "{again:#}");
+    }
+    assert_eq!(members_of(&sandbox, "team:goal"), members);
+}
+
+#[test]
+fn a_project_whose_last_unrouted_task_is_gone_lands_wholly_in_the_routed_source() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    std::fs::remove_file(plan.join("tasks/own.md")).expect("the unrouted task is removed");
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    assert_eq!(landed(&report, "plan:goal"), "team:goal", "{report:#}");
+    assert_eq!(source_of(&landed(&report, "plan:pets")), TEAM);
+    assert!(
+        tree(&sandbox.project().join(NOTES)).is_empty(),
+        "nothing lands in the named destination"
+    );
+}
+
+#[test]
+fn a_dry_run_reports_the_placement_the_copy_then_makes_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/nickderobertis/lib]\ndepends_on: [pets]",
+    );
+    let before: Vec<_> = [PLAN, NOTES, TEAM]
+        .iter()
+        .map(|folder| tree(&sandbox.project().join(folder)))
+        .collect();
+    let dry = answer(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", NOTES, "--dry-run"],
+    );
+    let after: Vec<_> = [PLAN, NOTES, TEAM]
+        .iter()
+        .map(|folder| tree(&sandbox.project().join(folder)))
+        .collect();
+    assert_eq!(before, after, "a dry run leaves every source as it was");
+
+    let real = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    for item in ["plan:goal", "plan:pets", "plan:own"] {
+        assert_eq!(
+            outcome(&dry, item)["placed"],
+            outcome(&real, item)["placed"],
+            "{item}: the dry run named the placement the copy made"
+        );
+        assert_eq!(
+            outcome(&real, item)["placed"]["destination"].as_str(),
+            Some(source_of(&landed(&real, item))),
+        );
+    }
+    assert_eq!(
+        outcome(&real, "plan:pets")["placed"],
+        json!({"destination": TEAM, "route": 0})
+    );
+}
+
+#[test]
+fn a_routed_copy_refuses_an_item_whose_counterpart_sits_where_it_no_longer_routes() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(
+        &plan,
+        "tasks",
+        "moving",
+        "title: Moving\nstatus: todo\nrepositories: [github.com/petsinc/api]",
+    );
+    let first = answer(&sandbox, &["task", "copy", "plan:moving", "--to", NOTES]);
+    let counterpart = landed(&first, "plan:moving");
+    assert_eq!(source_of(&counterpart), TEAM);
+
+    // Somebody moves the work to another repository after it was copied.
+    let path = plan.join("tasks/moving.md");
+    let text = std::fs::read_to_string(&path).expect("the task");
+    std::fs::write(
+        &path,
+        text.replace("github.com/petsinc/api", "github.com/nickderobertis/api"),
+    )
+    .expect("the task is edited");
+    let before = (
+        tree(&sandbox.project().join(NOTES)),
+        tree(&sandbox.project().join(TEAM)),
+    );
+    let refusal = refused(&sandbox, &["task", "copy", "plan:moving", "--to", NOTES], 1);
+    assert!(
+        refusal.contains("plan:moving")
+            && refusal.contains(&counterpart)
+            && refusal.contains(NOTES)
+            && refusal.contains("next:"),
+        "the refusal names the item, its counterpart and where it routes now:\n{refusal}"
+    );
+    assert_eq!(
+        before,
+        (
+            tree(&sandbox.project().join(NOTES)),
+            tree(&sandbox.project().join(TEAM)),
+        ),
+        "nothing is written before the refusal"
+    );
+
+    // And the member keys are the store's: a caller cannot set either.
+    for key in ["onetaskgraph.members", "onetaskgraph.member_of"] {
+        let refusal = refused(
+            &sandbox,
+            &["task", "metadata", "set", &counterpart, key, "[]"],
+            1,
+        );
+        assert!(
+            refusal.contains(key),
+            "{key} is refused by name:\n{refusal}"
+        );
+    }
+}
+
+#[test]
+fn a_home_reads_with_its_members_across_pages_and_reports_a_member_it_cannot_read() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    for (id, repository) in [
+        ("a", "github.com/nickderobertis/a"),
+        ("b", "github.com/petsinc/b"),
+        ("c", "github.com/nickderobertis/c"),
+        ("d", "github.com/petsinc/d"),
+        ("e", "github.com/petsinc/e"),
+    ] {
+        record(
+            &plan,
+            "tasks",
+            id,
+            &format!("title: Task {id}\nstatus: todo\nproject: goal\nrepositories: [{repository}]"),
+        );
+    }
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    let home = landed(&report, "plan:goal");
+    let mut wanted: Vec<String> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|id| landed(&report, &format!("plan:{id}")))
+        .collect();
+    wanted.sort();
+
+    // Two at a time, to exhaustion: every task once, each under its own source.
+    let mut seen: Vec<String> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut arguments = vec![
+            "task",
+            "list",
+            "--project",
+            home.as_str(),
+            "--members",
+            "--limit",
+            "2",
+        ];
+        if let Some(token) = &token {
+            arguments.extend(["--page", token.as_str()]);
+        }
+        let page = answer(&sandbox, &arguments);
+        let items = page["items"].as_array().expect("items");
+        assert!(items.len() <= 2, "a page holds at most the limit");
+        seen.extend(
+            items
+                .iter()
+                .map(|task| task["id"].as_str().expect("an id").to_owned()),
+        );
+        match page["next"].as_str() {
+            Some(next) => token = Some(next.to_owned()),
+            None => break,
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, wanted, "no task dropped or repeated across pages");
+
+    // Without --members only the home's own.
+    let own = answer(&sandbox, &["task", "list", "--project", &home]);
+    assert!(
+        own["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|task| source_of(task["id"].as_str().expect("an id")) == NOTES),
+        "{own:#}"
+    );
+
+    // A member that cannot be read is an error, never a silent omission.
+    let member = members_of(&sandbox, &home)[0].clone();
+    let file = sandbox.project().join(TEAM).join("projects").join(format!(
+        "{}.md",
+        member.split_once(':').expect("qualified").1
+    ));
+    std::fs::remove_file(&file).expect("the member project is removed");
+    let output = run(
+        &sandbox,
+        &["task", "list", "--project", &home, "--members", "--json"],
+    );
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let partial: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let errors = partial["errors"].as_array().expect("errors");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error["source"] == TEAM && error.to_string().contains(&member)),
+        "the unreadable member is reported: {partial:#}"
+    );
+    let refusal = refused(
+        &sandbox,
+        &["task", "list", "--project", "goal", "--members"],
+        1,
+    );
+    assert!(refusal.contains("--members"), "{refusal}");
+}
