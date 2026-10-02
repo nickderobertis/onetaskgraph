@@ -269,7 +269,7 @@ pub struct RouteArgs {
     pub source: String,
     /// One repository the item concerns, as a normalized origin `host/owner/name`. Repeat
     /// for several; none at all matches no route.
-    #[arg(long = "repository", value_name = "ORIGIN", value_parser = repository)]
+    #[arg(long = "repository", value_name = "R", value_parser = repository)]
     pub repository: Vec<Repository>,
 }
 

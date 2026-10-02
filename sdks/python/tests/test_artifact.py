@@ -269,7 +269,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 26
+    assert emitted_bundle["version"] == 27
+    # Version 27 published routing: what `sources route` answers with, and the placement it and
+    # every outcome of a routed copy's report name.
+    assert generate.RESPONSE_ROOTS["sources_route"] == "SourceRoute"
+    for root in ("SourceRoute", "Placement"):
+        assert root in bundle["roots"], root
+    assert '"placed"' in json.dumps(emitted_bundle["roots"]["CopyOutcome"])
     # Version 26 published the metadata values and the copy origin a task list may be narrowed
     # by: the query's `metadata` and `origin`, the `MetadataMatch` one of the first is, and the
     # two capabilities a source declares them with.

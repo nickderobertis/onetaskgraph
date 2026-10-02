@@ -28,6 +28,7 @@ from .models import (
     RenderedTemplate,
     SourceListing,
     SourceName,
+    SourceRoute,
     StatusCategory,
     StatusOptionsReport,
     TaskContentSet,
@@ -52,6 +53,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "show"): ("id",),
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
+    ("sources", "route"): ("source",),
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
     ("task", "comment", "add"): ("id",),
@@ -657,6 +659,26 @@ class GeneratedClient:
             set=set,
         )
 
+    async def sources_route(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceRoute:
+        """Run ``onetaskgraph sources route``."""
+        return await self._invoke(
+            ["sources", "route"],
+            SourceRoute,
+            source=source,
+            default_sources=default_sources,
+            page_size=page_size,
+            repository=_strings("sources_route", "repository", repository),
+            set=set,
+        )
+
     async def sources_status_options(
         self,
         source: SourceName | str,
@@ -921,6 +943,7 @@ class GeneratedClient:
         in_: Literal["title", "content", "both"] | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         limit: int | None = None,
+        members: bool | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
@@ -958,6 +981,7 @@ class GeneratedClient:
             in_=in_,
             label=label,
             limit=limit,
+            members=members,
             metadata=_strings("task_list", "metadata", metadata),
             no_project=no_project,
             not_label=not_label,

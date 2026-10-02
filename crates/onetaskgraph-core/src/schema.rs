@@ -15,7 +15,7 @@ use onetaskgraph_plugin_api::{
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
-use crate::config::{EffectiveConfig, Origin, OutputFormat, Setting};
+use crate::config::{EffectiveConfig, Origin, OutputFormat, Placement, Setting, SourceRoute};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::template::{
@@ -43,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 26;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 27;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -198,6 +198,10 @@ pub fn schema_bundle() -> Value {
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
+    // What `sources route` answers with, and the placement a routed copy's report names for
+    // each item it landed.
+    roots.insert("SourceRoute", schema_for!(SourceRoute));
+    roots.insert("Placement", schema_for!(Placement));
     roots.insert("Setting", schema_for!(Setting));
     roots.insert("Origin", schema_for!(Origin));
     roots.insert("OutputFormat", schema_for!(OutputFormat));

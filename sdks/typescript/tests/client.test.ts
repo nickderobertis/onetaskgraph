@@ -1280,3 +1280,69 @@ test("the reference figures round-trip absent, zero and non-zero through the gen
 
   expect(validate({ items: [], references_rewritten: -1 })).toBe(false);
 });
+
+test("sources route answers from configuration, and a home reads with its members", async () => {
+  const routeRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-route-"));
+  try {
+    const record = (kind: string, name: string, front: string) => {
+      mkdirSync(resolve(routeRoot, "plan", kind), { recursive: true });
+      writeFileSync(resolve(routeRoot, "plan", kind, `${name}.md`), `---\n${front}\n---\n`);
+    };
+    record("projects", "goal", "title: Goal\nstatus: todo");
+    record(
+      "tasks",
+      "lib",
+      "title: Lib\nstatus: todo\nproject: goal\nrepositories: [github.com/me/lib]",
+    );
+    record(
+      "tasks",
+      "app",
+      "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+    );
+    mkdirSync(resolve(routeRoot, "notes"));
+    mkdirSync(resolve(routeRoot, "team"));
+    const folder = { status_mapping: { todo: "todo" } };
+    writeFileSync(
+      resolve(routeRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          plan: { plugin: "local-md", config: { root: resolve(routeRoot, "plan"), ...folder } },
+          notes: {
+            plugin: "local-md",
+            config: { root: resolve(routeRoot, "notes"), ...folder },
+            routes: [{ repositories: ["github.com/petsinc/*"], to: "team" }],
+          },
+          team: { plugin: "local-md", config: { root: resolve(routeRoot, "team"), ...folder } },
+        },
+      }),
+    );
+    const routeClient = new OnetaskgraphClient({ binaryPath: binary, cwd: routeRoot });
+
+    expect(
+      await routeClient.sourcesRoute("notes", { repositories: ["github.com/petsinc/x"] }),
+    ).toEqual({
+      source: "notes",
+      destination: "team",
+      route: 0,
+    });
+    expect(await routeClient.sourcesRoute("notes")).toEqual({
+      source: "notes",
+      destination: "notes",
+      route: null,
+    });
+    await expect(routeClient.sourcesRoute("nowhere")).rejects.toThrow('"nowhere"');
+
+    const copied = await routeClient.projectCopy("plan:goal", "notes");
+    expect(copied.items.map((item) => [item.source, item.placed?.destination])).toEqual([
+      ["plan:goal", "notes"],
+      ["plan:app", "team"],
+      ["plan:lib", "notes"],
+    ]);
+    const both = await routeClient.taskList({ project: "notes:goal", members: true });
+    expect(both.items.map((task) => task.id.split(":")[0]).sort()).toEqual(["notes", "team"]);
+    const own = await routeClient.taskList({ project: "notes:goal" });
+    expect(own.items.map((task) => task.id.split(":")[0])).toEqual(["notes"]);
+  } finally {
+    rmSync(routeRoot, { recursive: true, force: true });
+  }
+});

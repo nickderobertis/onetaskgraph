@@ -529,6 +529,33 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Placement": {
+        "description": "Where one item written to a source lands, and which of its routes put it there.\n\n`route` is always written, `null` included: a reader of a routed copy's report is told\nthat no entry matched rather than left to infer it from an absent key.",
+        "properties": {
+          "destination": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source the item lands in: the routed one, or the source itself."
+          },
+          "route": {
+            "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "destination"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -662,6 +689,17 @@ export const runtimeSchemas = {
       }
     ],
     "properties": {
+      "placed": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Placement"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+      },
       "source": {
         "$ref": "#/$defs/GlobalId",
         "description": "The qualified id the item was read from."
@@ -856,6 +894,17 @@ export const runtimeSchemas = {
           }
         ],
         "properties": {
+          "placed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Placement"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+          },
           "source": {
             "$ref": "#/$defs/GlobalId",
             "description": "The qualified id the item was read from."
@@ -1080,6 +1129,28 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Placement": {
+        "description": "Where one item written to a source lands, and which of its routes put it there.\n\n`route` is always written, `null` included: a reader of a routed copy's report is told\nthat no entry matched rather than left to infer it from an absent key.",
+        "properties": {
+          "destination": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source the item lands in: the routed one, or the source itself."
+          },
+          "route": {
+            "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "destination"
+        ],
+        "type": "object"
       },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
@@ -4083,6 +4154,37 @@ export const runtimeSchemas = {
     "description": "The engine's own resume token: one plugin cursor per source stream, opaque to the\ncaller exactly as a plugin's cursor is opaque to the engine.\n\nRendered as lower-case hex, which is not obfuscation — the inside is not a secret —\nbut the one property a token a person copies off a terminal has to have: it survives\na shell. The document underneath holds a plugin's own cursor, and a cursor may hold\nanything at all, so a token spelled as the raw JSON would carry quotes, braces and\nspaces straight into the next command line. Hex has no character a shell reads.\n\n# What a token is and is not checked for\n\nBoth ways in go through [`parse`](Self::parse) — including deserialising one — and\nwhat that establishes is **structural**: the string is hex, the bytes are this\nengine's own resume document, and every state in it is well formed. It does not, and\ncannot, establish that this engine is the one that wrote it. A token is not a\ncredential and carries nothing secret; forging one buys a caller nothing they could\nnot have asked for outright, since every cursor inside is handed straight back to the\nsource that issued it and is validated there.\n\nWhat a forged token *could* do is name a stream this configuration has no source for,\nor resume further into a page than the engine ever pages. Both are refused where the\ntoken meets the query it is resuming, by\n[`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows\nwhich sources are configured and what page ceiling each declares.",
     "title": "PageToken",
     "type": "string"
+  },
+  "Placement": {
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Where one item written to a source lands, and which of its routes put it there.\n\n`route` is always written, `null` included: a reader of a routed copy's report is told\nthat no entry matched rather than left to infer it from an absent key.",
+    "properties": {
+      "destination": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The source the item lands in: the routed one, or the source itself."
+      },
+      "route": {
+        "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "destination"
+    ],
+    "title": "Placement",
+    "type": "object"
   },
   "Predicate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10799,6 +10901,42 @@ export const runtimeSchemas = {
       "pages_fetched"
     ],
     "title": "SourcePlan",
+    "type": "object"
+  },
+  "SourceRoute": {
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `sources route` answers: where an item with the repositories asked about, written\nto `source`, would land — read from configuration alone, never from a source.",
+    "properties": {
+      "destination": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The source the item lands in: the routed one, or the source itself."
+      },
+      "route": {
+        "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The source the item would be written to."
+      }
+    },
+    "required": [
+      "source",
+      "destination"
+    ],
+    "title": "SourceRoute",
     "type": "object"
   },
   "Status": {

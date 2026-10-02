@@ -21,6 +21,7 @@ import type {
   Regenerated,
   RenderedTemplate,
   SourceListings,
+  SourceRoute,
   StatusCategory,
   StatusOptionsReport,
   TaskContentSet,
@@ -162,6 +163,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources list": "SourceListings",
   "sources status-options": "StatusOptionsReport",
   "sources fields": "FieldsReport",
+  "sources route": "SourceRoute",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   "task deps": "QueryResponseOfQualifiedEdge",
@@ -204,7 +206,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails. A template verb reads no source at all. Of the verbs that create and regenerate from
+// fails, and `sources route` reads configuration alone. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -212,6 +214,7 @@ const partialResponseCommands = new Set(
       command !== "config show" &&
       command !== "sources list" &&
       command !== "sources fields" &&
+      command !== "sources route" &&
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
@@ -718,6 +721,15 @@ export class OnetaskgraphClient {
   sourcesFields(source: string, options: { apply?: boolean } = {}): Promise<FieldsReport> {
     return this.run("sources fields", [source, ...(options.apply ? ["--apply"] : [])]);
   }
+  // Where an item with these repositories, written to `source`, would land — from configuration
+  // alone, never from a source.
+  sourcesRoute(source: string, options: { repositories?: string[] } = {}): Promise<SourceRoute> {
+    const args = [source];
+    for (const repository of stringList("sourcesRoute", "repositories", options.repositories)) {
+      args.push("--repository", repository);
+    }
+    return this.run("sources route", args);
+  }
   taskList(
     options: FilterOptions & {
       project?: string;
@@ -731,12 +743,15 @@ export class OnetaskgraphClient {
       metadata?: string[];
       // A qualified id, `<source>:<id>`: keep tasks copied from exactly that item.
       origin?: string;
+      // With a qualified `project`, read every member project it names beside it.
+      members?: boolean;
     } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
     const args: string[] = [];
     addFilters(args, options);
     if (options.project !== undefined) args.push("--project", options.project);
     if (options.noProject) args.push("--no-project");
+    if (options.members) args.push("--members");
     for (const priority of options.priorities ?? []) args.push("--priority", priority);
     if (options.commentedSince !== undefined) {
       args.push("--commented-since", options.commentedSince);
