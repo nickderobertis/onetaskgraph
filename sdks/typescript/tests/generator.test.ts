@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import "./ambient.ts";
-import { commandResponseRoots } from "../src/index.ts";
+import { commandAlternateRoots, commandResponseRoots } from "../src/index.ts";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const binary = resolve(packageRoot, "../../target/debug/onetaskgraph");
@@ -342,4 +342,21 @@ test("every command's response root is the one the Python generator maps it to",
   // root the bundle carries for it.
   expect({ ...typescript, sources_list: "SourceListing" }).toEqual(python);
   expect(typescript.sources_list).toBe("SourceListings");
+
+  // And the other shapes a command answers in, which each client accepts beside its root.
+  const alternates = source.slice(source.indexOf("ALTERNATE_ROOTS"));
+  const pythonAlternates = Object.fromEntries(
+    [...alternates.slice(0, alternates.indexOf("\n")).matchAll(/"(\w+)": \(([^)]*)\)/g)].map(
+      ([, verb, roots]) => [verb, [...(roots ?? "").matchAll(/"(\w+)"/g)].map(([, root]) => root)],
+    ),
+  );
+  expect(Object.keys(pythonAlternates)).toEqual(["sources_fields"]);
+  expect(
+    Object.fromEntries(
+      Object.entries(commandAlternateRoots).map(([command, roots]) => [
+        command.replace(/[ -]/g, "_"),
+        [...roots],
+      ]),
+    ),
+  ).toEqual(pythonAlternates);
 });

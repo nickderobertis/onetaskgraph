@@ -59,6 +59,13 @@ mod failures;
 mod fields;
 mod fixtures;
 mod journeys;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against the loopback Linear
+// workspace and folders of Markdown, with no credential and no network, in a few seconds. A
+// copy, a delivered task and a status narrowing are the engine's, so they cannot sit behind the
+// Linear plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth; the
+// plugin's own half is proven behind its own edge in its `tests/plugin.rs`.
+mod linear;
 mod machine;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and

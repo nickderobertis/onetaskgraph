@@ -84,6 +84,37 @@ pub fn fields(report: &FieldsReport) -> String {
     rendered
 }
 
+/// What `sources fields` reports for a `linear` source: one line per workflow state its
+/// `status_mapping` names, present on the team with its type or missing from it.
+pub fn workflow_states(report: &onetaskgraph_linear::WorkflowStatesReport) -> String {
+    if report.states.is_empty() {
+        return format!(
+            "{}: status_mapping names no workflow state of team {}\n",
+            report.source,
+            report.team()
+        );
+    }
+    let mut rendered = String::new();
+    for state in &report.states {
+        let category = serde_json::to_value(state.category())
+            .ok()
+            .and_then(|word| word.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let found = match state.found() {
+            onetaskgraph_linear::Found::Present(kind) => {
+                format!("present on team {} ({kind})", report.team())
+            }
+            onetaskgraph_linear::Found::Missing => format!("missing from team {}", report.team()),
+        };
+        rendered.push_str(&format!(
+            "{}: {category} -> {}: {found}\n",
+            report.source,
+            state.state()
+        ));
+    }
+    rendered
+}
+
 /// Lay `rows` out as aligned columns, one line each.
 ///
 /// The last column is never padded, so nothing trails a line with blanks that a shell

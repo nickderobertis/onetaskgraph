@@ -26,10 +26,10 @@ use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
 use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceName,
-    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery,
+    Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataMatch,
+    NativeId, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -472,31 +472,32 @@ async fn drive_every_declared_capability(
     )
     .await?;
 
-    // `search_title` and `search_content` are declared `Unsupported`, and capability rule
-    // 2 is what that declaration promises: the source **ignores** the predicate and
-    // returns the wider set, so the engine can narrow it. A source that half-applied one
-    // would return fewer rows here, which is the one failure no test above the plugin can
-    // catch.
-    for fields in [
-        TextFields::Title,
-        TextFields::Content,
-        TextFields::TitleOrContent,
+    // `search_title` and `search_content` are declared `Native`: the source narrows by each
+    // and returns exactly what the case-insensitive substring rule keeps. The first issue's
+    // title is in no issue's content, and every issue's content holds the lane's own sentence.
+    for (terms, fields, expected) in [
+        (first.clone(), TextFields::Title, vec![first.clone()]),
+        (first.clone(), TextFields::Content, Vec::new()),
+        (
+            first.clone(),
+            TextFields::TitleOrContent,
+            vec![first.clone()],
+        ),
+        (
+            "TEMPORARY CREDENTIALED WRITE".to_owned(),
+            TextFields::Content,
+            all_three.clone(),
+        ),
     ] {
         settled_tasks(
             LINEAR_INDEX,
             source,
             &TaskQuery {
-                text: Some(TextQuery {
-                    terms: first.clone(),
-                    fields,
-                }),
+                text: Some(TextQuery { terms, fields }),
                 ..scoped()
             },
-            &format!(
-                "a {fields:?} search this source declares unsupported, which must return the \
-                 wider set,"
-            ),
-            &all_three,
+            &format!("a {fields:?} search this source narrows itself"),
+            &expected,
         )
         .await?;
     }
@@ -599,7 +600,378 @@ async fn drive_every_declared_capability(
         closed_back.status.category
     );
 
-    drive_documents(run, source, &alpha_id, &title(5), &title(6)).await
+    drive_documents(run, source, &alpha_id, &title(5), &title(6)).await?;
+    drive_follow_ups(run, source, &title(7), &title(8), &title(9), &title(10)).await
+}
+
+/// One issue's raw `description`, as Linear hands it back.
+async fn raw_description(run: &LiveRun, id: &NativeId) -> Result<String, String> {
+    linear(
+        &run.key,
+        "query($id:String!){ issue(id:$id){ description } }",
+        json!({"id":id.0}),
+        "live raw issue read",
+    )
+    .await?
+    .pointer("/issue/description")
+    .and_then(Value::as_str)
+    .map(str::to_owned)
+    .ok_or_else(|| format!("issue {} carried no description", id.0))
+}
+
+/// One document's raw `content`, as Linear hands it back.
+async fn raw_content(run: &LiveRun, id: &NativeId) -> Result<String, String> {
+    linear(
+        &run.key,
+        "query($id:String!){ document(id:$id){ content } }",
+        json!({"id":id.0}),
+        "live raw document read",
+    )
+    .await?
+    .pointer("/document/content")
+    .and_then(Value::as_str)
+    .map(str::to_owned)
+    .ok_or_else(|| format!("document {} carried no content", id.0))
+}
+
+/// The text the lane writes into an issue's description, a comment's body and a document's
+/// content, to see what Linear does to an HTML comment in each: one on one line holding a
+/// domain-like value and an array, one closing on a line of its own, and one on one line with
+/// its JSON inside a code span.
+const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
+
+/// What Linear hands [`PROBE`] back as from an issue's description and a document's content,
+/// observed 2026-10-02 and recorded in the plugin's module documentation: inside the first
+/// comment the domain-like value is autolinked and the array's brackets escaped, the second
+/// comment's closing line is escaped, and the code span comes back as it was written.
+const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
+
+/// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
+/// in an issue's description, a comment's body and a document's content, recorded in the
+/// plugin's module documentation; the metadata slot, written as a code span, keeping values
+/// Linear rewrites everywhere else; each of the follow-up searches narrowed by Linear and
+/// confirmed in process — a decoy whose prose carries every phrase is kept out — and a narrow
+/// metadata write that moves only the slot.
+async fn drive_follow_ups(
+    run: &LiveRun,
+    source: &dyn TaskSource,
+    matching: &str,
+    decoy: &str,
+    document_title: &str,
+    probe_title: &str,
+) -> Result<(), String> {
+    let tag = format!("otg-live-{}", run.stamp_micros);
+    let origin = format!("elsewhere:{tag}");
+    let issue = |title: &str, content: String, metadata: Value, priority: Priority| Task {
+        id: NativeId("live-source-item".into()),
+        key: None,
+        title: title.to_owned(),
+        content: Some(content),
+        status: Status {
+            category: StatusCategory::Todo,
+            name: run.open_state.clone(),
+        },
+        labels: Vec::new(),
+        priority,
+        project: None,
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: serde_json::from_value(metadata).unwrap_or_default(),
+        repositories: Vec::new(),
+        delivers: Vec::new(),
+        delivered_by: Vec::new(),
+    };
+    // `caller.live` is a key Linear autolinks anywhere but a code span, and `caller.site`
+    // holds a URL-like value, an emphasis-shaped one and an array: each is something Linear
+    // rewrites in an HTML comment, and the slot has to keep every one.
+    let hostile = json!(["github.com/a/b", "_y_", "a --> b"]);
+    let matching_metadata = json!({"caller.tag": tag, "caller.key": tag, "caller.live": tag,
+        "caller.site": hostile, "onetaskgraph.origin": origin});
+    let matching_id = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: issue(
+                matching,
+                "A follow-up the lane searches for.".to_owned(),
+                matching_metadata.clone(),
+                Priority::High,
+            ),
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live write of {matching:?} failed: {error}"))?;
+    let decoy_id = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: issue(
+                decoy,
+                format!(
+                    "Quotes \"caller.key\":\"{tag}\" and \"onetaskgraph.origin\":\"{origin}\" \
+                     in its prose, and {tag}-prose."
+                ),
+                // `caller.key` and `onetaskgraph.origin` are keys Linear leaves alone in
+                // prose, so the phrases above make this a candidate Linear returns for both
+                // narrowings, and only the confirmation over its slot keeps it out.
+                json!({"caller.tag": tag, "caller.key": format!("{tag}-other")}),
+                Priority::Low,
+            ),
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live write of {decoy:?} failed: {error}"))?;
+    let read_back = source
+        .get_task(&matching_id)
+        .await
+        .map_err(|error| format!("live read of {matching:?} failed: {error}"))?
+        .ok_or_else(|| format!("{matching:?} was not readable by its own id"))?;
+    for key in ["caller.tag", "caller.key", "caller.live", "caller.site"] {
+        ensure!(
+            read_back.metadata.get(key) == matching_metadata.get(key),
+            "the metadata slot did not keep {key}: wrote {}, read {:?}",
+            matching_metadata[key],
+            read_back.metadata.get(key)
+        );
+    }
+    let held = raw_description(run, &matching_id).await?;
+    ensure!(
+        held.starts_with("A follow-up the lane searches for.\n\n<!-- onetaskgraph.metadata `")
+            && held.ends_with("` -->"),
+        "the slot did not come back in the one-line code-span spelling: {held:?}"
+    );
+
+    // The comment the activity search below finds the matching issue by.
+    source
+        .add_comment(
+            &matching_id,
+            &onetaskgraph_plugin_api::NewComment {
+                body: onetaskgraph_plugin_api::CommentBody::new(
+                    "A comment the activity search finds.".to_owned(),
+                )
+                .map_err(|error| error.to_string())?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment add failed: {error}"))?
+        .ok_or_else(|| "the matching issue had no comments".to_owned())?;
+
+    // An HTML comment in an issue's description, a comment's body and a document's content.
+    let probe_id = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: issue(probe_title, "probe".to_owned(), json!({}), Priority::None),
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live write of {probe_title:?} failed: {error}"))?;
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+        json!({"id":probe_id.0,"input":{"description":PROBE}}),
+        "live description probe",
+    )
+    .await?;
+    let stored = raw_description(run, &probe_id).await?;
+    ensure!(
+        stored == PROBE_STORED,
+        "an issue description's HTML comments came back as {stored:?}, not as recorded"
+    );
+    let added = source
+        .add_comment(
+            &probe_id,
+            &onetaskgraph_plugin_api::NewComment {
+                body: onetaskgraph_plugin_api::CommentBody::new(PROBE.to_owned())
+                    .map_err(|error| error.to_string())?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment add failed: {error}"))?
+        .ok_or_else(|| "the probe issue had no comments".to_owned())?;
+    ensure!(
+        added.body.as_str() == PROBE,
+        "a comment body's HTML comments did not survive byte for byte: {:?}",
+        added.body.as_str()
+    );
+    let document_id = source
+        .write_document(&ItemWrite {
+            target: None,
+            item: Document {
+                id: NativeId("live-source-item".into()),
+                title: document_title.to_owned(),
+                content: Some("A probed document.".to_owned()),
+                project: None,
+                labels: Vec::new(),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata: serde_json::from_value(json!({"caller.live": tag})).unwrap_or_default(),
+                repositories: Vec::new(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live document write failed: {error}"))?;
+    let document = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("live document read failed: {error}"))?
+        .ok_or_else(|| "the probed document was not readable by its own id".to_owned())?;
+    ensure!(
+        document.metadata.get("caller.live") == Some(&json!(tag))
+            && document.content.as_deref() == Some("A probed document."),
+        "a document's slot did not keep its metadata: {document:?}"
+    );
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        json!({"id":document_id.0,"input":{"content":PROBE}}),
+        "live content probe",
+    )
+    .await?;
+    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        content == PROBE_STORED,
+        "a document's HTML comments came back as {content:?}, not as recorded"
+    );
+
+    // Each follow-up search, narrowed by Linear and confirmed here: the decoy's prose carries
+    // the metadata and origin phrases, and its slot holds another value.
+    let both = vec![decoy.to_owned(), matching.to_owned()];
+    let only = vec![matching.to_owned()];
+    let tag_match = MetadataMatch::new("caller.tag", Vec::new(), tag.clone())?;
+    let base = TaskQuery {
+        metadata: vec![tag_match.clone()],
+        ..TaskQuery::default()
+    };
+    settled_tasks(LINEAR_INDEX, source, &base, "the two tagged issues", &both).await?;
+    for (query, what, expected) in [
+        (
+            TaskQuery {
+                metadata: vec![
+                    tag_match.clone(),
+                    MetadataMatch::new("caller.key", Vec::new(), tag.clone())?,
+                ],
+                ..TaskQuery::default()
+            },
+            "a metadata match the decoy carries only in prose",
+            only.clone(),
+        ),
+        (
+            TaskQuery {
+                origin: Some(origin.clone()),
+                ..base.clone()
+            },
+            "an origin the decoy carries only in prose",
+            only.clone(),
+        ),
+        (
+            TaskQuery {
+                priorities: vec![Priority::High],
+                ..base.clone()
+            },
+            "a priority",
+            only.clone(),
+        ),
+        (
+            TaskQuery {
+                commented_since: chrono::Utc::now()
+                    .checked_sub_signed(chrono::Duration::minutes(10)),
+                ..base.clone()
+            },
+            "comment activity in the last ten minutes",
+            only.clone(),
+        ),
+        (
+            TaskQuery {
+                commented_since: chrono::Utc::now().checked_add_signed(chrono::Duration::days(1)),
+                ..base.clone()
+            },
+            "comment activity tomorrow",
+            Vec::new(),
+        ),
+        (
+            TaskQuery {
+                text: Some(TextQuery {
+                    terms: format!("{tag}-PROSE"),
+                    fields: TextFields::Content,
+                }),
+                ..base.clone()
+            },
+            "a content search, any case",
+            vec![decoy.to_owned()],
+        ),
+    ] {
+        settled_tasks(LINEAR_INDEX, source, &query, what, &expected).await?;
+    }
+
+    // Linear's own comparators, as the module documentation records them: `contains` reads
+    // the slot and is case-sensitive, `containsIgnoreCase` is not.
+    let narrowed = |filter: Value| async move {
+        let data = linear(
+            &run.key,
+            "query($filter:IssueFilter){ issues(first:10,filter:$filter){ nodes{ title } } }",
+            json!({ "filter": filter }),
+            "live comparator probe",
+        )
+        .await?;
+        let mut titles = data
+            .pointer("/issues/nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "the comparator probe answered no issues".to_owned())?
+            .iter()
+            .filter_map(|node| node["title"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        titles.sort();
+        Ok::<_, String>(titles)
+    };
+    let phrase = format!("\"caller.tag\":\"{tag}\"");
+    for (filter, what, expected) in [
+        (
+            json!({"description":{"contains":phrase}}),
+            "`contains` of a phrase both slots hold",
+            both.clone(),
+        ),
+        (
+            json!({"description":{"contains":phrase.to_uppercase()}}),
+            "`contains` of the same phrase upper-cased",
+            Vec::new(),
+        ),
+        (
+            json!({"description":{"containsIgnoreCase":phrase.to_uppercase()}}),
+            "`containsIgnoreCase` of it upper-cased",
+            both.clone(),
+        ),
+    ] {
+        settled(LINEAR_INDEX, what, &expected, || narrowed(filter.clone())).await?;
+    }
+
+    // A narrow metadata write moves only the slot: every byte above it is as it was.
+    let before = raw_description(run, &decoy_id).await?;
+    let key = onetaskgraph_plugin_api::MetadataKey::new("caller.review")?;
+    source
+        .set_task_metadata(&decoy_id, &key, &json!({"approved": true}))
+        .await
+        .map_err(|error| format!("live metadata write failed: {error}"))?
+        .ok_or_else(|| "the decoy was not held".to_owned())?;
+    let after = raw_description(run, &decoy_id).await?;
+    let above = |field: &str| {
+        field
+            .rfind("<!-- onetaskgraph.metadata")
+            .map(|start| field[..start].to_owned())
+    };
+    ensure!(
+        above(&before).is_some() && above(&before) == above(&after),
+        "a narrow metadata write moved bytes above the slot:\n{before:?}\n{after:?}"
+    );
+    ensure!(
+        after.contains("\"caller.review\":{\"approved\":true}"),
+        "the narrow metadata write did not land in the slot: {after:?}"
+    );
+    Ok(())
 }
 
 /// `documents`, against Linear's own first-class document type.
@@ -843,15 +1215,15 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             documents: Support::Native,
             comments: Support::Native,
             priority: Support::Native,
-            filter_by_priority: Support::Unsupported,
-            filter_by_comment_activity: Support::Unsupported,
-            filter_by_metadata: Support::Unsupported,
-            filter_by_origin: Support::Unsupported,
+            filter_by_priority: Support::Native,
+            filter_by_comment_activity: Support::Native,
+            filter_by_metadata: Support::Native,
+            filter_by_origin: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
-            search_title: Support::Unsupported,
-            search_content: Support::Unsupported,
+            search_title: Support::Native,
+            search_content: Support::Native,
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,

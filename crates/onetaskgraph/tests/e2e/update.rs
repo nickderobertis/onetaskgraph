@@ -789,21 +789,39 @@ fn a_linear_update_sends_one_issue_update_of_what_differs() {
         .collect();
     assert_eq!(far, [qualified(SOURCE, "T-3")]);
 
-    // A list Linear cannot carry is refused by name.
-    let refused = exits(
+    // A `delivers` list lands in the slot and reads back, and the task it names is kept in
+    // step: its `delivered_by` names this one.
+    let delivered = answered(
         "linear",
         &sandbox,
         &[
+            "--json",
             "task",
             "update",
             &id,
             "--delivers",
             &qualified(SOURCE, "T-3"),
         ],
+    );
+    assert_eq!(written(&delivered), ["delivers"]);
+    assert_eq!(
+        shown("linear", &sandbox, &id)["delivers"],
+        json!([qualified(SOURCE, "T-3")])
+    );
+    assert_eq!(
+        shown("linear", &sandbox, &qualified(SOURCE, "T-3"))["delivered_by"],
+        json!([id])
+    );
+
+    // One naming the task itself is refused by name.
+    let refused = exits(
+        "linear",
+        &sandbox,
+        &["task", "update", &id, "--delivers", &id],
         1,
     );
     assert!(
-        stderr(&refused).contains("cannot carry delivers"),
+        stderr(&refused).contains("delivers"),
         "{}",
         stderr(&refused)
     );

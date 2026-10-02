@@ -269,7 +269,35 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 27
+    assert emitted_bundle["version"] == 28
+    # Version 28 published a `linear` source's configuration as a root of its own, carrying the
+    # `status_mapping` and the `project` the host's Linear work is written with — and the
+    # generated package models it.
+    linear_config = bundle["roots"]["LinearConfig"]
+    assert isinstance(linear_config, dict)
+    for member in ("status_mapping", "project"):
+        assert member in linear_config["properties"], member
+        assert member not in linear_config.get("required", []), member
+    from onetaskgraph_sdk import LinearConfig
+
+    configured = LinearConfig.model_validate(
+        {"team": "ENG", "project": "P-1", "status_mapping": {"queued": "Queued", "draft": None}}
+    )
+    # Keyed by the status category itself, valued by a named workflow-state type.
+    assert {
+        key.value: None if name is None else name.root
+        for key, name in configured.status_mapping.items()
+    } == {"queued": "Queued", "draft": None}
+    assert configured.project is not None and configured.project.root == "P-1"
+    # A key that names no status category is refused, as the binary refuses it.
+    import pydantic
+
+    try:
+        LinearConfig.model_validate({"status_mapping": {"shipped": "Done"}})
+    except pydantic.ValidationError:
+        pass
+    else:
+        raise AssertionError("a status_mapping key naming no category was accepted")
     # Version 27 published what `task show-many` answers with: one `TaskDetail` per id.
     task_details = bundle["roots"]["TaskDetails"]
     assert isinstance(task_details, dict)

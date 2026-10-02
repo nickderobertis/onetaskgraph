@@ -555,7 +555,7 @@ fn a_board_without_status_and_a_source_that_is_not_a_board_are_refused_by_name()
     for (source, said) in [
         (
             "notes",
-            "source notes uses plugin in-memory, not github-projects; fields is only available for github-projects sources",
+            "source notes uses plugin in-memory, not github-projects; fields is only available for github-projects and linear sources",
         ),
         ("absent", "no configured source is named absent"),
     ] {
