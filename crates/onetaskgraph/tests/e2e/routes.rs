@@ -15,7 +15,10 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{document, github_projects_with_board, linear_empty_workspace};
+use crate::fixtures::{
+    document, github_projects_with_board, linear_empty_workspace,
+    linear_failing_a_relation_write_once,
+};
 
 /// The folder a plan is authored in.
 const PLAN: &str = "plan";
@@ -137,8 +140,13 @@ fn petsinc_plan(root: &Path) {
 
 /// The routing board, the Linear workspace it routes to, and the folder a plan is in.
 fn board_and_linear(sandbox: &Sandbox) {
-    let (board, _) = github_projects_with_board(sandbox);
     let linear = linear_empty_workspace(sandbox);
+    board_and(sandbox, linear);
+}
+
+/// The routing board, the Linear workspace `linear` configures, and the plan's folder.
+fn board_and(sandbox: &Sandbox, linear: Value) {
+    let (board, _) = github_projects_with_board(sandbox);
     // Each fixture writes its own credential into the one secrets file, the second over the
     // first, so the two are written together here.
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
@@ -1001,4 +1009,213 @@ fn a_home_reads_with_its_members_across_pages_and_reports_a_member_it_cannot_rea
         1,
     );
     assert!(refusal.contains("--members"), "{refusal}");
+}
+
+#[test]
+fn a_member_copy_adding_a_petsinc_task_to_a_board_home_creates_its_linear_member_once() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    record(&plan, "projects", "goal", "title: One goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "lib",
+        "title: Library change\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/nickderobertis/lib]",
+    );
+    board_and_linear(&sandbox);
+    let first = answer(&sandbox, &["project", "copy", "plan:goal", "--to", BOARD]);
+    let home = landed(&first, "plan:goal");
+    assert_eq!(source_of(&home), BOARD);
+    assert!(members_of(&sandbox, &home).is_empty(), "no member yet");
+    let lib = landed(&first, "plan:lib");
+
+    // A running engine adds a Hello Patient task to the plan and writes it back.
+    record(
+        &plan,
+        "tasks",
+        "app",
+        "title: App consumes it\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/petsinc/app]\ndepends_on: [lib]",
+    );
+    let added = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--member",
+            "plan:app",
+            "--to",
+            BOARD,
+        ],
+    );
+    assert_eq!(
+        landed(&added, "plan:goal"),
+        home,
+        "the home stays: {added:#}"
+    );
+    let app = landed(&added, "plan:app");
+    assert_eq!(source_of(&app), LINEAR);
+    assert_eq!(
+        outcome(&added, "plan:app")["placed"],
+        json!({"destination": LINEAR, "route": 0})
+    );
+    let members = members_of(&sandbox, &home);
+    assert_eq!(members.len(), 1, "the member was created and recorded");
+    assert_eq!(source_of(&members[0]), LINEAR);
+    assert_eq!(filed_under(&sandbox, &app), members[0]);
+    assert_eq!(depends_on(&sandbox, &app), vec![lib]);
+
+    // A second one lands in the same member.
+    record(
+        &plan,
+        "tasks",
+        "app2",
+        "title: App follows up\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/petsinc/app]",
+    );
+    let again = answer(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--member",
+            "plan:app2",
+            "--to",
+            BOARD,
+        ],
+    );
+    let app2 = landed(&again, "plan:app2");
+    assert_eq!(filed_under(&sandbox, &app2), members[0]);
+    assert_eq!(members_of(&sandbox, &home), members, "and no second member");
+}
+
+/// What a routed copy's undo has to put back, read through the binary: each record's
+/// fields that a copy writes, and its forward edges.
+fn state(sandbox: &Sandbox, projects: &[&str], tasks: &[&str]) -> Vec<Value> {
+    let fields = |held: &Value| {
+        let item = &held["items"][0]["item"];
+        json!({
+            "title": item["title"],
+            "content": item["content"],
+            "status": item["status"],
+            "project": item["project"],
+            "metadata": item["metadata"],
+            "repositories": item["repositories"],
+        })
+    };
+    let mut read = Vec::new();
+    for project in projects {
+        read.push(fields(&answer(sandbox, &["project", "show", project])));
+    }
+    for task in tasks {
+        read.push(fields(&answer(sandbox, &["task", "show", task])));
+        read.push(json!(depends_on(sandbox, task)));
+    }
+    read
+}
+
+#[test]
+fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() {
+    let sandbox = Sandbox::new();
+    let plan = mixed_plan(&sandbox);
+    // Linear refuses the first native relation it is asked for — an edge between two of
+    // its own issues, which the first copy below never makes.
+    let linear = linear_failing_a_relation_write_once(&sandbox);
+    board_and(&sandbox, linear);
+    let first = answer(&sandbox, &["project", "copy", "plan:goal", "--to", BOARD]);
+    let home = landed(&first, "plan:goal");
+    let member = members_of(&sandbox, &home)[0].clone();
+    let (app, lib, docs) = (
+        landed(&first, "plan:app"),
+        landed(&first, "plan:lib"),
+        landed(&first, "plan:docs"),
+    );
+    let tasks = [app.as_str(), lib.as_str(), docs.as_str()];
+    let before = state(&sandbox, &[&home, &member], &tasks);
+    let listed_before = answer(&sandbox, &["task", "list", "--project", &home, "--members"]);
+    let plan_before = tree(&plan);
+
+    // The next copy writes the board first — the home's title — then Linear. Two new petsinc
+    // tasks land there, the first depending on the second; that edge is written once the
+    // second has landed, as an update of the first, and Linear refuses it — after a new
+    // board task has landed too.
+    record(
+        &plan,
+        "projects",
+        "goal",
+        "title: One goal, renamed\nstatus: todo",
+    );
+    let path = plan.join("tasks/app.md");
+    let text = std::fs::read_to_string(&path).expect("the task");
+    std::fs::write(
+        &path,
+        text.replace("App consumes it", "App consumes it, renamed"),
+    )
+    .expect("an edit");
+    record(
+        &plan,
+        "tasks",
+        "app2",
+        "title: App follows up\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/petsinc/app]\ndepends_on: [app3]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "app3",
+        "title: App finishes\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/petsinc/app]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "lib2",
+        "title: Library again\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/nickderobertis/lib]",
+    );
+    let edited_plan = tree(&plan);
+    let refusal = refused(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", BOARD],
+        1,
+    );
+    assert!(
+        refusal.contains(LINEAR) && !refusal.contains("could not be undone"),
+        "the copy failed in Linear and was undone:\n{refusal}"
+    );
+
+    assert_eq!(
+        state(&sandbox, &[&home, &member], &tasks),
+        before,
+        "every item the copy touched, in both sources, reads as it did — the home's members, \
+         each counterpart's metadata and every edge included"
+    );
+    assert_eq!(
+        answer(&sandbox, &["task", "list", "--project", &home, "--members"])["items"],
+        listed_before["items"],
+        "no item the copy created remains in either source"
+    );
+    // The plan's own files carry only the edits made to them: no copy link was written.
+    let mut expected = edited_plan;
+    for (path, bytes) in &plan_before {
+        if !path.ends_with("goal.md") && !path.ends_with("app.md") {
+            assert_eq!(
+                expected.get(path),
+                Some(bytes),
+                "{path} keeps its link as it was"
+            );
+        }
+    }
+    expected.retain(|path, _| {
+        path.ends_with("app2.md") || path.ends_with("app3.md") || path.ends_with("lib2.md")
+    });
+    for (path, bytes) in expected {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("onetaskgraph.copies"),
+            "{path} records no link to an item that was taken back"
+        );
+    }
 }

@@ -4242,18 +4242,26 @@ fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
     if text.contains("\"null\":true") && v.get("project").is_some() {
         return false;
     }
-    for id in ["p-1", "p-2"] {
-        if text.contains(id)
-            && v.get("project")
-                .and_then(Value::as_str)
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-                != Some(id)
-        {
-            return false;
-        }
+    if let Some(id) = linear_project_eq(&vars["filter"])
+        && v.get("project").and_then(Value::as_str) != Some(id.as_str())
+    {
+        return false;
     }
     true
+}
+
+/// The project id an issue filter narrows to, `{"project": {"id": {"eq": …}}}` at any depth
+/// of it — every project this workspace holds, the ones a copy created in it included.
+fn linear_project_eq(filter: &Value) -> Option<String> {
+    match filter {
+        Value::Object(fields) => fields
+            .get("project")
+            .and_then(|project| project["id"]["eq"].as_str())
+            .map(str::to_owned)
+            .or_else(|| fields.values().find_map(linear_project_eq)),
+        Value::Array(parts) => parts.iter().find_map(linear_project_eq),
+        _ => None,
+    }
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 fn linear_relations(

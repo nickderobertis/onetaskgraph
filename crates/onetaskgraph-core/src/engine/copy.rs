@@ -129,8 +129,9 @@ pub enum CopyScope {
     ///
     /// An edge from a copied item to a member the list does not name resolves to the
     /// destination id that member's own [`GlobalId::ORIGIN_KEY`] records at the source,
-    /// without reading the destination for it. When that member records none, the copy is
-    /// refused before anything is written.
+    /// without reading the destination for it — or, for a copy into a source with `routes`,
+    /// the id its own `onetaskgraph.copies` link records in any source the copy reaches.
+    /// When that member records neither, the copy is refused before anything is written.
     Members(CopyItems),
     /// The ids name documents, and only those documents are copied.
     ///
@@ -1891,8 +1892,18 @@ impl Engine {
                 if members.contains(&task.id) {
                     continue;
                 }
+                // A routed copy also reads the member's own link, because a plan authored
+                // where it is copied from records where each task landed rather than an
+                // origin, and its tasks may have landed in any source the copy reaches.
+                let linked = || {
+                    reachable
+                        .iter()
+                        .find_map(|there| link_of(&task.item.metadata, there))
+                        .filter(|_| self.routes.routes(&request.destination))
+                };
                 match origin_of(&task.item.metadata)
                     .filter(|origin| reachable.contains(&origin.source))
+                    .or_else(linked)
                 {
                     Some(origin) => {
                         running.counterparts.insert(task.id.to_string(), origin);
