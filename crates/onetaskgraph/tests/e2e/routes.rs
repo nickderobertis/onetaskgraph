@@ -448,6 +448,29 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
         human.contains("route:") && human.contains("none"),
         "{human}"
     );
+    let matched = ok(
+        &sandbox,
+        &[
+            "sources",
+            "route",
+            BOARD,
+            "--repository",
+            "github.com/petsinc/api",
+        ],
+    );
+    let fields: Vec<Vec<&str>> = matched
+        .lines()
+        .map(|line| line.split_whitespace().collect())
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            vec!["source:", BOARD],
+            vec!["destination:", LINEAR],
+            vec!["route:", "0"],
+        ],
+        "the human answer names the matched entry's index:\n{matched}"
+    );
 
     let unknown = refused(&sandbox, &["sources", "route", "nowhere"], 1);
     assert!(
@@ -578,6 +601,11 @@ fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_ot
     assert!(
         human.contains("in team by route 0"),
         "the human report names the placement too:\n{human}"
+    );
+    let unrouted = ok(&sandbox, &["task", "copy", "plan:loose", "--to", NOTES]);
+    assert!(
+        unrouted.contains("in notes by no route"),
+        "an item no route matched says so rather than naming an entry:\n{unrouted}"
     );
 
     // `task create` names the project in the source it names; routed away, the task is
@@ -2777,6 +2805,10 @@ fn a_routed_project_copy_reports_what_the_plan_dropped_in_its_home_and_in_its_me
         let orphan = outcome(&again, source);
         assert_eq!(orphan["action"], "orphaned", "{again:#}");
         assert_eq!(orphan["destination"], json!(landed_on));
+        assert!(
+            orphan.get("placed").is_none(),
+            "an orphan was not placed, so its outcome names no placement: {orphan:#}"
+        );
     }
     assert!(
         answer(&sandbox, &["task", "show", &pets2])["items"][0].is_object(),
