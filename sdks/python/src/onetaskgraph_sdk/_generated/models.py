@@ -12,6 +12,7 @@ from .failure_document import FailureDocument as FailureDocument
 from .fields_report import FieldsReport as FieldsReport
 from .global_id import GlobalId as GlobalId
 from .item_type import ItemType as ItemType
+from .linear_config import LinearConfig as LinearConfig
 from .location import Location as Location
 from .metadata_set import MetadataSet as MetadataSet
 from .page_of_document import Page as PageOfDocument
@@ -44,6 +45,7 @@ from .template_variable import TemplateVariable as TemplateVariable
 from .template_variables import TemplateVariables as TemplateVariables
 from .updated_field import UpdatedField as UpdatedField
 from .variable_type import VariableType as VariableType
+from .workflow_states_report import WorkflowStatesReport as WorkflowStatesReport
 
 # Every root is named here rather than left to the `import X as X` form alone: a
 # root whose generated class carries another name — every `QueryResponseOf…`, and
@@ -64,6 +66,7 @@ __all__ = [
     "FieldsReport",
     "GlobalId",
     "ItemType",
+    "LinearConfig",
     "Location",
     "MetadataSet",
     "PageOfDocument",
@@ -96,4 +99,5 @@ __all__ = [
     "TemplateVariables",
     "UpdatedField",
     "VariableType",
+    "WorkflowStatesReport",
 ]

@@ -538,11 +538,10 @@ pub const ROWS: &[Row] = &[
             // from it — a label demanded of a document keeps nothing, a label excluded
             // keeps everything — against a real remote protocol rather than against a mock.
             labels_its_documents: false,
-            // The two searches are unsupported, which is what makes this row the one that
-            // proves the engine's text compensation against a real remote protocol. That
-            // is a ruling rather than a finding: Linear's own API has issue search, so
-            // this is unimplemented rather than unsupportable — see the verdict table in
-            // `onetaskgraph-linear`'s own module documentation and `docs/follow-ups.md`.
+            // Every predicate is sent to Linear and confirmed in process, the follow-up
+            // searches included — see the verdict table in `onetaskgraph-linear`'s own module
+            // documentation — so this row proves pushdown against a remote protocol, and the
+            // `scanned` row is what proves the engine's compensation.
             declared: Declared {
                 // Linear's own first-class `Document`, read through `documents(…)` and
                 // written through `documentCreate`/`documentUpdate`.
@@ -551,17 +550,6 @@ pub const ROWS: &[Row] = &[
                 comments: Support::Native,
                 // Linear's own issue priority, 0 to 4.
                 priority: Support::Native,
-                // Unimplemented rather than unsupportable, as the searches are, and so the
-                // engine narrows: this row is the one that proves that against a real remote
-                // protocol.
-                filter_by_priority: Support::Unsupported,
-                // Not sent to Linear at all, and so narrowed by the engine over each kept
-                // issue's comments.
-                filter_by_comment_activity: Support::Unsupported,
-                filter_by_metadata: Support::Unsupported,
-                filter_by_origin: Support::Unsupported,
-                search_title: Support::Unsupported,
-                search_content: Support::Unsupported,
                 max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -2948,16 +2936,120 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -
     linear_server_over(sandbox, dataset(), recorded, failing)
 }
 
+/// A Linear workspace over `held`, and a handle that reads what it holds and every request it
+/// was sent.
+///
+/// The handle is what lets a journey assert on the store rather than on what the binary said
+/// about it: an issue's raw description byte for byte, and which mutations a command sent.
+pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspace) {
+    let state = Arc::new(Mutex::new(linear_with_comments(held)));
+    let ledger = Arc::new(Mutex::new(Vec::new()));
+    let config = linear_serve(sandbox, state.clone(), ledger.clone(), None, &[]);
+    (config, LinearWorkspace { state, ledger })
+}
+
+/// What a journey reads of one Linear workspace it configured.
+#[derive(Clone)]
+pub struct LinearWorkspace {
+    state: Arc<Mutex<Value>>,
+    ledger: Arc<Mutex<Vec<(String, Value)>>>,
+}
+
+impl LinearWorkspace {
+    /// Every request this workspace answered, as its GraphQL document and its variables, in
+    /// the order they arrived.
+    pub fn served(&self) -> Vec<(String, Value)> {
+        self.ledger.lock().unwrap().clone()
+    }
+
+    /// The raw long-form field one held item carries — an issue's or a project's
+    /// `description`, a document's `content` — exactly as this workspace would hand it back.
+    pub fn long_form(&self, kind: &str, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        let row = data[kind].as_array()?.iter().find(|row| row["id"] == id)?;
+        Some(match kind {
+            "documents" => linear_long_form(row, Vec::new()),
+            "projects" => linear_description(row, "project_dependencies", &data),
+            _ => linear_description(row, "task_dependencies", &data),
+        })
+    }
+
+    /// The name of the workflow state one held issue is at.
+    pub fn state_of(&self, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        let row = data["tasks"]
+            .as_array()?
+            .iter()
+            .find(|row| row["id"] == id)?;
+        linear_state(row)["name"].as_str().map(str::to_owned)
+    }
+
+    /// The id of the held issue titled `title`, for one a command created.
+    pub fn issue_titled(&self, title: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        data["tasks"]
+            .as_array()?
+            .iter()
+            .find(|row| row["title"] == title)
+            .and_then(|row| row["id"].as_str().map(str::to_owned))
+    }
+
+    /// The project one held issue is filed under.
+    pub fn project_of(&self, id: &str) -> Option<String> {
+        self.filed_under("tasks", id)
+    }
+
+    /// The project one held document is filed under.
+    pub fn document_project(&self, id: &str) -> Option<String> {
+        self.filed_under("documents", id)
+    }
+
+    /// The id of the held document titled `title`, for one a command created.
+    pub fn document_titled(&self, title: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        data["documents"]
+            .as_array()?
+            .iter()
+            .find(|row| row["title"] == title)
+            .and_then(|row| row["id"].as_str().map(str::to_owned))
+    }
+
+    fn filed_under(&self, kind: &str, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        data[kind]
+            .as_array()?
+            .iter()
+            .find(|row| row["id"] == id)
+            .and_then(|row| row["project"].as_str().map(str::to_owned))
+    }
+}
+
 fn linear_server_over(
     sandbox: &Sandbox,
     held: Value,
     recorded: Option<Value>,
     failing: &[&str],
 ) -> Value {
+    let state = Arc::new(Mutex::new(linear_with_comments(held)));
+    linear_serve(
+        sandbox,
+        state,
+        Arc::new(Mutex::new(Vec::new())),
+        recorded,
+        failing,
+    )
+}
+
+fn linear_serve(
+    sandbox: &Sandbox,
+    state: Arc<Mutex<Value>>,
+    ledger: Arc<Mutex<Vec<(String, Value)>>>,
+    recorded: Option<Value>,
+    failing: &[&str],
+) -> Value {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
-    let state = Arc::new(Mutex::new(linear_with_comments(held)));
     let failing: Vec<String> = failing
         .iter()
         .map(|operation| (*operation).into())
@@ -3051,6 +3143,10 @@ fn linear_server_over(
                 );
                 continue;
             }
+            ledger.lock().unwrap().push((
+                request["query"].as_str().unwrap_or_default().to_owned(),
+                request.get("variables").cloned().unwrap_or(Value::Null),
+            ));
             let refused = {
                 let mut pending = failing.lock().unwrap();
                 let operation = request["query"].as_str().unwrap_or_default();
@@ -3213,6 +3309,12 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                         && values.get("team").is_some_and(|team| !team.is_empty())
                 })
         }
+        graphql::TEAM_WORKFLOW_STATES => {
+            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
+                .is_ok_and(|values| {
+                    values.len() == 1 && values.get("team").is_some_and(|team| !team.is_empty())
+                })
+        }
         graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
@@ -3319,6 +3421,32 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                             == 1
                     })
         }
+        // The narrow long-form writes of a project and a document: the one field the metadata
+        // slot lives in, and nothing beside it.
+        graphql::PROJECT_UPDATE | graphql::DOCUMENT_UPDATE
+            if variables
+                .pointer("/input")
+                .and_then(Value::as_object)
+                .is_some_and(|input| {
+                    input.len() == 1
+                        && input.contains_key(if operation == graphql::PROJECT_UPDATE {
+                            "description"
+                        } else {
+                            "content"
+                        })
+                }) =>
+        {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &[],
+                    &["description", "content"],
+                )
+        }
         graphql::DOCUMENT_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
@@ -3418,14 +3546,22 @@ fn valid_linear_filter(value: &Value) -> bool {
             // `inIgnoreCase` above: `ProjectFilter` is not `IssueFilter`, has no `team` at
             // all, and reaches a project's status through `status` — Linear refused the
             // other spelling with `Field "team" is not defined by type "ProjectFilter"`.
+            //
+            // `title`, `description`, `priority` and `comments` are the follow-up searches'
+            // narrowings, and `createdAt`/`updatedAt` the comment members one of them reaches —
+            // each one the plugin's pinned schema carries and the real API was observed taking.
             "team" | "accessibleTeams" | "key" | "labels" | "some" | "name" | "every" | "state"
-            | "status" | "type" | "project" | "id" => {
+            | "status" | "type" | "project" | "id" | "title" | "description" | "priority"
+            | "comments" | "createdAt" | "updatedAt" => {
                 value.is_object() && valid_linear_filter(value)
             }
-            "eqIgnoreCase" | "neqIgnoreCase" | "eq" => value.is_string(),
-            "in" => value
-                .as_array()
-                .is_some_and(|values| values.iter().all(Value::is_string)),
+            "eqIgnoreCase" | "neqIgnoreCase" | "eq" | "contains" | "containsIgnoreCase" | "gte" => {
+                value.is_string()
+            }
+            // A list of names, or — under `priority` alone — of Linear's priority numbers.
+            "in" | "nin" => value.as_array().is_some_and(|values| {
+                values.iter().all(Value::is_string) || values.iter().all(Value::is_number)
+            }),
             "null" => value.is_boolean(),
             _ => false,
         }),
@@ -3477,6 +3613,7 @@ fn linear_response(
         graphql::TEAM,
         graphql::ISSUE_STATE,
         graphql::ISSUE_STATE_OF_TYPE,
+        graphql::TEAM_WORKFLOW_STATES,
         graphql::PROJECT_STATUS,
         graphql::ISSUE_LABEL,
         graphql::PROJECT_LABEL,
@@ -3515,13 +3652,28 @@ fn linear_response(
         return Ok(json!({"teams":{"nodes":[{"id":"TEAM-1"}]}}));
     }
     if operation == graphql::ISSUE_STATE {
-        return Ok(json!({"workflowStates":{"nodes":[{"id":vars["name"]}]}}));
+        // A state of the team by name; any other name answers as itself, the one state this
+        // workspace has always taken a whole write's status name for.
+        let name = vars["name"].as_str().unwrap_or_default();
+        let id = linear_team_state(|state| state.1.eq_ignore_ascii_case(name))
+            .map_or_else(|| json!(name), |state| json!(state.0));
+        return Ok(json!({"workflowStates":{"nodes":[{"id":id}]}}));
     }
     if operation == graphql::ISSUE_STATE_OF_TYPE {
         let kind = vars["type"].as_str().unwrap_or_default();
-        return Ok(
-            json!({"workflowStates":{"nodes":[{"id":format!("STATE-{kind}"),"name":linear_state_name(kind)}]}}),
-        );
+        let nodes = LINEAR_TEAM_STATES
+            .iter()
+            .filter(|state| state.2 == kind)
+            .map(|state| json!({"id":state.0,"name":state.1}))
+            .collect::<Vec<_>>();
+        return Ok(json!({"workflowStates":{"nodes":nodes}}));
+    }
+    if operation == graphql::TEAM_WORKFLOW_STATES {
+        let nodes = LINEAR_TEAM_STATES
+            .iter()
+            .map(|state| json!({"id":state.0,"name":state.1,"type":state.2}))
+            .collect::<Vec<_>>();
+        return Ok(json!({"workflowStates":{"nodes":nodes}}));
     }
     if operation == graphql::PROJECT_STATUS {
         return Ok(json!({"projectStatuses":{"nodes":project_statuses()}}));
@@ -3543,6 +3695,31 @@ fn linear_response(
     }
     if matches!(operation, graphql::ISSUE_CREATE | graphql::ISSUE_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::ISSUE_CREATE, false);
+    }
+    // A project's description alone, or a document's content alone: the long-form field moves
+    // and nothing else about the item does.
+    if matches!(
+        operation,
+        graphql::PROJECT_UPDATE | graphql::DOCUMENT_UPDATE
+    ) && vars["input"]
+        .as_object()
+        .is_some_and(|input| input.len() == 1)
+        && (vars["input"].get("description").is_some() || vars["input"].get("content").is_some())
+    {
+        let (collection, field, root, payload) = if operation == graphql::PROJECT_UPDATE {
+            ("projects", "description", "projectUpdate", "project")
+        } else {
+            ("documents", "content", "documentUpdate", "document")
+        };
+        let id = vars["id"].as_str().ok_or("update id must be a string")?;
+        let row = data[collection]
+            .as_array_mut()
+            .ok_or("fixture collection is not an array")?
+            .iter_mut()
+            .find(|row| row["id"] == id)
+            .ok_or("update target does not exist")?;
+        row["_linear_description"] = vars["input"][field].clone();
+        return Ok(json!({ (root): {"success":true,(payload):{"id":id}} }));
     }
     if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::PROJECT_CREATE, true);
@@ -3566,7 +3743,7 @@ fn linear_response(
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Document, data))
             .map(linear_document)
             .collect();
         return Ok(json!({"documents":linear_connection(rows,&vars)}));
@@ -3635,7 +3812,7 @@ fn linear_response(
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Issue, data))
             .map(|v| linear_task(v, data))
             .collect();
         return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
@@ -3645,7 +3822,7 @@ fn linear_response(
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| linear_matches_fixture_subset(v, &vars))
+            .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Project, data))
             .map(|v| linear_project(v, data))
             .collect();
         return Ok(json!({"projects":linear_connection(rows,&vars)}));
@@ -3715,16 +3892,27 @@ fn linear_write_item(
         .iter()
         .map(|id| json!({"id":id,"name":id}))
         .collect::<Vec<_>>();
+    let status_id = input
+        .get(status_key)
+        .and_then(Value::as_str)
+        .ok_or("status id must be a string")?;
     let mut row = json!({
         "id": id,
         "title": input.get(title_key).and_then(Value::as_str).ok_or("title must be a string")?,
         "content": "",
-        "status": {"name":input.get(status_key).and_then(Value::as_str).ok_or("status id must be a string")?,"category":"todo"},
+        "status": {"name":status_id,"category":"todo"},
         "labels": labels,
         "_linear_description": input.get("description").cloned().unwrap_or(Value::Null),
     });
+    if !project {
+        linear_put_state(&mut row, status_id);
+    }
     if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
         row["project"] = project_id.clone();
+    }
+    // What an update does not send it does not move: the team an issue is in.
+    if let Some(team) = existing.and_then(|index| rows[index].get("team").cloned()) {
+        row["team"] = team;
     }
     if !project && let Some(priority) = input.get("priority") {
         row["priority"] = linear_priority_name(priority);
@@ -4151,17 +4339,77 @@ fn linear_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This fixture-only mapping and matcher implement the finite shared journey dataset against the accepted 2026-08-24 contract; production parsing and real CLI row assertions independently verify the observable behavior without requiring live credentials.
 fn linear_state(v: &Value) -> Value {
+    if let Some(state) = v.get("_linear_state").filter(|state| state.is_object()) {
+        return state.clone();
+    }
+    let v = &v["status"];
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"unstarted","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
-/// The name this workspace's one state of a workflow type carries.
-fn linear_state_name(kind: &str) -> &'static str {
+/// The workflow states of this workspace's one team, in the order Linear lists them: id,
+/// name, `WorkflowState.type`.
+///
+/// The Hello Patient team's own names and types, as observed on 2026-10-01 — two states of type
+/// `backlog`, two of type `unstarted`, review states typed `started`, `canceled` and
+/// `duplicate`, and `Triage` — so a state written by name and one written as the first of its
+/// type land in different places, and a journey can tell which a source did. The first state
+/// of each type is the one this workspace has always answered a type lookup with, and keeps
+/// the id it always had.
+pub const LINEAR_TEAM_STATES: &[(&str, &str, &str)] = &[
+    ("STATE-backlog", "Backlog", "backlog"),
+    ("STATE-proposed", "Proposed", "backlog"),
+    ("STATE-unstarted", "Todo", "unstarted"),
+    ("STATE-queued", "Queued", "unstarted"),
+    ("STATE-started", "In Progress", "started"),
+    ("STATE-needs-attention", "Needs Attention", "started"),
+    ("STATE-ready-for-review", "Ready for Review", "started"),
+    ("STATE-in-review", "In Review", "started"),
+    ("STATE-reviewed", "Reviewed", "started"),
+    ("STATE-ready-to-merge", "Ready To Merge", "started"),
+    ("STATE-blocked", "Blocked", "started"),
+    ("STATE-completed", "Done", "completed"),
+    ("STATE-canceled", "Canceled", "canceled"),
+    ("STATE-cannot-reproduce", "Cannot Reproduce", "canceled"),
+    ("STATE-duplicate", "Duplicate", "duplicate"),
+    ("STATE-triage", "Triage", "triage"),
+];
+
+/// The team's first state the predicate holds of.
+fn linear_team_state(
+    wanted: impl Fn(&(&str, &str, &str)) -> bool,
+) -> Option<&'static (&'static str, &'static str, &'static str)> {
+    LINEAR_TEAM_STATES.iter().find(|state| wanted(state))
+}
+
+/// One issue row put at the team's workflow state `id`, which it then reads back as.
+///
+/// An id the team does not hold is the name a whole write resolved for a state this workspace
+/// does not model — the shared dataset's `Doing` or `Shipped` — and is kept as it always was:
+/// that name, read back as `todo`.
+fn linear_put_state(row: &mut Value, id: &str) {
+    match linear_team_state(|state| state.0 == id) {
+        Some((_, name, kind)) => {
+            row["_linear_state"] = json!({"name": name, "type": kind});
+            row["status"] = json!({"name": name, "category": linear_type_category(kind)});
+        }
+        None => {
+            if let Some(held) = row.as_object_mut() {
+                held.remove("_linear_state");
+            }
+            row["status"] = json!({"name": id, "category": "todo"});
+        }
+    }
+}
+
+/// The shared dataset's category for one workflow-state type.
+fn linear_type_category(kind: &str) -> &'static str {
     match kind {
-        "unstarted" => "Todo",
-        "started" => "In Progress",
-        "completed" => "Done",
-        "canceled" => "Canceled",
-        _ => "Backlog",
+        "unstarted" => "todo",
+        "started" => "in-progress",
+        "completed" => "done",
+        "canceled" => "cancelled",
+        "backlog" => "backlog",
+        _ => "unknown",
     }
 }
 /// A project's status, whose `type` is the `ProjectStatusType` enum and **not** the
@@ -4232,14 +4480,11 @@ fn linear_narrow_issue_update(
         row["title"] = title.clone();
     }
     if let Some(state) = vars["input"].get("stateId").and_then(Value::as_str) {
-        // A state this stand-in answered by type, `STATE-<type>`, read back as that type's
-        // category and name.
-        let kind = state
-            .strip_prefix("STATE-")
-            .ok_or("stateId names no state of a type")?;
-        row["status"] = json!({"name": linear_state_name(kind), "category": match kind {
-            "unstarted" => "todo", "started" => "in-progress", "completed" => "done",
-            "canceled" => "cancelled", _ => "backlog"}});
+        // A narrow write names a state of the team, which the issue then reads back as.
+        if linear_team_state(|held| held.0 == state).is_none() {
+            return Err("stateId names no state of the team");
+        }
+        linear_put_state(row, state);
     }
     Ok(
         if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
@@ -4252,7 +4497,7 @@ fn linear_narrow_issue_update(
 }
 
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
@@ -4352,62 +4597,171 @@ fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
     let end = start + nodes.len();
     json!({"nodes":nodes,"pageInfo":{"hasNextPage":end<rows.len(),"endCursor":if end<rows.len(){Some(end.to_string())}else{None}}})
 }
-fn linear_matches_fixture_subset(v: &Value, vars: &Value) -> bool {
-    let text = vars["filter"].to_string().to_ascii_lowercase();
-    let labels = v["labels"].as_array().unwrap();
-    for name in ["bug", "chore", "core"] {
-        if text.contains(&format!("\"{name}\"")) {
-            let present = labels.iter().any(|l| l["name"].as_str() == Some(name));
-            let excluded = text.contains(&format!("neqignorecase\":\"{name}"));
-            if (excluded && present) || (!excluded && !present) {
-                return false;
-            }
-        }
-    }
-    let mut allowed = Vec::new();
-    // Two vocabularies, because Linear has two: an issue's `WorkflowState.type` is
-    // `unstarted`/`started`, a project's `ProjectStatus.type` is `planned`/`started`, and
-    // `paused` is a project state with no issue counterpart at all. Only one of them ever
-    // appears in a given filter, so one scan reads both.
-    for (linear, category) in [
-        ("completed", "done"),
-        ("unstarted", "todo"),
-        ("planned", "todo"),
-        ("\"started\"", "in-progress"),
-        ("paused", "in-progress"),
-        ("backlog", "backlog"),
-        ("canceled", "cancelled"),
-    ] {
-        if text.contains(linear) {
-            allowed.push(category);
-        }
-    }
-    if !allowed.is_empty() && !allowed.contains(&v["status"]["category"].as_str().unwrap_or("")) {
-        return false;
-    }
-    if text.contains("\"null\":true") && v.get("project").is_some() {
-        return false;
-    }
-    if let Some(id) = linear_project_eq(&vars["filter"])
-        && v.get("project").and_then(Value::as_str) != Some(id.as_str())
-    {
-        return false;
-    }
-    true
+/// Which of Linear's three filter inputs a filter object is: `IssueFilter`, `ProjectFilter` or
+/// `DocumentFilter`, whose members differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinearRow {
+    Issue,
+    Project,
+    Document,
 }
 
-/// The project id an issue filter narrows to, `{"project": {"id": {"eq": …}}}` at any depth
-/// of it — every project this workspace holds, the ones a copy created in it included.
-fn linear_project_eq(filter: &Value) -> Option<String> {
-    match filter {
-        Value::Object(fields) => fields
-            .get("project")
-            .and_then(|project| project["id"]["eq"].as_str())
-            .map(str::to_owned)
-            .or_else(|| fields.values().find_map(linear_project_eq)),
-        Value::Array(parts) => parts.iter().find_map(linear_project_eq),
-        _ => None,
-    }
+/// The team this workspace's rows are in unless one says otherwise: the one its sources are
+/// configured with.
+const LINEAR_TEAM: &str = "FIX";
+
+/// Whether one held row satisfies one filter object, member by member, as Linear evaluates it.
+///
+/// Every member a source sends is evaluated rather than recognised by its spelling, so a
+/// predicate a plugin sends and this workspace ignored could not pass a journey: the plugin
+/// declares each of them native, and a row returned that the filter excludes, or one dropped
+/// that it keeps, is what the journeys assert against. A member this does not know matches
+/// nothing — [`valid_linear_filter`] has already refused it.
+fn linear_holds(row: &Value, filter: &Value, kind: LinearRow, data: &Value) -> bool {
+    let Some(members) = filter.as_object() else {
+        return false;
+    };
+    members
+        .iter()
+        .all(|(member, wanted)| match member.as_str() {
+            "and" => wanted
+                .as_array()
+                .is_some_and(|parts| parts.iter().all(|part| linear_holds(row, part, kind, data))),
+            "or" => wanted
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| linear_holds(row, part, kind, data))),
+            "team" => linear_compares(
+                Some(row["team"].as_str().unwrap_or(LINEAR_TEAM)),
+                &wanted["key"],
+            ),
+            "accessibleTeams" => linear_compares(
+                Some(row["team"].as_str().unwrap_or(LINEAR_TEAM)),
+                &wanted["some"]["key"],
+            ),
+            "labels" => {
+                let names = row["labels"]
+                    .as_array()
+                    .map(|labels| {
+                        labels
+                            .iter()
+                            .filter_map(|label| label["name"].as_str())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let some = wanted.get("some").is_none_or(|some| {
+                    names
+                        .iter()
+                        .any(|name| linear_compares(Some(name), &some["name"]))
+                });
+                let every = wanted.get("every").is_none_or(|every| {
+                    names
+                        .iter()
+                        .all(|name| linear_compares(Some(name), &every["name"]))
+                });
+                some && every
+            }
+            "state" => {
+                let state = linear_state(row);
+                wanted.as_object().is_some_and(|parts| {
+                    parts
+                        .iter()
+                        .all(|(part, cmp)| linear_compares(state[part].as_str(), cmp))
+                })
+            }
+            "status" => linear_compares(
+                linear_project_status(&row["status"])["type"].as_str(),
+                &wanted["type"],
+            ),
+            "project" => {
+                let held = row["project"].as_str();
+                wanted.as_object().is_some_and(|parts| {
+                    parts.iter().all(|(part, cmp)| match part.as_str() {
+                        "null" => cmp.as_bool() == Some(held.is_none()),
+                        "id" => linear_compares(held, cmp),
+                        _ => false,
+                    })
+                })
+            }
+            "id" => linear_compares(row["id"].as_str(), wanted),
+            "title" => linear_compares(row["title"].as_str(), wanted),
+            "description" => {
+                let held = match kind {
+                    LinearRow::Issue => linear_description(row, "task_dependencies", data),
+                    LinearRow::Project => linear_description(row, "project_dependencies", data),
+                    LinearRow::Document => linear_long_form(row, Vec::new()),
+                };
+                linear_compares(Some(&held), wanted)
+            }
+            "priority" => {
+                let held = linear_priority(&row["priority"]);
+                wanted["in"].as_array().is_some_and(|levels| {
+                    levels.iter().any(|level| level.as_f64() == held.as_f64())
+                })
+            }
+            "comments" => {
+                let issue = &row["id"];
+                data["_linear_comments"].as_array().is_some_and(|comments| {
+                    comments
+                        .iter()
+                        .filter(|comment| comment["issue"] == *issue)
+                        .any(|comment| linear_comment_holds(comment, &wanted["some"]))
+                })
+            }
+            _ => false,
+        })
+}
+
+/// Whether one held comment satisfies one `CommentFilter`.
+fn linear_comment_holds(comment: &Value, filter: &Value) -> bool {
+    let Some(members) = filter.as_object() else {
+        return false;
+    };
+    members
+        .iter()
+        .all(|(member, wanted)| match member.as_str() {
+            "or" => wanted
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| linear_comment_holds(comment, part))),
+            "createdAt" | "updatedAt" => {
+                let at = |value: &Value| {
+                    value
+                        .as_str()
+                        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+                };
+                match (at(&comment[member]), at(&wanted["gte"])) {
+                    (Some(held), Some(since)) => held >= since,
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
+}
+
+/// Whether `held` satisfies one of Linear's string comparators, every operator it carries.
+fn linear_compares(held: Option<&str>, comparator: &Value) -> bool {
+    let Some(operators) = comparator.as_object() else {
+        return false;
+    };
+    operators.iter().all(|(operator, wanted)| {
+        let text = wanted.as_str().unwrap_or_default();
+        match (operator.as_str(), held) {
+            ("eq", Some(held)) => held == text,
+            ("eqIgnoreCase", Some(held)) => held.to_lowercase() == text.to_lowercase(),
+            ("neqIgnoreCase", Some(held)) => held.to_lowercase() != text.to_lowercase(),
+            ("neqIgnoreCase", None) => true,
+            ("in", Some(held)) => wanted
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value == held)),
+            ("nin", Some(held)) => wanted
+                .as_array()
+                .is_some_and(|values| values.iter().all(|value| value != held)),
+            ("contains", Some(held)) => held.contains(text),
+            ("containsIgnoreCase", Some(held)) => {
+                held.to_lowercase().contains(&text.to_lowercase())
+            }
+            _ => false,
+        }
+    })
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 fn linear_relations(

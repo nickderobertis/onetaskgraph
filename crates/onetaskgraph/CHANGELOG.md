@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.56](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.55...v0.2.56) - 2026-10-02
+
+### Added
+
+- *(linear)* bring the Linear source to parity with GitHub Projects ([#3160](https://github.com/nickderobertis/onetaskgraph/pull/3160))
+
 ## [0.2.55](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.54...v0.2.55) - 2026-10-02
 
 ### Added

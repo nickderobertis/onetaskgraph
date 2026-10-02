@@ -43,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 28;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 29;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -210,6 +210,18 @@ pub fn schema_bundle() -> Value {
     roots.insert("SecretsReport", schema_for!(SecretsReport));
     roots.insert("ResolvedCredential", schema_for!(ResolvedCredential));
     roots.insert("CredentialLayer", schema_for!(CredentialLayer));
+
+    // A `linear` source's configuration, as a root of its own as well as under
+    // `plugin_config`: both SDKs are generated from the roots, and a caller writing a
+    // configuration for the source this host's Linear work lands in — its `status_mapping`
+    // and its `project` — needs the shape named rather than reachable only as a plugin's.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The schema is the plugin's own `LinearConfig`, not restated here; what lives here is its registration as a root, and the roots are what both SDK generators read and what `SCHEMA_BUNDLE_VERSION` and its golden track — a root registered anywhere else is one no SDK is generated against and no version moves for. The engine already depends on and names every plugin by feature (`registry.rs`), and a contribution mechanism on `SourcePlugin` would change the api crate AGENTS.md asks be kept still.
+    #[cfg(feature = "linear")]
+    roots.insert(
+        "LinearConfig",
+        schema_for!(onetaskgraph_linear::LinearConfig),
+    );
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     let plugins: BTreeMap<String, Schema> = registry()
         .iter()

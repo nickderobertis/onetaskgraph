@@ -832,6 +832,27 @@ them do; this is the inventory of what is owed, not a status board.
     re-copy each have every write they make refused in turn — whole, and as one aliased
     field failing after the one before it landed — and leave the item's body and metadata
     exactly as they stood.
+73. A Linear source's `status_mapping` writes every category it names as that workflow state
+    through `task status set`, `task update`, `task create` and a copy — never another state
+    of the same type — and reads an issue at it back as that category under its name; an
+    issue already there is not written; any other state reads by its type; and `--status`
+    returns exactly the issues that read as each category. A category it leaves out is written
+    as without the key, one set to `null` and a state the team lacks are refused before any
+    write, and one state named twice is refused when the configuration is read. `sources
+    fields` reports each mapped state present or missing with its type, and refuses `--apply`.
+74. A Linear source configured with `project` reads only that project's issues, projects and
+    documents, files a task copied in with no project under it, and refuses one naming another
+    project, naming both; without the key it reads team-wide.
+75. On a Linear task, project and document, `metadata set` and `render` change only the
+    trailing metadata slot — and, for a render, the body and its provenance — every other byte
+    as it was; a copy out of Linear records its link on the Linear item; and a Linear ticket
+    delivered from another source moves through its mapped `Queued`, `In Progress` and `Done`,
+    while one at `Proposed` or `Backlog` is left alone.
+76. The follow-up searches — metadata, origin, priority, comment activity, title and content —
+    are sent to Linear and return exactly what matches, a decoy whose prose carries the phrase
+    and one whose slot holds another value kept out; and a cross-source edge written to a
+    Linear source is established in both directions and never taken from an issue of another
+    team, or of another project when the source is scoped.
 
 ## What a copied document's references are pointed at
 

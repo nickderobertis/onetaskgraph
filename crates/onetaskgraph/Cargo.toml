@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph"
 description = "One interface over the ticketing systems your work lives in."
-version = "0.2.55"
+version = "0.2.56"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -34,6 +34,9 @@ dialoguer.workspace = true
 # Both network destinations: the binary this repository ships registers every plugin kind,
 # and so does `onetaskgraph-source`, the reference host the journeys drive them through.
 onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
+# `sources fields` reports a Linear source's workflow states through the plugin's own
+# `workflow_states`, and the e2e fake answers the GraphQL documents the plugin declares.
+onetaskgraph-linear.workspace = true
 # The contract crate directly, not through the engine: this binary renders the work types
 # a source returns, and re-exporting them from the engine would make the engine's public
 # surface a second place the contract is spelled.
@@ -47,11 +50,10 @@ tokio.workspace = true
 assert_cmd.workspace = true
 graphql-parser.workspace = true
 jsonschema.workspace = true
-# The two hosted plugins whose journeys drive a fixture built from the plugin's own
-# constants — the GraphQL documents Linear sends, and the title prefix a GitHub Projects
-# board spells a document with — rather than from a copy of them a fixture could drift from.
+# The hosted plugin whose journeys drive a fixture built from the plugin's own constants —
+# the title prefix a GitHub Projects board spells a document with — rather than from a copy of
+# them a fixture could drift from. Linear's GraphQL documents come from its [dependencies] entry.
 onetaskgraph-github-projects.workspace = true
-onetaskgraph-linear.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
 # The rendering journeys hash a created item's content and answers themselves, rather than
