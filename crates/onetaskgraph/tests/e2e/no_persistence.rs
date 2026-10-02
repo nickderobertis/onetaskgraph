@@ -16,6 +16,12 @@
 //! destination write is at the user's explicit request, names its destination, and goes
 //! into that source's own store: exactly the files under the named destination's own root
 //! may change, and every other path in the sandbox is held to the same rule as before.
+//!
+//! That destination routes: an item whose repositories it sends elsewhere lands in a second
+//! folder, and a project's home there gains a member project. Both stores are named by the
+//! configuration the user wrote and the copy they asked for, so both may change — and the
+//! read of a home with its members, which learns them from the home on every request, is
+//! held to the rule every other read is.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -77,13 +83,24 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 /// see either.
 const DESTINATION: &str = "notes";
 
+/// Where [`DESTINATION`] routes petsinc work: the second store a routed copy writes into.
+const ROUTED: &str = "team";
+
 /// The configuration this journey runs against: one source whose every field is a
 /// sentinel, and one writable folder to copy into.
 fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
     document(&json!({
-        DESTINATION: {"plugin": "local-md", "config": {
-            "root": sandbox.subdirectory(DESTINATION),
-            // `todo` too, the word a created task is written with when none is given.
+        DESTINATION: {
+            "plugin": "local-md",
+            "config": {
+                "root": sandbox.subdirectory(DESTINATION),
+                // `todo` too, the word a created task is written with when none is given.
+                "status_mapping": {SENTINELS[4]: "todo", "todo": "todo"},
+            },
+            "routes": [{"repositories": ["github.com/petsinc/*"], "to": ROUTED}],
+        },
+        ROUTED: {"plugin": "local-md", "config": {
+            "root": sandbox.subdirectory(ROUTED),
             "status_mapping": {SENTINELS[4]: "todo", "todo": "todo"},
         }},
         "work": boundary.source("in-memory", json!({
@@ -93,7 +110,11 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
                      "status": {"category": "todo", "name": SENTINELS[4]},
                      "labels": [{"id": "L-1", "name": SENTINELS[2]}], "project": "P-1"},
                     {"id": "T-2", "title": "second", "content": SENTINELS[1],
-                     "status": {"category": "done", "name": "Shipped"}, "labels": []}
+                     "status": {"category": "done", "name": "Shipped"}, "labels": []},
+                    // Routed: a project copy of P-1 lands it beside the home's member.
+                    {"id": "T-3", "title": "routed", "content": SENTINELS[1],
+                     "status": {"category": "todo", "name": SENTINELS[4]}, "labels": [],
+                     "project": "P-1", "repositories": ["github.com/petsinc/sentinel"]}
                 ],
                 "projects": [
                     // The sentinel status, at the one category this journey's destination
@@ -143,6 +164,32 @@ fn every_verb() -> Vec<Vec<String>> {
             "--to",
             DESTINATION,
             "--no-tasks",
+        ]),
+        // The routed copy: the home stays in the destination, the petsinc task lands in the
+        // routed store under a member project, and a dry run of it writes nothing at all.
+        owned(&[
+            "project",
+            "copy",
+            &project,
+            "--to",
+            DESTINATION,
+            "--dry-run",
+        ]),
+        owned(&["project", "copy", &project, "--to", DESTINATION]),
+        owned(&["project", "copy", &project, "--to", DESTINATION]),
+        owned(&[
+            "task",
+            "list",
+            "--project",
+            &qualified(DESTINATION, "P-1"),
+            "--members",
+        ]),
+        owned(&[
+            "sources",
+            "route",
+            DESTINATION,
+            "--repository",
+            "github.com/petsinc/sentinel",
         ]),
         owned(&["sources", "list"]),
         owned(&["task", "list"]),
@@ -360,9 +407,13 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
         }
         assert_eq!(answered, every_verb().len());
 
-        // The one place a file may have changed: the store of the source the copy named.
-        // Everything else in the tree is held to exactly the rule it was held to before.
-        let store = sandbox.project().join(DESTINATION);
+        // The places a file may have changed: the store of the source the copy named, and the
+        // store its routes send to. Everything else in the tree is held to exactly the rule it
+        // was held to before.
+        let stores = [
+            sandbox.project().join(DESTINATION),
+            sandbox.project().join(ROUTED),
+        ];
         let after = snapshot(&root);
         let mut offences = Vec::new();
         let mut written = 0;
@@ -373,8 +424,8 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
                 Some(_) => "changed",
                 None => "was created",
             };
-            if path.starts_with(&store) {
-                written += 1;
+            if let Some(store) = stores.iter().position(|store| path.starts_with(store)) {
+                written |= 1 << store;
                 continue;
             }
             let held: Vec<&str> = SENTINELS
@@ -402,9 +453,10 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
         );
         // Not vacuous in the other direction either: the copy really did write into the
         // destination's own store, so the exemption above is exempting something real.
-        assert!(
-            written > 0,
-            "the copy verb wrote nothing, so this journey proved nothing about writes"
+        assert_eq!(
+            written, 0b11,
+            "the copy verb wrote into both stores, or this journey proved nothing about a \
+             routed write"
         );
     }
 }
