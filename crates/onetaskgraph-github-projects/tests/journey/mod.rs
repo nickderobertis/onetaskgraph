@@ -861,10 +861,11 @@ async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
     };
     match response.pointer("/data/node") {
         Some(Value::Null)
-            if response
-                .get("errors")
-                .and_then(Value::as_array)
-                .is_none_or(|errors| errors.iter().all(unresolvable)) =>
+            if match response.get("errors") {
+                None => true,
+                Some(Value::Array(errors)) => errors.iter().all(unresolvable),
+                Some(_) => false,
+            } =>
         {
             Ok(true)
         }

@@ -353,6 +353,8 @@ enum PresenceFault {
     SomeOtherNode,
     /// `node` null beside an error that is not "no such node": a resolver that failed.
     NullForbidden,
+    /// `node` null beside an `errors` member that is not a list of errors at all.
+    NullMalformedErrors,
 }
 
 impl Board {
@@ -988,6 +990,10 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
             "answered a node that is not it",
         ),
         (
+            PresenceFault::NullMalformedErrors,
+            "answered null for a reason other than there being no such node",
+        ),
+        (
             PresenceFault::NullForbidden,
             "answered null for a reason other than there being no such node",
         ),
@@ -1155,6 +1161,13 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
             Some(PresenceFault::NoNode) => return answered(json!({})),
             Some(PresenceFault::SomeOtherNode) => {
                 return answered(json!({"node":{"id":"I_someone_else"}}));
+            }
+            Some(PresenceFault::NullMalformedErrors) => {
+                return (
+                    "200 OK",
+                    json!({"data":{"node":null},"errors":"could not resolve to a node"})
+                        .to_string(),
+                );
             }
             Some(PresenceFault::NullForbidden) => {
                 return (
