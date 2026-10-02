@@ -82,6 +82,13 @@ mod priority;
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
 // crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod rendered;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and
+// the loopback Linear workspace and GitHub board, with no credential and no network, and the
+// module's thirty-eight journeys finish in under two seconds. Routing and member projects are
+// the engine's and the configuration's — a copy spanning two plugins is placed and undone by
+// `onetaskgraph-core` — so they cannot sit behind one plugin crate's edge, which AGENTS.md
+// forbids depending on the engine at any depth.
 mod routes;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: it drives the binary against the shared fixture rows and a loopback
