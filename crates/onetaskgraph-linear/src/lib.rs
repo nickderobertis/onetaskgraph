@@ -225,11 +225,13 @@
 //! On a read, an issue at a state the mapping names is that category under the state's own
 //! name; every other state reads by its type, as it always has — the review states only
 //! people write, `Triage` among them, which nothing here ever writes. `filter_by_status`
-//! narrows a mapped category by its state's name, and any category with a type of its own by
-//! that type *excluding* every state the mapping names, because those read as the category
-//! they are mapped to: `--status queued` returns the issues at `Queued` and never one at
-//! `Todo`, and a `todo` filter returning an issue at `Queued` would be a row that reads back as
-//! another category.
+//! returns exactly the issues whose status reads as each category asked for: those at the
+//! state the mapping names for it, and those at an unmapped state whose type falls back to
+//! it — never one at a state mapped to another category. So `--status queued` returns the
+//! issues at `Queued` and never one at `Todo`; `--status in-progress` returns those at
+//! `In Progress` and at an unmapped `started` state such as `In Review`, and never one at
+//! `Needs Attention` when that is mapped to `unknown`; and `--status unknown` also returns
+//! those at a state of a type none of the five categories stands for, `Triage` among them.
 //!
 //! A category the mapping does not mention keeps the behaviour of a source without the key
 //! exactly: `set_task_status` and the targeted update write the team's first state of the

@@ -229,6 +229,8 @@ fn mapped_workspace(sandbox: &Sandbox, mapping: Value) -> (Value, LinearWorkspac
                 issue("L-REVIEW", "In Review", json!({})),
                 issue("L-TRIAGE", "Triage", json!({})),
                 issue("L-CANCELED", "Canceled", json!({})),
+                issue("L-PROGRESS", "In Progress", json!({})),
+                issue("L-ATTENTION", "Needs Attention", json!({})),
             ],
             vec![project("LP-1")],
             Vec::new(),
@@ -292,13 +294,20 @@ fn a_mapped_linear_source_writes_every_category_at_its_named_state_by_every_writ
     );
     assert_eq!(
         listed(&sandbox, &["--source", "linear", "--status", "in-progress"]),
-        ["L-REVIEW"],
-        "a state the mapping leaves out reads, and narrows, by its type"
+        ["L-REVIEW", "L-PROGRESS"],
+        "in-progress is its mapped `In Progress` and `In Review`, an unmapped state of its type, \
+         and never `Needs Attention`, a state of that type mapped to another status"
     );
+    for (id, expected) in [
+        ("linear:L-PROGRESS", json!(["in-progress", "In Progress"])),
+        ("linear:L-ATTENTION", json!(["unknown", "Needs Attention"])),
+    ] {
+        assert_eq!(status(&sandbox, id), expected, "{id}");
+    }
     assert_eq!(
         listed(&sandbox, &["--source", "linear", "--status", "unknown"]),
-        ["L-TRIAGE"],
-        "`Triage` reads as unknown by its type, and the filter returns it"
+        ["L-TRIAGE", "L-ATTENTION"],
+        "unknown is its mapped `Needs Attention` and `Triage`, which reads as it by its type"
     );
 
     for category in CATEGORIES {
