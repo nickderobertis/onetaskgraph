@@ -16506,6 +16506,33 @@ async fn a_write_whose_origin_cannot_be_put_back_says_which_key_it_left_moved() 
         })
         .await
         .expect_err("the content update is refused");
+    // The kind is the content write's own, exactly as a refusal with nothing left behind has
+    // it: a caller branching on the kind is not told the restore's failure instead.
+    let alone = board(vec![
+        Item::issue("I_1", "one")
+            .body("as it stood")
+            .status("Todo")
+            .carrying("plans:OLD"),
+    ]);
+    alone.refuse("updateIssue");
+    let mut lone = task("I_1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    lone.content = Some("a body that must not land".to_owned());
+    lone.metadata
+        .insert("onetaskgraph.origin".to_owned(), json!("plans:NEW"));
+    lone.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let original = source(&alone)
+        .write_task(&ItemWrite {
+            target: Some(native("I_1")),
+            item: lone,
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the content update is refused");
+    assert_eq!(
+        std::mem::discriminant(&error),
+        std::mem::discriminant(&original),
+        "{error:?} is not the kind of {original:?}"
+    );
     let said = refusal(error);
     assert!(said.contains("updateIssue is refused"), "{said}");
     assert!(
