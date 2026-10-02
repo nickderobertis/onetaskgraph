@@ -303,6 +303,23 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         }
 
         Command::Task {
+            command: TaskCommand::ShowMany(args),
+        } => {
+            let ids = args
+                .ids
+                .iter()
+                .map(|id| qualified(id))
+                .collect::<Result<Vec<_>, _>>()?;
+            let details = engine(loaded).task_details(&ids, !args.no_comments).await;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Json => json(&details, "the tasks")?,
+                OutputFormat::Text => render::task_details(&ids, &details),
+            };
+            emit(out, rendered.trim_end(), "the tasks")?;
+            Ok(details_exit(&ids, &details))
+        }
+
+        Command::Task {
             command: TaskCommand::Comment { command },
         } => comment(out, loaded, command).await,
 
@@ -422,11 +439,12 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Copy(args),
         } => {
-            let request = copy_request(
+            let mut request = copy_request(
                 args.id.iter().map(String::as_str),
                 CopyScope::Tasks,
                 &args.copy,
             )?;
+            request.create = args.create;
             copy(out, loaded, &request).await
         }
 
@@ -1035,6 +1053,8 @@ fn copy_request<'a>(
         })?,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
         recreate: args.recreate,
+        // Only `task copy` takes `--create`; it sets this on the request it builds.
+        create: false,
         dry_run: args.dry_run,
     })
 }
@@ -1061,6 +1081,31 @@ fn report(errors: &[SourceFailure], allow_partial: bool) -> u8 {
         "onetaskgraph: next: fix the source(s) named above — `onetaskgraph sources list` \
          reports each one's state — or re-run with --allow-partial to accept an answer \
          without them."
+    );
+    EXIT_PARTIAL
+}
+
+/// The exit status of `task show-many`: success when every detail read cleanly, and the
+/// partial answer's status — each failure named on standard error — when any carries an
+/// error. There is no `--allow-partial` to accept one, because the status is the one place a
+/// caller reads, without parsing the details, whether every id was read.
+fn details_exit(ids: &[GlobalId], details: &onetaskgraph_core::TaskDetails) -> u8 {
+    let mut failed = false;
+    for (id, detail) in ids.iter().zip(&details.details) {
+        for failure in &detail.response.errors {
+            failed = true;
+            eprintln!(
+                "onetaskgraph: {id}: source {} could not answer: {}",
+                failure.source, failure.error
+            );
+        }
+    }
+    if !failed {
+        return EXIT_OK;
+    }
+    eprintln!(
+        "onetaskgraph: next: each id above carries its failure in its own detail's `errors`; \
+         fix what it names and show that id again — the details of every other id are whole."
     );
     EXIT_PARTIAL
 }
@@ -1389,6 +1434,7 @@ mod tests {
                 "sources fields",
                 "task list",
                 "task show",
+                "task show-many",
                 "task deps",
                 "task copy",
                 "task comment add",

@@ -77,8 +77,40 @@ pub struct CopyRequest {
     /// Whether an origin naming nothing at the destination falls through to the search
     /// rule instead of refusing.
     pub recreate: bool,
+    /// Whether the caller asserts the destination holds no counterpart of any item named,
+    /// so each is created there without the correspondence lookup — no origin search of the
+    /// destination at all.
+    ///
+    /// Sound for a caller that has just asked the destination itself: the origin query is
+    /// an index that lags a write, so repeating it here would be behind by exactly as much as
+    /// the caller's own was and could find nothing the caller's did not. Refused beside
+    /// [`match_by`](Self::match_by) and [`recreate`](Self::recreate), which are ways of
+    /// looking, and for an item that itself records a counterpart at the destination — a
+    /// link or an origin naming it — which is a carrier the caller's assertion overlooked.
+    // llmlint: ignore-block[invalid_states_unrepresentable] One enum of the ways a copy finds its target would make `create` beside `match_by` or `recreate` unrepresentable, but only by replacing `match_by` and `recreate`, which every Rust caller of this request sets by name and the command line maps flag for flag — rewriting what each existing caller writes. `create` is one more field beside them, as `recreate` and `dry_run` were, and the one combination it makes possible that means nothing is refused by `Engine::copy`, as `EngineError::CreateWith`, before anything is read.
+    pub create: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Whether to perform every read and no write.
     pub dry_run: bool,
+}
+
+/// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
+/// the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyLookup {
+    /// [`CopyRequest::match_by`], `--match-by`.
+    MatchBy,
+    /// [`CopyRequest::recreate`], `--recreate`.
+    Recreate,
+}
+
+impl std::fmt::Display for CopyLookup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MatchBy => "--match-by",
+            Self::Recreate => "--recreate",
+        })
+    }
 }
 
 /// The items one copy names: at least one, because a copy naming none is not a copy.
@@ -1051,6 +1083,18 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        // Before anything is read: `--create` says there is nothing to look for, and the other
+        // two say how to look.
+        if request.create {
+            for (given, flag) in [
+                (request.match_by.is_some(), CopyLookup::MatchBy),
+                (request.recreate, CopyLookup::Recreate),
+            ] {
+                if given {
+                    return Err(EngineError::CreateWith { flag });
+                }
+            }
+        }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
@@ -2319,6 +2363,20 @@ impl Engine {
         item: &Item,
     ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
+        // A caller asserting there is nothing to find is believed, and nothing is looked for —
+        // unless the item itself says otherwise, by naming a counterpart at the destination.
+        if request.create {
+            let carrier = link_of(metadata, destination.name()).or_else(|| {
+                origin_of(metadata).filter(|origin| &origin.source == destination.name())
+            });
+            if let Some(carrier) = carrier {
+                return Err(EngineError::CreateCarried {
+                    item: id.clone(),
+                    carrier,
+                });
+            }
+            return Ok((Target::Create, None));
+        }
         // The link first, and it is believed only when the item it names still names this
         // one back: a person who re-pointed that item's origin has said it is not this
         // one's counterpart any more, so the link is ignored and rewritten to whatever the

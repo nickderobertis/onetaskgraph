@@ -14,15 +14,15 @@
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Comment, CommentBody, Cursor, NativeId, NewComment, Page, PageRequest, SourceError, SourceName,
-    Task, TaskQuery,
+    Task, TaskDetailRead, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::fetch::{fits, unrepeated};
-use super::{ConfiguredSource, Engine, EngineError, Qualified};
+use super::{Answer, ConfiguredSource, Engine, EngineError, Qualified, delivery};
 use crate::GlobalId;
-use crate::plan::{QueryResponse, SourceFailure};
+use crate::plan::{QueryPlan, QueryResponse, SourceFailure};
 use crate::resolve::ResolvedSource;
 
 /// Every comment on one task, oldest first: what `task comment list` answers with.
@@ -64,43 +64,182 @@ pub struct TaskDetail {
     pub comments: Option<Vec<Comment>>,
 }
 
+/// Several tasks as `task show-many` reports them: one [`TaskDetail`] per id asked for, in
+/// the order they were asked for.
+///
+/// An object rather than a bare list, for the reason [`CommentList`] is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskDetails {
+    /// One detail per id, in request order — the document `task show <ID>` answers for that
+    /// id, except that an id it would refuse outright, or answer with nothing, carries why
+    /// in that detail's own `errors` instead, so it never refuses the others.
+    pub details: Vec<TaskDetail>,
+}
+
 impl Engine {
     /// One task by its qualified id, with its comments when its source has them.
     ///
     /// The task is read exactly as [`task`](Self::task) reads it, and the comments are read
-    /// only once the task was found — a source declaring no comments is never asked.
+    /// only once the task was found — a source declaring no comments is never asked. Both
+    /// halves go through the source's one [`get_task_details`] call, so a source that reads
+    /// an item and its first page of comments in one request answers in one.
+    ///
+    /// [`get_task_details`]: onetaskgraph_plugin_api::TaskSource::get_task_details
     ///
     /// # Errors
     ///
     /// As [`task`](Self::task). A comment read that fails is not an error: it lands in the
     /// response's `errors` beside the task that was read.
     pub async fn task_detail(&self, id: &GlobalId) -> Result<TaskDetail, EngineError> {
-        let mut response = self.task(id).await?;
-        let source = match self.configured(&id.source) {
-            Some(ConfiguredSource::Ready(source))
-                if !response.items.is_empty()
-                    && source.source().capabilities().comments.is_native() =>
-            {
-                source
+        let name = self.known(&id.source)?;
+        let mut details = self
+            .source_details(&name, std::slice::from_ref(id), true)
+            .await;
+        Ok(details.remove(0))
+    }
+
+    /// Several tasks by their qualified ids, each with its comments when `comments` is set and
+    /// its source has them — the ids may span sources.
+    ///
+    /// Each source is asked once, for every id naming it, through its
+    /// [`get_task_details`](onetaskgraph_plugin_api::TaskSource::get_task_details); what each
+    /// detail holds is what [`task_detail`](Self::task_detail), or [`task`](Self::task) when
+    /// `comments` is unset, answers for that id. An id that answer would refuse — it names no
+    /// configured source — or answer with nothing — its source holds no such task — carries
+    /// that in its own detail's `errors`, so one unreadable id never refuses the others, and a
+    /// caller reads every failure from the same place.
+    pub async fn task_details(&self, ids: &[GlobalId], comments: bool) -> TaskDetails {
+        let mut details: Vec<Option<TaskDetail>> = vec![None; ids.len()];
+        let mut named: Vec<&SourceName> = Vec::new();
+        for id in ids {
+            if !named.contains(&&id.source) {
+                named.push(&id.source);
             }
-            _ => {
-                return Ok(TaskDetail {
-                    response,
+        }
+        for name in named {
+            let at: Vec<usize> = (0..ids.len())
+                .filter(|index| ids[*index].source == *name)
+                .collect();
+            let asked: Vec<GlobalId> = at.iter().map(|index| ids[*index].clone()).collect();
+            let answered = match self.known(name) {
+                Ok(name) => self.source_details(&name, &asked, comments).await,
+                Err(refusal) => asked
+                    .iter()
+                    .map(|_| TaskDetail {
+                        response: failed_response(
+                            name,
+                            SourceError::Config {
+                                message: refusal.to_string(),
+                            },
+                        ),
+                        comments: None,
+                    })
+                    .collect(),
+            };
+            for ((index, id), mut detail) in at.into_iter().zip(&asked).zip(answered) {
+                if detail.response.items.is_empty() && detail.response.errors.is_empty() {
+                    detail.response.errors.push(SourceFailure {
+                        source: id.source.clone(),
+                        error: SourceError::Refused {
+                            message: no_such_task(id).to_string(),
+                        },
+                    });
+                }
+                details[index] = Some(detail);
+            }
+        }
+        TaskDetails {
+            details: details.into_iter().flatten().collect(),
+        }
+    }
+
+    /// One detail per id of `ids`, every one of which names the configured source `name`, read
+    /// with one call of that source.
+    async fn source_details(
+        &self,
+        name: &SourceName,
+        ids: &[GlobalId],
+        comments: bool,
+    ) -> Vec<TaskDetail> {
+        let mut answer = Answer::new();
+        let selected = answer.split(self, std::slice::from_ref(name));
+        let Some(source) = selected.first() else {
+            // A source that never built: every id is answered with the failure `task` answers
+            // with, and nothing is asked.
+            return ids
+                .iter()
+                .map(|_| TaskDetail {
+                    response: QueryResponse {
+                        items: Vec::new(),
+                        next: None,
+                        plan: QueryPlan::default(),
+                        errors: answer.errors.clone(),
+                    },
                     comments: None,
-                });
-            }
+                })
+                .collect();
         };
-        let comments = match walk(source, &id.native).await {
-            Ok(comments) => comments,
-            Err(error) => {
-                response.errors.push(SourceFailure {
-                    source: source.name().clone(),
-                    error,
-                });
+        let commented = comments && source.source().capabilities().comments.is_native();
+        let page = PageRequest {
+            cursor: None,
+            limit: source.source().capabilities().max_page_size.max(1),
+        };
+        let natives: Vec<NativeId> = ids.iter().map(|id| id.native.clone()).collect();
+        let mut read = source
+            .source()
+            .get_task_details(&natives, commented.then_some(&page))
+            .await;
+        if read.len() != ids.len() {
+            let message = format!(
+                "the source answered {} task details for the {} ids it was asked for",
+                read.len(),
+                ids.len()
+            );
+            read = ids
+                .iter()
+                .map(|_| {
+                    Err(SourceError::Malformed {
+                        message: message.clone(),
+                    })
+                })
+                .collect();
+        }
+        let mut details = Vec::with_capacity(ids.len());
+        for (id, result) in ids.iter().zip(read) {
+            let (found, first) = match result {
+                Ok(Some(TaskDetailRead { task, comments })) => (Ok(Some(task)), comments),
+                Ok(None) => (Ok(None), None),
+                Err(error) => (Err(error), None),
+            };
+            let qualified = GlobalId::new(source.name().clone(), id.native.clone());
+            let mut response = Answer::new().one_response(source, found, |task| {
+                delivery::qualified_task(qualified, task)
+            });
+            let comments = if commented && !response.items.is_empty() {
+                let walked = match first {
+                    Some(Ok(Some(first))) => walk_from(source, &id.native, first, page.limit).await,
+                    Some(Ok(None)) => Ok(None),
+                    Some(Err(error)) => Err(error),
+                    // A source that was asked for the first page and answered none of it is
+                    // asked the way a source of one comment page at a time always is.
+                    None => walk(source, &id.native).await,
+                };
+                match walked {
+                    Ok(comments) => comments,
+                    Err(error) => {
+                        response.errors.push(SourceFailure {
+                            source: source.name().clone(),
+                            error,
+                        });
+                        None
+                    }
+                }
+            } else {
                 None
-            }
-        };
-        Ok(TaskDetail { response, comments })
+            };
+            details.push(TaskDetail { response, comments });
+        }
+        details
     }
 
     /// Every comment on one task, oldest first.
@@ -233,18 +372,28 @@ async fn walk(
     task: &NativeId,
 ) -> Result<Option<Vec<Comment>>, SourceError> {
     let limit = source.source().capabilities().max_page_size.max(1);
+    let request = PageRequest {
+        cursor: None,
+        limit,
+    };
+    let Some(first) = source.source().task_comments(task, &request).await? else {
+        return Ok(None);
+    };
+    walk_from(source, task, first, limit).await
+}
+
+/// [`walk`], from a first page already in hand — the one a detail read carried beside the
+/// task — asked at `limit`.
+async fn walk_from(
+    source: &ResolvedSource,
+    task: &NativeId,
+    first: Page<Comment>,
+    limit: u32,
+) -> Result<Option<Vec<Comment>>, SourceError> {
     let mut comments = Vec::new();
     let mut cursor: Option<Cursor> = None;
+    let mut page = first;
     loop {
-        let request = PageRequest {
-            cursor: cursor.clone(),
-            limit,
-        };
-        // A task that is gone part way through a walk is gone: reporting the comments read
-        // before it went would describe a task nobody can address any more.
-        let Some(page) = source.source().task_comments(task, &request).await? else {
-            return Ok(None);
-        };
         fits(page.items.len(), limit)?;
         unrepeated(
             page.next.as_ref(),
@@ -252,10 +401,20 @@ async fn walk(
             "walking a task's comments",
         )?;
         comments.extend(page.items);
-        match page.next {
-            Some(next) => cursor = Some(next),
-            None => return Ok(Some(comments)),
-        }
+        let Some(next) = page.next else {
+            return Ok(Some(comments));
+        };
+        cursor = Some(next);
+        let request = PageRequest {
+            cursor: cursor.clone(),
+            limit,
+        };
+        // A task that is gone part way through a walk is gone: reporting the comments read
+        // before it went would describe a task nobody can address any more.
+        let Some(read) = source.source().task_comments(task, &request).await? else {
+            return Ok(None);
+        };
+        page = read;
     }
 }
 
@@ -347,6 +506,19 @@ async fn missing(source: &ResolvedSource, task: &GlobalId, comment: &NativeId) -
         },
         Ok(None) => no_such_task(task),
         Err(error) => failed(source, error),
+    }
+}
+
+/// A response for an id the engine could not ask any source about, carrying why.
+fn failed_response(source: &SourceName, error: SourceError) -> QueryResponse<Qualified<Task>> {
+    QueryResponse {
+        items: Vec::new(),
+        next: None,
+        plan: QueryPlan::default(),
+        errors: vec![SourceFailure {
+            source: source.clone(),
+            error,
+        }],
     }
 }
 

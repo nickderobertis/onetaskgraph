@@ -27,7 +27,7 @@ use crate::{
     DeliveryOutcome, Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken,
     Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated,
     SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail,
-    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
+    TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -43,7 +43,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 27;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 28;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -146,6 +146,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("CommentList", schema_for!(CommentList));
     roots.insert("DeletedComment", schema_for!(DeletedComment));
     roots.insert("TaskDetail", schema_for!(TaskDetail));
+    // What `task show-many` answers with: one `TaskDetail` per id, in request order.
+    roots.insert("TaskDetails", schema_for!(TaskDetails));
 
     // What `task status set` answers with, and the per-task entries it and a copy report for
     // the delivered tasks they kept in step — plus the entry type both of a task's lists hold.

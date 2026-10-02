@@ -12,9 +12,10 @@
 //! to drift from the one a filter compares against.
 
 use onetaskgraph_core::{
-    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
-    Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing, SourceState,
-    TaskContentSet, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateVariables,
+    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, GlobalId, MetadataSet,
+    Predicate, Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing,
+    SourceState, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
+    TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
@@ -607,6 +608,26 @@ pub fn task_with_comments(task: &Qualified<Task>, comments: Option<&[Comment]>) 
         rendered.push_str(&comment(held));
     }
     rendered
+}
+
+/// Several tasks as `task show-many` reports them: each in full, as `task show` renders it,
+/// in the order asked for, or the id and why it could not be shown.
+pub fn task_details(ids: &[GlobalId], details: &TaskDetails) -> String {
+    let mut rendered = Vec::new();
+    for (id, detail) in ids.iter().zip(&details.details) {
+        let mut shown = match detail.response.items.first() {
+            Some(task) => task_with_comments(task, detail.comments.as_deref()),
+            None => format!("{id}\n"),
+        };
+        for failure in &detail.response.errors {
+            shown.push_str(&format!(
+                "error: source {} could not answer: {}\n",
+                failure.source, failure.error
+            ));
+        }
+        rendered.push(shown);
+    }
+    rendered.join("\n---\n\n")
 }
 
 /// One comment in full: the fields a person reads it by, then what it says, unaltered.

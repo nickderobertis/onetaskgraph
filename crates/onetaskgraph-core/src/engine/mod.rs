@@ -52,11 +52,11 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use comment::{CommentList, DeletedComment, TaskDetail};
+pub use comment::{CommentList, DeletedComment, TaskDetail, TaskDetails};
 pub(crate) use copy::malformed_links;
 pub use copy::{
-    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest, CopyScope,
-    CopyVia, MatchBy, NoCounterpart, Spent,
+    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest,
+    CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
@@ -743,6 +743,35 @@ pub enum EngineError {
         item: String,
         /// The destination item its `onetaskgraph.copies` entry names.
         link: String,
+    },
+
+    /// `--create` was given beside a flag that says how to look for a counterpart, when
+    /// `--create` says there is none to look for.
+    #[error(
+        "--create cannot be given with {flag}: --create asserts the destination holds no \
+         counterpart, so there is nothing for {flag} to look for\n\
+         next: drop {flag} to create each item without looking, or drop --create to look."
+    )]
+    CreateWith {
+        /// The flag given beside `--create`.
+        flag: CopyLookup,
+    },
+
+    /// `--create` named an item that itself records a counterpart at the destination.
+    ///
+    /// Refused rather than created: the item's own `onetaskgraph.copies` link — or its
+    /// origin — names an item there, so the caller's assertion that the destination holds
+    /// none is wrong for it, and creating another would duplicate it.
+    #[error(
+        "{item} already records a counterpart at the destination, {carrier}, and --create \
+         asserts it has none\n\
+         next: copy it without --create, which updates {carrier}."
+    )]
+    CreateCarried {
+        /// The item being copied.
+        item: GlobalId,
+        /// The destination item its link or its origin names.
+        carrier: GlobalId,
     },
 
     /// A member copy named a task that is not a member of the project being copied.
@@ -1806,11 +1835,21 @@ impl Answer {
 
     /// The response for a verb that reads exactly one item from exactly one source.
     fn one<T, U>(
-        mut self,
+        self,
         source: &ResolvedSource,
         found: Result<Option<T>, SourceError>,
         qualify: impl FnOnce(T) -> U,
     ) -> Result<QueryResponse<U>, EngineError> {
+        Ok(self.one_response(source, found, qualify))
+    }
+
+    /// [`one`](Self::one), for a caller with no refusal to thread through.
+    fn one_response<T, U>(
+        mut self,
+        source: &ResolvedSource,
+        found: Result<Option<T>, SourceError>,
+        qualify: impl FnOnce(T) -> U,
+    ) -> QueryResponse<U> {
         self.plans.push(plan_for(source, Outcomes::default(), 1));
         let items = match found {
             Ok(Some(item)) => vec![qualify(item)],
@@ -1823,14 +1862,14 @@ impl Answer {
                 Vec::new()
             }
         };
-        Ok(QueryResponse {
+        QueryResponse {
             items,
             next: None,
             plan: QueryPlan {
                 per_source: merge_plans(self.plans),
             },
             errors: self.errors,
-        })
+        }
     }
 
     /// The response for a verb with nothing left to ask.
