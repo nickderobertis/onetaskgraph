@@ -1109,12 +1109,11 @@ pub struct TaskShowArgs {
 /// `onetaskgraph task show-many`.
 #[derive(Debug, Args)]
 pub struct TaskShowManyArgs {
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `TaskCopyArgs::id`: a `GlobalId` here would refuse an unqualified id as a bad invocation under clap's wording, and `qualified` in `main` converts each through `GlobalId::from_str` before any source is started, saying what a qualified id is and where to read the configured names.
     /// The qualified ids, `<source>:<native-id>`, in the order their details are reported.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`: `qualified`
-    /// in `main` converts each through `GlobalId::from_str` and says what a qualified id is.
     #[arg(value_name = "ID", required = true)]
     pub ids: Vec<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Read each record without requesting its comments.
     #[arg(long)]
     pub no_comments: bool,
@@ -1215,9 +1214,10 @@ pub struct TaskCopyArgs {
     /// whoever asks: repeating your own query here could find nothing yours did not. Refused
     /// beside --match-by and --recreate, which are ways of looking, and for a task whose own
     /// link or origin already names an item at the destination.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `CopyRequest::create`: one enum of the ways a copy finds its target would replace `--match-by` and `--recreate`, which `CopyArgs` shares with `project copy` and `document copy`, so `create` is one more flag beside them, and the one combination it makes possible that means nothing is refused by `Engine::copy` as `EngineError::CreateWith`, naming both flags, before anything is read.
     #[arg(long)]
     pub create: bool,
-
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     #[command(flatten)]
     pub copy: CopyArgs,
 }

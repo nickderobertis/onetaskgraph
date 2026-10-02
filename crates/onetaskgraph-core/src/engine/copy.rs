@@ -87,14 +87,9 @@ pub struct CopyRequest {
     /// [`match_by`](Self::match_by) and [`recreate`](Self::recreate), which are ways of
     /// looking, and for an item that itself records a counterpart at the destination — a
     /// link or an origin naming it — which is a carrier the caller's assertion overlooked.
-    // llmlint: ignore[invalid_states_unrepresentable] One enum of the ways a copy finds its
-    // target would make `create` beside `match_by` or `recreate` unrepresentable, but only by
-    // replacing `match_by` and `recreate`, which every Rust caller of this request sets by name
-    // and the command line maps flag for flag — rewriting what each existing caller writes.
-    // `create` is one more field beside them, as `recreate` and `dry_run` were, and the one
-    // combination it makes possible that means nothing is refused by `Engine::copy`, as
-    // `EngineError::CreateWith`, before anything is read.
+    // llmlint: ignore-block[invalid_states_unrepresentable] One enum of the ways a copy finds its target would make `create` beside `match_by` or `recreate` unrepresentable, but only by replacing `match_by` and `recreate`, which every Rust caller of this request sets by name and the command line maps flag for flag — rewriting what each existing caller writes. `create` is one more field beside them, as `recreate` and `dry_run` were, and the one combination it makes possible that means nothing is refused by `Engine::copy`, as `EngineError::CreateWith`, before anything is read.
     pub create: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Whether to perform every read and no write.
     pub dry_run: bool,
 }
