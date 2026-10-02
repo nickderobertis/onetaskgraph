@@ -1,5 +1,5 @@
-requests 117
-node count 236850
+requests 119
+node count 244425
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -22,11 +22,13 @@ requests per call
     1       0  live origin field cleanup
     1       0  live origin field creation
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
+    1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1   20400  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies
     1     153  node-count and point-cost reconciliation while reading one draft
     1     203  node-count and point-cost reconciliation while reading one issue
+    1     303  node-count and point-cost reconciliation while reading one issue with its comments
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count and point-cost reconciliation while reading the board
     1      50  node-count and point-cost reconciliation while reading the board's fields

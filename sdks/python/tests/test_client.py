@@ -175,6 +175,13 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
         )
     ).items
     assert run(client.task_show(id=GlobalId(root="memory:T-1"))).items
+    shown_many = run(
+        client.task_show_many(ids=["memory:T-1", GlobalId(root="memory:P-1")], no_comments=True)
+    )
+    assert [len(detail.items) for detail in shown_many.details] == [1, 0]
+    assert "no task with the id memory:P-1" in str(
+        shown_many.details[1].errors[0].error.root.message
+    )
     assert run(client.task_deps(id="memory:T-1")).items
     assert run(client.project_list(source=["memory"])).items
     assert run(client.project_show(id="memory:P-1")).items
@@ -539,6 +546,21 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     record = run(client.task_show(id="notes:T-1", no_comments=True))
     assert record.comments is None
     assert record.items == shown.items
+
+    # Several tasks at once, in the order asked, each exactly as `task_show` answers it — and
+    # an id naming nothing carries its failure in its own detail rather than refusing the rest.
+    many = run(client.task_show_many(ids=["plain:T-1", "notes:T-missing", "notes:T-1"]))
+    assert len(many.details) == 3
+    # Compared as the documents they are: each generated root models what it nests on its own.
+    assert many.details[0].model_dump() == run(client.task_show(id="plain:T-1")).model_dump()
+    assert many.details[2].model_dump() == shown.model_dump()
+    assert many.details[1].items == []
+    assert many.details[1].comments is None
+    assert "no task with the id notes:T-missing" in str(
+        many.details[1].errors[0].error.root.message
+    )
+    records = run(client.task_show_many(ids=("notes:T-1",), no_comments=True))
+    assert [detail.model_dump() for detail in records.details] == [record.model_dump()]
 
     # A source whose tasks have none carries no comments key, and refuses the verbs.
     assert run(client.task_show(id="plain:T-1")).comments is None

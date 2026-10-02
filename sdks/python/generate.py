@@ -22,6 +22,8 @@ RESPONSE_ROOTS = {
     "task_list": "QueryResponseOfQualifiedTask",
     # The task response with the task's comments beside it, for a source that has them.
     "task_show": "TaskDetail",
+    # One `TaskDetail` per id, in request order: `task show` for several tasks at once.
+    "task_show_many": "TaskDetails",
     "task_deps": "QueryResponseOfQualifiedEdge",
     "task_copy": "CopyReport",
     "task_comment_add": "Comment",
@@ -611,7 +613,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("text",)
         case ("sources", "status-options" | "fields"):
             return ("source",)
-        case ("task" | "document", "copy"):
+        case ("task" | "document", "copy") | ("task", "show-many"):
             return ("ids",)
         case ("task", "comment", "add" | "list"):
             return ("id",)
@@ -846,7 +848,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     ]
     positional_types = {
         "id": "GlobalId | str",
-        # `task copy` and `document copy` take one or more ids, which are the variadic
+        # `task copy`, `document copy` and `task show-many` take one or more ids, the variadic
         # positionals the command surface has; the client passes each of them through.
         "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
         # `task status set` takes the category it sets as its second operand, spelled as the

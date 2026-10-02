@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{NativeId, SourceError};
+use crate::{NativeId, Page, SourceError, Task};
 
 /// One comment on a task, as its source holds it.
 ///
@@ -99,6 +99,23 @@ pub struct NewComment {
     // llmlint: ignore[invalid_states_unrepresentable] an author is the source's own spelling of a person — a login, a display name, a free-form name in a Markdown file — so there is no narrower type every source could agree on; each source refuses what it cannot record, naming it, which is the rule every write of this contract follows.
     #[serde(default)]
     pub author: Option<String>,
+}
+
+/// One task as [`TaskSource::get_task_details`](crate::TaskSource::get_task_details) reads it:
+/// the task, and the first page of its comments when they were asked for.
+///
+/// The comments are a result of their own rather than part of the task's, because the two
+/// can fail apart: a task that was read and whose comments could not be — a board draft,
+/// which has none — is still a task a caller is owed, with the comment failure beside it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskDetailRead {
+    /// The task, exactly as [`TaskSource::get_task`](crate::TaskSource::get_task) answers it.
+    pub task: Task,
+    /// The first page of its comments, oldest first: `None` when the read did not ask for
+    /// them, and otherwise exactly what
+    /// [`TaskSource::task_comments`](crate::TaskSource::task_comments) answers for that page
+    /// — `Ok(None)` included, for a task gone between the two halves of a read that made two.
+    pub comments: Option<Result<Option<Page<Comment>>, SourceError>>,
 }
 
 /// The refusal a source with no comments answers a comment call with.

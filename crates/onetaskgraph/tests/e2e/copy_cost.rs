@@ -758,18 +758,14 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
             arguments.push("--no-comments");
         }
         let (_, sent, shown) = plan.measure(&arguments);
-        assert_eq!(
-            sent.iter()
-                .filter(|(query, _)| query == graphql::ISSUE)
-                .count(),
-            1
-        );
-        assert_eq!(
-            sent.iter()
-                .filter(|(query, _)| query == graphql::ISSUE_COMMENTS)
-                .count(),
-            usize::from(comments)
-        );
+        // One request either way: the item with its first page of comments, or the item.
+        let read = if comments {
+            graphql::ISSUE_DETAIL
+        } else {
+            graphql::ISSUE
+        };
+        assert_eq!(sent.len(), 1, "{sent:#?}");
+        assert_eq!(sent[0].0, read, "{sent:#?}");
         assert_eq!(shown.get("comments").is_some(), comments);
     }
     plan.sandbox
@@ -837,18 +833,18 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
             assert_eq!(shown.get("comments").is_some(), comments);
             let served = plan.board.served();
             let sent = &served[before..];
-            // One successful detail/record read and one missing-item failure.
+            // One successful detail/record read and one missing-item failure, each one request.
+            let read = if comments {
+                graphql::ISSUE_DETAIL
+            } else {
+                graphql::ISSUE
+            };
             assert_eq!(
                 sent.iter()
-                    .filter(|(query, _)| query == graphql::ISSUE)
-                    .count(),
-                2
-            );
-            assert_eq!(
-                sent.iter()
-                    .filter(|(query, _)| query == graphql::ISSUE_COMMENTS)
-                    .count(),
-                usize::from(comments)
+                    .map(|(query, _)| query.as_str())
+                    .collect::<Vec<_>>(),
+                [read, graphql::ISSUE],
+                "{sent:#?}"
             );
         }
     }
@@ -885,6 +881,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         "--json",
     ]);
     let (_, recount_calls, _) = plan.measure(&["task", "show", id, "--json"]);
+    let (_, detail_calls, _) = plan.measure(&["task", "comment", "list", id, "--json"]);
     let (_, status_calls, _) = plan.measure(&["task", "status", "set", id, "todo", "--json"]);
     let (_, priority_calls, _) = plan.measure(&["task", "priority", "set", id, "medium", "--json"]);
     let (_, content_calls, _) = plan.measure(&[
@@ -909,14 +906,18 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         ("new copy", &new_calls, 6),
         ("bound copy", &bound_calls, 5),
         ("comment", &comment_calls, 2),
-        ("recount", &recount_calls, 2),
+        ("recount", &recount_calls, 1),
+        ("detail", &detail_calls, 1),
         ("status", &status_calls, 2),
         ("priority", &priority_calls, 2),
         ("content", &content_calls, 2),
         ("metadata", &metadata_calls, 2),
     ] {
         let mut reads = std::collections::BTreeMap::<String, usize>::new();
-        for (_, variables) in sent.iter().filter(|(query, _)| query == graphql::ISSUE) {
+        for (_, variables) in sent
+            .iter()
+            .filter(|(query, _)| query == graphql::ISSUE || query == graphql::ISSUE_DETAIL)
+        {
             *reads
                 .entry(variables["id"].as_str().unwrap().to_owned())
                 .or_default() += 1;
@@ -962,5 +963,56 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
     assert_eq!(
         shown["items"][0]["item"]["metadata"]["myapp.owner"],
         "grace"
+    );
+}
+
+/// The cost table's `batched detail` row: `task show-many` of `n` tasks, each with its first
+/// page of comments, is `ceil(n / DETAIL_BATCH)` requests and as many declared points.
+#[test]
+fn a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch() {
+    use onetaskgraph_github_projects::{DETAIL_BATCH, graphql};
+    let plan = Plan::of(DETAIL_BATCH + 1);
+    let (_, _, copied) = plan.copy(&[]);
+    let tasks: Vec<String> = landed(&copied)
+        .into_iter()
+        .filter(|(source, _)| source.starts_with("plans:T-"))
+        .map(|(_, destination)| destination.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(tasks.len(), DETAIL_BATCH + 1);
+    for n in [1, 3, DETAIL_BATCH, DETAIL_BATCH + 1] {
+        let mut arguments = vec!["task", "show-many"];
+        arguments.extend(tasks[..n].iter().map(String::as_str));
+        arguments.push("--json");
+        let (_, sent, report) = plan.measure(&arguments);
+        let expected = n.div_ceil(DETAIL_BATCH);
+        let points: u64 = sent
+            .iter()
+            .map(|(document, _)| {
+                onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
+            })
+            .sum();
+        assert_eq!(sent.len(), expected, "{n} items: {sent:#?}");
+        assert_eq!(points, expected as u64, "{n} items");
+        // One item is the one-item detail read; more are the batch.
+        let read = if n == 1 {
+            graphql::ISSUE_DETAIL
+        } else {
+            graphql::ISSUE_DETAILS
+        };
+        assert!(
+            sent.iter().all(|(document, _)| document == read),
+            "{sent:#?}"
+        );
+        assert_eq!(report["details"].as_array().map(Vec::len), Some(n));
+    }
+    assert!(
+        include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
+            .contains("//! | batched detail | ceil(n / DETAIL_BATCH) |"),
+        "cost table: batched detail"
+    );
+    assert!(
+        include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
+            .contains(&format!("pub const DETAIL_BATCH: usize = {DETAIL_BATCH};")),
+        "cost table: DETAIL_BATCH"
     );
 }

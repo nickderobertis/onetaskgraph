@@ -431,6 +431,11 @@ pub fn dry_run_variables(document: &str) -> Value {
     }
     bind("after", Value::Null);
     bind("id", json!("node-count-reconciliation"));
+    // A batch read names each of its slots, every one an id; the probe resolves none of them.
+    for slot in 0..onetaskgraph_github_projects::DETAIL_BATCH {
+        bind(&format!("id{slot}"), json!("node-count-reconciliation"));
+    }
+    bind("comments", json!(true));
     bind("search", json!("repo:github/docs is:issue"));
     bind(
         "filter",

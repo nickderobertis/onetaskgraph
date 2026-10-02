@@ -67,7 +67,8 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
-onetaskgraph task show <ID>
+onetaskgraph task show <ID> [--no-comments]
+onetaskgraph task show-many <ID>... [--no-comments]
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME]
@@ -142,6 +143,14 @@ account themselves and refuse it rather than drop it. `task show` prints a task'
 after its body, and its `--json` carries them as a top-level `comments` list for a source
 whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
 `task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
+
+`task show-many <ID>...` shows several tasks at once, whatever sources they are in, and its
+`--json` is `{"details": [...]}`: one entry per id, in the order given, each exactly what
+`task show <ID> --json` prints. An id that cannot be read — no such task, no such source, a
+GitHub draft's comments — carries its failure in that entry's own `errors` and does not refuse
+the others; the command exits non-zero exactly when some entry carries one. Each source is
+asked for its ids together, so GitHub Projects reads 24 items, with their comments, per
+request.
 
 `task list --commented-since <INSTANT>` keeps the tasks **one of whose comments was created,
 or last edited, at or after** the instant — an RFC 3339 time with its offset, such as

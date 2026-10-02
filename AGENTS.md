@@ -67,8 +67,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
-  comment types `Comment`, `CommentBody` and `NewComment`; the metering types `Metering` and
-  `Metered`; and `SourceError`.
+  comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
+  metering types `Metering` and `Metered`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -794,6 +794,12 @@ them do; this is the inventory of what is owed, not a status board.
     each predicate pushed down or applied locally; both SDKs answer what the command
     line answers; and a location with an empty key or segment, a value with no `=`, and an
     origin that is not a qualified id are each refused naming the flag.
+70. `task show-many` answers one detail per id, in request order, each exactly what
+    `task show` prints for that id — with its comments or, under `--no-comments`, without
+    them — and an id naming no task, no configured source, or a GitHub draft's comments
+    carries its failure in its own detail without refusing the others, the verb exiting
+    non-zero exactly when some detail does; a GitHub board reads `n` items with their
+    comments in `ceil(n / DETAIL_BATCH)` requests.
 
 ## What a copied document's references are pointed at
 

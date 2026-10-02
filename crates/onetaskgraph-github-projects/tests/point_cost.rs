@@ -21,7 +21,7 @@
 //! credentialed lane reconciles each of them against GitHub's own `cost`, from the
 //! `rateLimit(dryRun: true)` probe `tests/journey/mod.rs` already sends per read document.
 
-use onetaskgraph_github_projects::{graphql, worst_case_point_cost};
+use onetaskgraph_github_projects::{DETAIL_BATCH, graphql, worst_case_point_cost};
 
 /// What each document this source sends costs, in points, under the largest page sizes it
 /// can be driven with.
@@ -61,6 +61,8 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::REMOVE_BLOCKED_BY, 1),
     (graphql::DELETE_ISSUE, 1),
     (graphql::ISSUE_COMMENTS, 1),
+    (graphql::ISSUE_DETAIL, 1),
+    (graphql::ISSUE_DETAILS, 1),
     (graphql::COMMENT_ISSUE, 1),
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
@@ -162,4 +164,57 @@ fn the_check_reports_a_failure_naming_a_document_nobody_priced() {
         .expect("a document with no recorded price is refused");
     assert!(refusal.contains("reading the board"), "{refusal}");
     assert!(refusal.contains("records no price"), "{refusal}");
+}
+
+/// The batch read is one point, and the batch size is the largest that is: one item more
+/// would cost two.
+///
+/// `DETAIL_BATCH` is declared as the largest batch the node-count model prices at one point,
+/// and the sweep above only shows the document at that size costs one. This is the other
+/// half: the same document grown by one aliased item — written the way every alias in it is —
+/// is priced at two, so a batch constant left below what one point buys fails here rather
+/// than spending a request a caller did not need to.
+#[test]
+fn the_batch_read_is_the_largest_one_point_buys() {
+    const {
+        assert!(
+            DETAIL_BATCH >= 10,
+            "a batch this small is not worth a document"
+        )
+    };
+    let document = graphql::ISSUE_DETAILS;
+    // Fixed-size aliased `node(id:)` fields, one per item, and never `nodes(ids:)`, which the
+    // pricing model cannot see under.
+    assert!(!document.contains("nodes(ids:"), "{document}");
+    assert_eq!(document.matches(":node(id:$id").count(), DETAIL_BATCH);
+    assert_eq!(worst_case_point_cost(document).unwrap(), 1);
+
+    let last = DETAIL_BATCH - 1;
+    let alias_at = document
+        .find(&format!("i{last}:node(id:$id{last})"))
+        .expect("the last alias");
+    let alias_end = document[alias_at..]
+        .find("\n")
+        .map_or(document.len(), |end| alias_at + end);
+    let alias = &document[alias_at..alias_end];
+    let grown_alias = alias
+        .replacen(&format!("i{last}:"), &format!("i{DETAIL_BATCH}:"), 1)
+        .replacen(&format!("$id{last}"), &format!("$id{DETAIL_BATCH}"), 1);
+    let grown = format!(
+        "{}\n      {grown_alias}{}",
+        &document[..alias_end],
+        &document[alias_end..]
+    )
+    .replacen(
+        &format!("$id{last}:ID!,"),
+        &format!("$id{last}:ID!,$id{DETAIL_BATCH}:ID!,"),
+        1,
+    );
+    assert_eq!(grown.matches(":node(id:$id").count(), DETAIL_BATCH + 1);
+    assert_eq!(
+        worst_case_point_cost(&grown).unwrap(),
+        2,
+        "one item more than DETAIL_BATCH is still one point, so DETAIL_BATCH is not the \
+         largest batch one point buys:\n{grown}"
+    );
 }

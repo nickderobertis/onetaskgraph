@@ -584,6 +584,22 @@ test("comments are added, listed, edited and deleted through the real binary", a
     expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
     expect(shown.items[0]?.item.content).toBe("Long-form task content.");
 
+    // Several tasks at once, in the order asked, each as `taskShow` answers it — and an id
+    // naming nothing carries its failure in its own detail rather than refusing the others.
+    const many = await commentClient.taskShowMany(["plain:T-1", "notes:T-missing", "notes:T-1"]);
+    expect(many.details).toHaveLength(3);
+    expect(many.details[0]).toEqual(await commentClient.taskShow("plain:T-1"));
+    expect(many.details[2]).toEqual(shown);
+    expect(many.details[1]?.items).toEqual([]);
+    expect(many.details[1]?.errors[0]?.error.message).toContain(
+      "no task with the id notes:T-missing",
+    );
+    const records = await commentClient.taskShowMany(["notes:T-1"], { noComments: true });
+    expect(records.details).toEqual([record]);
+    expect(() =>
+      commentClient.taskShowMany(["notes:T-1"], { noComments: JSON.parse('"true"') }),
+    ).toThrow("noComments must be a boolean");
+
     // A source whose tasks have none carries no comments key, and refuses the verbs.
     expect("comments" in (await commentClient.taskShow("plain:T-1"))).toBe(false);
     await expect(commentClient.taskCommentList("plain:T-1")).rejects.toThrow("has no comments");

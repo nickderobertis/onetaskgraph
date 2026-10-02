@@ -275,6 +275,14 @@ pub enum TaskCommand {
     List(TaskListArgs),
     /// Show one task by its qualified id, `<source>:<native-id>`.
     Show(TaskShowArgs),
+    /// Show several tasks by their qualified ids, each as `task show` reports it.
+    ///
+    /// One detail per id, in the order given, and the ids may span sources. An id that cannot
+    /// be read — no such task, a source nothing configures, comments a source refuses — says
+    /// why in its own detail's `errors` and does not refuse the others; the command exits
+    /// non-zero exactly when some detail carries an error. Each source is asked for its ids
+    /// together, so a source that reads many items in one request answers in few.
+    ShowMany(TaskShowManyArgs),
     /// Walk one task's dependency edges.
     Deps(DependencyArgs),
     /// Copy tasks into another configured source, by qualified id.
@@ -1094,6 +1102,20 @@ pub struct TaskShowArgs {
     #[command(flatten)]
     pub item: ShowArgs,
     /// Read the record without requesting its comments.
+    #[arg(long)]
+    pub no_comments: bool,
+}
+
+/// `onetaskgraph task show-many`.
+#[derive(Debug, Args)]
+pub struct TaskShowManyArgs {
+    /// The qualified ids, `<source>:<native-id>`, in the order their details are reported.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`: `qualified`
+    /// in `main` converts each through `GlobalId::from_str` and says what a qualified id is.
+    #[arg(value_name = "ID", required = true)]
+    pub ids: Vec<String>,
+    /// Read each record without requesting its comments.
     #[arg(long)]
     pub no_comments: bool,
 }

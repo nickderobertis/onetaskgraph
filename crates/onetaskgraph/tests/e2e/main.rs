@@ -82,6 +82,12 @@ mod priority;
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
 // crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod rendered;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: it drives the binary against the shared fixture rows and a loopback
+// fixture board, with no credential and no network, in a few seconds. `task show-many` is the
+// engine's verb, so it cannot sit behind a plugin crate's edge, which AGENTS.md forbids
+// depending on the engine at any depth.
+mod show_many;
 mod source_host;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
 // the required real CLI boundary against a loopback board and completes nine journeys in

@@ -201,7 +201,9 @@
 //! | new copy | 6 | ORIGIN_LOOKUP, BOARD_FIELDS, REPOSITORY, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
 //! | bound copy | 5 | ISSUE, BOARD_FIELDS, ISSUE_DEPENDENCIES, UPDATE_ISSUE, UPDATE_FIELDS |
 //! | comment | 2 | ISSUE, ADD_COMMENT |
-//! | recount | 2 | ISSUE, ISSUE_COMMENTS |
+//! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
+//! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
+//! | recount | 1 | ISSUE_DETAIL |
 //! | status | 2 | ISSUE, UPDATE_FIELD; a terminal status additionally updates issue state |
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
 //! | content | 2 | ISSUE, UPDATE_ISSUE |
@@ -513,8 +515,9 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
     Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
+    WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -534,6 +537,16 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// most one point buys. GitHub prices that document by rows, so pages of 20 cost what pages
 /// of 100 cost per row, and a page of fewer than 20 costs the same one point.
 pub const SEARCH_PAGE_SIZE: u32 = 20;
+/// How many items one [`graphql::ISSUE_DETAILS`] request reads, each with the first page of
+/// its comments: the largest batch the node-count model prices at one point.
+///
+/// Each aliased item is resolved once, and what GitHub charges for it is the connections
+/// under it — its labels, its page of board memberships, the field values of each of those
+/// three memberships, and its comments: six requests' worth of the aggregate GitHub divides
+/// by a hundred and rounds. Twenty-four items come to 144, which rounds to one point;
+/// twenty-five come to 150, which rounds to two. `tests/point_cost.rs` prices the document at
+/// one point and fails if one item more would still be priced at one.
+pub const DETAIL_BATCH: usize = 24;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -1024,6 +1037,83 @@ pub mod graphql {
         issue_comment!(),
         r#"}pageInfo{hasNextPage endCursor}}}}}"#
     );
+    /// One issue by its own node id, with a page of its comments: what `task show` and a
+    /// comment listing read, in one request.
+    ///
+    /// [`ISSUE`] and [`ISSUE_COMMENTS`] in one document, rather than one then the other. The
+    /// comments are selected here and **not** on the shared [`board_issue!`] fragment, which
+    /// [`SEARCH_ISSUES`] and [`SUB_ISSUES`] nest under a page of a hundred issues: a comment
+    /// connection there would multiply through both of those documents' price, and neither
+    /// needs one.
+    pub const ISSUE_DETAIL: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+      node(id:$id){__typename ...BoardIssue ... on Issue{comments(first:$first,after:$after){nodes{"#,
+        issue_comment!(),
+        r#"}pageInfo{hasNextPage endCursor}}}}
+    }"#,
+        board_issue!()
+    );
+
+    /// One alias of [`ISSUE_DETAILS`]: the item a batch's `$id<n>` names, with the first
+    /// page of its comments when `$comments` asks for them.
+    macro_rules! issue_details_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      i",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                "){__typename ...BoardIssue ... on Issue{comments(first:$first) @include(if:$comments){nodes{",
+                issue_comment!(),
+                "}pageInfo{hasNextPage endCursor}}}}"
+            )
+        };
+    }
+
+    /// [`ISSUE_DETAIL`] for [`DETAIL_BATCH`](super::DETAIL_BATCH) items at once, each by its
+    /// own node id, as one fixed-size document of aliased `node(id:)` fields.
+    ///
+    /// **Aliased `node(id:)` rather than `nodes(ids:)`, and that is what keeps its price
+    /// honest.** The `github-graphql-node-count` model this workspace prices with treats a
+    /// field that supplies neither `first` nor `last` as free, and `nodes(ids:)` supplies
+    /// neither — so every connection under it would be priced at nothing and the pin in
+    /// `tests/point_cost.rs` would understate what GitHub charges. Each alias here is the
+    /// one-item read the model already prices, so the batch costs what its aliases cost.
+    ///
+    /// **Fixed-size, so there is one document to price.** A batch of fewer items binds the
+    /// slots it has no item for to the last item it does, and reads that item again; the
+    /// price is the document's, whatever its variables, so a short batch costs what a full
+    /// one does and nothing more.
+    pub const ISSUE_DETAILS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!,$comments:Boolean!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){"#,
+        issue_details_alias!(0),
+        issue_details_alias!(1),
+        issue_details_alias!(2),
+        issue_details_alias!(3),
+        issue_details_alias!(4),
+        issue_details_alias!(5),
+        issue_details_alias!(6),
+        issue_details_alias!(7),
+        issue_details_alias!(8),
+        issue_details_alias!(9),
+        issue_details_alias!(10),
+        issue_details_alias!(11),
+        issue_details_alias!(12),
+        issue_details_alias!(13),
+        issue_details_alias!(14),
+        issue_details_alias!(15),
+        issue_details_alias!(16),
+        issue_details_alias!(17),
+        issue_details_alias!(18),
+        issue_details_alias!(19),
+        issue_details_alias!(20),
+        issue_details_alias!(21),
+        issue_details_alias!(22),
+        issue_details_alias!(23),
+        "\n    }",
+        board_issue!()
+    );
+
     /// Which issue one comment is on, read before that comment is edited or removed.
     ///
     /// GitHub's comment mutations take the comment's id and nothing else, so without this a
@@ -1054,7 +1144,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 30] = [
+    pub const DOCUMENTS: [(&str, &str); 32] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1093,6 +1183,11 @@ pub mod graphql {
         (REMOVE_BLOCKED_BY, "removing a dependency"),
         (DELETE_ISSUE, "deleting an issue"),
         (ISSUE_COMMENTS, "reading a task's comments"),
+        (ISSUE_DETAIL, "reading one issue with its comments"),
+        (
+            ISSUE_DETAILS,
+            "reading a batch of issues with their comments",
+        ),
         (COMMENT_ISSUE, "reading which issue a comment is on"),
         (ADD_COMMENT, "adding a comment"),
         (UPDATE_COMMENT, "editing a comment"),
@@ -6698,17 +6793,146 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         if item.content_kind == ContentKind::DraftIssue {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "task {} of source {} is a draft item on the board, and GitHub keeps \
-                     comments on issues alone, so a draft has none to read or write; next: \
-                     convert the draft to an issue on the board, then comment on the issue it \
-                     becomes",
-                    task.0, self.name
-                ),
-            });
+            return Err(self.draft_has_no_comments(task));
         }
         Ok(Some(item.id))
+    }
+
+    /// The refusal a comment call on a board draft is answered with: GitHub keeps comments on
+    /// issues, and a draft is not one.
+    fn draft_has_no_comments(&self, task: &NativeId) -> SourceError {
+        SourceError::Refused {
+            message: format!(
+                "task {} of source {} is a draft item on the board, and GitHub keeps \
+                 comments on issues alone, so a draft has none to read or write; next: \
+                 convert the draft to an issue on the board, then comment on the issue it \
+                 becomes",
+                task.0, self.name
+            ),
+        }
+    }
+
+    /// One task and a page of its comments, read with [`graphql::ISSUE_DETAIL`] in one
+    /// request — or `None` when this board holds no task by that id.
+    ///
+    /// What `task show` and a comment listing read. A draft is a task with no comments, so it
+    /// is answered with the draft and the refusal, at the price of the draft's own read.
+    async fn issue_detail(
+        &self,
+        id: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<TaskDetailRead>, SourceError> {
+        let after = page.cursor.as_ref().map(|cursor| cursor.0.as_str());
+        let asked = self
+            .graphql(
+                graphql::ISSUE_DETAIL,
+                json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":after,
+                       "nestedFirst":NESTED_PAGE_SIZE,"boardItems":BOARD_ITEMS_PAGE_SIZE,
+                       "duplicates":true}),
+            )
+            .await;
+        let data = match asked {
+            Ok(data) => data,
+            Err(error) if unresolvable_node(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        self.detail_of(id, data.get("node").unwrap_or(&Value::Null), true, after)
+            .await
+    }
+
+    /// Several tasks, each with the first page of its comments when `comments` is set, read
+    /// [`DETAIL_BATCH`] at a time with [`graphql::ISSUE_DETAILS`] — one answer per id, in
+    /// order.
+    ///
+    /// A batch GitHub refuses because one of its ids resolves to no node at all is read again
+    /// one item at a time, so that id is answered as missing and the others as themselves; any
+    /// other refusal is every id of that batch's answer.
+    async fn issue_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        let mut read = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(DETAIL_BATCH) {
+            let mut variables = serde_json::Map::new();
+            for slot in 0..DETAIL_BATCH {
+                let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
+                variables.insert(format!("id{slot}"), json!(id));
+            }
+            variables.insert(
+                "first".to_owned(),
+                json!(comments.map_or(MAX_PAGE_SIZE, |page| page.limit.min(MAX_PAGE_SIZE))),
+            );
+            variables.insert("comments".to_owned(), json!(comments.is_some()));
+            variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+            variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+            variables.insert("duplicates".to_owned(), json!(true));
+            match self
+                .graphql(graphql::ISSUE_DETAILS, Value::Object(variables))
+                .await
+            {
+                Ok(data) => {
+                    for (slot, id) in batch.iter().enumerate() {
+                        let node = data.get(format!("i{slot}")).unwrap_or(&Value::Null);
+                        read.push(self.detail_of(id, node, comments.is_some(), None).await);
+                    }
+                }
+                Err(error) if unresolvable_node(&error) => {
+                    for id in batch {
+                        read.push(match comments {
+                            Some(page) => self.issue_detail(id, page).await,
+                            None => self.task_read(id).await,
+                        });
+                    }
+                }
+                Err(error) => read.extend(batch.iter().map(|_| Err(error.clone()))),
+            }
+        }
+        read
+    }
+
+    /// One task and nothing of its comments, as [`TaskSource::get_task`] reads it.
+    async fn task_read(&self, id: &NativeId) -> Result<Option<TaskDetailRead>, SourceError> {
+        Ok(self.get_task(id).await?.map(|task| TaskDetailRead {
+            task,
+            comments: None,
+        }))
+    }
+
+    /// What one node a detail read reached says: the task this board holds by `id`, with the
+    /// page of comments the node carries when `commented` — or `None` for a node that is no
+    /// task of this board.
+    ///
+    /// Resolved as [`Self::item_by_id`] resolves an item: a draft is read again as a draft,
+    /// and an item this process created answers from this process's own record, which a node
+    /// read taken moments after the write can still be behind.
+    async fn detail_of(
+        &self,
+        id: &NativeId,
+        node: &Value,
+        commented: bool,
+        after: Option<&str>,
+    ) -> Result<Option<TaskDetailRead>, SourceError> {
+        if node.is_null() {
+            return Ok(None);
+        }
+        let draft = optional_str(node, "__typename")? == Some("DraftIssue");
+        let item = if draft {
+            self.draft_by_id(id).await?
+        } else {
+            self.resolve_issue(node).await?
+        };
+        let Some(item) = item.filter(|item| item.kind == BoardKind::Work(ItemKind::Task)) else {
+            return Ok(None);
+        };
+        let own = self.created()?.iter().find(|own| own.id == *id).cloned();
+        let task = own.unwrap_or(item).task()?;
+        let comments = match (commented, draft) {
+            (false, _) => None,
+            (true, true) => Some(Err(self.draft_has_no_comments(id))),
+            (true, false) => Some(comment_page(node, &id.0, after).map(Some)),
+        };
+        Ok(Some(TaskDetailRead { task, comments }))
     }
 
     /// Whether the comment `comment` is one of `issue`'s own.
@@ -8304,45 +8528,52 @@ impl TaskSource for GitHubProjectsSource {
     ///
     /// Nothing here filters, so nothing has to be read ahead of the page: the caller's limit is
     /// the page GitHub is asked for and GitHub's `endCursor` is the cursor handed back.
+    ///
+    /// One request, [`graphql::ISSUE_DETAIL`]: the read that says the id names a task of this
+    /// board is the read of its comments. A draft this process already resolved is refused
+    /// without one.
     async fn task_comments(
         &self,
         task: &NativeId,
         page: &PageRequest,
     ) -> Result<Option<Page<Comment>>, SourceError> {
         validate_page(page)?;
-        let Some(issue) = self.commented_issue(task).await? else {
-            return Ok(None);
-        };
-        let after = page.cursor.as_ref().map(|cursor| cursor.0.as_str());
-        let data = self
-            .graphql(
-                graphql::ISSUE_COMMENTS,
-                json!({"id":issue.0,"first":page.limit.min(MAX_PAGE_SIZE),"after":after}),
-            )
-            .await?;
-        // The issue was there a moment ago; one removed since is no longer a task here.
-        let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
-            return Ok(None);
-        };
-        let connection = node
-            .get("comments")
-            .filter(|value| !value.is_null())
-            .ok_or_else(|| SourceError::Malformed {
-                message: format!(
-                    "GitHub issue {} answered with no comments connection",
-                    issue.0
-                ),
-            })?;
-        let items = optional_nodes(Some(connection), "issue comments")?
-            .into_iter()
-            .flatten()
-            .map(comment_from)
-            .collect::<Result<Vec<_>, _>>()?;
-        let next = next_cursor(connection)?;
-        if let Some(next) = &next {
-            validate_cursor_progress(after, &next.0)?;
+        let cached = self.resolved_cache()?.get(task).cloned();
+        if let Some(item) = cached {
+            if item.kind != BoardKind::Work(ItemKind::Task) {
+                return Ok(None);
+            }
+            if item.content_kind == ContentKind::DraftIssue {
+                return Err(self.draft_has_no_comments(task));
+            }
         }
-        Ok(Some(Page { items, next }))
+        match self.issue_detail(task, page).await? {
+            Some(TaskDetailRead {
+                comments: Some(comments),
+                ..
+            }) => comments,
+            _ => Ok(None),
+        }
+    }
+
+    /// Every id's task, with the first page of its comments when `comments` names it:
+    /// [`DETAIL_BATCH`] items per [`graphql::ISSUE_DETAILS`] request, and one item with its
+    /// comments in one [`graphql::ISSUE_DETAIL`] request.
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        if let Some(page) = comments
+            && let Err(error) = validate_page(page)
+        {
+            return ids.iter().map(|_| Err(error.clone())).collect();
+        }
+        match (ids, comments) {
+            ([id], Some(page)) => vec![self.issue_detail(id, page).await],
+            ([id], None) => vec![self.task_read(id).await],
+            _ => self.issue_details(ids, comments).await,
+        }
     }
 
     /// Add one comment to the task's issue, as the account the token belongs to.
@@ -8474,6 +8705,30 @@ fn comment_from(value: &Value) -> Result<Comment, SourceError> {
         body: required_str(value, "body")?.to_owned(),
         url: optional_str(value, "url")?.map(str::to_owned),
     })
+}
+
+/// The page of comments one issue node carries, resumed from `after`.
+fn comment_page(
+    node: &Value,
+    issue: &str,
+    after: Option<&str>,
+) -> Result<Page<Comment>, SourceError> {
+    let connection = node
+        .get("comments")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub issue {issue} answered with no comments connection"),
+        })?;
+    let items = optional_nodes(Some(connection), "issue comments")?
+        .into_iter()
+        .flatten()
+        .map(comment_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let next = next_cursor(connection)?;
+    if let Some(next) = &next {
+        validate_cursor_progress(after, &next.0)?;
+    }
+    Ok(Page { items, next })
 }
 
 /// Where the recorded tail of a dependency walk resumes; see

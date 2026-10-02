@@ -269,7 +269,11 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 26
+    assert emitted_bundle["version"] == 27
+    # Version 27 published what `task show-many` answers with: one `TaskDetail` per id.
+    task_details = bundle["roots"]["TaskDetails"]
+    assert isinstance(task_details, dict)
+    assert task_details["required"] == ["details"]
     # Version 26 published the metadata values and the copy origin a task list may be narrowed
     # by: the query's `metadata` and `origin`, the `MetadataMatch` one of the first is, and the
     # two capabilities a source declares them with.

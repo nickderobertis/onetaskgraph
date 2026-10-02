@@ -52,7 +52,7 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use comment::{CommentList, DeletedComment, TaskDetail};
+pub use comment::{CommentList, DeletedComment, TaskDetail, TaskDetails};
 pub(crate) use copy::malformed_links;
 pub use copy::{
     BudgetSpent, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest, CopyScope,
@@ -1806,11 +1806,21 @@ impl Answer {
 
     /// The response for a verb that reads exactly one item from exactly one source.
     fn one<T, U>(
-        mut self,
+        self,
         source: &ResolvedSource,
         found: Result<Option<T>, SourceError>,
         qualify: impl FnOnce(T) -> U,
     ) -> Result<QueryResponse<U>, EngineError> {
+        Ok(self.one_response(source, found, qualify))
+    }
+
+    /// [`one`](Self::one), for a caller with no refusal to thread through.
+    fn one_response<T, U>(
+        mut self,
+        source: &ResolvedSource,
+        found: Result<Option<T>, SourceError>,
+        qualify: impl FnOnce(T) -> U,
+    ) -> QueryResponse<U> {
         self.plans.push(plan_for(source, Outcomes::default(), 1));
         let items = match found {
             Ok(Some(item)) => vec![qualify(item)],
@@ -1823,14 +1833,14 @@ impl Answer {
                 Vec::new()
             }
         };
-        Ok(QueryResponse {
+        QueryResponse {
             items,
             next: None,
             plan: QueryPlan {
                 per_source: merge_plans(self.plans),
             },
             errors: self.errors,
-        })
+        }
     }
 
     /// The response for a verb with nothing left to ask.

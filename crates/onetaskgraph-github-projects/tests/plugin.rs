@@ -1506,6 +1506,39 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .expect("an id this board holds");
         return json!({"node":{"__typename":item.typename}});
     }
+    if query == onetaskgraph_github_projects::graphql::ISSUE_DETAILS {
+        // Each alias is the one-item detail read of the id its own variable names, and the
+        // comments ride along only when the batch asked for them.
+        let mut answered = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::DETAIL_BATCH {
+            let id = variables[format!("id{slot}")]
+                .as_str()
+                .expect("every slot of a batch names an id")
+                .to_owned();
+            let node = detail_node(
+                &mut state,
+                &id,
+                &Value::Null,
+                variables["first"].as_u64().expect("first") as usize,
+                variables["comments"] == json!(true),
+                asked,
+            );
+            answered.insert(format!("i{slot}"), node);
+        }
+        return Value::Object(answered);
+    }
+    if query == onetaskgraph_github_projects::graphql::ISSUE_DETAIL {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let node = detail_node(
+            &mut state,
+            &id,
+            &variables["after"],
+            variables["first"].as_u64().expect("first") as usize,
+            true,
+            asked,
+        );
+        return json!({ "node": node });
+    }
     if query.contains("comments(first:$first,after:$after)") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         state.comment_reads.push(id.clone());
@@ -1515,25 +1548,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         if item.typename != "Issue" {
             return json!({"node":{"__typename":item.typename}});
         }
-        let offset = match &variables["after"] {
-            Value::Null => 0,
-            Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
-            other => panic!("after must be null or a string: {other}"),
-        };
-        let first = variables["first"].as_u64().expect("first") as usize;
-        let on = state
-            .comments
-            .iter()
-            .filter(|held| held.issue == id)
-            .collect::<Vec<_>>();
-        let end = (offset + first).min(on.len());
-        let nodes = on[offset.min(end)..end]
-            .iter()
-            .map(|held| held.as_node())
-            .collect::<Vec<_>>();
-        return json!({"node":{"__typename":"Issue","comments":{"nodes":nodes,
-            "pageInfo":{"hasNextPage":end < on.len(),
-                        "endCursor":(end > offset).then(|| end.to_string())}}}});
+        let comments = comment_connection(
+            &state,
+            &id,
+            &variables["after"],
+            variables["first"].as_u64().expect("first") as usize,
+        );
+        return json!({"node":{"__typename":"Issue","comments":comments}});
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         // GitHub declares both arguments `String!`, so a lookup arriving without them is
@@ -1939,6 +1960,57 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
 }
 
+/// One page of an issue's comments, oldest first, resumed from `after`.
+fn comment_connection(state: &State, id: &str, after: &Value, first: usize) -> Value {
+    let offset = match after {
+        Value::Null => 0,
+        Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
+        other => panic!("after must be null or a string: {other}"),
+    };
+    let on = state
+        .comments
+        .iter()
+        .filter(|held| held.issue == id)
+        .collect::<Vec<_>>();
+    let end = (offset + first).min(on.len());
+    let nodes = on[offset.min(end)..end]
+        .iter()
+        .map(|held| held.as_node())
+        .collect::<Vec<_>>();
+    json!({"nodes":nodes,"pageInfo":{"hasNextPage":end < on.len(),
+                                      "endCursor":(end > offset).then(|| end.to_string())}})
+}
+
+/// One node a detail read reaches: the issue as every node read answers it, with a page of its
+/// comments when they were asked for — and a draft or a pull request answered by its type
+/// alone, as GitHub answers a fragment on `Issue` about something that is not one.
+fn detail_node(
+    state: &mut State,
+    id: &str,
+    after: &Value,
+    first: usize,
+    comments: bool,
+    asked: Asked,
+) -> Value {
+    let Some(item) = state
+        .items
+        .iter()
+        .find(|item| item.content_id == id)
+        .cloned()
+    else {
+        return Value::Null;
+    };
+    if item.typename != "Issue" {
+        return json!({"__typename":item.typename});
+    }
+    let mut node = item.as_issue(&state.options(), asked);
+    if comments {
+        state.comment_reads.push(id.to_owned());
+        node["comments"] = comment_connection(state, id, after, first);
+    }
+    node
+}
+
 /// The calls a *session* makes that the source itself never does, answered by this board.
 ///
 /// One whole session of the live journey is the source's own reads and writes plus the
@@ -2264,6 +2336,8 @@ fn operation_name(query: &str) -> &str {
         "node" if query.contains("projectV2Items(") => "draft",
         "node" if query.contains("projectItems(first:$first") => "issueBoardItems",
         "node" if query.contains("blockedBy(") => "issueDependencies",
+        "node" if query.contains("...BoardIssue ... on Issue{comments(") => "issueDetail",
+        "i0" => "issueDetails",
         "node" if query.contains("comments(first:") => "issueComments",
         "node" if query.contains("on IssueComment{") => "comment",
         "node" => "issue",
@@ -12511,9 +12585,10 @@ async fn a_tasks_comments_are_its_issues_own_oldest_first_walked_in_pages_to_exh
             && !comment_ids(&rest.items).contains(&elsewhere),
         "another issue's comment was reported on this task"
     );
-    // One request per page: the caller's limit is the page GitHub is asked for, rather than
-    // every comment read and then cut.
-    assert_eq!(fixture.requests("issueComments"), 2);
+    // One request per page, the read of the issue included: the caller's limit is the page
+    // GitHub is asked for, rather than every comment read and then cut.
+    assert_eq!(fixture.requests("issueDetail"), 2);
+    assert_eq!(fixture.operations(), ["issueDetail", "issueDetail"]);
 
     // Every member is read off what GitHub said, the author's login and a deleted account's
     // `null` alike, and the body keeps its trailing newline.
@@ -12734,6 +12809,9 @@ async fn a_comment_call_naming_no_task_of_this_board_answers_none_and_changes_no
             "{operation} was sent for no task"
         );
     }
+    // The project and the document were answered from their reads above; the id naming
+    // nothing was asked once, by the one read a listing is.
+    assert_eq!(fixture.requests("issueDetail"), 1);
     assert_eq!(
         fixture.comments_on("I_plan")[0].body,
         "on the project's issue"
@@ -12868,7 +12946,7 @@ async fn a_comment_handed_an_author_is_refused_before_anything_is_sent() {
 #[tokio::test]
 async fn a_graphql_error_on_any_comment_call_reaches_the_caller_as_the_refusal_github_sent() {
     for operation in [
-        "issueComments",
+        "issueDetail",
         "comment",
         "addComment",
         "updateIssueComment",
@@ -12880,7 +12958,7 @@ async fn a_graphql_error_on_any_comment_call_reaches_the_caller_as_the_refusal_g
         let source = source(&fixture);
         let task = native("I_task");
         let outcome = match operation {
-            "issueComments" => source.task_comments(&task, &page(50)).await.map(|_| ()),
+            "issueDetail" => source.task_comments(&task, &page(50)).await.map(|_| ()),
             "addComment" => source
                 .add_comment(&task, &commenting("hello"))
                 .await
@@ -12914,6 +12992,13 @@ fn issue_read(id: &str) -> Value {
     json!({"data":{"node":Item::issue(id, "a step").as_issue(&json!([]), asked)}})
 }
 
+/// One issue answered the way a read of it with its comments answers, carrying `comments`.
+fn issue_with_comments(id: &str, comments: Value) -> Value {
+    let mut read = issue_read(id);
+    read["data"]["node"]["comments"] = comments;
+    read
+}
+
 /// Which comment verb a malformed-answer case drives.
 enum CommentCall {
     List,
@@ -12932,31 +13017,28 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
     let owned = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
                                        "issue":{"id":"I_1"}}}});
     let cases: Vec<(Vec<Value>, CommentCall, &str)> = vec![
+        // A listing is one read of the issue with its comments, so each of these is the issue
+        // answered with a comment connection this source cannot read.
         (
-            vec![
-                issue_read("I_1"),
-                json!({"data":{"node":{"__typename":"Issue"}}}),
-            ],
+            vec![issue_read("I_1")],
             CommentCall::List,
             "answered with no comments connection",
         ),
         (
-            vec![
-                issue_read("I_1"),
-                json!({"data":{"node":{"__typename":"Issue","comments":{
-                    "nodes":[{"id":"IC_1","body":"said","createdAt":"yesterday"}],
-                    "pageInfo":{"hasNextPage":false}}}}}),
-            ],
+            vec![issue_with_comments(
+                "I_1",
+                json!({"nodes":[{"id":"IC_1","body":"said","createdAt":"yesterday"}],
+                       "pageInfo":{"hasNextPage":false}}),
+            )],
             CommentCall::List,
             "createdAt is not a timestamp",
         ),
         (
-            vec![
-                issue_read("I_1"),
-                json!({"data":{"node":{"__typename":"Issue","comments":{
-                    "nodes":[comment("IC_1")],
-                    "pageInfo":{"hasNextPage":true,"endCursor":"C1"}}}}}),
-            ],
+            vec![issue_with_comments(
+                "I_1",
+                json!({"nodes":[comment("IC_1")],
+                       "pageInfo":{"hasNextPage":true,"endCursor":"C1"}}),
+            )],
             CommentCall::ListFrom("C1"),
             "cursor is empty or did not advance",
         ),
@@ -13052,10 +13134,10 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
         );
     }
 
-    // An issue that is gone by the time its comments are read, and a comment whose node is
+    // An issue that is not there when its comments are read, and a comment whose node is
     // gone by the time its issue is read, are no such task and no such comment.
     let gone = configured(
-        &sequence_server(vec![issue_read("I_1"), json!({"data":{"node":null}})]),
+        &sequence_server(vec![json!({"data":{"node":null}})]),
         json!({}),
     );
     assert!(
@@ -13085,7 +13167,7 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
 async fn comment_calls_are_paced_waited_out_and_named_like_every_other_call() {
     // A limiter catching any comment call names that call, rather than whatever came first.
     for (operation, doing) in [
-        ("issueComments", "reading a task's comments"),
+        ("issueDetail", "reading one issue with its comments"),
         ("comment", "reading which issue a comment is on"),
         ("addComment", "adding a comment"),
         ("updateIssueComment", "editing a comment"),
@@ -13097,7 +13179,7 @@ async fn comment_calls_are_paced_waited_out_and_named_like_every_other_call() {
         let source = paced(&fixture.endpoint, no_waiting());
         let task = native("I_task");
         let outcome = match operation {
-            "issueComments" => source.task_comments(&task, &page(50)).await.map(|_| ()),
+            "issueDetail" => source.task_comments(&task, &page(50)).await.map(|_| ()),
             "addComment" => source
                 .add_comment(&task, &commenting("hello"))
                 .await
