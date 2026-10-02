@@ -1377,6 +1377,7 @@ mod tests {
                 "sources fields",
                 "task list",
                 "task show",
+                "task show-many",
                 "task deps",
                 "task copy",
                 "task comment add",
