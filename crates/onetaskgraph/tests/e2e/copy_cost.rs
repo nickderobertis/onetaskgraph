@@ -817,7 +817,7 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
             let mut command = if typescript {
                 let mut command = std::process::Command::new("bun");
                 command.args(["-e", &format!(
-                    "import {{ OnetaskgraphClient }} from {}; const client = new OnetaskgraphClient({{binaryPath: process.env.DISPATCH_BINARY,cwd:process.cwd()}}); const id = process.env.DISPATCH_ITEM; if (id === undefined) throw new Error('missing fixture item'); const result = await client.taskShow(id, {{noComments:{}}}); console.log(JSON.stringify(result)); try {{ await client.taskShow('board:missing', {{noComments:true}}); throw new Error('missing task passed'); }} catch (error) {{ if (!(error instanceof Error) || !error.message.includes('no task')) throw error; }}",
+                    "import {{ OnetaskgraphClient }} from {}; delete process.env.HOME; const client = new OnetaskgraphClient({{binaryPath: process.env.DISPATCH_BINARY,cwd:process.cwd()}}); const id = process.env.DISPATCH_ITEM; if (id === undefined) throw new Error('missing fixture item'); const result = await client.taskShow(id, {{noComments:{}}}); console.log(JSON.stringify(result)); try {{ await client.taskShow('board:missing', {{noComments:true}}); throw new Error('missing task passed'); }} catch (error) {{ if (!(error instanceof Error) || !error.message.includes('no task')) throw error; }}",
                     serde_json::to_string(&workspace.join("sdks/typescript/src/client.ts")).unwrap(), !comments,
                 )]);
                 command
@@ -826,10 +826,13 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
                 command.args(["run", "--frozen", "--project"])
                     .arg(workspace.join("sdks/python"))
                     .args(["python", "-c", &format!(
-                        "import asyncio,os,json\nfrom onetaskgraph_sdk import Client,OnetaskgraphError\nasync def run():\n c=Client(os.environ['DISPATCH_BINARY'],cwd=os.getcwd())\n result=await c.task_show(id=os.environ['DISPATCH_ITEM'],no_comments={})\n print(result.model_dump_json(exclude_none=True))\n try:\n  await c.task_show(id='board:missing',no_comments=True)\n except OnetaskgraphError:\n  pass\n else:\n  raise AssertionError('missing task passed')\nasyncio.run(run())", if comments { "False" } else { "True" },
+                        "import asyncio,os,json\nfrom onetaskgraph_sdk import Client,OnetaskgraphError\nasync def run():\n os.environ.pop('HOME',None)\n c=Client(os.environ['DISPATCH_BINARY'],cwd=os.getcwd())\n result=await c.task_show(id=os.environ['DISPATCH_ITEM'],no_comments={})\n print(result.model_dump_json(exclude_none=True))\n try:\n  await c.task_show(id='board:missing',no_comments=True)\n except OnetaskgraphError:\n  pass\n else:\n  raise AssertionError('missing task passed')\nasyncio.run(run())", if comments { "False" } else { "True" },
                     )]);
                 command
             };
+            // `uv` and `bun` keep HOME: a version-manager shim resolves which runtime to
+            // run through it, and fails without it. Each script drops HOME itself before
+            // its SDK spawns the binary, so the binary runs exactly as the CLI calls above.
             for (key, _) in std::env::vars() {
                 if key.starts_with("ONETASKGRAPH_") {
                     command.env_remove(key);
@@ -838,7 +841,6 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
             let output = command
                 .current_dir(plan.sandbox.project())
                 .env("XDG_CONFIG_HOME", plan.sandbox.config_home())
-                .env_remove("HOME")
                 .env("DISPATCH_BINARY", env!("CARGO_BIN_EXE_onetaskgraph"))
                 .env("DISPATCH_ITEM", &id)
                 .output()
