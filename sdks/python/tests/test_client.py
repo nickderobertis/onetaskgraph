@@ -936,7 +936,7 @@ def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
                     "plugin": "linear",
                     "config": {
                         "team": "FIX",
-                        "api_key_env": "TEST_LINEAR_KEY",
+                        "api_key_env": "TEST_LINEAR_CREDENTIAL",
                         "endpoint": f"http://127.0.0.1:{server.server_port}/graphql",
                         "status_mapping": {"queued": "Queued", "done": "Shipped"},
                     },
@@ -947,7 +947,7 @@ def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
         client = Client(
             binary,
             cwd=tmp_path,
-            environment={**os.environ, "TEST_LINEAR_KEY": "fixture-key"},
+            environment={**os.environ, "TEST_LINEAR_CREDENTIAL": "fixture-key"},
         )
         report = run(client.sources_fields("team"))
         assert isinstance(report, WorkflowStatesReport)
