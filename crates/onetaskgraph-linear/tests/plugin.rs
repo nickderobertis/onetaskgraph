@@ -6946,6 +6946,70 @@ async fn the_follow_up_searches_are_narrowed_by_linear_and_confirmed_in_process(
     );
 }
 
+/// A metadata value and an origin holding a character an encoder may escape are not sent to
+/// Linear, so every issue of the team is a candidate; the confirmation over the parsed slot
+/// still returns exactly the issue whose slot holds both — spelled escaped, as an encoder that
+/// escapes `/` writes it — and keeps out a decoy carrying them as prose and one whose slot holds
+/// other values.
+#[tokio::test]
+async fn an_escapable_metadata_value_and_origin_are_decided_by_the_confirmation_alone() {
+    let issue = |id: &str, description: &str| {
+        serde_json::json!({"id":id,"identifier":identifier(id),"title":"Follow-up",
+            "description":description,"url":null,"createdAt":null,"updatedAt":null,
+            "project":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,
+            "labels":{"nodes":[]}})
+    };
+    let slot = |json: &str| format!("Prose.\n\n<!-- onetaskgraph.metadata\n{json}\n-->");
+    let nodes = vec![
+        issue(
+            "match",
+            &slot(r#"{"caller.site":"github.com\/a\/b","onetaskgraph.origin":"work:notes\/a.md"}"#),
+        ),
+        issue(
+            "prose",
+            "Mentions \"caller.site\":\"github.com/a/b\" and \"onetaskgraph.origin\":\"work:notes/a.md\".",
+        ),
+        issue(
+            "other",
+            &slot(r#"{"caller.site":"github.com/a/c","onetaskgraph.origin":"work:notes/b.md"}"#),
+        ),
+    ];
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"issues":{"nodes":nodes,
+        "pageInfo":{"hasNextPage":false,"endCursor":null}}})]);
+    let page = configured_source(&endpoint, serde_json::json!({}))
+        .query_tasks(
+            &TaskQuery {
+                metadata: vec![
+                    onetaskgraph_plugin_api::MetadataMatch::new(
+                        "caller.site",
+                        Vec::new(),
+                        "github.com/a/b",
+                    )
+                    .unwrap(),
+                ],
+                origin: Some("work:notes/a.md".into()),
+                ..TaskQuery::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|task| task.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["match"]
+    );
+    assert_eq!(
+        sent(&wire.recv().unwrap())["variables"]["filter"],
+        serde_json::json!({"team":{"key":{"eqIgnoreCase":"ENG"}}})
+    );
+}
+
 /// The scan for a copy of a cross-source far end asks for the issues of this source's team —
 /// and of its project, when it is scoped — whose description carries that far end as its
 /// origin, rather than walking the whole workspace; and an issue answering the scan whose
