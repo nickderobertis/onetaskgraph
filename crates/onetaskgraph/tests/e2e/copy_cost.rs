@@ -29,6 +29,21 @@ const RECORD: &str =
 /// Where the record's figures are explained, one table of which this test holds as well.
 const EXPLAINED: &str = include_str!("../../../onetaskgraph-github-projects/session-cost.md");
 
+/// The protocol document, whose GitHub Projects cost table states the rows this change moved
+/// or added and is held to the same figures as the plugin's own.
+const PROTOCOL: &str = include_str!("../../../../docs/plugin-protocol.md");
+
+/// The rows `docs/plugin-protocol.md` states.
+const PROTOCOL_ROWS: [&str; 7] = [
+    "new copy",
+    "copy --create",
+    "bound copy",
+    "comment",
+    "detail",
+    "batched detail",
+    "update",
+];
+
 /// What one measured command came to: the requests the board served for it, as a session and
 /// as the documents and variables themselves, and what the command reported.
 type Measured = (Session, Vec<(String, Value)>, Value);
@@ -975,6 +990,12 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
                 .contains(&format!("//! | {verb} | {expected} |")),
             "cost table: {verb}"
         );
+        if PROTOCOL_ROWS.contains(&verb) {
+            assert!(
+                PROTOCOL.contains(&format!("\n| {verb} | {expected} |")),
+                "docs/plugin-protocol.md cost table: {verb}"
+            );
+        }
         println!("{verb}: {} requests, {points} declared points", sent.len());
     }
     // The board's fields and the repository's id in one read, and the board filed on the
@@ -1081,6 +1102,11 @@ fn a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch() {
         include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
             .contains("//! | batched detail | ceil(n / DETAIL_BATCH) |"),
         "cost table: batched detail"
+    );
+    assert!(
+        PROTOCOL.contains("\n| batched detail | ceil(n / DETAIL_BATCH) |")
+            && PROTOCOL.contains(&format!("`DETAIL_BATCH` is {DETAIL_BATCH}")),
+        "docs/plugin-protocol.md cost table: batched detail"
     );
     assert!(
         include_str!("../../../onetaskgraph-github-projects/src/lib.rs")

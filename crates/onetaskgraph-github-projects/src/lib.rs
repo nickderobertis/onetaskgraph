@@ -179,8 +179,10 @@
 //!
 //! | The question | What is sent | What it costs |
 //! | --- | --- | --- |
-//! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)` — and, when that node is a board draft, [`graphql::DRAFT`] — the draft and the one board item it is | the item |
-//! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` | the board's fields |
+//! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)`, carrying the field definitions of the boards it sits on and the far ends of its `blockedBy`, which is what a write of it needs — and, when that node is a board draft, [`graphql::DRAFT`] — the draft and the one board item it is | the item |
+//! | one task with its first page of comments, for `task show` and a comment listing | [`graphql::ISSUE_DETAIL`] — the same `node(id:)` read with the issue's `comments` | the item and a page of its comments |
+//! | several tasks with their comments, for `task show-many` | [`graphql::ISSUE_DETAILS`] — [`DETAIL_BATCH`] aliased `node(id:)` fields per request | each item and a page of its comments |
+//! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` — or, for a create that needs the repository's id too, [`graphql::CREATION_CONTEXT`], both in one request | the board's fields |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
 //! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
@@ -189,19 +191,58 @@
 //! | every task, every document, every label, when nothing above narrows the question | [`graphql::BOARD`] — the board's own `items` — **and** [`graphql::SEARCH_ISSUES`], because neither enumeration of a board is complete alone; see [`GitHubProjectsSource::board`] | the board, twice over |
 //! | which board item one issue is, past the page that came with it | [`graphql::ISSUE_BOARD_ITEMS`] — that issue's own `projectItems` | one issue's memberships |
 //!
-//! The following standalone-ticket requests are pinned by the real CLI fixture journey
-//! `follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields`. They include the
-//! origin lookup and field/repository discovery a create needs. A bound re-copy changes
-//! status, priority, content and metadata; comment recount means a subsequent detail read.
-//! Each request here costs one declared point. A membership beyond the embedded page can
-//! additionally require the one-point membership recovery described above.
+//! The following standalone-ticket requests are pinned by the real CLI fixture journeys
+//! `follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields` and
+//! `a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch`, as request count
+//! equal to declared points equal to the row. They include the origin lookup and the
+//! field/repository discovery a create needs. A bound re-copy changes status, priority,
+//! content and metadata; comment recount means a subsequent detail read. Each request here
+//! costs one declared point. A membership beyond the embedded page can additionally require
+//! the one-point membership recovery described above, and a far end a write names that does
+//! not already block the item is read by its own id.
+//!
+//! **[`DETAIL_BATCH`] is 24**: the largest batch of [`graphql::ISSUE_DETAILS`] the node-count
+//! model prices at one point. Each aliased item is six of GitHub's aggregate, so 24 are 144,
+//! which rounds to one point, and 25 are 150, which rounds to two; `tests/point_cost.rs`
+//! holds both halves.
+//!
+//! **An existing item is written body last.** A bound re-copy and a `task update` send its
+//! board fields first — the `Status` option and the `Priority` together, in one request — then
+//! its parent and its `blockedBy`, and its title, body and state in one `updateIssue` last.
+//! GitHub runs no two requests as one, and runs a document's mutation fields in order without
+//! undoing an earlier field when a later one fails, so that order is what makes a write
+//! refused part-way leave the item's body, and every metadata key in it, exactly as it stood;
+//! the one piece of metadata written before the body, an origin a copy re-points, is put back
+//! when a later write is refused. `crates/onetaskgraph/tests/e2e/write_order.rs` refuses each
+//! of those writes in turn, whole and as one aliased field failing after the one before it.
+//!
+//! **Two facts about GitHub the write rows rest on, each read off GitHub's published schema
+//! artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-01 and pinned
+//! in `tests/fixtures/schema.graphql`:**
+//!
+//! - **A board is accepted at creation, so a new copy is 4 requests and 3 with `--create`.**
+//!   `CreateIssueInput.projectV2Ids: [ID!]` is declared there — "An array of Node IDs for
+//!   Projects V2 associated with this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])`.
+//!   A create sends the board in it and reads the board item that made off the payload's
+//!   `Issue.projectItems`, so it sends no [`graphql::ADD_TO_BOARD`]; an answer naming no item
+//!   on this board is filed with `addProjectV2ItemById` as before, which answers with the item
+//!   an issue already has. The board's fields and the repository's id are read together, in
+//!   [`graphql::CREATION_CONTEXT`], at the point the repository is known.
+//! - **A comment still reads its target first, so a comment is 2 requests.**
+//!   `AddCommentInput.subjectId: ID!` is declared there with
+//!   `@possibleTypes(concreteTypes: ["Issue", "PullRequest"], abstractType:
+//!   "IssueOrPullRequest")`. A board draft is no such subject and would be refused, but a
+//!   project's issue, a document's issue, an issue on no board of this source and a pull
+//!   request all are: GitHub writes the comment, so there is no refusal to map into "that is
+//!   not a task of this board". [`graphql::ISSUE`] before [`graphql::ADD_COMMENT`] is what
+//!   refuses those by name.
 //!
 //! | Verb | Requests / points | Documents |
 //! | --- | --- | --- |
 //! | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
 //! | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 //! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS, then UPDATE_ISSUE last |
-//! | comment | 2 | ISSUE, ADD_COMMENT |
+//! | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request (see below) |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 //! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
 //! | recount | 1 | ISSUE_DETAIL |
@@ -798,7 +839,7 @@ pub mod graphql {
     }
 
     /// One issue by its own node id, which is what a qualified id names here — with what a
-    /// write of it needs and the issue does not carry in [`board_issue!`]: the field
+    /// write of it needs and the issue does not carry in `board_issue!`: the field
     /// definitions of the boards it sits on, and the far ends of its `blockedBy`.
     ///
     /// Strongly consistent, unlike the search above: GitHub's issue search is an index and
@@ -809,7 +850,7 @@ pub mod graphql {
     /// reads it by its own id, and with them that one read answers everything the write
     /// needs: which option ids the board's `Status` and `Priority` fields hold — so no
     /// [`BOARD_FIELDS`] — and which issues block it, with each one's kind — so no
-    /// [`ISSUE_DEPENDENCIES`]. On [`board_issue!`] they would sit under the hundred-issue
+    /// [`ISSUE_DEPENDENCIES`]. On `board_issue!` they would sit under the hundred-issue
     /// pages of [`SEARCH_ISSUES`] and [`SUB_ISSUES`], multiplying both documents' price. Here
     /// they sit under one item, and this read is still one point.
     pub const ISSUE: &str = concat!(
@@ -1096,7 +1137,7 @@ pub mod graphql {
     /// comment listing read, in one request.
     ///
     /// [`ISSUE`] and [`ISSUE_COMMENTS`] in one document, rather than one then the other. The
-    /// comments are selected here and **not** on the shared [`board_issue!`] fragment, which
+    /// comments are selected here and **not** on the shared `board_issue!` fragment, which
     /// [`SEARCH_ISSUES`] and [`SUB_ISSUES`] nest under a page of a hundred issues: a comment
     /// connection there would multiply through both of those documents' price, and neither
     /// needs one.
@@ -6724,9 +6765,9 @@ impl GitHubProjectsSource {
         let column = column
             .filter(|(_, _, name)| existing.is_none_or(|item| item.option.as_ref() != Some(name)))
             .map(|(field, option, _)| (field, option));
-        // Creating an item here is several calls — `createIssue`, `addProjectV2ItemById`,
-        // then each board field, the parent and the dependencies — and GitHub can fail at
-        // any of them. Everything this source can refuse *before* the first of those is
+        // Creating an item here is several calls — `createIssue`, which files it on the
+        // board, then its board fields, the parent and the dependencies — and GitHub can fail
+        // at any of them. Everything this source can refuse *before* the first of those is
         // already checked above, so what is left is GitHub itself failing part way. When it
         // does over an item this call created, the issue is taken back: a write that
         // refused must not leave an item behind that nobody asked for, and one that does

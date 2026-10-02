@@ -767,10 +767,10 @@ them do; this is the inventory of what is owed, not a status board.
     already holds its value; a folder of Markdown changes by exactly the named entries, over
     the in-process boundary and the stdio plugin protocol alike, and a status named by a word
     of its own keeps that word there and lands on the mapped option on a GitHub board.
-64. On a GitHub board an update of an existing issue is one read of it, at most one
-    `updateIssue` carrying title, body and state together, one field write each for
-    `Status` and `Priority`, and the `blockedBy` difference; one naming only what the issue
-    holds is the read alone. Linear sends one `issueUpdate` of what differs.
+64. On a GitHub board an update of an existing issue is one read of it, the `Status` and
+    `Priority` field writes together in one request, the `blockedBy` difference, and last
+    one `updateIssue` carrying title, body and state together; one naming only what the
+    issue holds is the read alone. Linear sends one `issueUpdate` of what differs.
 65. An update keeps the tasks it delivers in step exactly as `task status set` does when it
     names a status or a `delivers` list — the dropped ticket released — and re-evaluates
     nothing when it names neither; an update naming no field, a key both set and removed, a
@@ -805,6 +805,12 @@ them do; this is the inventory of what is owed, not a status board.
     created; it is refused beside `--match-by` or `--recreate`, and for a task whose own
     link or origin already names an item at the destination, naming that item, writing
     nothing.
+72. A bound re-copy of a GitHub board task changing any of its title, body, status,
+    priority and metadata is one read of it and at most two writes, and applies each change
+    alone and all of them together; a `task update` and a bound
+    re-copy each have every write they make refused in turn — whole, and as one aliased
+    field failing after the one before it landed — and leave the item's body and metadata
+    exactly as they stood.
 
 ## What a copied document's references are pointed at
 

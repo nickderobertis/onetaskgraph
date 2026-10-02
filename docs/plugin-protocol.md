@@ -1513,6 +1513,15 @@ exposes the same choice as `task_show(id=ID, no_comments=True)`; TypeScript uses
 for the record and `Engine::task_detail` for the record with comments. The
 response shape and schema version are unchanged: comments were already optional.
 
+`task show-many ID... [--no-comments]` — `task_show_many(ids, no_comments=...)` in Python,
+`taskShowMany(ids, { noComments })` in TypeScript, `Engine::task_details` for a Rust caller —
+answers `{"details": [...]}`: one `TaskDetail` per id, in request order, each exactly what
+`task show ID --json` prints. An id that cannot be read carries its failure in its own
+`errors` and does not refuse the others; the command exits 4 exactly when some detail does.
+The engine asks each source for its ids together through `TaskSource::get_task_details`,
+which a plugin may override and which defaults to `get_task` and `task_comments` item by item.
+It is not a message of this protocol: a subprocess plugin answers it through those two.
+
 A GitHub Projects source reuses records resolved in its own instance for writes
 and reuses their identity for comments. Explicit item reads still fetch fresh
 records. A mutation invalidates its target's binding before sending, and a
@@ -1539,3 +1548,50 @@ beside `--match-by` and `--recreate`, which are ways of looking, and for a task 
 `onetaskgraph.copies` link or origin already names an item at the destination, naming that
 item. The copy report is the one any copy prints, and a created item answers this process's
 later reads exactly as any created item does.
+
+### GitHub Projects request costs
+
+Every request below is one GraphQL document priced at one point by the node-count model, so a
+row's requests are its points. `crates/onetaskgraph/tests/e2e/copy_cost.rs` pins each row
+against the requests the loopback board served, and holds this table and the one in the
+plugin's crate documentation to the same figures.
+
+| Verb | Requests / points | Documents |
+| --- | --- | --- |
+| new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
+| copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
+| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
+| comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
+| detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
+| batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time |
+| update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body and state) last |
+
+`DETAIL_BATCH` is 24, the largest batch of `ISSUE_DETAILS` the node-count model prices at one
+point: each aliased `node(id:)` item is six of GitHub's aggregate, so 24 come to 144, which
+rounds to one point, and 25 to 150, which rounds to two. The document is fixed-size aliased
+`node(id:)` fields rather than `nodes(ids:)`, which the model cannot see under.
+
+An existing item is written body last. A bound re-copy and a `task update` send its board
+fields first, then its parent and its `blockedBy`, and its title, body and state in one
+`updateIssue` last. GitHub runs no two requests as one, and runs a document's mutation fields
+in order without undoing an earlier field when a later one fails, so that order is what makes
+a write refused part-way leave the item's body and metadata exactly as they stood; an origin
+a copy re-points, the one metadata key written before the body, is put back when a later write
+is refused.
+
+Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
+(<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in
+`crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql`:
+
+- `createIssue` accepts the board at creation: `CreateIssueInput.projectV2Ids: [ID!]`, "An
+  array of Node IDs for Projects V2 associated with this issue". A create sends the board
+  there and reads its board item off the payload's `Issue.projectItems`, so it sends no
+  `addProjectV2ItemById` unless the answer names no item on the board.
+- A comment cannot skip its target's read: `AddCommentInput.subjectId` admits
+  `Issue` and `PullRequest`, so GitHub refuses a draft but accepts a project's issue, a
+  document's issue, an issue on no board and a pull request alike. There is no refusal to map
+  into "that is not a task of this board", so the target is read first.
+
+No field or repository id is kept past one command: the store holds no work data outside a
+plugin, and an option id kept between runs would write the wrong `Status` once `sources
+fields --apply` re-mints the options.

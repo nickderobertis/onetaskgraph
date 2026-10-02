@@ -638,10 +638,10 @@ quantities — requests and worst-case node count, **not points**:
 | ------------------ | ----------------------: | -------------------------: | ------------------: |
 | **requests**       |                       9 |                          3 |                   1 |
 | **mutations**      |                       3 |                          2 |                   0 |
-| **node count**     |                    1209 |                        203 |                 203 |
+| **node count**     |                    1209 |                        456 |                 456 |
 
-(e) is one read of the issue, one `updateIssue` carrying the body — its visible content and
-its metadata slot together — and one write of the `Status` field. It reads no project item,
+(e) is one read of the issue, one write of the `Status` field, and one `updateIssue` carrying
+the body — its visible content and its metadata slot together — last. It reads no project item,
 no dependency connection and no board, and it never writes the origin field, because an
 update is of an item whose origin already is what it is. (f) is the read alone: nothing
 differs, so nothing is sent. The test holds both to the record, and asserts on its own that
@@ -654,8 +654,9 @@ wrote and the `delivers` it held before, which is everything the engine reports 
 three requests are all the command sends for a task that delivers nothing. A task that does
 deliver something adds the reads and writes of keeping each delivered task in step, exactly
 as `task status set` does. A terminal status adds its close to the same `updateIssue`, and an
-open status crossing from closed reopens in it; a priority that changes is one field write
-more; edges that differ cost the `blockedBy` difference and the reads that find it.
+open status crossing from closed reopens in it; a priority that changes rides in the same field
+request as the status option; edges that differ cost the `blockedBy` difference, and a far end
+not already blocking the item is read by its own id.
 
 ## A task copy that follows the link its last copy recorded, and what that moved
 
@@ -875,3 +876,55 @@ remove the same two requests, 8/1,009 to 6/806 and 9/22,121 to 7/21,918.
 New task creation (j) combines two field writes, 7 requests to 6, with nodes
 unchanged. Other copy rows are unchanged. The (g)/(h) comparison table above is
 updated to these figures, as its existing drift test requires.
+
+## Batched reads, folded creation and body-last writes, and what they moved
+
+This change cuts what a follow-up run's reads and writes cost, measured on the same loopback
+board in the same two quantities — requests and worst-case node count, **not points** — and
+pinned row by row, as requests equal to declared points equal to the cost table, by
+`follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields` and
+`a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch`:
+
+| Verb | Before | After |
+| --- | ---: | ---: |
+| new copy | 6 | 4 |
+| copy --create | — | 3 |
+| bound copy | 5 | 3 |
+| task show / task comment list (detail) | 2 | 1 |
+| task show-many of `n` items (batched detail) | 2n | ceil(n / 24) |
+| task update naming title, body, metadata, status and priority | 4, or 5 with no `Status` or `Priority` value held | 3 |
+| comment | 2 | 2 |
+
+What moved each:
+
+- **Detail.** `task show` and `task comment list` read the item and its first page of comments
+  in one `ISSUE_DETAIL` request, and `task show-many` reads 24 of them per `ISSUE_DETAILS`
+  request — fixed-size aliased `node(id:)` fields, each priced as the one-item read is, so the
+  batch is one point. The comment connection is selected on those two documents and not on the
+  shared fragment, which the hundred-issue search and sub-issue pages carry.
+- **A new copy.** The board's fields and the repository's id are read together in one
+  `CREATION_CONTEXT` request at the point the repository is known, and `createIssue` files the
+  issue on the board through `projectV2Ids` and answers with its board item, so neither
+  `REPOSITORY` nor `addProjectV2ItemById` is sent. `--create` drops the origin lookup as well.
+- **A bound copy and an update.** The read of an item by its own id now carries the field
+  definitions of the boards it sits on and the far ends of its `blockedBy`, which takes that
+  read from 203 worst-case nodes to 456 at the same one point and removes the `BOARD_FIELDS`
+  and `ISSUE_DEPENDENCIES` reads that followed it. The `Status` option and the `Priority` go in
+  one field request, and the content goes last in one `updateIssue`.
+- **A comment** stays two requests: GitHub accepts a comment on any issue or pull request, so
+  only reading the target first refuses one that is not a task of this board.
+
+The copy golden moves (a) from 56 requests and 29,600 nodes to 44 and 29,633 — eleven
+`addProjectV2ItemById` and the separate repository read gone, the creates' payloads counting
+three membership nodes each — and (b) from 24/34,983 to 13/35,566, its eleven dependency reads
+answered by the richer issue reads. The member copies (c)/(d) go from 7/1,006 to 4/912, the
+targeted updates (e)/(f) keep their requests at 456 nodes a read, the linked re-copy (g) goes
+from 6/806 to 4/912, the origin-found one (h) from 7/21,918 to 6/21,971, (i) from 4/21,718 to
+3/21,771, and the new task copy (j) from 6/965 to 4/968. The (g)/(h) table above is updated to
+these figures, as its drift test requires.
+
+The session golden moves from 117 requests and 236,850 nodes to 112 and 246,264: six
+`addProjectV2ItemById` and one repository read are gone, the richer issue reads add 1,518
+nodes over the six of them, and the reconciliation probes three more read documents —
+`ISSUE_DETAIL`, `ISSUE_DETAILS` and `CREATION_CONTEXT` — at 303, 7,272 and 50 nodes.
+
