@@ -747,6 +747,9 @@ export class OnetaskgraphClient {
       members?: boolean;
     } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
+    if (options.members !== undefined && typeof options.members !== "boolean") {
+      throw new TypeError("taskList: members must be a boolean");
+    }
     const args: string[] = [];
     addFilters(args, options);
     if (options.project !== undefined) args.push("--project", options.project);

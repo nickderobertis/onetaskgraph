@@ -1340,6 +1340,9 @@ test("sources route answers from configuration, and a home reads with its member
     ]);
     const both = await routeClient.taskList({ project: "notes:goal", members: true });
     expect(both.items.map((task) => task.id.split(":")[0]).sort()).toEqual(["notes", "team"]);
+    expect(() =>
+      routeClient.taskList({ project: "notes:goal", members: JSON.parse('"false"') }),
+    ).toThrow("members must be a boolean");
     const own = await routeClient.taskList({ project: "notes:goal" });
     expect(own.items.map((task) => task.id.split(":")[0])).toEqual(["notes"]);
   } finally {

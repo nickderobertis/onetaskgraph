@@ -2154,3 +2154,39 @@ fn what_a_routed_copy_spent_includes_the_source_it_was_routed_to() {
         "the board's requests are counted: {report:#}"
     );
 }
+
+#[test]
+fn an_entry_matches_by_any_of_its_patterns_and_a_star_stands_for_one_whole_segment() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        NOTES: {
+            "plugin": "local-md",
+            "config": {"root": sandbox.subdirectory(NOTES)},
+            "routes": [{
+                "repositories": ["github.com/petsinc/*", "gitlab.com/petsinc/*"],
+                "to": TEAM,
+            }],
+        },
+        TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
+    })));
+    let route = |repositories: &[&str]| {
+        let mut arguments = vec!["sources", "route", NOTES];
+        for repository in repositories {
+            arguments.extend(["--repository", repository]);
+        }
+        answer(&sandbox, &arguments)["route"].clone()
+    };
+    assert_eq!(
+        route(&["github.com/petsinc/api", "gitlab.com/petsinc/web"]),
+        json!(0),
+        "two repositories, each matching a different pattern of one entry"
+    );
+    assert_eq!(route(&["gitlab.com/petsinc/web"]), json!(0));
+    for unrouted in [
+        "github.com/petsinc/api/sub",
+        "github.com/petsincorporated/api",
+        "bitbucket.org/petsinc/api",
+    ] {
+        assert_eq!(route(&[unrouted]), Value::Null, "{unrouted} stays");
+    }
+}
