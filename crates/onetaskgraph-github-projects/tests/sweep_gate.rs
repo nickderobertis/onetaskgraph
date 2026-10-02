@@ -323,9 +323,10 @@ struct Board {
     /// issue: the issue id, how the answer fails to arrive, and whether the delete landed
     /// behind it.
     unanswered: Vec<(String, NoAnswer, bool)>,
-    /// Issue ids whose next delete this board answers without errors and without the payload
-    /// confirming it, deleting nothing — each consumed by that delete.
-    unconfirmed: Vec<String>,
+    /// Issue deletes this board answers without errors and without a payload confirming them,
+    /// deleting nothing: the issue id and the `deleteIssue` payload sent, each consumed by
+    /// the next delete of that issue.
+    unconfirmed: Vec<(String, Value)>,
     /// How this board answers every read of an issue's presence, when not truthfully.
     presence_fault: Option<PresenceFault>,
 }
@@ -514,13 +515,13 @@ impl Drive {
             .push((id.to_owned(), how, lands));
     }
 
-    /// Answer the next delete of issue `id` with an empty payload, deleting nothing.
-    fn leave_issue_delete_unconfirmed(&self, id: &str) {
+    /// Answer the next delete of issue `id` with `payload` as `deleteIssue`, deleting nothing.
+    fn leave_issue_delete_unconfirmed(&self, id: &str, payload: Value) {
         STANDIN
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .unconfirmed
-            .push(id.to_owned());
+            .push((id.to_owned(), payload));
     }
 
     /// Answer every read of an issue's presence with `fault` rather than the truth.
@@ -985,29 +986,32 @@ async fn an_issue_delete_refused_outright_still_fails_the_cleanup() {
 
 #[tokio::test]
 async fn an_issue_delete_answered_without_confirmation_is_settled_by_the_repository() {
-    // An answer with no errors and no `deleteIssue` payload is no evidence the issue went:
-    // this one is still there, so the cleanup fails naming it rather than reporting success.
-    let drive = Drive::plant(
-        vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-    );
-    drive.leave_issue_delete_unconfirmed("I_mine");
-    let _in_flight = session_in_flight();
+    // An answer with no errors and no payload naming a repository is no evidence the issue
+    // went: this one is still there, so the cleanup fails naming it rather than reporting
+    // success.
+    for payload in [Value::Null, json!({"repository":{"id":""}})] {
+        let drive = Drive::plant(
+            vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        drive.leave_issue_delete_unconfirmed("I_mine", payload.clone());
+        let _in_flight = session_in_flight();
 
-    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
-        .await
-        .expect_err("an unconfirmed delete of an issue still there fails the cleanup");
+        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+            .await
+            .expect_err("an unconfirmed delete of an issue still there fails the cleanup");
 
-    assert!(
-        refusal.contains("issue I_mine is still in the repository")
-            && refusal.contains("without confirming it"),
-        "{refusal}"
-    );
-    assert!(drive.holds_issue("I_mine"));
-    assert_eq!(drive.refused(), vec!["I_mine".to_owned()]);
+        assert!(
+            refusal.contains("issue I_mine is still in the repository")
+                && refusal.contains("without confirming it"),
+            "{payload}: {refusal}"
+        );
+        assert!(drive.holds_issue("I_mine"), "{payload}");
+        assert_eq!(drive.refused(), vec!["I_mine".to_owned()], "{payload}");
+    }
 }
 
 #[tokio::test]
@@ -1170,10 +1174,14 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
                 NoAnswer::CutOff => (CUT_OFF, "{\"data\":".to_owned()),
             };
         }
-        if let Some(at) = board.unconfirmed.iter().position(|held| *held == issue) {
-            board.unconfirmed.remove(at);
+        if let Some(at) = board
+            .unconfirmed
+            .iter()
+            .position(|(held, _)| *held == issue)
+        {
+            let (_, payload) = board.unconfirmed.remove(at);
             board.refused.push(issue);
-            return answered(json!({"deleteIssue":null}));
+            return answered(json!({ "deleteIssue": payload }));
         }
         if board.immortal(&issue) {
             board.refused.push(issue.clone());

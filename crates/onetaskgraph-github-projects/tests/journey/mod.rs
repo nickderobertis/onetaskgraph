@@ -782,8 +782,8 @@ async fn remove_live_artifacts(
 /// decides is the repository: [`issue_is_gone`] reads the issue back, and an issue that is no
 /// longer there is the outcome this delete was asking for, whichever attempt took it.
 ///
-/// An answer counts as the delete only when its payload says so — `deleteIssue` naming the
-/// repository the issue left; one that comes back without errors and without that is no
+/// An answer counts as the delete only when its payload says so — `deleteIssue` naming, by a
+/// non-empty id, the repository the issue left; one that comes back without errors and without that is no
 /// evidence either way, so the repository decides it too.
 ///
 /// A refusal GitHub answered on the *first* attempt fails the cleanup at once, as it always
@@ -805,7 +805,8 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
             Ok(response)
                 if response
                     .pointer("/data/deleteIssue/repository/id")
-                    .is_some_and(Value::is_string) =>
+                    .and_then(Value::as_str)
+                    .is_some_and(|repository| !repository.is_empty()) =>
             {
                 return Ok(());
             }
