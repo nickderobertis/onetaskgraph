@@ -731,6 +731,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         destination: SourceName::new("work")?,
         match_by: None,
         recreate: false,
+        create: false,
         dry_run: false,
     }).await?;
 

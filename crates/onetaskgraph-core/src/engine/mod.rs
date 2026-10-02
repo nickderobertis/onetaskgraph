@@ -55,8 +55,8 @@ use resume::{Resume, StreamKind};
 pub use comment::{CommentList, DeletedComment, TaskDetail, TaskDetails};
 pub(crate) use copy::malformed_links;
 pub use copy::{
-    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyOutcome, CopyReport, CopyRequest, CopyScope,
-    CopyVia, MatchBy, NoCounterpart, Spent,
+    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest,
+    CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use local::ProjectSelector;
@@ -754,7 +754,7 @@ pub enum EngineError {
     )]
     CreateWith {
         /// The flag given beside `--create`.
-        flag: String,
+        flag: CopyLookup,
     },
 
     /// `--create` named an item that itself records a counterpart at the destination.
@@ -769,9 +769,9 @@ pub enum EngineError {
     )]
     CreateCarried {
         /// The item being copied.
-        item: String,
+        item: GlobalId,
         /// The destination item its link or its origin names.
-        carrier: String,
+        carrier: GlobalId,
     },
 
     /// A member copy named a task that is not a member of the project being copied.

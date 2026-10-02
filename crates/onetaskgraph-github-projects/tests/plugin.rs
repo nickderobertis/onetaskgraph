@@ -16298,3 +16298,122 @@ async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
         ]
     );
 }
+
+/// A batch GitHub refuses because one id resolves to no node at all is read again one item
+/// at a time, so that id answers as missing and the rest as themselves; any other refusal is
+/// every id's answer.
+#[tokio::test]
+async fn a_batch_refused_for_an_id_naming_no_node_is_read_again_one_item_at_a_time() {
+    let unresolvable = json!({"errors":[{
+        "message":"Could not resolve to a node with the global id of 'garbage'"}]});
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let endpoint = sequence_server(vec![
+        unresolvable.clone(),
+        issue_with_comments("I_1", no_comments),
+        unresolvable,
+    ]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details(&[native("I_1"), native("garbage")], Some(&page(50)))
+        .await;
+    assert_eq!(read.len(), 2);
+    match &read[0] {
+        Ok(Some(detail)) => {
+            assert_eq!(detail.task.id, native("I_1"));
+            assert!(
+                matches!(&detail.comments, Some(Ok(Some(comments))) if comments.items.is_empty()),
+                "{detail:?}"
+            );
+        }
+        other => panic!("I_1 is read on its own: {other:?}"),
+    }
+    assert!(matches!(read[1], Ok(None)), "{:?}", read[1]);
+
+    let endpoint = sequence_server(vec![json!({"errors":[{
+        "message":"Something went wrong while executing your query"}]})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details(&[native("I_1"), native("I_2")], None)
+        .await;
+    assert_eq!(read.len(), 2);
+    for answered in &read {
+        assert!(
+            matches!(answered, Err(SourceError::Refused { message })
+                if message.contains("Something went wrong")),
+            "{answered:?}"
+        );
+    }
+}
+
+/// A batch answer is held to the ids it was asked about: an alias left out, and an alias
+/// answering about another issue, are each refused as malformed rather than read as missing
+/// or reported under the id asked for.
+#[tokio::test]
+async fn a_batch_answer_missing_an_item_or_naming_another_is_refused_as_malformed() {
+    let other = issue_read("I_2")["data"]["node"].clone();
+    let endpoint = sequence_server(vec![json!({"data":{"i0": other}})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details(&[native("I_1"), native("I_3")], None)
+        .await;
+    assert!(
+        matches!(&read[0], Err(SourceError::Malformed { message })
+            if message.contains("answered the read of I_1 with issue I_2")),
+        "{:?}",
+        read[0]
+    );
+    assert!(
+        matches!(&read[1], Err(SourceError::Malformed { message })
+            if message.contains("no item for I_3")),
+        "{:?}",
+        read[1]
+    );
+    // And one read whose answer carries no node at all is refused, not read as missing.
+    let endpoint = sequence_server(vec![json!({"data":{}})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details(&[native("I_1")], Some(&page(50)))
+        .await;
+    assert!(
+        matches!(&read[0], Err(SourceError::Malformed { message }) if message.contains("no node")),
+        "{:?}",
+        read[0]
+    );
+}
+
+/// The origin field is the one piece of an existing item's metadata written before its body,
+/// so a write refused after it moved puts it back: the item's metadata is as it stood.
+#[tokio::test]
+async fn a_write_refused_after_it_moved_the_origin_puts_the_origin_back() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one")
+            .status("Todo")
+            .carrying("plans:OLD"),
+    ]);
+    fixture.refuse("updateIssue");
+    let mut item = task("I_1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    item.metadata
+        .insert("onetaskgraph.origin".to_owned(), json!("plans:NEW"));
+    item.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let error = source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(native("I_1")),
+            item,
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the content update is refused");
+    assert!(refusal(error).contains("updateIssue is refused"));
+    let origins = fixture
+        .seen()
+        .iter()
+        .filter(|call| {
+            call[0] == "updateProjectV2ItemFieldValue" && call[1]["fieldId"] == "FIELD_origin"
+        })
+        .map(|call| call[1]["value"]["text"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        origins,
+        [json!("plans:NEW"), json!("plans:OLD")],
+        "the origin moved with the board fields, then was put back"
+    );
+    let held = fixture.item("I_1");
+    assert_eq!(held.origin.as_deref(), Some("plans:OLD"));
+    assert_eq!(held.title, "one");
+}

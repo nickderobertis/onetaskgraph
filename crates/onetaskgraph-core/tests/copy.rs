@@ -3924,7 +3924,7 @@ async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a
             panic!("--create with {flag} must refuse");
         };
         assert!(
-            matches!(&refused, EngineError::CreateWith { flag: named } if named == flag),
+            matches!(&refused, EngineError::CreateWith { flag: named } if named.to_string() == flag),
             "{refused:?}"
         );
         assert!(refused.to_string().contains("next:"), "{refused}");
@@ -3947,7 +3947,7 @@ async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a
         };
         assert!(
             matches!(&refused, EngineError::CreateCarried { item: named, carrier: held }
-                if named == item && held == carrier),
+                if named.to_string() == item && held.to_string() == carrier),
             "{refused:?}"
         );
         assert!(refused.to_string().contains(carrier), "{refused}");

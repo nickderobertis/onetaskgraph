@@ -87,9 +87,35 @@ pub struct CopyRequest {
     /// [`match_by`](Self::match_by) and [`recreate`](Self::recreate), which are ways of
     /// looking, and for an item that itself records a counterpart at the destination — a
     /// link or an origin naming it — which is a carrier the caller's assertion overlooked.
+    // llmlint: ignore[invalid_states_unrepresentable] One enum of the ways a copy finds its
+    // target would make `create` beside `match_by` or `recreate` unrepresentable, but only by
+    // replacing `match_by` and `recreate`, which every Rust caller of this request sets by name
+    // and the command line maps flag for flag — rewriting what each existing caller writes.
+    // `create` is one more field beside them, as `recreate` and `dry_run` were, and the one
+    // combination it makes possible that means nothing is refused by `Engine::copy`, as
+    // `EngineError::CreateWith`, before anything is read.
     pub create: bool,
     /// Whether to perform every read and no write.
     pub dry_run: bool,
+}
+
+/// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
+/// the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyLookup {
+    /// [`CopyRequest::match_by`], `--match-by`.
+    MatchBy,
+    /// [`CopyRequest::recreate`], `--recreate`.
+    Recreate,
+}
+
+impl std::fmt::Display for CopyLookup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MatchBy => "--match-by",
+            Self::Recreate => "--recreate",
+        })
+    }
 }
 
 /// The items one copy names: at least one, because a copy naming none is not a copy.
@@ -1066,13 +1092,11 @@ impl Engine {
         // two say how to look.
         if request.create {
             for (given, flag) in [
-                (request.match_by.is_some(), "--match-by"),
-                (request.recreate, "--recreate"),
+                (request.match_by.is_some(), CopyLookup::MatchBy),
+                (request.recreate, CopyLookup::Recreate),
             ] {
                 if given {
-                    return Err(EngineError::CreateWith {
-                        flag: flag.to_owned(),
-                    });
+                    return Err(EngineError::CreateWith { flag });
                 }
             }
         }
@@ -2352,8 +2376,8 @@ impl Engine {
             });
             if let Some(carrier) = carrier {
                 return Err(EngineError::CreateCarried {
-                    item: id.to_string(),
-                    carrier: carrier.to_string(),
+                    item: id.clone(),
+                    carrier,
                 });
             }
             return Ok((Target::Create, None));

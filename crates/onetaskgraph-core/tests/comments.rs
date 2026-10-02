@@ -13,8 +13,8 @@ use onetaskgraph_core::{
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencySupport, Direction,
     Health, Label, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskSource, WriteSupport,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -565,4 +565,171 @@ async fn a_task_detail_reports_a_comment_read_its_source_refuses_as_that_sources
             .to_string()
             .contains("which has no comments")
     );
+}
+
+/// Several tasks read at once answer each id exactly as reading it alone does — every comment
+/// page walked, a source with none answered without them — and an id that alone would be
+/// refused or answered with nothing carries why in its own detail instead.
+#[tokio::test]
+async fn task_details_answer_each_id_as_one_task_detail_does_in_the_order_asked() {
+    let engine = engine();
+    let ids = [
+        id("memory:T-2"),
+        id("memory:T-1"),
+        id("bare:T-1"),
+        id("broken:T-1"),
+        id("memory:T-9"),
+        id("nowhere:T-1"),
+    ];
+    let details = engine.task_details(&ids, true).await.details;
+    assert_eq!(details.len(), ids.len());
+    for (at, id) in ids.iter().enumerate().take(4) {
+        assert_eq!(
+            details[at],
+            engine.task_detail(id).await.expect("a configured source"),
+            "{id} reads as it does alone"
+        );
+    }
+    // Five comments over pages of two, walked to the end from the page the read carried.
+    assert_eq!(
+        details[1].comments.as_ref().map(Vec::len),
+        Some(5),
+        "{:?}",
+        details[1]
+    );
+    assert!(details[2].comments.is_none(), "a source with no comments");
+    assert!(
+        !details[3].response.errors.is_empty(),
+        "a source that never built"
+    );
+    let missing = &details[4].response;
+    assert!(missing.items.is_empty());
+    assert!(
+        missing.errors[0]
+            .error
+            .to_string()
+            .contains("no task with the id memory:T-9"),
+        "{missing:?}"
+    );
+    let unknown = &details[5].response;
+    assert_eq!(unknown.errors[0].source, name("nowhere"));
+    assert!(
+        unknown.errors[0]
+            .error
+            .to_string()
+            .contains("no source named \"nowhere\""),
+        "{unknown:?}"
+    );
+
+    // Without comments, each is the bare task read.
+    let records = engine.task_details(&ids[..2], false).await.details;
+    for (detail, id) in records.iter().zip(&ids) {
+        assert_eq!(detail.comments, None);
+        assert_eq!(
+            detail.response,
+            engine.task(id).await.expect("a configured source")
+        );
+    }
+}
+
+/// A source that answers a detail read with the wrong number of details: its own reads are
+/// the in-memory source's, and its batch drops the last id's answer.
+struct ShortDetails {
+    inner: Box<dyn TaskSource>,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for ShortDetails {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::TaskDetailRead>, SourceError>> {
+        let mut read = self.inner.get_task_details(ids, comments).await;
+        read.pop();
+        read
+    }
+}
+
+#[tokio::test]
+async fn a_source_answering_the_wrong_number_of_details_fails_every_id_it_was_asked() {
+    let inner = onetaskgraph_in_memory::Plugin
+        .build(
+            &name("short"),
+            &json!({"tasks": [task_value("T-1"), task_value("T-2")]}),
+            &NoSecrets,
+        )
+        .expect("the in-memory plugin builds");
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name("short"),
+            Box::new(ShortDetails { inner }),
+        ))],
+        vec![name("short")],
+    );
+    let details = engine
+        .task_details(&[id("short:T-1"), id("short:T-2")], false)
+        .await
+        .details;
+    assert_eq!(
+        details.len(),
+        2,
+        "one detail per id, whatever the source answered"
+    );
+    for detail in &details {
+        assert!(detail.response.items.is_empty(), "{detail:?}");
+        assert!(
+            matches!(&detail.response.errors[0].error, SourceError::Malformed { message }
+                if message.contains("answered 1 task details for the 2 ids")),
+            "{detail:?}"
+        );
+    }
 }

@@ -7099,8 +7099,12 @@ impl GitHubProjectsSource {
             Err(error) if unresolvable_node(&error) => return Ok(None),
             Err(error) => return Err(error),
         };
-        self.detail_of(id, data.get("node").unwrap_or(&Value::Null), true, after)
-            .await
+        // `node` is null for an id that names nothing, and absent only from an answer this
+        // source cannot read — never the same thing.
+        let node = data.get("node").ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub answered the read of {} with no node", id.0),
+        })?;
+        self.detail_of(id, node, true, after).await
     }
 
     /// Several tasks, each with the first page of its comments when `comments` is set, read
@@ -7136,8 +7140,18 @@ impl GitHubProjectsSource {
             {
                 Ok(data) => {
                     for (slot, id) in batch.iter().enumerate() {
-                        let node = data.get(format!("i{slot}")).unwrap_or(&Value::Null);
-                        read.push(self.detail_of(id, node, comments.is_some(), None).await);
+                        // Every alias asked for is answered, null for an id naming nothing;
+                        // one missing is an answer this source cannot read.
+                        let read_one = match data.get(format!("i{slot}")) {
+                            Some(node) => self.detail_of(id, node, comments.is_some(), None).await,
+                            None => Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered a batch read with no item for {}",
+                                    id.0
+                                ),
+                            }),
+                        };
+                        read.push(read_one);
                     }
                 }
                 Err(error) if unresolvable_node(&error) => {
@@ -7180,6 +7194,21 @@ impl GitHubProjectsSource {
             return Ok(None);
         }
         let draft = optional_str(node, "__typename")? == Some("DraftIssue");
+        // An issue answered under one id is that id's, or the answer is not one this source
+        // can report: reporting another issue's task and comments under the qualified id asked
+        // for would be the one wrong answer here. A draft's own read checks the same.
+        if !draft
+            && optional_str(node, "__typename")? == Some("Issue")
+            && required_str(node, "id")? != id.0
+        {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub answered the read of {} with issue {}",
+                    id.0,
+                    required_str(node, "id")?
+                ),
+            });
+        }
         let item = if draft {
             self.draft_by_id(id).await?
         } else {
