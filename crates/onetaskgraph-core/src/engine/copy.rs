@@ -756,13 +756,9 @@ impl Journal {
     /// item written twice — once as it lands, once when its edges are repaired — was only
     /// ever one thing before this copy started, and that is what undoing it restores.
     fn record(&mut self, entry: Undo) {
-        if self
-            .entries
-            .iter()
-            .any(|held| {
-                held.at() == entry.at() && held.kind() == entry.kind() && held.id() == entry.id()
-            })
-        {
+        if self.entries.iter().any(|held| {
+            held.at() == entry.at() && held.kind() == entry.kind() && held.id() == entry.id()
+        }) {
             return;
         }
         self.entries.push(entry);
@@ -1255,17 +1251,10 @@ impl Engine {
                     .await?
             }
             CopyScope::Members(named) => {
-                let (projects, unrecorded) = self
-                    .named_members(request, named, &mut running)
-                    .await?;
-                self.copy_projects(
-                    request,
-                    &projects,
-                    &unrecorded,
-                    &mut running,
-                    journal,
-                )
-                .await?
+                let (projects, unrecorded) =
+                    self.named_members(request, named, &mut running).await?;
+                self.copy_projects(request, &projects, &unrecorded, &mut running, journal)
+                    .await?
             }
         };
         let references = running.references;
@@ -1705,9 +1694,8 @@ impl Engine {
                 continue;
             }
             let there = self.writable(&elsewhere)?;
-            let named = link_of(&held.metadata, &elsewhere).or_else(|| {
-                origin_of(&held.metadata).filter(|origin| origin.source == elsewhere)
-            });
+            let named = link_of(&held.metadata, &elsewhere)
+                .or_else(|| origin_of(&held.metadata).filter(|origin| origin.source == elsewhere));
             let Some(named) = named else {
                 continue;
             };
@@ -1956,6 +1944,7 @@ impl Engine {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
@@ -2444,12 +2433,7 @@ impl Engine {
                 &running.resolvable,
                 &running.counterparts,
             );
-            let delivers = delivers_of(
-                item,
-                &item.to,
-                &running.resolvable,
-                &running.counterparts,
-            );
+            let delivers = delivers_of(item, &item.to, &running.resolvable, &running.counterparts);
             if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
                 unresolved.push(index);
             }
@@ -2542,10 +2526,9 @@ impl Engine {
                 self.document_placement(request, &read.source, document, running)
                     .await?
             }
-            Item::Project(project) => {
-                self.routes
-                    .place(&request.destination, &project.repositories)
-            }
+            Item::Project(project) => self
+                .routes
+                .place(&request.destination, &project.repositories),
         };
         self.aim(request, read, placement).await
     }
@@ -2647,8 +2630,7 @@ impl Engine {
                     .map(|_| link),
                 None => None,
             };
-            let originated = match origin_of(metadata).filter(|origin| origin.source == elsewhere)
-            {
+            let originated = match origin_of(metadata).filter(|origin| origin.source == elsewhere) {
                 Some(origin) => self
                     .prior(there, item.level(), &origin.native)
                     .await?
@@ -3057,11 +3039,7 @@ impl Engine {
         for reachable in self.routes.reachable(&request.destination) {
             let there = self.writable(&reachable)?;
             if let Some(found) = self
-                .scan(
-                    there,
-                    Level::Project,
-                    &Wanted::Origin(project.to_string()),
-                )
+                .scan(there, Level::Project, &Wanted::Origin(project.to_string()))
                 .await?
             {
                 return Ok(Some(GlobalId::new(reachable, found)));
@@ -3095,7 +3073,9 @@ impl Engine {
             else {
                 return Ok(None);
             };
-            running.homes.insert(key.clone(), Home::of(home.clone(), &held));
+            running
+                .homes
+                .insert(key.clone(), Home::of(home.clone(), &held));
         }
         let named = running.homes[&key]
             .members
@@ -3152,7 +3132,9 @@ impl Engine {
             .get_mut(&key)
             .expect("the home was recorded above");
         entry.members.retain(|member| &member.source != to);
-        entry.members.push(GlobalId::new(to.clone(), created.clone()));
+        entry
+            .members
+            .push(GlobalId::new(to.clone(), created.clone()));
         entry.grew = true;
         Ok(Some(created))
     }
@@ -4253,12 +4235,14 @@ fn mapped_delivers(
             }
             let landed = written.get(&far.to_string())?;
             let native = &landed.native;
-            Some(if &landed.source != destination || native.as_str().contains(':') {
-                TaskRef::qualified(&landed.source, native)
-            } else {
-                TaskRef::new(native.as_str())
-                    .unwrap_or_else(|_| TaskRef::qualified(destination, native))
-            })
+            Some(
+                if &landed.source != destination || native.as_str().contains(':') {
+                    TaskRef::qualified(&landed.source, native)
+                } else {
+                    TaskRef::new(native.as_str())
+                        .unwrap_or_else(|_| TaskRef::qualified(destination, native))
+                },
+            )
         })
         .collect()
 }

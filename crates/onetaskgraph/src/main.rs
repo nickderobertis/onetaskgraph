@@ -177,6 +177,19 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         }
 
         Command::Sources {
+            command: SourcesCommand::Route(args),
+        } => {
+            // Configuration alone: no engine is built, so no source is constructed or asked.
+            let route = source_route(loaded, &args.source, &args.repository)?;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Text => render::source_route(&route),
+                OutputFormat::Json => json(&route, "the route")?,
+            };
+            emit(out, rendered.trim_end(), "the route")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Sources {
             command: SourcesCommand::StatusOptions(args),
         } => {
             let (name, config) = github_projects_source(loaded, &args.source, "status-options")?;
@@ -222,10 +235,22 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: TaskCommand::List(args),
         } => {
             let engine = engine(loaded);
+            let project = selector(&engine, args.project.as_deref(), args.no_project);
+            if args.members && !matches!(project, ProjectSelector::Qualified(_)) {
+                return Err(Failure::decided(
+                    "members-unqualified",
+                    format!(
+                        "--members reads the member projects one home names, so --project \
+                         has to name that home by its qualified id, and {:?} is not one\n\
+                         next: write --project <source>:<project-id>.",
+                        args.project.as_deref().unwrap_or_default()
+                    ),
+                ));
+            }
             let request = TaskRequest {
                 sources: selection(&args.selection)?,
                 filters: filters(&args.filters)?,
-                project: selector(&engine, args.project.as_deref(), args.no_project),
+                project,
                 priorities: args
                     .priority
                     .iter()
@@ -234,6 +259,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 commented_since: args.commented_since,
                 metadata: args.metadata.clone(),
                 origin: args.origin.clone(),
+                include_members: args.members,
                 paging: paging(loaded, &args.paging)?,
             };
             let response = engine
@@ -672,6 +698,34 @@ fn show_rendered<T>(
 /// The configured `github-projects` source a guarded board setup verb names, and its
 /// configuration, refused with `verb` as the failure's kind when there is no such source or it
 /// is not a `github-projects` one.
+/// Where an item with `repositories`, written to the source named `source`, would land.
+fn source_route(
+    loaded: &Loaded,
+    source: &str,
+    repositories: &[onetaskgraph_plugin_api::Repository],
+) -> Result<onetaskgraph_core::config::SourceRoute, Failure> {
+    let unknown = || {
+        Failure::from(&onetaskgraph_core::EngineError::UnknownSource {
+            name: source.to_owned(),
+            configured: loaded
+                .config
+                .sources()
+                .keys()
+                .map(SourceName::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        })
+    };
+    let name = SourceName::try_from(source.to_owned()).map_err(|_| unknown())?;
+    if !loaded.config.sources().contains_key(&name) {
+        return Err(unknown());
+    }
+    Ok(onetaskgraph_core::config::SourceRoute {
+        placement: loaded.config.routes().place(&name, repositories),
+        source: name,
+    })
+}
+
 fn github_projects_source(
     loaded: &Loaded,
     source: &str,

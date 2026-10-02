@@ -11,13 +11,15 @@
 //! here. A second spelling of `in-progress` in this file would be a second place for it
 //! to drift from the one a filter compares against.
 
+use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
     CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, MetadataSet, Predicate,
     Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing, SourceState,
     TaskContentSet, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, Document, Label, Location, Priority, Project, Support, Task, TaskRef,
+    Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project, Support,
+    Task, TaskRef,
 };
 use onetaskgraph_status_options::{FieldOutcome, FieldsReport, StatusOptionsReport};
 use serde::Serialize;
@@ -406,13 +408,21 @@ pub fn copied(report: &CopyReport) -> String {
             .items
             .iter()
             .map(|outcome| {
-                vec![
+                let mut row = vec![
                     outcome.source.to_string(),
                     outcome
                         .destination()
                         .map_or_else(|| "-".to_owned(), ToString::to_string),
                     outcome.action.name(),
-                ]
+                ];
+                // Only a routed copy places anything, so only its rows say where and why.
+                if let Some(placed) = &outcome.placed {
+                    row.push(match placed.route {
+                        Some(index) => format!("in {} by route {index}", placed.destination),
+                        None => format!("in {} by no route", placed.destination),
+                    });
+                }
+                row
             })
             .collect::<Vec<_>>(),
     );
@@ -668,6 +678,26 @@ pub fn project_detail(project: &Qualified<Project>) -> String {
             format!("{} ({})", wire(&item.status.category), item.status.name),
         ),
     ];
+    // A home names its member projects, and a member its home: the plan they make together
+    // is read with `task list --project <home> --members`.
+    let members: Vec<&str> = item
+        .metadata
+        .get(MetadataKey::MEMBERS_KEY)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    if !members.is_empty() {
+        fields.push(("members", members.join(", ")));
+    }
+    if let Some(home) = item
+        .metadata
+        .get(MetadataKey::MEMBER_OF_KEY)
+        .and_then(serde_json::Value::as_str)
+    {
+        fields.push(("member of", home.to_owned()));
+    }
     detail(
         &mut fields,
         &item.labels,
@@ -675,6 +705,24 @@ pub fn project_detail(project: &Qualified<Project>) -> String {
         item.location.as_ref(),
     );
     body(&fields, item.content.as_deref())
+}
+
+/// Where `sources route` says an item would land, and which route sent it there.
+pub fn source_route(route: &SourceRoute) -> String {
+    columns(&[
+        vec!["source:".to_owned(), route.source.to_string()],
+        vec![
+            "destination:".to_owned(),
+            route.placement.destination.to_string(),
+        ],
+        vec![
+            "route:".to_owned(),
+            route
+                .placement
+                .route
+                .map_or_else(|| "none".to_owned(), |index| index.to_string()),
+        ],
+    ])
 }
 
 /// The fields a task, a project and a document share below their own.

@@ -217,6 +217,7 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
         commented_since: None,
         metadata: Vec::new(),
         origin: None,
+        include_members: false,
         paging: one_page(),
     };
     let projects = ProjectRequest {
@@ -321,6 +322,7 @@ async fn paging_re_asks_rather_than_serving_a_page_it_kept() {
         commented_since: None,
         metadata: Vec::new(),
         origin: None,
+        include_members: false,
         paging: Paging {
             limit: NonZeroU32::new(1).expect("1 is not zero"),
             token: None,

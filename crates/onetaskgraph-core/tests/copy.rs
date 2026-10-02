@@ -109,6 +109,7 @@ async fn listed(engine: &Engine, source: &str) -> Vec<String> {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1069,6 +1070,7 @@ async fn held(engine: &Engine, source: &str) -> Vec<String> {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
+            include_members: false,
             paging: paging(),
         })
         .await
