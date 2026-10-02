@@ -198,7 +198,8 @@
 //!
 //! | Verb | Requests / points | Documents |
 //! | --- | --- | --- |
-//! | new copy | 6 | ORIGIN_LOOKUP, BOARD_FIELDS, REPOSITORY, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
+//! | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
+//! | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 //! | bound copy | 5 | ISSUE, BOARD_FIELDS, ISSUE_DEPENDENCIES, UPDATE_ISSUE, UPDATE_FIELDS |
 //! | comment | 2 | ISSUE, ADD_COMMENT |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
@@ -962,6 +963,26 @@ pub mod graphql {
     );
     /// Resolves the configured repository's node id, which creating an issue requires.
     pub const REPOSITORY: &str = r#"query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id nameWithOwner}}"#;
+    /// What creating an issue needs and has not read yet: the board's own id and field
+    /// definitions, as [`BOARD_FIELDS`] reads them, and the node id of the repository the
+    /// issue is created in, as [`REPOSITORY`] reads it — in one request.
+    ///
+    /// Sent at the point a create knows which repository it is for, when neither half is
+    /// already known to this process; a create needing only one of them sends that one's own
+    /// document. Neither half is kept past the process: a field's option ids are re-minted by
+    /// `sources fields --apply`, so a copy of them held between runs would write the wrong
+    /// status.
+    pub const CREATION_CONTEXT: &str = r#"query($owner:String!,$number:Int!,$nestedFirst:Int!,$repositoryOwner:String!,$repositoryName:String!){
+      boardFields:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name}
+          }pageInfo{hasNextPage}}
+        }}
+      }
+      repository(owner:$repositoryOwner,name:$repositoryName){id nameWithOwner}
+    }"#;
     /// Reads both dependency directions for one issue, with each far end's own kind — and
     /// the issue's own body, which is where an edge to another source is recorded, so that
     /// half of a dependency read needs no second read of the issue or of the board.
@@ -970,9 +991,14 @@ pub mod graphql {
         blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
         blocking(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
       }}} fragment Related on Issue{id title body parent{id} subIssuesSummary{total}}"#;
-    /// Creates one issue in the configured repository.
-    pub const CREATE_ISSUE: &str =
-        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id number url}}}"#;
+    /// Creates one issue, filed on the board at creation through
+    /// `CreateIssueInput.projectV2Ids`, and answers with the board item that filing made.
+    ///
+    /// The issue's `projectItems` page is what names that item, so the field writes that
+    /// follow need no [`ADD_TO_BOARD`]. It is the one mutation here that selects a
+    /// connection, bounded at `$boardItems` — a new issue sits on the board it was filed on
+    /// and no other — and one item resolved once is still GitHub's one-point minimum.
+    pub const CREATE_ISSUE: &str = r#"mutation($input:CreateIssueInput!,$boardItems:Int!){createIssue(input:$input){issue{id number url projectItems(first:$boardItems){nodes{id project{id number}}}}}}"#;
     /// Puts an existing issue on the configured board.
     pub const ADD_TO_BOARD: &str = r#"mutation($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}"#;
     /// Updates an issue's visible fields and its open or closed state in one call.
@@ -1144,7 +1170,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 32] = [
+    pub const DOCUMENTS: [(&str, &str); 33] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1157,6 +1183,10 @@ pub mod graphql {
         (BOARD_FIELDS, "reading the board's fields"),
         (DRAFT, "reading one draft"),
         (REPOSITORY, "reading the destination repository"),
+        (
+            CREATION_CONTEXT,
+            "reading the board's fields and the destination repository",
+        ),
         (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
         (CREATE_ISSUE, "creating an issue"),
         (ADD_TO_BOARD, "adding an issue to the board"),
@@ -4051,6 +4081,12 @@ impl GitHubProjectsSource {
                        "nestedFirst":NESTED_PAGE_SIZE}),
             )
             .await?;
+        self.fields_read(&data)
+    }
+
+    /// The board's id and fields out of an answer carrying the `boardFields` root, held for
+    /// the rest of this command.
+    fn fields_read(&self, data: &Value) -> Result<BoardFields, SourceError> {
         let board = data
             .pointer("/boardFields/projectV2")
             .filter(|value| !value.is_null())
@@ -4066,6 +4102,33 @@ impl GitHubProjectsSource {
         };
         *self.fields_cache()? = Some(read.clone());
         Ok(read)
+    }
+
+    /// Read what creating an issue in `repository` needs and this command has not read yet —
+    /// the board's fields and the repository's node id — in one request when it needs both.
+    ///
+    /// When either is already known this sends nothing, and the other is read by its own
+    /// document where it is asked for, so no create reads anything twice.
+    async fn creation_context(
+        &self,
+        repository: &RepositoryTarget,
+        incoming: &Incoming<'_>,
+    ) -> Result<(), SourceError> {
+        let fields_known = self.board_cache()?.is_some() || self.fields_cache()?.is_some();
+        if fields_known || self.repository_cache()?.contains_key(repository) {
+            return Ok(());
+        }
+        let data = self
+            .graphql(
+                graphql::CREATION_CONTEXT,
+                json!({"owner":self.owner,"number":self.project_number,
+                       "nestedFirst":NESTED_PAGE_SIZE,"repositoryOwner":repository.owner,
+                       "repositoryName":repository.name}),
+            )
+            .await?;
+        self.fields_read(&data)?;
+        self.repository_read(&data, repository, incoming)?;
+        Ok(())
     }
 
     /// This process's own view of the board's fields, or the refusal a poisoned lock is.
@@ -6319,6 +6382,17 @@ impl GitHubProjectsSource {
                 json!({"owner":repository.owner,"name":repository.name}),
             )
             .await?;
+        self.repository_read(&data, repository, incoming)
+    }
+
+    /// The repository's node id out of an answer carrying the `repository` root, held for
+    /// the rest of this command, or the refusal naming the item that cannot be created in it.
+    fn repository_read(
+        &self,
+        data: &Value,
+        repository: &RepositoryTarget,
+        incoming: &Incoming<'_>,
+    ) -> Result<String, SourceError> {
         let node = data
             .get("repository")
             .filter(|value| !value.is_null())
@@ -6390,6 +6464,17 @@ impl GitHubProjectsSource {
             None => None,
         };
         let existing = existing.as_ref();
+        // An existing issue is never moved; a new one is created where the rule says — and
+        // knowing where is what lets the board's fields and that repository's id be read
+        // together, before anything below needs either.
+        let creation_target = match existing {
+            Some(_) => None,
+            None => {
+                let target = self.creation_target(incoming).await?;
+                self.creation_context(&target, incoming).await?;
+                Some(target)
+            }
+        };
         let board = self
             .fields_for(
                 existing,
@@ -6444,18 +6529,16 @@ impl GitHubProjectsSource {
             }
         }
 
-        // An existing issue is never moved; a new one is created where the rule says. The
-        // repository the issue really lives in is what the slot below is written against,
-        // so a single entry that is where the issue is created travels as no key at all,
-        // and the read side derives it back from the issue.
-        let (own_repository, creation_target) = match existing {
-            Some(item) => (item.own_repository.clone(), None),
-            None => {
-                let target = self.creation_target(incoming).await?;
-                let origin = Repository::try_from(target.origin())
-                    .map_err(|message| SourceError::Config { message })?;
-                (Some(origin), Some(target))
-            }
+        // The repository the issue really lives in is what the slot below is written against,
+        // so a single entry that is where the issue is created travels as no key at all, and
+        // the read side derives it back from the issue.
+        let own_repository = match (existing, &creation_target) {
+            (Some(item), _) => item.own_repository.clone(),
+            (None, Some(target)) => Some(
+                Repository::try_from(target.origin())
+                    .map_err(|message| SourceError::Config { message })?,
+            ),
+            (None, None) => None,
         };
         let (native, fallback) = self
             .partition_edges(incoming.written.kind(), content_kind, depends_on)
@@ -7106,10 +7189,11 @@ impl GitHubProjectsSource {
     /// Creates one issue, files it on the board, and reports what a read of it would say:
     /// its content id, its board item id, and the web address GitHub gave it.
     ///
-    /// Two calls rather than one: `createIssue` needs a repository and answers with an
-    /// issue that is on no board, and `addProjectV2ItemById` is what puts it there. A
-    /// terminal status is not written here: `finish_write` selects its option first and
-    /// closes the issue after, so a close never lands on an item whose board cannot show it.
+    /// One call: `createIssue` takes the board in `projectV2Ids` and answers with the board
+    /// item that made, so the item is on the board as it is created. `addProjectV2ItemById`
+    /// is sent only for an answer that names no item on this board. A terminal status is not
+    /// written here: `finish_write` selects its option first and closes the issue after, so a
+    /// close never lands on an item whose board cannot show it.
     ///
     /// The address and the number come back here because this is the only place either is
     /// known before GitHub's own board read catches up — an item this run created answers
@@ -7127,8 +7211,9 @@ impl GitHubProjectsSource {
             .graphql(
                 graphql::CREATE_ISSUE,
                 json!({"input":{
-                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body
-                }}),
+                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body,
+                    "projectV2Ids":[board_id]
+                },"boardItems":BOARD_ITEMS_PAGE_SIZE}),
             )
             .await?;
         let created = data
@@ -7157,6 +7242,29 @@ impl GitHubProjectsSource {
                 return Err(error);
             }
         };
+        // Filed at creation, the issue names its board item on the page that came back with
+        // it. One that does not was created and not filed, and is filed here instead —
+        // `addProjectV2ItemById` answers with the item an issue already has on a board, so
+        // filing one GitHub did file is not a second item either.
+        let filed = created
+            .pointer("/projectItems/nodes")
+            .and_then(Value::as_array)
+            .and_then(|nodes| {
+                nodes.iter().find(|node| {
+                    node.pointer("/project/id").and_then(Value::as_str) == Some(board_id)
+                })
+            })
+            .and_then(|node| node.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        if let Some(item_id) = filed {
+            return Ok(Landed {
+                content_id,
+                item_id,
+                url,
+                number,
+            });
+        }
         let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,

@@ -538,6 +538,10 @@ struct State {
     /// up. Nothing else can produce that state, and it is not one a board is ever *seen*
     /// in — which is exactly why it needs a fixture to reach it.
     creation_reports_number: bool,
+    /// Whether `createIssue` files the issue on the board its `projectV2Ids` names, as GitHub
+    /// documents it does — `false` models an answer that named no item there, which is what
+    /// the source files with `addProjectV2ItemById` instead.
+    creation_files_on_board: bool,
     /// Which identifier the next guarded snapshot returns blank, for boundary validation.
     blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
@@ -1101,6 +1105,12 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
+    /// Answer every `createIssue` from here on without filing the issue on the board its
+    /// `projectV2Ids` names, so it lands on no board until `addProjectV2ItemById` files it.
+    fn creation_files_nothing(&self) {
+        self.state.lock().unwrap().creation_files_on_board = false;
+    }
+
     /// Answer every `createIssue` from here on with a `number` that is not an integer.
     fn creation_reports_an_unreadable_number(&self) {
         self.state.lock().unwrap().creation_number_is_unreadable = true;
@@ -1133,6 +1143,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
         creation_reports_number: true,
+        creation_files_on_board: true,
         blank_status_snapshot_id: None,
         origin_field,
         status_field,
@@ -1612,10 +1623,24 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .then_some(created.number)
                 .map_or(Value::Null, |number| json!(number))
         };
-        state.pending.push(created);
+        // Filed at creation on the board `projectV2Ids` names, unless a case has made this
+        // board answer the way it would if GitHub had not.
+        let filed = state.creation_files_on_board
+            && input["projectV2Ids"]
+                .as_array()
+                .is_some_and(|boards| boards.iter().any(|board| board == "PVT_board"));
+        let memberships = if filed {
+            let nodes = json!([{"id":created.item_id,"project":{"id":"PVT_board","number":7}}]);
+            state.items.push(created);
+            nodes
+        } else {
+            state.pending.push(created);
+            json!([])
+        };
         // GitHub answers the creating mutation with the issue's own address and number,
         // which is the only place a run learns either before its board read catches up.
-        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}")});
+        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}"),
+            "projectItems":{"nodes":memberships}});
         if !number.is_null() {
             issue["number"] = number;
         }
@@ -1861,6 +1886,25 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return json!({"node":{"state":item.state,"stateReason":item.state_reason,
             "projectItems":{"nodes":[{"project":{"id":"PVT_board"},
                 "fieldValues":item.field_values(&state.options())}]}}});
+    }
+    if query == onetaskgraph_github_projects::graphql::CREATION_CONTEXT {
+        // The board's fields and the repository's id, each as its own document answers it.
+        let slug = format!(
+            "{}/{}",
+            variables["repositoryOwner"]
+                .as_str()
+                .expect("a repository owner"),
+            variables["repositoryName"]
+                .as_str()
+                .expect("a repository name")
+        );
+        let repository = if variables["repositoryName"] == "missing" {
+            Value::Null
+        } else {
+            json!({"id":repository_node_id(&slug),"nameWithOwner":slug})
+        };
+        return json!({"boardFields":{"projectV2":{"id":"PVT_board","fields":state.fields()}},
+                      "repository":repository});
     }
     if query.contains("boardFields:repositoryOwner(login:$owner)") {
         assert_eq!(variables["owner"], json!("octo-org"));
@@ -5143,11 +5187,22 @@ async fn each_distinct_repository_is_looked_up_once_per_command() {
             .await
             .expect("a task of the plan");
     }
+    // The configured repository is read with the board's fields by the first create, and
+    // each of the other three on its own the first time an item names it.
     assert_eq!(
         fixture.requests("repository"),
-        4,
-        "acme/work, acme/one, acme/two and acme/three, each once: {:?}",
+        3,
+        "acme/one, acme/two and acme/three, each once: {:?}",
         fixture.documents()
+    );
+    assert_eq!(
+        fixture
+            .documents()
+            .iter()
+            .filter(|document| *document == onetaskgraph_github_projects::graphql::CREATION_CONTEXT)
+            .count(),
+        1,
+        "acme/work, once, with the board's fields"
     );
     assert_eq!(
         created_in(&fixture),
@@ -7853,7 +7908,8 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
     let complete = json!({"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"FIELD_status",
                                     "name":"Status","options":[{"id":"OPT_todo","name":"Todo"}]}],
                           "pageInfo":{"hasNextPage":false}});
-    let empty_board = fields_json("B", complete);
+    // What a create reads first: the board's fields with the repository's id.
+    let empty_board = with_repository(fields_json("B", complete));
     for (bodies, expected) in [
         (
             vec![
@@ -7862,6 +7918,8 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
             ],
             "returned no issue",
         ),
+        // Answered with no item on the board, the issue is filed by hand — and that answer
+        // naming no item is refused too.
         (
             vec![
                 empty_board.clone(),
@@ -7871,11 +7929,6 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
             "returned no project item",
         ),
     ] {
-        let mut bodies = bodies;
-        bodies.insert(
-            1,
-            json!({"data":{"repository":{"id":"R","nameWithOwner":"acme/work"}}}),
-        );
         let endpoint = sequence_server(bodies);
         let message = refusal(
             configured(&endpoint, json!({}))
@@ -7913,6 +7966,12 @@ fn issue_item(content: Value) -> Value {
 
 fn fields_json(id: &str, fields: Value) -> Value {
     json!({"data":{"boardFields":{"projectV2":{"id":id,"fields":fields}}}})
+}
+/// [`fields_json`] answered with the repository a create is for beside it, as the one read a
+/// create makes of what it needs answers.
+fn with_repository(mut fields: Value) -> Value {
+    fields["data"]["repository"] = json!({"id":"R","nameWithOwner":"acme/work"});
+    fields
 }
 /// One issue's own node read, placing it on the configured board and holding no field
 /// values — so what a write needs of the board's fields comes from [`fields_json`].
@@ -8126,8 +8185,7 @@ async fn a_status_or_origin_field_of_the_wrong_shape_is_refused_by_name() {
         ),
     ] {
         let endpoint = sequence_server(vec![
-            fields_json("PVT_board", fields),
-            json!({"data":{"repository":{"id":"R","nameWithOwner":"acme/work"}}}),
+            with_repository(fields_json("PVT_board", fields)),
             json!({"data":{"createIssue":{"issue":{"id":"I_new"}}}}),
             json!({"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_new"}}}}),
         ]);
@@ -9126,10 +9184,15 @@ async fn six_related_writes_read_the_boards_fields_and_repository_once_for_the_c
         Vec::<String>::new(),
         "a copy listed the board to write items it names by id"
     );
+    // Read once, beside the board's fields, by the first issue created; never on its own.
     assert_eq!(
         fixture.requests("repository"),
-        1,
+        0,
         "the destination repository was re-resolved per issue created"
+    );
+    assert_eq!(
+        fixture.documents()[0],
+        onetaskgraph_github_projects::graphql::CREATION_CONTEXT
     );
     assert_eq!(
         fixture.item(&plan.0).sub_issues,
@@ -10029,9 +10092,10 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
         .await
         .expect("one task");
     let gaps = fixture.mutation_gaps();
+    // `createIssue`, which files it on the board, and its board fields.
     assert!(
-        gaps.len() == 2,
-        "a created task is several mutations, and this saw {}",
+        gaps.len() == 1,
+        "a created task is two mutations, and this saw {}",
         gaps.len() + 1
     );
     let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
@@ -10097,9 +10161,10 @@ async fn the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_
         .await
         .expect("one task");
     let gaps = fixture.mutation_gaps();
+    // `createIssue`, which files it on the board, and its board fields.
     assert!(
-        gaps.len() == 2,
-        "a created task is several mutations, and this saw {}",
+        gaps.len() == 1,
+        "a created task is two mutations, and this saw {}",
         gaps.len() + 1
     );
     // No tolerance is subtracted here and none is needed: the ordering that makes this
@@ -10163,7 +10228,7 @@ async fn a_copy_of_a_project_of_many_tasks_is_not_refused_by_a_board_enforcing_t
     );
     assert_eq!(fixture.item(&plan.0).sub_issues, 8);
     assert!(
-        fixture.mutation_gaps().len() >= 30,
+        fixture.mutation_gaps().len() >= 20,
         "a project of eight tasks is far more than a handful of mutations"
     );
 }
@@ -10553,7 +10618,10 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
     // an operator needs named is whichever was refused, not whichever happens to come
     // first. Each is refused on its own, by name, against a board that answers the rest.
     let cases: Vec<(&str, &str)> = vec![
-        ("repository", "reading the destination repository"),
+        (
+            "boardFields",
+            "reading the board's fields and the destination repository",
+        ),
         ("createIssue", "creating an issue"),
         ("addProjectV2ItemById", "adding an issue to the board"),
         ("updateProjectV2ItemFieldValue", "writing a board field"),
@@ -10562,6 +10630,10 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
     ];
     for (operation, doing) in cases {
         let fixture = board(vec![Item::issue("I_far", "the far end").status("Todo")]);
+        if operation == "addProjectV2ItemById" {
+            // Sent only for a create GitHub answered without filing it on the board.
+            fixture.creation_files_nothing();
+        }
         fixture.script_for(operation, vec![Refusal::secondary_forbidden()]);
         let source = paced(&fixture.endpoint, no_waiting());
         let plan = source
@@ -10571,8 +10643,9 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
                 status(StatusCategory::InProgress, "In Progress"),
             )))
             .await;
-        // A project write is `repository`, `createIssue`, `addProjectV2ItemById` and the
-        // board fields; the two dependency operations need an item with a far end, so
+        // A project write is the board's fields with the repository, `createIssue` — filing
+        // it on the board, or not and then `addProjectV2ItemById` — and the board fields; the
+        // two dependency operations need an item with a far end, so
         // those reach the refusal through the task written under the project instead.
         let error = match plan {
             Err(error) => error,
@@ -16077,4 +16150,110 @@ async fn a_write_after_a_stale_search_preserves_this_processs_newer_metadata() {
     assert_eq!(slot["team.keep"], "new");
     assert_eq!(slot["team.next"], "also new");
     assert_eq!(fixture.requests("issue"), 1);
+}
+
+/// A create files its issue on the board as `createIssue` makes it, and reads the board's
+/// fields and the repository's id in one request before it: three requests where there were
+/// five, and `addProjectV2ItemById` only when GitHub answered with no item on this board.
+#[tokio::test]
+async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
+    let fixture = board(vec![]);
+    let writer = source(&fixture);
+    let created = writer
+        .write_task(&write(task(
+            "T-1",
+            "a step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a create");
+    assert_eq!(
+        fixture.operations(),
+        [
+            "boardFields",
+            "createIssue",
+            "updateProjectV2ItemFieldValue"
+        ],
+        "{:#?}",
+        fixture.documents()
+    );
+    assert_eq!(
+        fixture.documents()[0],
+        onetaskgraph_github_projects::graphql::CREATION_CONTEXT
+    );
+    let created_input = fixture
+        .seen()
+        .into_iter()
+        .find(|call| call[0] == "createIssue")
+        .expect("createIssue was sent");
+    assert_eq!(created_input[1]["projectV2Ids"], json!(["PVT_board"]));
+    assert!(fixture.holds(&created.0), "the issue is on the board");
+    assert_eq!(
+        writer
+            .get_task(&created)
+            .await
+            .unwrap()
+            .map(|task| task.title),
+        Some("a step".to_owned())
+    );
+
+    // A second create in the same command knows both halves already and reads neither.
+    let before = fixture.operations().len();
+    writer
+        .write_task(&write(task(
+            "T-2",
+            "a second",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a second create");
+    assert_eq!(
+        fixture.operations()[before..],
+        ["createIssue", "updateProjectV2ItemFieldValue"]
+    );
+
+    // Answered without an item on this board, the issue is filed on it by hand.
+    let fixture = board(vec![]);
+    fixture.creation_files_nothing();
+    let created = source(&fixture)
+        .write_task(&write(task(
+            "T-1",
+            "a step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a create filed by hand");
+    assert_eq!(
+        fixture.operations(),
+        [
+            "boardFields",
+            "createIssue",
+            "addProjectV2ItemById",
+            "updateProjectV2ItemFieldValue"
+        ]
+    );
+    assert!(fixture.holds(&created.0));
+
+    // And a filing GitHub refuses then takes the issue back, so nothing is left on no board.
+    let fixture = board(vec![]);
+    fixture.creation_files_nothing();
+    fixture.refuse("addProjectV2ItemById");
+    let refused = source(&fixture)
+        .write_task(&write(task(
+            "T-1",
+            "a step",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a refused filing fails the write");
+    assert!(refusal(refused).contains("addProjectV2ItemById"));
+    assert_eq!(
+        fixture.operations(),
+        [
+            "boardFields",
+            "createIssue",
+            "addProjectV2ItemById",
+            "deleteIssue"
+        ]
+    );
 }

@@ -861,6 +861,20 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
     std::fs::write(&path, body).unwrap();
     let (_, new_calls, report) =
         plan.measure(&["task", "copy", "plans:T-0", "--to", "board", "--json"]);
+    std::fs::write(
+        plan.root.join("tasks/T-1.md"),
+        "---\ntitle: Asserted new\nstatus: Todo\npriority: high\n---\nnew\n",
+    )
+    .unwrap();
+    let (_, create_calls, _) = plan.measure(&[
+        "task",
+        "copy",
+        "plans:T-1",
+        "--to",
+        "board",
+        "--create",
+        "--json",
+    ]);
     let id = report["items"][0]["destination"].as_str().unwrap();
     std::fs::write(&path, format!("---\ntitle: Revised ticket\nstatus: Doing\npriority: high\nmetadata: {{onetaskgraph.origin: {id}, myapp.owner: ada}}\n---\nRevised body.\n")).unwrap();
     let (_, bound_calls, _) =
@@ -903,7 +917,8 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         "--json",
     ]);
     for (verb, sent, expected) in [
-        ("new copy", &new_calls, 6),
+        ("new copy", &new_calls, 4),
+        ("copy --create", &create_calls, 3),
         ("bound copy", &bound_calls, 5),
         ("comment", &comment_calls, 2),
         ("recount", &recount_calls, 1),
@@ -938,13 +953,36 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         );
         println!("{verb}: {} requests, {points} declared points", sent.len());
     }
+    // The board's fields and the repository's id in one read, and the board filed on the
+    // issue as it is created — so no BOARD_FIELDS, REPOSITORY or ADD_TO_BOARD — and `--create`
+    // is the same without the origin lookup.
+    fn documents(sent: &[(String, Value)]) -> Vec<&str> {
+        sent.iter().map(|(query, _)| query.as_str()).collect()
+    }
     assert_eq!(
-        new_calls
-            .iter()
-            .filter(|(query, _)| query == graphql::UPDATE_FIELDS)
-            .count(),
-        1
+        documents(&new_calls),
+        [
+            graphql::ORIGIN_LOOKUP,
+            graphql::CREATION_CONTEXT,
+            graphql::CREATE_ISSUE,
+            graphql::UPDATE_FIELDS
+        ]
     );
+    assert_eq!(
+        documents(&create_calls),
+        [
+            graphql::CREATION_CONTEXT,
+            graphql::CREATE_ISSUE,
+            graphql::UPDATE_FIELDS
+        ]
+    );
+    for sent in [&new_calls, &create_calls] {
+        let (_, created) = sent
+            .iter()
+            .find(|(query, _)| query == graphql::CREATE_ISSUE)
+            .unwrap();
+        assert_eq!(created["input"]["projectV2Ids"], json!(["PVT-board"]));
+    }
     assert_eq!(
         bound_calls
             .iter()

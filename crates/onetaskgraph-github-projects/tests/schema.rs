@@ -311,6 +311,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some(include_str!("fixtures/sub-issues.json")),
         ),
         (graphql::REPOSITORY, None, None),
+        (graphql::CREATION_CONTEXT, None, None),
         (
             graphql::ISSUE_DEPENDENCIES,
             Some("/data/node"),

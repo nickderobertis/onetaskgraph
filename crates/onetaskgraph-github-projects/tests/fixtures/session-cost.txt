@@ -1,5 +1,5 @@
-requests 119
-node count 244425
+requests 112
+node count 244493
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -9,10 +9,9 @@ requests per call
     1       0  account allowance after the reconciliation
     1       0  account allowance before the reconciliation
     2       0  adding a comment
-    6       0  adding an issue to the board
     2     100  board page size probe
     9       0  contract schema introspection
-    6       0  creating an issue
+    6      18  creating an issue
     6       0  deleting an issue
     1       0  editing a comment
     3       0  filing an issue under its project
@@ -32,6 +31,7 @@ requests per call
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count and point-cost reconciliation while reading the board
     1      50  node-count and point-cost reconciliation while reading the board's fields
+    1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
     1   20400  node-count and point-cost reconciliation while searching this board's issues
@@ -42,8 +42,7 @@ requests per call
     4     400  reading an issue's dependencies
     6    1218  reading one issue
     3   20451  reading the board
-    2     100  reading the board's fields
-    2       0  reading the destination repository
+    2     100  reading the board's fields and the destination repository
     1       0  reading which issue a comment is on
     2       0  recording a dependency
    10   89760  searching this board's issues
