@@ -830,11 +830,13 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
 
 /// Whether the repository no longer holds the issue `issue_id`, read rather than inferred.
 ///
-/// `Query.node` is nullable and answers null for an id naming no object, which is the
-/// schema's own statement of "not there" — so nothing here reads how GitHub words or types
-/// the error it sends beside that null. An answer with no `data.node` at all, or a call
-/// GitHub did not answer, settles nothing and is reported as the failure it is — and so does a
-/// node that is not the issue asked about, which is an answer to some other question.
+/// `Query.node` is nullable and answers null for an id naming no object — but GraphQL also
+/// nulls a field whose resolver failed, a permission refusal among them, so a null is read as
+/// "not there" only when every error beside it is GitHub saying the id resolves to no node:
+/// the same refusal, read the same way, that the plugin's own `UNRESOLVABLE_NODE` reads as
+/// naming nothing. A null beside any other error, an answer with no `data.node` at all, or a
+/// call GitHub did not answer, settles nothing and is reported as the failure it is — and so
+/// does a node that is not the issue asked about, which is an answer to some other question.
 async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
     let response = match graphql_answer(
         token,
@@ -847,8 +849,29 @@ async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
         Ok(response) | Err(Refusal::Answered(_, Some(response))) => response,
         Err(refusal) => return Err(refusal.into_message()),
     };
+    let unresolvable = |error: &Value| {
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| {
+                message
+                    .to_ascii_lowercase()
+                    .contains("could not resolve to a node")
+            })
+    };
     match response.pointer("/data/node") {
-        Some(Value::Null) => Ok(true),
+        Some(Value::Null)
+            if response
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_none_or(|errors| errors.iter().all(unresolvable)) =>
+        {
+            Ok(true)
+        }
+        Some(Value::Null) => Err(format!(
+            "live artifact issue presence of {issue_id} answered null for a reason other than \
+             there being no such node: {response}"
+        )),
         Some(node) if node.get("id").and_then(Value::as_str) == Some(issue_id) => Ok(false),
         Some(node) => Err(format!(
             "live artifact issue presence of {issue_id} answered a node that is not it: {node}"

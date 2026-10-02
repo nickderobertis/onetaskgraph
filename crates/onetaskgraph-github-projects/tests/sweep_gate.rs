@@ -351,6 +351,8 @@ enum PresenceFault {
     InvalidJson,
     NoNode,
     SomeOtherNode,
+    /// `node` null beside an error that is not "no such node": a resolver that failed.
+    NullForbidden,
 }
 
 impl Board {
@@ -985,6 +987,10 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
             PresenceFault::SomeOtherNode,
             "answered a node that is not it",
         ),
+        (
+            PresenceFault::NullForbidden,
+            "answered null for a reason other than there being no such node",
+        ),
     ] {
         let drive = Drive::plant(
             vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
@@ -1149,6 +1155,15 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
             Some(PresenceFault::NoNode) => return answered(json!({})),
             Some(PresenceFault::SomeOtherNode) => {
                 return answered(json!({"node":{"id":"I_someone_else"}}));
+            }
+            Some(PresenceFault::NullForbidden) => {
+                return (
+                    "200 OK",
+                    json!({"data":{"node":null},"errors":[{"type":"FORBIDDEN",
+                        "path":["node"],
+                        "message":"Resource not accessible by personal access token"}]})
+                    .to_string(),
+                );
             }
         }
         if board.holds_issue(&id) {
