@@ -243,8 +243,13 @@ fn a_mixed_plan_lands_its_home_on_the_board_and_its_petsinc_tasks_in_a_linear_me
     assert_eq!(shown["items"][0]["item"]["title"], "One goal");
     let human = ok(&sandbox, &["project", "show", &home]);
     assert!(
-        human.contains(&member),
+        human.contains("members:") && human.contains(&member),
         "`project show` of a home prints its members:\n{human}"
+    );
+    let human = ok(&sandbox, &["project", "show", &member]);
+    assert!(
+        human.contains("member of:") && human.contains(&home),
+        "and of a member, its home:\n{human}"
     );
 
     // The petsinc task is filed under the member, and the edges cross both ways.
@@ -1768,6 +1773,8 @@ fn a_routed_task_create_refuses_a_missing_home_and_takes_back_a_member_its_faile
 #[test]
 fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read() {
     let sandbox = Sandbox::new();
+    // A board that builds and then fails every read: a member there cannot be read.
+    let dead = crate::fixtures::github_projects_unreachable(&sandbox);
     let plan = sandbox.subdirectory(PLAN);
     sandbox.project_document(&document(&json!({
         PLAN: {"plugin": "local-md", "config": {"root": plan}},
@@ -1781,6 +1788,7 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
         "broken": {"plugin": "github-projects", "config": {
             "owner": "nobody", "project_number": 1, "token_env": "ROUTES_ABSENT_TOKEN",
         }},
+        "dead": {"plugin": "github-projects", "config": dead},
     })));
     record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
     for (id, repository) in [
@@ -1835,8 +1843,9 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
     );
     assert!(stale.contains("different query"), "{stale}");
 
-    // A member in a source nothing configures, and one in a source that cannot be built.
-    rewrite("- team:goal\n  - ghost:goal\n  - broken:1");
+    // A member in a source nothing configures, one in a source that cannot be built, and one
+    // whose source fails the read.
+    rewrite("- team:goal\n  - ghost:goal\n  - broken:1\n  - dead:1");
     let output = run(
         &sandbox,
         &[
@@ -1850,7 +1859,7 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
     );
     assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
     let partial: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
-    for source in ["ghost", "broken"] {
+    for source in ["ghost", "broken", "dead"] {
         assert!(
             partial["errors"]
                 .as_array()
@@ -1869,8 +1878,87 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
         "the readable member is still read"
     );
 
+    // A list naming something that is not a qualified id, or two members in one source, is
+    // the home's source failing — for a read, and for a copy filing into that home.
+    for members in [
+        "- team:goal\n  - not-qualified",
+        "- team:goal\n  - team:other",
+    ] {
+        rewrite(members);
+        let output = run(
+            &sandbox,
+            &[
+                "task",
+                "list",
+                "--project",
+                "notes:goal",
+                "--members",
+                "--json",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+        let partial: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+        assert!(
+            partial["errors"]
+                .as_array()
+                .expect("errors")
+                .iter()
+                .any(|error| {
+                    error["source"] == NOTES && error.to_string().contains("onetaskgraph.members")
+                }),
+            "{members}: {partial:#}"
+        );
+        record(
+            &plan,
+            "tasks",
+            "d",
+            "title: d\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/d]",
+        );
+        let refusal = refused(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                "plan:goal",
+                "--member",
+                "plan:d",
+                "--to",
+                NOTES,
+            ],
+            1,
+        );
+        assert!(
+            refusal.contains("onetaskgraph.members"),
+            "{members}: {refusal}"
+        );
+    }
+
+    // A home its source does not hold is a plan whose members cannot be learned.
+    let output = run(
+        &sandbox,
+        &[
+            "task",
+            "list",
+            "--project",
+            "notes:nowhere",
+            "--members",
+            "--json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let partial: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    assert!(
+        partial["errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .any(|error| error["source"] == NOTES && error.to_string().contains("notes:nowhere")),
+        "{partial:#}"
+    );
+
     // And a member list nobody can read is the home's source failing, not a plan without
     // members.
+    rewrite("- team:goal");
     let notes_text = std::fs::read_to_string(&home).expect("the home");
     let start = notes_text.find("onetaskgraph.members").expect("the key");
     let end = notes_text[start..]
@@ -2031,4 +2119,38 @@ fn a_routed_copy_whose_home_member_list_write_fails_takes_back_the_member_and_it
     let home_after = answer(&sandbox, &["project", "show", &home])["items"][0]["item"].clone();
     assert_eq!(home_after["metadata"], home_before["metadata"]);
     assert_eq!(home_after["title"], home_before["title"]);
+}
+
+#[test]
+fn what_a_routed_copy_spent_includes_the_source_it_was_routed_to() {
+    // The named destination is a Linear workspace, which meters nothing; the board it routes
+    // to meters every request. A report that counted only the named source would say nothing.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    record(
+        &plan,
+        "tasks",
+        "app",
+        "title: App\nstatus: todo\nrepositories: [github.com/nickderobertis/onetaskgraph]",
+    );
+    let linear = linear_empty_workspace(&sandbox);
+    let (board, _) = github_projects_with_board(&sandbox);
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        LINEAR: {
+            "plugin": "linear",
+            "config": linear,
+            "routes": [{"repositories": ["github.com/nickderobertis/*"], "to": BOARD}],
+        },
+        BOARD: {"plugin": "github-projects", "config": board},
+    })));
+    let report = answer(&sandbox, &["task", "copy", "plan:app", "--to", LINEAR]);
+    assert_eq!(source_of(&landed(&report, "plan:app")), BOARD, "{report:#}");
+    assert!(
+        report["spent"]["requests"]
+            .as_u64()
+            .is_some_and(|sent| sent > 0),
+        "the board's requests are counted: {report:#}"
+    );
 }

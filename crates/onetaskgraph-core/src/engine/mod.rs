@@ -1152,17 +1152,39 @@ impl Engine {
     /// Read from the home on every call and kept nowhere. A member in a source nothing
     /// configures, one its source does not hold, and one whose source fails the read are
     /// each reported rather than left out, because a plan missing a member without saying
-    /// so reads exactly like a plan that has none. A home that cannot be read has its
-    /// failure reported by its own source's walk.
+    /// so reads exactly like a plan that has none. So is a home its source fails to read or
+    /// does not hold: its members cannot be learned, and a page of its own tasks alone must
+    /// not pass for the whole plan. A home whose source did not build is reported by the
+    /// walk, as any unavailable source is.
     async fn members(&self, home: &GlobalId) -> (Vec<GlobalId>, Vec<SourceFailure>) {
-        let Some(source) = self.ready().find(|source| source.name() == &home.source) else {
-            return (Vec::new(), Vec::new());
-        };
-        let Ok(Some(held)) = source.source().get_project(&home.native).await else {
-            return (Vec::new(), Vec::new());
-        };
         let mut members = Vec::new();
         let mut unread = Vec::new();
+        let Some(source) = self.ready().find(|source| source.name() == &home.source) else {
+            return (members, unread);
+        };
+        let held = match source.source().get_project(&home.native).await {
+            Ok(Some(held)) => held,
+            Ok(None) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error: SourceError::Refused {
+                        message: format!(
+                            "{home} names no project {} holds, so its member projects cannot \
+                             be read",
+                            home.source
+                        ),
+                    },
+                });
+                return (members, unread);
+            }
+            Err(error) => {
+                unread.push(SourceFailure {
+                    source: home.source.clone(),
+                    error,
+                });
+                return (members, unread);
+            }
+        };
         let named = match copy::members_of(home, &held.metadata) {
             Ok(named) => named,
             // A list nobody can read is a home whose plan cannot be read whole, which is a

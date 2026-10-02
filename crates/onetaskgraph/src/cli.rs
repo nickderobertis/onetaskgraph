@@ -263,9 +263,7 @@ pub enum SourcesCommand {
 #[derive(Debug, Args)]
 pub struct RouteArgs {
     /// The configured source the item would be written to.
-    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an
-    // unknown name is refused naming the configured ones; the command converts it to a
-    // `SourceName` before any lookup.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
     pub source: String,
     /// One repository the item concerns, as a normalized origin `host/owner/name`. Repeat
     /// for several; none at all matches no route.
