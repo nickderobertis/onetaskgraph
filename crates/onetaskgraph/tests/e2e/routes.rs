@@ -1802,6 +1802,105 @@ fn a_routed_task_create_refuses_a_missing_home_and_takes_back_a_member_its_faile
         home_before,
         "and the home's member list is as it was"
     );
+
+    // A create from a template takes its own write path, and is taken back the same way.
+    let template = sandbox.project().join("task-template.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables:\n  title: {description: The title}\n---\n\
+         # {{ title }}\n",
+    )
+    .expect("a template");
+    refused(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            NOTES,
+            "--project",
+            "goal",
+            "--title",
+            "Rendered work",
+            "--repository",
+            "github.com/petsinc/api",
+            "--template",
+            &template.display().to_string(),
+            "--var",
+            "title=Rendered work",
+            "--no-interactive",
+        ],
+        1,
+    );
+    assert!(
+        !sandbox.project().join(TEAM).join("projects").exists()
+            || tree(&sandbox.project().join(TEAM).join("projects")).is_empty(),
+        "the member the rendered create made is taken back"
+    );
+    assert_eq!(
+        std::fs::read(&home).expect("the home"),
+        home_before,
+        "and the home's member list is as it was"
+    );
+}
+
+#[test]
+fn a_routed_copy_whose_member_project_cannot_be_made_leaves_every_source_as_it_found_them() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    let notes_before = tree(&sandbox.project().join(NOTES));
+
+    // The re-copy has the home and the task already there to write, and a petsinc task whose
+    // member project `team` cannot hold: a file stands where its project folder goes.
+    for (file, from, to) in [
+        ("projects/goal.md", "Body of goal.", "A new body."),
+        ("tasks/own.md", "title: Own\n", "title: Own, edited\n"),
+    ] {
+        let path = plan.join(file);
+        let text = std::fs::read_to_string(&path).expect("the record");
+        let edited = text.replacen(from, to, 1);
+        assert_ne!(edited, text, "{file} is edited");
+        std::fs::write(&path, edited).expect("the edit");
+    }
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+    );
+    let obstacle = sandbox.project().join(TEAM).join("projects");
+    std::fs::write(&obstacle, "not a folder").expect("an obstacle");
+    let plan_before = tree(&plan);
+
+    let refusal = refused(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", NOTES],
+        1,
+    );
+    assert!(
+        refusal.contains(TEAM) && !refusal.contains("could not be undone"),
+        "the member's write failed and the copy was undone:\n{refusal}"
+    );
+    assert_eq!(
+        tree(&sandbox.project().join(NOTES)),
+        notes_before,
+        "the home and its task read as they did"
+    );
+    assert_eq!(tree(&plan), plan_before, "no copy link was left behind");
+    assert_eq!(
+        tree(&sandbox.project().join(TEAM))
+            .into_keys()
+            .collect::<Vec<_>>(),
+        [obstacle.display().to_string()],
+        "nothing landed in the routed source"
+    );
 }
 
 #[test]
@@ -2068,6 +2167,87 @@ fn a_routed_document_copy_points_its_references_at_the_source_its_project_landed
         content.contains(&there.display().to_string()),
         "the reference names the task in the routed source:\n{content}"
     );
+}
+
+#[test]
+fn documents_one_copy_lands_in_two_sources_each_point_at_the_records_where_they_landed() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    petsinc_plan(&plan);
+    record(&plan, "projects", "own", "title: Own goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "own-a",
+        "title: Own A\nstatus: todo\nproject: own\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    for (name, project, task) in [
+        ("pets-design", "pets", "pets-a"),
+        ("own-design", "own", "own-a"),
+    ] {
+        record(
+            &plan,
+            "documents",
+            name,
+            &format!(
+                "title: {name}\nproject: {project}\n---\nStart at `{}`.\n\n<!-- -->",
+                plan.join(format!("tasks/{task}.md")).display()
+            ),
+        );
+    }
+    let mut tasks = std::collections::BTreeMap::new();
+    for project in ["plan:pets", "plan:own"] {
+        let copied = answer(&sandbox, &["project", "copy", project, "--to", NOTES]);
+        for task in ["plan:pets-a", "plan:own-a"] {
+            if let Some(item) = copied["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .find(|item| item["source"] == task)
+            {
+                tasks.insert(
+                    task,
+                    item["destination"].as_str().expect("landed").to_owned(),
+                );
+            }
+        }
+    }
+    assert_eq!(source_of(&tasks["plan:pets-a"]), TEAM);
+    assert_eq!(source_of(&tasks["plan:own-a"]), NOTES);
+
+    // One invocation, two documents, two sources: each is rewritten against its own.
+    let report = answer(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            "plan:pets-design",
+            "plan:own-design",
+            "--to",
+            NOTES,
+        ],
+    );
+    assert_eq!(report["references_rewritten"], 2, "{report:#}");
+    assert!(report.get("references_unresolved").is_none(), "{report:#}");
+    for (document, task, source) in [
+        ("plan:pets-design", "plan:pets-a", TEAM),
+        ("plan:own-design", "plan:own-a", NOTES),
+    ] {
+        let landed_document = landed(&report, document);
+        assert_eq!(source_of(&landed_document), source, "{report:#}");
+        let held = answer(&sandbox, &["document", "show", &landed_document]);
+        let content = held["items"][0]["item"]["content"]
+            .as_str()
+            .expect("content");
+        let shown = answer(&sandbox, &["task", "show", &tasks[task]]);
+        let there = shown["items"][0]["item"]["location"]["path"]
+            .as_str()
+            .expect("a folder task's path");
+        assert!(
+            content.contains(there) && !content.contains(&plan.display().to_string()),
+            "{document} names {task} where it landed, {there}:\n{content}"
+        );
+    }
 }
 
 #[test]
