@@ -221,21 +221,38 @@ report the same edge with the waiting item as `from`, rather than two mirrored o
 ### Linear's slot, settled
 
 Linear gives a caller no field of their own, so the source owns a **trailing Markdown
-comment at the end of the item's `description`**:
+comment at the end of the item's `description`** (a document's `content`), on one line, with
+the canonical JSON inside a code span:
 
 ```text
 The description a person wrote.
 
+<!-- onetaskgraph.metadata `{"onepipeline.turn_budget":12}` -->
+```
+
+Two properties decided the comment. Every other field the item carries — its title, its
+content, its labels, its state — still round-trips unchanged beside the metadata, because the
+slot is inside a field Linear already treats as free text. And a person opening that issue in
+Linear's own interface still sees their issue rather than a payload, because Linear renders the
+description as Markdown and a Markdown comment does not render.
+
+The code span is Linear's doing. Linear normalizes the text *inside* an HTML comment in a
+description or a document as it normalizes prose — observed 2026-10-02: a domain-like key such
+as `caller.live` comes back `[caller.live](<http://caller.live>)`, an array's `[` and `]` come
+back escaped, `\"` loses its backslash, `_y_` becomes `*y*`, and a line opening `-->` comes
+back `\-->` — so JSON written bare there does not survive. Inside a code span on one line every
+byte comes back as written. `<`, `>` and backticks inside a string are written as `\u003c`,
+`\u003e` and `\u0060`, which JSON reads as the same characters, so no value can end the span or
+the comment. A comment's *body* is not normalized: an HTML comment there comes back byte for
+byte in any shape. The source still reads the multi-line slot it wrote before,
+
+```text
 <!-- onetaskgraph.metadata
 {"onepipeline.turn_budget":12}
 -->
 ```
 
-Two properties decided it. Every other field the item carries — its title, its content,
-its labels, its state — still round-trips unchanged beside the metadata, because the slot
-is inside a field Linear already treats as free text. And a person opening that issue in
-Linear's own interface still sees their issue rather than a payload, because Linear
-renders the description as Markdown and a Markdown comment does not render.
+in either close Linear hands it back with, and the next write of that item writes the code span.
 
 The read side takes the slot off the visible description, so `content` is what the person
 wrote. Only a comment at the very **end** of the description is a slot; one in the middle
@@ -248,14 +265,9 @@ and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape
 update of the item's `description` (a document's `content`) that differs from what Linear
 holds only inside the slot.
 
-Linear stores the field as Markdown and escapes a line that opens with `-->`, so the slot it
-hands back closes `\-->` rather than `-->`; observed 2026-10-02 for an issue's description
-and a document's content alike, and a comment's body comes back unescaped. The read side
-takes either close. A marker that has to survive every field byte for byte belongs on one
-line, `<!-- … -->`, which Linear leaves alone.
-
-**`github-projects` uses that same encoding, in the issue body, and for the same reason
-plus one of its own: length.** A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
+**`github-projects` uses the multi-line spelling of that encoding, in the issue body, for the
+same reason plus one of its own: length** — GitHub keeps a body byte for byte, so it needs no
+code span. A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
 `SINGLE_SELECT`, `MULTI_SELECT` or `ITERATION`, a `TEXT` value is length-bounded, and a
 board's `shortDescription` is capped at 300 characters — of which the metadata comment
 spends about 110 before any content, so a project carrying an ordinary 278-character goal

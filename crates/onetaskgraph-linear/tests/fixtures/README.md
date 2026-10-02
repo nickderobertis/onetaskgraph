@@ -289,6 +289,27 @@ live journey is what found all three and what guards them. And the pinned filter
 members this source sends plus the one recorded absence above — a member Linear adds, or one
 it removes that nothing here sends, is invisible until this file is re-observed.
 
+**A pass on 2026-10-02**, with the live lane's credential against the scratch team `TES`,
+settled what the follow-up flow rests on, and the plugin's module documentation records each
+finding beside the code it decided:
+
+- **The follow-up narrowings.** `IssueFilter.description.contains` reads the whole stored
+  description, the metadata slot included, and is case-sensitive; `containsIgnoreCase` on
+  `title` and `description` is not; `priority.in` narrows by Linear's own number; and
+  `comments.some` with `createdAt`/`updatedAt` `gte` narrows by a comment's own times, an edit
+  moving `updatedAt`. Their input types are pinned from the API's own introspection, which
+  also showed every member of `ProjectUpdateInput` optional.
+- **What happens to an HTML comment.** A comment's body keeps one byte for byte. An issue's
+  description and a document's content normalize the text inside one as Markdown — autolinks,
+  escaped brackets and tildes, emphasis rewritten, a backslash dropped or doubled, a line
+  opening `-->` escaped — except inside a code span on one line, which comes back identical.
+  That is why the slot is now written that way.
+- **The Hello Patient team's states**, read on 2026-10-01: Proposed and Backlog (`backlog`),
+  Todo and Queued (`unstarted`), In Progress and Needs Attention (`started`), Done
+  (`completed`), Canceled (`canceled`), Triage (`triage`), and review states typed `started`,
+  `canceled` and `duplicate`. The shared e2e fake's team carries those names and types, so a
+  state written by name and one written as the first of its type are told apart.
+
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;

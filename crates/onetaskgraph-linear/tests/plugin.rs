@@ -5165,7 +5165,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     // Linear escapes a line opening `-->` when it stores a field, so the held slot closes the
     // way Linear hands it back; the rewritten one is sent in this source's one encoding.
     let held = "Prose a person wrote,\n\n  with its own spacing.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1]}\n\\-->";
-    let sent_back = "Prose a person wrote,\n\n  with its own spacing.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1],\"myapp.review\":{\"approved\":true}}\n-->";
+    let sent_back = "Prose a person wrote,\n\n  with its own spacing.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"myapp.review\":{\"approved\":true}}` -->";
 
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
@@ -5261,7 +5261,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     assert_eq!(
         requests[1]["variables"]["input"]["description"],
         serde_json::json!(
-            "Bare prose\n\n\n<!-- onetaskgraph.metadata\n{\"myapp.review\":{\"approved\":true}}\n-->"
+            "Bare prose\n\n\n<!-- onetaskgraph.metadata `{\"myapp.review\":{\"approved\":true}}` -->"
         )
     );
 
@@ -5310,7 +5310,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let held = "Old rendering\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"old\"}}\n-->";
     let provenance = serde_json::json!({"digest":"new"});
-    let expected = "New rendering\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"new\"}}\n-->";
+    let expected = "New rendering\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"new\"}}` -->";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
@@ -5381,7 +5381,7 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let description = requests[1]["variables"]["input"]["description"]
         .as_str()
         .expect("a description");
-    assert!(description.starts_with(&format!("{quoted}\n\n<!-- onetaskgraph.metadata\n")));
+    assert!(description.starts_with(&format!("{quoted}\n\n<!-- onetaskgraph.metadata `")));
 }
 
 #[tokio::test]
@@ -5659,7 +5659,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     assert_eq!(
         update["variables"]["input"]["description"],
         serde_json::json!(
-            "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.delivered_by\":[\"plan:T-1\"],\"onetaskgraph.delivers\":[\"i2\",\"elsewhere:T-9\"]}\n-->"
+            "Recorded body\n\n<!-- onetaskgraph.metadata `{\"caller.number\":7,\"onetaskgraph.delivered_by\":[\"plan:T-1\"],\"onetaskgraph.delivers\":[\"i2\",\"elsewhere:T-9\"]}` -->"
         )
     );
 
@@ -5693,7 +5693,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     assert_eq!(
         create["variables"]["input"]["description"],
         serde_json::json!(
-            "Recorded body\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->"
+            "Recorded body\n\n<!-- onetaskgraph.metadata `{\"caller.number\":7}` -->"
         )
     );
 }
@@ -5878,7 +5878,7 @@ async fn delivered_by_is_written_into_the_slot_and_moves_nothing_else() {
     assert_eq!(
         requests[1]["variables"],
         serde_json::json!({"id":"i1","input":{"description":
-            "Prose a person wrote,\nwith its own spacing.  \n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1],\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}\n-->"}})
+            "Prose a person wrote,\nwith its own spacing.  \n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}` -->"}})
     );
 
     let already =
@@ -6404,7 +6404,7 @@ async fn a_targeted_update_sends_one_issue_update_carrying_only_what_differs() {
     assert_eq!(
         sent[3]["variables"],
         serde_json::json!({"id":"I-1","input":{
-            "description":"The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.kept\":[1],\"team.landing\":\"merged\"}\n-->",
+            "description":"The prose.\n\n<!-- onetaskgraph.metadata `{\"team.kept\":[1],\"team.landing\":\"merged\"}` -->",
             "stateId":"STATE-DONE"}}),
         "the unchanged title is not sent, and nothing else is"
     );
@@ -7049,4 +7049,70 @@ async fn the_states_report_names_each_mapped_state_present_or_missing_with_its_t
             {"category":"done","state":"Shipped","present":false}]})
     );
     assert_eq!(wire.try_iter().count(), 2, "two reads, and nothing written");
+}
+
+/// The slot is written on one line, its JSON inside a code span, with `<`, `>` and backticks
+/// escaped — the spelling Linear keeps byte for byte — and a value holding what would close
+/// the span or the comment reads back exactly; a slot in the multi-line spelling this source
+/// wrote before still reads, in either of the closes Linear hands it back with.
+#[tokio::test]
+async fn the_slot_is_written_in_the_one_spelling_linear_keeps_and_the_old_one_still_reads() {
+    let key = MetadataKey::new("caller.live").unwrap();
+    let hostile = serde_json::json!(["a --> b <!-- c", "`tick`", "github.com/a/b", "_y_ [z]"]);
+    let (endpoint, wire) = response_server(vec![
+        prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
+    ]);
+    writable_source(&endpoint)
+        .set_task_metadata(&"i1".into(), &key, &hostile)
+        .await
+        .unwrap();
+    let requests = wire
+        .try_iter()
+        .map(|request| sent(&request))
+        .collect::<Vec<_>>();
+    let written = requests[1]["variables"]["input"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_owned();
+    assert_eq!(
+        written,
+        "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.live\":[\"a --\\u003e b \\u003c!-- c\",\"\\u0060tick\\u0060\",\"github.com/a/b\",\"_y_ [z]\"]}` -->"
+    );
+    // What was written reads back as the value it was.
+    let (endpoint, _) = response_server(vec![prioritised_issue(
+        "i1",
+        Some(&written),
+        serde_json::json!(0),
+    )]);
+    let task = source(&endpoint)
+        .get_task(&"i1".into())
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(task.metadata.get("caller.live"), Some(&hostile));
+    assert_eq!(task.content.as_deref(), Some("Prose."));
+
+    for old in [
+        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1}\n-->",
+        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":1}\n\\-->",
+    ] {
+        let (endpoint, _) = response_server(vec![prioritised_issue(
+            "i1",
+            Some(old),
+            serde_json::json!(0),
+        )]);
+        let task = source(&endpoint)
+            .get_task(&"i1".into())
+            .await
+            .unwrap()
+            .expect("held");
+        assert_eq!(
+            task.metadata.get("caller.kept"),
+            Some(&serde_json::json!(1)),
+            "{old:?}"
+        );
+        assert_eq!(task.content.as_deref(), Some("Prose."), "{old:?}");
+    }
 }

@@ -761,14 +761,22 @@ fn slotted_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
 }
 
 /// `field` split at its trailing slot: the bytes above it, and the slot's parsed JSON.
+///
+/// Either spelling: the one-line code span a source writes, and the multi-line one a
+/// workspace seeded before it holds.
 fn split_slot(field: &str) -> (String, Value) {
     let start = field
-        .rfind("<!-- onetaskgraph.metadata\n")
+        .rfind("<!-- onetaskgraph.metadata")
         .expect("the field ends in a slot");
-    let encoded = field[start + "<!-- onetaskgraph.metadata\n".len()..]
-        .trim_end_matches("-->")
-        .trim_end_matches('\\')
-        .trim_end_matches('\n');
+    let slot = &field[start + "<!-- onetaskgraph.metadata".len()..];
+    let encoded = match slot.strip_prefix(" `") {
+        Some(span) => span.trim_end().trim_end_matches("` -->"),
+        None => slot
+            .trim_start_matches('\n')
+            .trim_end_matches("-->")
+            .trim_end_matches('\\')
+            .trim_end_matches('\n'),
+    };
     (
         field[..start].to_owned(),
         serde_json::from_str(encoded).expect("the slot holds JSON"),

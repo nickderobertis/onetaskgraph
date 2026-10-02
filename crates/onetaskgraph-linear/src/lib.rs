@@ -50,7 +50,9 @@
 //! cannot miss a row the contract's predicate keeps, which is what makes sending it sound;
 //! the confirmation is what makes the answer exact. Every member below is pinned in
 //! `tests/fixtures/schema.graphql`, and each rests on one observation of the real API,
-//! against the scratch team `TES` on 2026-10-02, which `tests/live.rs` asserts again:
+//! against the scratch team `TES` on 2026-10-02, which `drive_follow_ups` in `tests/live.rs`
+//! asserts again — the comparators by name, and every narrowing through this source with a
+//! decoy whose prose carries the searched phrases:
 //!
 //! - **`IssueFilter.description.contains` reads the whole stored description, the metadata
 //!   slot included, and is case-sensitive.** An issue whose slot held
@@ -58,7 +60,9 @@
 //!   `"onetaskgraph.origin":"…"` pair beside it; the same description's prose, upper-cased,
 //!   was returned for `containsIgnoreCase` and *not* for `contains`. So a metadata match or an
 //!   origin is sent as the phrase its value is encoded as — `"<key>":"<value>"`, the key being
-//!   the last segment of a nested path — and confirmed over the parsed slot.
+//!   the last segment of a nested path — and confirmed over the parsed slot. The slot's code
+//!   span is what makes that phrase the stored bytes: a slot in the old multi-line spelling
+//!   whose key Linear autolinked is not found by it, and could not be read as that key anyway.
 //! - **`IssueFilter.title.containsIgnoreCase` and `description.containsIgnoreCase` match
 //!   regardless of case** — the title `… Alpha Title` was returned for `alpha TITLE`, and not
 //!   for `contains` of it. They are the two text searches; the content search is confirmed
@@ -74,23 +78,28 @@
 //! ## Ruling: what Linear does to an HTML comment, settled
 //!
 //! A follow-up tool marks what it writes with HTML comments, and this source keeps its own
-//! metadata in one, so where one survives is a fact this crate records rather than assumes.
+//! metadata in one, so what survives is a fact this crate records rather than assumes.
 //! Observed on 2026-10-02 against the scratch team `TES`, each written and read back by id,
-//! and asserted again by `an_html_comment_survives_where_linear_says_it_does` in
-//! `tests/live.rs`:
+//! and asserted again — the probe text and its stored form exactly — by `drive_follow_ups` in
+//! `tests/live.rs`, a leg of its `real_linear_applies_every_declared_capability_and_leaves_no_residue`:
 //!
-//! - **An issue's `description`:** a comment on one line, `<!-- marker {"k":"v"} -->`,
-//!   comes back byte for byte. A comment whose closing `-->` opens a line of its own comes
-//!   back with that line escaped as Markdown escapes it: `\n-->` becomes `\n\\-->`, and every
-//!   other byte, the JSON inside included, is as written.
-//! - **A comment's `body`:** both shapes come back byte for byte, the multi-line one with its
-//!   bare `-->` included.
-//! - **A document's `content`:** as an issue's description — one line byte for byte, and a
-//!   line opening `-->` escaped to `\-->`.
-//!
-//! So this source's own slot, which closes on a line of its own, is read back with either
-//! close (see [`METADATA_CLOSE_ESCAPED`]), and a marker meant to survive every field
-//! unchanged belongs on one line.
+//! - **A comment's `body` keeps every HTML comment byte for byte** — on one line or across
+//!   several, a bare `-->` closing line, domain-like text and JSON included.
+//! - **An issue's `description` and a document's `content` do not.** Linear stores both as
+//!   Markdown and normalizes the text *inside* an HTML comment exactly as it normalizes prose:
+//!   a domain-like token or a URL is autolinked — `example.com` comes back
+//!   `[example.com](<http://example.com>)`, and a key such as `caller.live` likewise — `[` and
+//!   `]` come back `\[` and `\]`, `~` comes back `\~`, `_y_` comes back `*y*`, the backslash
+//!   of `\"` is dropped, a backslash before a letter is doubled, and a line opening `-->` comes
+//!   back `\-->`. Text with none of those in it — `{"k":"v"}`, `caller.key`, `sha256:…`,
+//!   `gh:I_kwDO…` — comes back as written. An autolink can run on past the token, swallowing
+//!   what follows it up to the next delimiter.
+//! - **One thing in those two fields comes back byte for byte: a code span.** An HTML comment
+//!   on one line whose payload is inside backticks — ``<!-- probe `{…}` -->`` — came back
+//!   identical with every one of the payloads above inside it, and re-writing what Linear
+//!   handed back changed nothing more. So this source writes its own slot that way (see
+//!   `METADATA_OPEN_SPAN`), and a marker meant to survive an issue's description or a
+//!   document's content belongs in one too.
 //!
 //! ## Ruling: a Linear document carries no label, and that is Linear's
 //!
@@ -191,10 +200,12 @@
 //! probe, and `write_relations` records why the pair this source sends is the oriented one.
 //!
 //! Caller metadata is canonical JSON in a trailing
-//! `<!-- onetaskgraph.metadata ... -->` Markdown comment in the item's description. The
-//! visible description is returned unchanged without that slot. Writes put the same
-//! canonical encoding back beside the visible description, and use Linear issue/project
-//! relations for same-source dependencies. Only cross-source far ends use the reserved
+//! ``<!-- onetaskgraph.metadata `…` -->`` Markdown comment in the item's description, on one
+//! line with the JSON in a code span — the one spelling Linear keeps byte for byte, see the
+//! ruling above; the multi-line spelling this source wrote before is still read. The visible
+//! description is returned unchanged without that slot. Writes put the same canonical
+//! encoding back beside the visible description, and use Linear issue/project relations for
+//! same-source dependencies. Only cross-source far ends use the reserved
 //! `onetaskgraph.depends_on` metadata key.
 //!
 //! ## Ruling: a status is written by `status_mapping`, and by type where it names none
@@ -1218,7 +1229,7 @@ impl LinearSource {
     ///
     /// So there are two builders, and each names its own type's members. Adding a predicate
     /// means deciding twice, on purpose, rather than once by accident.
-    fn issue_filter(&self, query: &TaskQuery) -> Value {
+    fn issue_filter(&self, query: &TaskQuery) -> Result<Value, SourceError> {
         let mut parts = self.issue_scope();
         parts.extend(Self::label_parts(&query.labels));
         if !query.statuses.is_empty() {
@@ -1249,10 +1260,10 @@ impl LinearSource {
         }
         for wanted in &query.metadata {
             let at = wanted.path().last().map_or(wanted.key(), String::as_str);
-            parts.push(slot_phrase(at, wanted.value()));
+            parts.push(slot_phrase(at, wanted.value())?);
         }
         if let Some(origin) = &query.origin {
-            parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, origin));
+            parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, origin)?);
         }
         if let Some(text) = &query.text {
             let title = json!({"title": {"containsIgnoreCase": text.terms}});
@@ -1263,7 +1274,7 @@ impl LinearSource {
                 TextFields::TitleOrContent => json!({"or": [title, content]}),
             });
         }
-        Self::narrowed(parts)
+        Ok(Self::narrowed(parts))
     }
 
     /// What every issue read of this source is narrowed to before any predicate: the
@@ -1742,13 +1753,11 @@ impl LinearSource {
         if metadata.is_empty() {
             return Ok((!visible.is_empty()).then(|| visible.to_owned()));
         }
-        let encoded = serde_json::to_string(metadata).map_err(|error| SourceError::Malformed {
-            message: error.to_string(),
-        })?;
+        let slot = slot_text(metadata)?;
         Ok(Some(if visible.is_empty() {
-            format!("{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+            slot
         } else {
-            format!("{visible}\n\n{METADATA_OPEN}{encoded}{METADATA_CLOSE}")
+            format!("{visible}\n\n{slot}")
         }))
     }
     /// What this source says when asked for a project edge carrying no ordering.
@@ -1976,7 +1985,7 @@ impl LinearSource {
                     WriteKind::Project => Self::narrowed(self.project_scope()),
                     WriteKind::Task => {
                         let mut parts = self.issue_scope();
-                        parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, edge.to.id()));
+                        parts.push(slot_phrase(TaskQuery::ORIGIN_KEY, edge.to.id())?);
                         Self::narrowed(parts)
                     }
                 };
@@ -2073,7 +2082,7 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(ISSUES,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)})).await?;
+        let d=self.send(ISSUES,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let page = connection(&d, "issues", |v| map_task(v, &self.name, &self.statuses))?;
         Ok(Page {
             items: page
@@ -2716,10 +2725,13 @@ impl TaskSource for LinearSource {
         let Some((task, description)) = self.issue_held(id).await? else {
             return Ok(None);
         };
-        let (_, mut slot) = metadata_description(description.clone())?;
+        let (_, held) = metadata_description(description.clone())?;
+        let mut slot = held.clone();
         set_task_list(&mut slot, TaskRef::DELIVERED_BY_KEY, &entries);
-        let rewritten = reslotted(description.as_deref(), &slot)?;
-        if rewritten != description {
+        // Compared as JSON rather than as the field's bytes, so a slot already holding the
+        // list is not rewritten for its spelling alone.
+        if slot != held {
+            let rewritten = reslotted(description.as_deref(), &slot)?;
             self.write_description_alone(&task.id, rewritten.as_deref())
                 .await?;
         }
@@ -3281,12 +3293,7 @@ fn reslotted(
             .unwrap_or(above);
         return Ok((!visible.is_empty()).then(|| visible.to_owned()));
     }
-    let encoded = serde_json::to_string(slot).map_err(|error| SourceError::Malformed {
-        message: error.to_string(),
-    })?;
-    Ok(Some(format!(
-        "{above}{METADATA_OPEN}{encoded}{METADATA_CLOSE}"
-    )))
+    Ok(Some(format!("{above}{}", slot_text(slot)?)))
 }
 
 /// Hold `entries` under `key` in one slot's metadata, or no such key when there are none.
@@ -3983,34 +3990,93 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
     }
 }
 
-/// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment
-/// at the end of `description`; its later write side must use this exact encoding.
+/// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment at the
+/// end of the long-form field, and writes it on one line with the canonical JSON inside a code
+/// span: ``<!-- onetaskgraph.metadata `{…}` -->``.
+///
+/// **The code span is what keeps the JSON byte for byte, and Linear is why it is needed.**
+/// Linear stores an issue's description and a document's content as Markdown and normalizes the
+/// text *inside* an HTML comment as it normalizes prose — observed 2026-10-02 against the
+/// scratch team: a domain-like key `caller.live` came back `[caller.live](<http://caller.live>)`,
+/// an array's `[`/`]` came back `\[`/`\]`, `\"` lost its backslash, `_y_` became `*y*`, and an
+/// autolink of `github.com/a/b` swallowed the JSON after it. The same payload inside a code span
+/// on one line came back identical, in an issue's description and in a document's content
+/// alike. See [`slot_json`] for the three characters escaped so the span cannot end early.
+const METADATA_PREFIX: &str = "<!-- onetaskgraph.metadata";
+/// The opening of the slot this source writes.
+const METADATA_OPEN_SPAN: &str = "<!-- onetaskgraph.metadata `";
+/// The close of the slot this source writes.
+const METADATA_CLOSE_SPAN: &str = "` -->";
+/// The opening of the multi-line slot this source wrote before the code span, still read: an
+/// item written then keeps its metadata. Linear normalized its JSON, so a key or a value
+/// Linear rewrote reads back as Linear left it — or, for an array Linear escaped, as a
+/// malformed slot naming itself — and the next write of that item writes the code span.
 const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
 const METADATA_CLOSE: &str = "\n-->";
-/// The same close as Linear hands a document's `content` back: it stores a document as
-/// Markdown and escapes a line opening `-->`, so the slot this source wrote reads back with
-/// a backslash before its close (observed from the real API on 2026-09-14). An issue's or a
-/// project's `description` comes back as written. The write side keeps the one encoding.
+/// The same close as Linear hands that multi-line slot back: it escapes a line opening
+/// `-->`, so the slot reads back with a backslash before its close (observed from the real API
+/// on 2026-09-14 for a document and on 2026-10-02 for an issue's description too).
 const METADATA_CLOSE_ESCAPED: &str = "\n\\-->";
+
+/// One JSON value in the encoding the slot holds it in: compact canonical JSON with `<`, `>`
+/// and `` ` `` escaped as `\u003c`, `\u003e` and `\u0060`.
+///
+/// All three only ever occur inside a JSON string, where the escape means the same character,
+/// so the value parses back exactly; and with them escaped no value can close the code span or
+/// the HTML comment around it. The search phrase a metadata match narrows by is built with this
+/// too, so it is the bytes the slot holds.
+fn slot_json(value: &impl serde::Serialize) -> Result<String, SourceError> {
+    let encoded = serde_json::to_string(value).map_err(|error| SourceError::Malformed {
+        message: error.to_string(),
+    })?;
+    Ok(encoded
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('`', "\\u0060"))
+}
+
+/// The slot holding exactly `metadata`, as this source writes it.
+fn slot_text(metadata: &std::collections::BTreeMap<String, Value>) -> Result<String, SourceError> {
+    Ok(format!(
+        "{METADATA_OPEN_SPAN}{}{METADATA_CLOSE_SPAN}",
+        slot_json(metadata)?
+    ))
+}
 
 /// Where the trailing metadata slot of `description` is: the byte its opening marker starts
 /// at, and the span of the encoded JSON inside it — or `None` when it ends in no slot.
 ///
-/// The one place the slot is recognised, so what [`metadata_description`] reads out and
-/// what [`metadata_slot`] keeps for a content write are the same bytes.
+/// The one place the slot is recognised, in either spelling, so what [`metadata_description`]
+/// reads out and what [`metadata_slot`] keeps for a content write are the same bytes.
 fn slot_bounds(description: &str) -> Result<Option<(usize, usize, usize)>, SourceError> {
-    let Some(start) = description.rfind(METADATA_OPEN) else {
+    let Some(start) = description.rfind(METADATA_PREFIX) else {
         return Ok(None);
     };
-    let encoded_start = start + METADATA_OPEN.len();
-    let close = [METADATA_CLOSE, METADATA_CLOSE_ESCAPED]
-        .into_iter()
-        .filter_map(|close| {
+    let rest = &description[start..];
+    let (encoded_start, close) = if rest.starts_with(METADATA_OPEN_SPAN) {
+        let encoded_start = start + METADATA_OPEN_SPAN.len();
+        (
+            encoded_start,
             description[encoded_start..]
-                .find(close)
-                .map(|at| (at, close.len()))
-        })
-        .min();
+                .rfind(METADATA_CLOSE_SPAN)
+                .map(|at| (at, METADATA_CLOSE_SPAN.len())),
+        )
+    } else if rest.starts_with(METADATA_OPEN) {
+        let encoded_start = start + METADATA_OPEN.len();
+        (
+            encoded_start,
+            [METADATA_CLOSE, METADATA_CLOSE_ESCAPED]
+                .into_iter()
+                .filter_map(|close| {
+                    description[encoded_start..]
+                        .find(close)
+                        .map(|at| (at, close.len()))
+                })
+                .min(),
+        )
+    } else {
+        return Ok(None);
+    };
     let Some((relative_end, close_len)) = close else {
         return Err(SourceError::Malformed {
             message: "unterminated onetaskgraph metadata slot in Linear description".into(),
@@ -4066,9 +4132,8 @@ fn metadata_description(
 /// makes sending it sound — `IssueFilter.description.contains` reads the whole stored
 /// description, the slot included, and is case-sensitive, both observed against Linear on
 /// 2026-10-02 and recorded in this crate's module documentation.
-fn slot_phrase(key: &str, value: &str) -> Value {
-    let encoded = |text: &str| Value::String(text.to_owned()).to_string();
-    json!({"description": {"contains": format!("{}:{}", encoded(key), encoded(value))}})
+fn slot_phrase(key: &str, value: &str) -> Result<Value, SourceError> {
+    Ok(json!({"description": {"contains": format!("{}:{}", slot_json(&key)?, slot_json(&value)?)}}))
 }
 
 /// Whether `title`/`content` satisfies `query`, case-insensitively — the contract's own rule,
