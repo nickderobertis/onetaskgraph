@@ -74,6 +74,9 @@ RESPONSE_ROOTS = {
 # `TemplateProvenance` is the `onetaskgraph.template` entry a rendered item's metadata holds,
 # which a caller checking for a hand edit or a changed template reads by name. `UpdatedField` is
 # the vocabulary `task update` reports what it wrote in, which a caller branches on by name.
+# `LinearConfig` is a `linear` source's configuration — its `status_mapping` and its `project` —
+# which a caller writing one models by name. `WorkflowStatesReport` is what `sources fields`
+# writes for a `linear` source, beside the `FieldsReport` it writes for a board.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -94,6 +97,8 @@ CONTRACT_ROOTS = {
     "ItemType",
     "TemplateProvenance",
     "UpdatedField",
+    "LinearConfig",
+    "WorkflowStatesReport",
 }
 RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {

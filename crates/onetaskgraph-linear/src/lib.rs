@@ -490,8 +490,10 @@ use graphql::{
 
 /// One `linear` source's configuration.
 ///
-/// It names the credential's environment variable, never its value.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+/// It names the credential's environment variable, never its value. Serializable so the
+/// schema it is published under carries each member's default, which is what a configuration
+/// that leaves the member out means.
+#[derive(Debug, Clone, Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LinearConfig {
     /// Environment variable resolved by the host.
@@ -509,8 +511,9 @@ pub struct LinearConfig {
     /// The keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,
     /// `done`, `cancelled` and `unknown`. A mapped category is written as the named state by
     /// every write — never as the first state of that state's type — and an issue at a state
-    /// the mapping names reads as that category, under that state's name; `--status` narrows
-    /// a mapped category by those names. A category this does not mention keeps the
+    /// the mapping names reads as that category, under that state's name; any other state
+    /// reads by its type, and `--status` returns exactly the issues that read as the
+    /// categories it names. A category this does not mention keeps the
     /// behaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and
     /// `cancelled` are written as the team's first state of the matching type, and `draft`,
     /// `queued` and `unknown` are disabled. A name the team lacks is refused before any
@@ -532,9 +535,14 @@ pub struct LinearConfig {
 ///
 /// Validated on the way in rather than checked later, so a blank name — which no workflow
 /// state can have — is a state this type cannot hold.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(try_from = "String", into = "String")]
 struct StateName(String);
+impl From<StateName> for String {
+    fn from(value: StateName) -> Self {
+        value.0
+    }
+}
 impl TryFrom<String> for StateName {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -547,9 +555,14 @@ impl TryFrom<String> for StateName {
 }
 
 /// The id of the one Linear project a scoped source holds.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(try_from = "String", into = "String")]
 struct ProjectScope(String);
+impl From<ProjectScope> for String {
+    fn from(value: ProjectScope) -> Self {
+        value.0
+    }
+}
 impl TryFrom<String> for ProjectScope {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -561,9 +574,14 @@ impl TryFrom<String> for ProjectScope {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(try_from = "String", into = "String")]
 struct EnvName(String);
+impl From<EnvName> for String {
+    fn from(value: EnvName) -> Self {
+        value.0
+    }
+}
 impl TryFrom<String> for EnvName {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -579,9 +597,14 @@ impl TryFrom<String> for EnvName {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(try_from = "String", into = "String")]
 struct Team(String);
+impl From<Team> for String {
+    fn from(value: Team) -> Self {
+        value.0
+    }
+}
 impl TryFrom<String> for Team {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -592,9 +615,14 @@ impl TryFrom<String> for Team {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(try_from = "String", into = "String")]
 struct Endpoint(String);
+impl From<Endpoint> for String {
+    fn from(value: Endpoint) -> Self {
+        value.0
+    }
+}
 impl TryFrom<String> for Endpoint {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {

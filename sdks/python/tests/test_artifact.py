@@ -269,7 +269,22 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 26
+    assert emitted_bundle["version"] == 27
+    # Version 27 published a `linear` source's configuration as a root of its own, carrying the
+    # `status_mapping` and the `project` the host's Linear work is written with — and the
+    # generated package models it.
+    linear_config = bundle["roots"]["LinearConfig"]
+    assert isinstance(linear_config, dict)
+    for member in ("status_mapping", "project"):
+        assert member in linear_config["properties"], member
+        assert member not in linear_config.get("required", []), member
+    from onetaskgraph_sdk import LinearConfig
+
+    configured = LinearConfig.model_validate(
+        {"team": "ENG", "project": "P-1", "status_mapping": {"queued": "Queued", "draft": None}}
+    )
+    assert configured.status_mapping == {"queued": "Queued", "draft": None}
+    assert configured.project == "P-1"
     # Version 26 published the metadata values and the copy origin a task list may be narrowed
     # by: the query's `metadata` and `origin`, the `MetadataMatch` one of the first is, and the
     # two capabilities a source declares them with.

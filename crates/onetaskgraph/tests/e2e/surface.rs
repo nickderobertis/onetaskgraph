@@ -263,7 +263,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 26);
+    assert_eq!(bundle["version"], 27);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -329,6 +329,10 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "QueryResponseOfQualifiedTask",
         "StatusOptionsReport",
         "FieldsReport",
+        // What `sources fields` writes for a `linear` source, and that source's configuration,
+        // whose `status_mapping` and `project` a caller writing one models by name.
+        "WorkflowStatesReport",
+        "LinearConfig",
         "Priority",
         "TaskPrioritySet",
         "TaskContentSet",
