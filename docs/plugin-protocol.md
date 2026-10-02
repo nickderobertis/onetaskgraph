@@ -1567,6 +1567,8 @@ plugin's crate documentation to the same figures.
 | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
 | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
+| bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
+| bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it costs nothing |
 | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
 | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time |
@@ -1576,6 +1578,13 @@ plugin's crate documentation to the same figures.
 point: each aliased `node(id:)` item is six of GitHub's aggregate, so 24 come to 144, which
 rounds to one point, and 25 to 150, which rounds to two. The document is fixed-size aliased
 `node(id:)` fields rather than `nodes(ids:)`, which the model cannot see under.
+
+A bound re-copy is 3 requests for a task under no project that names no dependency it does not
+already carry. A project parent adds one: the engine reads the destination project its link
+names by its own id, once per command, to confirm the link still holds. The dependencies a
+re-copy newly names are read together — the item's own read already answered every far end
+that blocks it — `DETAIL_BATCH` to one `ISSUE_DETAILS` request, rather than one request each;
+recording each new edge is then one `addBlockedBy`.
 
 An existing item is written body last. A bound re-copy and a `task update` send its board
 fields first, then its parent and its `blockedBy`, and its title, body and state in one

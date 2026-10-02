@@ -883,13 +883,17 @@ This change cuts what a follow-up run's reads and writes cost, measured on the s
 board in the same two quantities — requests and worst-case node count, **not points** — and
 pinned row by row, as requests equal to declared points equal to the cost table, by
 `follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields` and
-`a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch`:
+`a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch`, and the two
+additions to a bound copy by
+`a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_names`:
 
 | Verb | Before | After |
 | --- | ---: | ---: |
 | new copy | 6 | 4 |
 | copy --create | — | 3 |
 | bound copy | 5 | 3 |
+| bound copy, filed under a project | 6 | 4 |
+| bound copy, newly naming `n` dependencies | + n | + ceil(n / 24) reads, + n `addBlockedBy` either way |
 | task show / task comment list (detail) | 2 | 1 |
 | task show-many of `n` items (batched detail) | 2n | ceil(n / 24) |
 | task update naming title, body, metadata, status and priority | 4, or 5 with no `Status` or `Priority` value held | 3 |
@@ -911,6 +915,10 @@ What moved each:
   read from 203 worst-case nodes to 456 at the same one point and removes the `BOARD_FIELDS`
   and `ISSUE_DEPENDENCIES` reads that followed it. The `Status` option and the `Priority` go in
   one field request, and the content goes last in one `updateIssue`.
+  A task filed under a project adds the one read the engine makes of the destination project
+  its link names, and the far ends a re-copy newly names — the ones its own read did not carry
+  as blockers — are read together in `ISSUE_DETAILS` batches of 24 rather than one `ISSUE`
+  each.
 - **A comment** stays two requests: GitHub accepts a comment on any issue or pull request, so
   only reading the target first refuses one that is not a task of this board.
 

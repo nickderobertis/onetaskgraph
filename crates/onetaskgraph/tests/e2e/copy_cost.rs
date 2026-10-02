@@ -1209,3 +1209,181 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
     assert_eq!(again["items"][0]["destination"], landed[0].1, "{again}");
     assert_ne!(again["items"][0]["action"], "created", "{again}");
 }
+
+/// The two additions the cost table states to a bound re-copy's 3 requests: a task filed
+/// under a project adds the one read that confirms the project's link, and the dependencies a
+/// re-copy newly names are read together, `ceil(n / DETAIL_BATCH)` requests for `n` of them,
+/// beside the one `addBlockedBy` each new edge is.
+#[test]
+fn a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_names() {
+    use onetaskgraph_github_projects::{DETAIL_BATCH, graphql};
+    let plan = Plan::of(DETAIL_BATCH + 2);
+    let (_, _, first) = plan.copy(&[]);
+    let landed = landed(&first);
+    let on_board = |task: usize| {
+        landed
+            .iter()
+            .find(|(source, _)| source == &format!("plans:T-{task}"))
+            .map(|(_, destination)| destination.as_str().unwrap().to_owned())
+            .unwrap()
+    };
+    let path = plan.root.join("tasks/T-0.md");
+    let linked = std::fs::read_to_string(&path).unwrap();
+    let recopy = ["task", "copy", "plans:T-0", "--to", "board", "--json"];
+    let edit = |status: &str, depends_on: &[usize]| {
+        let names = depends_on
+            .iter()
+            .map(|task| format!("{{id: \"{}\", item: task}}", on_board(*task)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let dependencies = if depends_on.is_empty() {
+            String::new()
+        } else {
+            format!("\ndepends_on: [{names}]")
+        };
+        std::fs::write(
+            &path,
+            linked.replace("status: Todo", &format!("status: {status}{dependencies}")),
+        )
+        .unwrap();
+    };
+    edit("Doing", &[]);
+    let (_, under_project, _) = plan.measure(&recopy);
+    // Three newly named dependencies are one batch, and one more than a batch holds is two.
+    let few: Vec<usize> = (1..=3).collect();
+    edit("Todo", &few);
+    let (_, newly_few, _) = plan.measure(&recopy);
+    // Setup, not measured: the three released again, so every one below is newly named.
+    edit("Doing", &[]);
+    plan.measure(&recopy);
+    // A far end the board does not hold, read in a batch beside two it does, refuses the copy
+    // by name before the item's own writes begin, and the item reads back as it stood.
+    let show = ["task", "show", &on_board(0), "--no-comments", "--json"];
+    let (_, _, before) = plan.measure(&show);
+    std::fs::write(
+        &path,
+        linked.replace(
+            "status: Todo",
+            &format!(
+                "status: Todo\ndepends_on: [{{id: \"{}\", item: task}}, {{id: \"board:ISSUE-404\", \
+                 item: task}}, {{id: \"{}\", item: task}}]",
+                on_board(1),
+                on_board(2)
+            ),
+        ),
+    )
+    .unwrap();
+    let served = plan.board.served().len();
+    let output = plan
+        .sandbox
+        .command()
+        .args(recopy)
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("GitHub dependency item ISSUE-404 was not found"),
+        "{}",
+        stderr(&output)
+    );
+    let refused = plan.board.served()[served..].to_vec();
+    // Refused before the item's own writes began: no field and no edge was sent, and what the
+    // copy's undo puts back is what was there.
+    assert!(
+        !refused
+            .iter()
+            .any(|(query, _)| query == graphql::UPDATE_FIELDS || query == graphql::ADD_BLOCKED_BY),
+        "{refused:#?}"
+    );
+    assert_eq!(
+        refused
+            .iter()
+            .filter(|(query, _)| query == graphql::ISSUE_DETAILS)
+            .count(),
+        1,
+        "{refused:#?}"
+    );
+    let (_, _, after) = plan.measure(&show);
+    assert_eq!(after, before);
+    let many: Vec<usize> = (1..=DETAIL_BATCH + 1).collect();
+    edit("Todo", &many);
+    let (_, newly_many, _) = plan.measure(&recopy);
+    // Named again, every one already blocks the item: its own read answers them, so nothing
+    // is read for them and nothing is written for them.
+    edit("Doing", &many);
+    let (_, carried, _) = plan.measure(&recopy);
+    let count = |sent: &[(String, Value)], document: &str| {
+        sent.iter().filter(|(query, _)| query == document).count()
+    };
+    for (case, sent, newly) in [
+        ("under a project", &under_project, 0),
+        ("three newly named", &newly_few, 3),
+        (
+            "a batch and one more newly named",
+            &newly_many,
+            DETAIL_BATCH + 1,
+        ),
+        ("every one already carried", &carried, 0),
+    ] {
+        let batches = newly.div_ceil(DETAIL_BATCH);
+        // The item, then the project its link names, each read once by its own id.
+        assert_eq!(count(sent, graphql::ISSUE), 2, "{case}: {sent:#?}");
+        assert_eq!(
+            count(sent, graphql::ISSUE_DETAILS),
+            batches,
+            "{case}: {sent:#?}"
+        );
+        assert_eq!(
+            count(sent, graphql::ADD_BLOCKED_BY),
+            newly,
+            "{case}: {sent:#?}"
+        );
+        assert_eq!(sent.len(), 4 + batches + newly, "{case}: {sent:#?}");
+        let points: u64 = sent
+            .iter()
+            .map(|(document, _)| {
+                onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
+            })
+            .sum();
+        assert_eq!(points, sent.len() as u64, "{case}");
+        // Every far end read, each exactly once, and nothing else in the batch's slots.
+        let asked: std::collections::BTreeSet<String> = sent
+            .iter()
+            .filter(|(query, _)| query == graphql::ISSUE_DETAILS)
+            .flat_map(|(_, variables)| {
+                (0..DETAIL_BATCH)
+                    .map(move |slot| variables[format!("id{slot}")].as_str().unwrap().to_owned())
+            })
+            .collect();
+        let wanted: std::collections::BTreeSet<String> = (1..=newly)
+            .map(|task| native(&json!(on_board(task))))
+            .collect();
+        assert_eq!(asked, wanted, "{case}");
+    }
+    for row in [
+        "//! | bound copy, filed under a project | 4 |",
+        "//! | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n |",
+    ] {
+        assert!(
+            include_str!("../../../onetaskgraph-github-projects/src/lib.rs").contains(row),
+            "cost table: {row}"
+        );
+        assert!(
+            PROTOCOL.contains(&row.replacen("//! ", "\n", 1)),
+            "docs/plugin-protocol.md cost table: {row}"
+        );
+    }
+    let (_, _, shown) = plan.measure(&["task", "deps", &on_board(0), "--json"]);
+    let blockers: std::collections::BTreeSet<String> = shown["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|edge| edge["to"]["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        blockers,
+        many.iter().map(|task| on_board(*task)).collect(),
+        "{shown}"
+    );
+}

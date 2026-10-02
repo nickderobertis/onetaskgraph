@@ -198,8 +198,13 @@
 //! field/repository discovery a create needs. A bound re-copy changes status, priority,
 //! content and metadata; comment recount means a subsequent detail read. Each request here
 //! costs one declared point. A membership beyond the embedded page can additionally require
-//! the one-point membership recovery described above, and a far end a write names that does
-//! not already block the item is read by its own id.
+//! the one-point membership recovery described above. A bound re-copy of a task filed under a
+//! project adds one read, the engine confirming that project's link by its own id once per
+//! command; and the same-source far ends a write newly names — those that do not already block
+//! the item, whose own read answered for them — are read together by their own ids,
+//! [`DETAIL_BATCH`] to one [`graphql::ISSUE_DETAILS`] request, each new edge then one
+//! [`graphql::ADD_BLOCKED_BY`]. Both additions are rows of the table below, pinned by
+//! `a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_names`.
 //!
 //! **[`DETAIL_BATCH`] is 24**: the largest batch of [`graphql::ISSUE_DETAILS`] the node-count
 //! model prices at one point. Each aliased item is six of GitHub's aggregate, so 24 are 144,
@@ -242,6 +247,8 @@
 //! | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
 //! | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 //! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS, then UPDATE_ISSUE last |
+//! | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
+//! | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it is answered by its own read and costs nothing |
 //! | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request (see below) |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 //! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
@@ -4011,6 +4018,88 @@ impl GitHubProjectsSource {
         }
     }
 
+    /// Several items of this board, each by its own id, in order — what [`Self::item_by_id`]
+    /// answers for each, read [`DETAIL_BATCH`] at a time with [`graphql::ISSUE_DETAILS`] rather
+    /// than one request per id.
+    ///
+    /// What this run wrote answers first, as it does there, and only the rest is read. One id
+    /// left to read is read by [`Self::item_by_id`] itself, which costs what a batch does. A
+    /// batch GitHub refuses because one of its ids resolves to no node at all is read again one
+    /// id at a time, so that id is answered as not held and the others as themselves; a draft
+    /// is completed by a read of the draft, exactly as there.
+    async fn items_by_ids(&self, ids: &[NativeId]) -> Result<Vec<Option<Resolved>>, SourceError> {
+        let mut found: Vec<Option<Option<Resolved>>> = {
+            let created = self.created()?;
+            ids.iter()
+                .map(|id| {
+                    created
+                        .iter()
+                        .find(|own| own.id == *id)
+                        .map(|own| Some(own.clone()))
+                })
+                .collect()
+        };
+        let unread: Vec<NativeId> = ids
+            .iter()
+            .zip(&found)
+            .filter(|(_, found)| found.is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut read = Vec::with_capacity(unread.len());
+        if let [one] = unread.as_slice() {
+            read.push(self.item_by_id(one).await?);
+        } else {
+            for batch in unread.chunks(DETAIL_BATCH) {
+                let data = match self
+                    .graphql(graphql::ISSUE_DETAILS, detail_batch(batch, None))
+                    .await
+                {
+                    Ok(data) => data,
+                    Err(error) if unresolvable_node(&error) => {
+                        for id in batch {
+                            read.push(self.item_by_id(id).await?);
+                        }
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                for (slot, id) in batch.iter().enumerate() {
+                    let node =
+                        data.get(format!("i{slot}"))
+                            .ok_or_else(|| SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered a batch read with no item for {}",
+                                    id.0
+                                ),
+                            })?;
+                    read.push(if node.is_null() {
+                        None
+                    } else if optional_str(node, "__typename")? == Some("DraftIssue") {
+                        self.draft_by_id(id).await?
+                    } else {
+                        if optional_str(node, "__typename")? == Some("Issue")
+                            && required_str(node, "id")? != id.0
+                        {
+                            return Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered the read of {} with issue {}",
+                                    id.0,
+                                    required_str(node, "id")?
+                                ),
+                            });
+                        }
+                        self.resolve_issue(node).await?
+                    });
+                }
+            }
+        }
+        let mut read = read.into_iter();
+        Ok(found
+            .iter_mut()
+            .map(|slot| slot.take().unwrap_or_else(|| read.next().flatten()))
+            .collect())
+    }
+
     fn resolved_cache(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, BTreeMap<NativeId, Resolved>>, SourceError> {
@@ -7121,21 +7210,8 @@ impl GitHubProjectsSource {
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
         let mut read = Vec::with_capacity(ids.len());
         for batch in ids.chunks(DETAIL_BATCH) {
-            let mut variables = serde_json::Map::new();
-            for slot in 0..DETAIL_BATCH {
-                let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
-                variables.insert(format!("id{slot}"), json!(id));
-            }
-            variables.insert(
-                "first".to_owned(),
-                json!(comments.map_or(MAX_PAGE_SIZE, |page| page.limit.min(MAX_PAGE_SIZE))),
-            );
-            variables.insert("comments".to_owned(), json!(comments.is_some()));
-            variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
-            variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
-            variables.insert("duplicates".to_owned(), json!(true));
             match self
-                .graphql(graphql::ISSUE_DETAILS, Value::Object(variables))
+                .graphql(graphql::ISSUE_DETAILS, detail_batch(batch, comments))
                 .await
             {
                 Ok(data) => {
@@ -7269,32 +7345,52 @@ impl GitHubProjectsSource {
     ) -> Result<(Vec<String>, Vec<DependencyEdge>), SourceError> {
         let mut native = Vec::new();
         let mut fallback = Vec::new();
-        for edge in depends_on {
-            let same_source = edge
-                .to
-                .source()
-                .is_none_or(|source| source == self.name.as_str());
-            // A qualified id's source segment runs to its *first* colon — `GlobalId` and
-            // `DependencyEndpoint::source` both read it that way — and a native id may hold
-            // colons of its own, so the far end is everything after that one separator.
-            // Splitting at the last would truncate `work:urn:task:7` to `7`.
-            let far_id = if edge.to.is_qualified() {
-                edge.to
-                    .id()
-                    .split_once(':')
-                    .map_or(edge.to.id(), |(_, native)| native)
-            } else {
-                edge.to.id()
-            };
-            // A same-source far end is read by its own id, exactly as the item it is a far end
-            // of is: whether this board holds it is that read's answer, never a listing's. One
-            // that already blocks the near issue was answered by that issue's own read, which
-            // carried each of its blockers' kinds — an issue every one — so it is not read again.
-            let blocking = carried.and_then(|nodes| {
-                nodes
-                    .iter()
-                    .find(|node| node.get("id").and_then(Value::as_str) == Some(far_id))
-            });
+        let far_ends: Vec<(&DependencyEdge, &str, bool, Option<&Value>)> = depends_on
+            .iter()
+            .map(|edge| {
+                let same_source = edge
+                    .to
+                    .source()
+                    .is_none_or(|source| source == self.name.as_str());
+                // A qualified id's source segment runs to its *first* colon — `GlobalId` and
+                // `DependencyEndpoint::source` both read it that way — and a native id may hold
+                // colons of its own, so the far end is everything after that one separator.
+                // Splitting at the last would truncate `work:urn:task:7` to `7`.
+                let far_id = if edge.to.is_qualified() {
+                    edge.to
+                        .id()
+                        .split_once(':')
+                        .map_or(edge.to.id(), |(_, native)| native)
+                } else {
+                    edge.to.id()
+                };
+                // One that already blocks the near issue was answered by that issue's own
+                // read, which carried each of its blockers' kinds — an issue every one — so it
+                // is not read again.
+                let blocking = carried.and_then(|nodes| {
+                    nodes
+                        .iter()
+                        .find(|node| node.get("id").and_then(Value::as_str) == Some(far_id))
+                });
+                (edge, far_id, same_source, blocking)
+            })
+            .collect();
+        // Every other same-source far end is read by its own id, exactly as the item it is a
+        // far end of is: whether this board holds it is that read's answer, never a listing's.
+        // They are read together, [`DETAIL_BATCH`] to a request, rather than one each.
+        let mut unread: Vec<NativeId> = Vec::new();
+        for (_, far_id, same_source, blocking) in &far_ends {
+            let id = NativeId((*far_id).to_owned());
+            if *same_source && blocking.is_none() && !unread.contains(&id) {
+                unread.push(id);
+            }
+        }
+        let read: BTreeMap<NativeId, Option<Resolved>> = unread
+            .iter()
+            .cloned()
+            .zip(self.items_by_ids(&unread).await?)
+            .collect();
+        for (edge, far_id, same_source, blocking) in far_ends {
             let far = match (same_source, blocking) {
                 (false, _) => None,
                 (true, Some(node)) => Some(FarEnd {
@@ -7306,9 +7402,10 @@ impl GitHubProjectsSource {
                     content_kind: ContentKind::Issue,
                 }),
                 (true, None) => {
-                    let read = self
-                        .item_by_id(&NativeId(far_id.to_owned()))
-                        .await?
+                    let read = read
+                        .get(&NativeId(far_id.to_owned()))
+                        .cloned()
+                        .flatten()
                         .ok_or_else(|| SourceError::Refused {
                             message: format!("GitHub dependency item {far_id} was not found"),
                         })?;
@@ -7669,6 +7766,29 @@ enum Reached {
 /// off the refusal GitHub sent, never guessed from the shape of the string: this source
 /// does not define the syntax of a GitHub node id and would be wrong about it.
 const UNRESOLVABLE_NODE: &str = "could not resolve to a node";
+
+/// The variables of one [`graphql::ISSUE_DETAILS`] request over `batch` — at most
+/// [`DETAIL_BATCH`] ids — each item with the first page of its comments when `comments` asks
+/// for them.
+///
+/// The document is fixed-size, so a slot `batch` has no id for is bound to its last id, which
+/// is read again at no added price.
+fn detail_batch(batch: &[NativeId], comments: Option<&PageRequest>) -> Value {
+    let mut variables = serde_json::Map::new();
+    for slot in 0..DETAIL_BATCH {
+        let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
+        variables.insert(format!("id{slot}"), json!(id));
+    }
+    variables.insert(
+        "first".to_owned(),
+        json!(comments.map_or(MAX_PAGE_SIZE, |page| page.limit.min(MAX_PAGE_SIZE))),
+    );
+    variables.insert("comments".to_owned(), json!(comments.is_some()));
+    variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+    variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+    variables.insert("duplicates".to_owned(), json!(true));
+    Value::Object(variables)
+}
 
 /// Whether this refusal is GitHub saying the id names no node at all.
 fn unresolvable_node(error: &SourceError) -> bool {
