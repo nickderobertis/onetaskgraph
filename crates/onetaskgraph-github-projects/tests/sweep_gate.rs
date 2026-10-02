@@ -319,6 +319,9 @@ struct Board {
     /// What this board has already refused a delete for, so a test can assert the tolerance
     /// was exercised rather than that nothing was ever deleted.
     refused: Vec<String>,
+    /// Issue ids whose next delete this board answers `504 Gateway Timeout`, each with
+    /// whether that delete landed behind the timeout. One timeout per entry.
+    timing_out: Vec<(String, bool)>,
 }
 
 impl Board {
@@ -440,6 +443,7 @@ impl Drive {
             vanishing_labels,
             immortal,
             refused: Vec::new(),
+            timing_out: Vec::new(),
         };
         Self {
             _exclusive: exclusive,
@@ -461,6 +465,15 @@ impl Drive {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .refused
             .clone()
+    }
+
+    /// Answer the next delete of issue `id` with a gateway timeout, landing it or not.
+    fn time_out_issue_delete(&self, id: &str, lands: bool) {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .timing_out
+            .push((id.to_owned(), lands));
     }
 
     /// Whether the repository still holds the issue `id`.
@@ -740,6 +753,76 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     );
 }
 
+#[tokio::test]
+async fn a_gateway_timeout_on_an_issue_delete_is_asked_again_rather_than_failing_the_run() {
+    // GitHub has answered this lane's `deleteIssue` with `504 Gateway Timeout` on a run whose
+    // journey had passed. A timeout is not an answer: the delete may have landed behind it or
+    // not, and the board can no longer say, because the item is already off it.
+    let landed = artifact_title(RUNS.mine, NOW);
+    let lost = artifact_title(RUNS.mine, NOW + 1);
+    let drive = Drive::plant(
+        vec![
+            ("PVTI_landed", Some("I_landed"), landed),
+            ("PVTI_lost", Some("I_lost"), lost),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    );
+    drive.time_out_issue_delete("I_landed", true);
+    drive.time_out_issue_delete("I_lost", false);
+    let _in_flight = session_in_flight();
+
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        .await
+        .expect("a delete that timed out is asked again, and either answer settles it");
+
+    let (titles, _) = drive.left();
+    assert!(titles.is_empty(), "{titles:?}");
+    assert!(
+        !drive.holds_issue("I_landed") && !drive.holds_issue("I_lost"),
+        "an issue whose delete timed out is still in the repository"
+    );
+    // Both timeouts really happened, and the one that had landed was then refused as gone.
+    assert_eq!(
+        sorted(drive.refused()),
+        sorted(vec![
+            "I_landed".to_owned(),
+            "I_landed".to_owned(),
+            "I_lost".to_owned()
+        ]),
+        "the board did not time out the deletes this case is about"
+    );
+}
+
+#[tokio::test]
+async fn an_issue_delete_refused_outright_still_fails_the_cleanup() {
+    // The side the retry must not swallow: a refusal GitHub actually answered is not a
+    // timeout, and an issue it reports gone on a FIRST attempt is one this run never saw go.
+    let mine = artifact_title(RUNS.mine, NOW);
+    let drive = Drive::plant(
+        vec![("PVTI_mine", Some("I_elsewhere"), mine)],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    );
+    // The issue is gone from the repository before this cleanup ever asks for it.
+    STANDIN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .issues
+        .clear();
+    let _in_flight = session_in_flight();
+
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        .await
+        .expect_err("a delete GitHub refused on its first answer fails the cleanup");
+    assert!(refusal.contains("NOT_FOUND"), "{refusal}");
+    assert_eq!(drive.refused(), vec!["I_elsewhere".to_owned()]);
+}
+
 fn sorted(mut names: Vec<String>) -> Vec<String> {
     names.sort();
     names
@@ -827,6 +910,14 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
     }
     if query.contains("deleteIssue(input:$input)") {
         let issue = input["issueId"].as_str().expect("an issue id").to_owned();
+        if let Some(at) = board.timing_out.iter().position(|(held, _)| *held == issue) {
+            let (_, lands) = board.timing_out.remove(at);
+            if lands {
+                board.issues.retain(|held| *held != issue);
+            }
+            board.refused.push(issue);
+            return ("504 Gateway Timeout", "{}".to_owned());
+        }
         if !board.holds_issue(&issue) {
             board.refused.push(issue.clone());
             return gone(&issue);

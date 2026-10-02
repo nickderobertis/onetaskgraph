@@ -709,13 +709,7 @@ async fn remove_live_artifacts(
             // nothing below would catch it. A delete that was refused says the item had
             // already gone, and whoever took it took its issue the same way this lane does.
             if taken && let Some(issue_id) = issue_id {
-                graphql_variables(
-                    token,
-                    "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
-                    "live artifact issue cleanup",
-                    json!({"input":{"issueId":issue_id}}),
-                )
-                .await?;
+                delete_issue(token, &issue_id).await?;
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -734,6 +728,58 @@ async fn remove_live_artifacts(
             format!("; GitHub refused: {}", refused.join("; "))
         }
     ))
+}
+
+/// Deletes the issue behind a board item this run has just taken off the board.
+///
+/// **A gateway that failed is not an answer about the issue, so it is asked again.** GitHub
+/// has answered this very mutation `504 Gateway Timeout` on a run whose journey had passed,
+/// and a timeout says nothing about whether the delete landed behind it. The board cannot
+/// settle it either, because the item is already off the board and no listing names the
+/// issue again. So only a failure that never reached an answer — a 5xx, or no response at
+/// all — is retried, and a retry that GitHub answers `NOT_FOUND` is the earlier attempt
+/// having landed. Anything else GitHub refuses fails the cleanup at once, as it always did,
+/// and so does a gateway still failing after every attempt.
+///
+/// `NOT_FOUND` is read only *after* this cleanup's own unanswered attempt: on a first
+/// attempt it would be an issue this run never saw removed, which is a failure to report.
+async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
+    const ATTEMPTS: u64 = 3;
+    let mut unanswered = None;
+    for attempt in 1..=ATTEMPTS {
+        match graphql_variables(
+            token,
+            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
+            "live artifact issue cleanup",
+            json!({"input":{"issueId":issue_id}}),
+        )
+        .await
+        {
+            Ok(_) => return Ok(()),
+            Err(problem) if unanswered.is_some() && problem.contains(r#""type":"NOT_FOUND""#) => {
+                return Ok(());
+            }
+            Err(problem) if never_answered(&problem) && attempt < ATTEMPTS => {
+                unanswered = Some(problem);
+                tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+            }
+            Err(problem) => {
+                return Err(match unanswered {
+                    Some(earlier) if earlier != problem => {
+                        format!("{problem} (an earlier attempt: {earlier})")
+                    }
+                    _ => problem,
+                });
+            }
+        }
+    }
+    unreachable!("the last attempt returns whatever it was answered")
+}
+
+/// Whether a failure [`graphql_variables`] reported is one GitHub never answered: a server
+/// error, or a request that never reached it.
+fn never_answered(problem: &str) -> bool {
+    problem.contains(" query failed: HTTP 5") || problem.contains(" query could not reach GitHub")
 }
 
 /// A live assertion that returns rather than panics.
