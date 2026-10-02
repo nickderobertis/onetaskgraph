@@ -889,8 +889,8 @@ additions to a bound copy by
 
 | Verb | Before | After |
 | --- | ---: | ---: |
-| new copy | 6 | 4 |
-| copy --create | — | 3 |
+| new copy | 6 | 5 |
+| copy --create | — | 4 |
 | bound copy | 5 | 3 |
 | bound copy, filed under a project | 6 | 4 |
 | bound copy, newly naming `n` dependencies | + n | + ceil(n / 24) reads, + n `addBlockedBy` either way |
@@ -907,9 +907,12 @@ What moved each:
   batch is one point. The comment connection is selected on those two documents and not on the
   shared fragment, which the hundred-issue search and sub-issue pages carry.
 - **A new copy.** The board's fields and the repository's id are read together in one
-  `CREATION_CONTEXT` request at the point the repository is known, and `createIssue` files the
-  issue on the board through `projectV2Ids` and answers with its board item, so neither
-  `REPOSITORY` nor `addProjectV2ItemById` is sent. `--create` drops the origin lookup as well.
+  `CREATION_CONTEXT` request at the point the repository is known, so `REPOSITORY` is not
+  sent. `--create` drops the origin lookup as well. `addProjectV2ItemById` still files the
+  issue: filing it at creation through `CreateIssueInput.projectV2Ids` was tried and put to a
+  real board by the credentialed journey on 2026-10-01, where all four creates answered with no
+  board item and the filing that then had to follow was refused "Content already exists in
+  this project", which failed that journey. A create sends no `projectV2Ids`.
 - **A bound copy and an update.** The read of an item by its own id now carries the field
   definitions of the boards it sits on and the far ends of its `blockedBy`, which takes that
   read from 203 worst-case nodes to 456 at the same one point and removes the `BOARD_FIELDS`
@@ -922,17 +925,16 @@ What moved each:
 - **A comment** stays two requests: GitHub accepts a comment on any issue or pull request, so
   only reading the target first refuses one that is not a task of this board.
 
-The copy golden moves (a) from 56 requests and 29,600 nodes to 44 and 29,633 — eleven
-`addProjectV2ItemById` and the separate repository read gone, the creates' payloads counting
-three membership nodes each — and (b) from 24/34,983 to 13/35,566, its eleven dependency reads
+The copy golden moves (a) from 56 requests and 29,600 nodes to 55 and 29,600 — the separate
+repository read gone — and (b) from 24/34,983 to 13/35,566, its eleven dependency reads
 answered by the richer issue reads. The member copies (c)/(d) go from 7/1,006 to 4/912, the
 targeted updates (e)/(f) keep their requests at 456 nodes a read, the linked re-copy (g) goes
 from 6/806 to 4/912, the origin-found one (h) from 7/21,918 to 6/21,971, (i) from 4/21,718 to
-3/21,771, and the new task copy (j) from 6/965 to 4/968. The (g)/(h) table above is updated to
+3/21,771, and the new task copy (j) from 6/965 to 5/965. The (g)/(h) table above is updated to
 these figures, as its drift test requires.
 
-The session golden moves from 117 requests and 236,850 nodes to 112 and 246,264: six
-`addProjectV2ItemById` and one repository read are gone, the richer issue reads add 1,518
+The session golden moves from 117 requests and 236,850 nodes to 118 and 246,246: both
+repository reads are folded into the board-field reads beside them, the richer issue reads add 1,518
 nodes over the six of them, and the reconciliation probes three more read documents —
 `ISSUE_DETAIL`, `ISSUE_DETAILS` and `CREATION_CONTEXT` — at 303, 7,272 and 50 nodes.
 

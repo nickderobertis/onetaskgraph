@@ -271,11 +271,9 @@ fn budget_exhausted(response: &reqwest::Response) -> bool {
 /// across such a call, and that is one observation rather than a guarantee. What a run
 /// reports is what that run saw.
 ///
-/// `rateLimit` is a field of `Query`, so a **mutation** cannot be asked at all. One mutation
-/// this source sends selects a connection — `createIssue` reads the new issue's page of board
-/// items, bounded at `$boardItems`, so it needs no `addProjectV2ItemById` — and every other
-/// selects none. What is checked instead is that each is priced at GitHub's one-point
-/// minimum, which a connection resolved once under a mutation cannot move.
+/// `rateLimit` is a field of `Query`, so a **mutation** cannot be asked at all. What is
+/// checked instead is that each mutation this source sends is priced at GitHub's one-point
+/// minimum, which a connection resolved once under a mutation could not move either.
 async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String> {
     let (limit, before) = account_allowance(token, "before").await?;
     let mut asked = 0_usize;
@@ -1200,11 +1198,7 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
 pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
-    (
-        "CreateIssueInput",
-        true,
-        &["repositoryId", "title", "body", "projectV2Ids"],
-    ),
+    ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
         true,
@@ -1468,13 +1462,10 @@ async fn verify_contract_schema(
 
 pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
     match type_name {
-        // `projectV2Ids` is what files the issue on the board as it is created, so a create
-        // sends no `addProjectV2ItemById` — the fact a new copy's cost rests on.
         "CreateIssueInput" => &[
             ("repositoryId", "ID!"),
             ("title", "String!"),
             ("body", "String"),
-            ("projectV2Ids", "[ID!]"),
         ],
         "AddProjectV2ItemByIdInput" => &[("projectId", "ID!"), ("contentId", "ID!")],
         "AddSubIssueInput" => &[("issueId", "ID!"), ("subIssueId", "ID")],

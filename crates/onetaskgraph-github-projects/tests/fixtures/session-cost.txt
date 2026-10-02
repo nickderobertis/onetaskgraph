@@ -1,5 +1,5 @@
-requests 112
-node count 246264
+requests 118
+node count 246246
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -9,9 +9,10 @@ requests per call
     1       0  account allowance after the reconciliation
     1       0  account allowance before the reconciliation
     2       0  adding a comment
+    6       0  adding an issue to the board
     2     100  board page size probe
     9       0  contract schema introspection
-    6      18  creating an issue
+    6       0  creating an issue
     6       0  deleting an issue
     1       0  editing a comment
     3       0  filing an issue under its project

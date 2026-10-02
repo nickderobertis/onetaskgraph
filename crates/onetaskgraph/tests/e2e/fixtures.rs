@@ -933,11 +933,6 @@ struct GitHubBoard {
     comment_ticks: u64,
     /// Issues `createIssue` made which `addProjectV2ItemById` has not filed yet.
     pending: Vec<Value>,
-    /// Whether `createIssue` files the issue on the board its `projectV2Ids` names, as GitHub
-    /// documents. A board refusing `addProjectV2ItemById` is built with this off, because
-    /// that refusal is only reachable once a create has answered with no board item — which
-    /// is when the source files the issue itself.
-    creation_files_on_board: bool,
     /// An alias of one batched field write this board fails, once, after performing every
     /// alias before it — the way GitHub runs a document's mutation fields in order and answers
     /// one that failed with `null` and an error, without undoing the ones before it.
@@ -1769,7 +1764,6 @@ fn github_projects_board_at(
         comments: Vec::new(),
         comment_ticks: 0,
         pending: Vec::new(),
-        creation_files_on_board: !fail_first.contains(&"addProjectV2ItemById(input:$input)"),
         failing_alias: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
@@ -2390,26 +2384,18 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[]});
-        // Filed at creation on the board `projectV2Ids` names, unless this board was built to
-        // answer as if GitHub had not — which is what the source then files itself.
-        let filed = board.creation_files_on_board
-            && input["projectV2Ids"]
-                .as_array()
-                .is_some_and(|boards| boards.iter().any(|board| board == "PVT-board"));
-        let memberships = if filed {
-            let nodes = json!([{"id":created["item"],"project":{"id":"PVT-board","number":7}}]);
-            board.items.push(created);
-            nodes
-        } else {
-            board.pending.push(created);
-            json!([])
-        };
+        // A real board answered a create naming it in `projectV2Ids` with no item, filed the
+        // issue after, and refused the filing that then had to follow — so no create names it.
+        assert!(
+            input.get("projectV2Ids").is_none(),
+            "a create named the board in projectV2Ids: {input}"
+        );
+        board.pending.push(created);
         // GitHub answers the creating mutation with the issue's own web address and its
         // number, which is the only place a run learns where an item it just created is,
         // and what that item's short handle is, before this board's read catches up.
         return json!({"createIssue":{"issue":{"id":id,"number":github_number(&id),
-            "url":format!("https://example.invalid/{id}"),
-            "projectItems":{"nodes":memberships}}}});
+            "url":format!("https://example.invalid/{id}")}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");

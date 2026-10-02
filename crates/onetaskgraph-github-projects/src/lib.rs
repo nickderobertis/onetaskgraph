@@ -224,15 +224,21 @@
 //!
 //! **Two facts about GitHub the write rows rest on, each read off GitHub's published schema
 //! artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-01 and pinned
-//! in `tests/fixtures/schema.graphql`:**
+//! in `tests/fixtures/schema.graphql`, and the first then put to GitHub itself:**
 //!
-//! - **A board is accepted at creation, so a new copy is 4 requests and 3 with `--create`.**
+//! - **A board is accepted at creation but its item is not answered, so a create still files
+//!   the issue itself: a new copy is 5 requests, and 4 with `--create`.**
 //!   `CreateIssueInput.projectV2Ids: [ID!]` is declared there — "An array of Node IDs for
 //!   Projects V2 associated with this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])`.
-//!   A create sends the board in it and reads the board item that made off the payload's
-//!   `Issue.projectItems`, so it sends no [`graphql::ADD_TO_BOARD`]; an answer naming no item
-//!   on this board is filed with `addProjectV2ItemById` as before, which answers with the item
-//!   an issue already has. The board's fields and the repository's id are read together, in
+//!   The credentialed journey `real_projects_v2_contract_writes_and_leaves_no_residue` was run
+//!   against a real board on 2026-10-01 with a create sending the board there and reading the
+//!   item off the payload's `Issue.projectItems`: every one of its four creates answered with
+//!   no item on the board, so each went on to [`graphql::ADD_TO_BOARD`], and the fourth was
+//!   refused "Content already exists in this project" — GitHub had filed the issue after
+//!   answering, and refuses a second filing rather than answering with the item it holds. A
+//!   create therefore sends no `projectV2Ids` and files the issue with
+//!   `addProjectV2ItemById`, the one call whose answer names the board item. The saving that is
+//!   real is the read before it: the board's fields and the repository's id together, in
 //!   [`graphql::CREATION_CONTEXT`], at the point the repository is known.
 //! - **A comment still reads its target first, so a comment is 2 requests.**
 //!   `AddCommentInput.subjectId: ID!` is declared there with
@@ -245,8 +251,8 @@
 //!
 //! | Verb | Requests / points | Documents |
 //! | --- | --- | --- |
-//! | new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
-//! | copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
+//! | new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
+//! | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 //! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS, then UPDATE_ISSUE last |
 //! | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
 //! | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it is answered by its own read and costs nothing |
@@ -1069,14 +1075,11 @@ pub mod graphql {
       }}}"#,
         related_issue!()
     );
-    /// Creates one issue, filed on the board at creation through
-    /// `CreateIssueInput.projectV2Ids`, and answers with the board item that filing made.
-    ///
-    /// The issue's `projectItems` page is what names that item, so the field writes that
-    /// follow need no [`ADD_TO_BOARD`]. It is the one mutation here that selects a
-    /// connection, bounded at `$boardItems` — a new issue sits on the board it was filed on
-    /// and no other — and one item resolved once is still GitHub's one-point minimum.
-    pub const CREATE_ISSUE: &str = r#"mutation($input:CreateIssueInput!,$boardItems:Int!){createIssue(input:$input){issue{id number url projectItems(first:$boardItems){nodes{id project{id number}}}}}}"#;
+    /// Creates one issue in the configured repository, on no board: [`ADD_TO_BOARD`] files
+    /// it. `CreateIssueInput.projectV2Ids` is not sent — see the crate's notes on what GitHub
+    /// answered when it was.
+    pub const CREATE_ISSUE: &str =
+        r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id number url}}}"#;
     /// Puts an existing issue on the configured board.
     pub const ADD_TO_BOARD: &str = r#"mutation($input:AddProjectV2ItemByIdInput!){addProjectV2ItemById(input:$input){item{id}}}"#;
     /// Updates an issue's visible fields and its open or closed state in one call.
@@ -7556,11 +7559,13 @@ impl GitHubProjectsSource {
     /// Creates one issue, files it on the board, and reports what a read of it would say:
     /// its content id, its board item id, and the web address GitHub gave it.
     ///
-    /// One call: `createIssue` takes the board in `projectV2Ids` and answers with the board
-    /// item that made, so the item is on the board as it is created. `addProjectV2ItemById`
-    /// is sent only for an answer that names no item on this board. A terminal status is not
-    /// written here: `finish_write` selects its option first and closes the issue after, so a
-    /// close never lands on an item whose board cannot show it.
+    /// Two calls rather than one: `createIssue` answers with an issue that is on no board,
+    /// and `addProjectV2ItemById` is what puts it there. Filing it at creation through
+    /// `CreateIssueInput.projectV2Ids` was tried and is not done: GitHub answered with no
+    /// board item, and the `addProjectV2ItemById` that then had to follow was refused
+    /// "Content already exists in this project". A terminal status is not written here:
+    /// `finish_write` selects its option first and closes the issue after, so a close never
+    /// lands on an item whose board cannot show it.
     ///
     /// The address and the number come back here because this is the only place either is
     /// known before GitHub's own board read catches up — an item this run created answers
@@ -7578,9 +7583,8 @@ impl GitHubProjectsSource {
             .graphql(
                 graphql::CREATE_ISSUE,
                 json!({"input":{
-                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body,
-                    "projectV2Ids":[board_id]
-                },"boardItems":BOARD_ITEMS_PAGE_SIZE}),
+                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body
+                }}),
             )
             .await?;
         let created = data
@@ -7609,29 +7613,6 @@ impl GitHubProjectsSource {
                 return Err(error);
             }
         };
-        // Filed at creation, the issue names its board item on the page that came back with
-        // it. One that does not was created and not filed, and is filed here instead —
-        // `addProjectV2ItemById` answers with the item an issue already has on a board, so
-        // filing one GitHub did file is not a second item either.
-        let filed = created
-            .pointer("/projectItems/nodes")
-            .and_then(Value::as_array)
-            .and_then(|nodes| {
-                nodes.iter().find(|node| {
-                    node.pointer("/project/id").and_then(Value::as_str) == Some(board_id)
-                })
-            })
-            .and_then(|node| node.get("id").and_then(Value::as_str))
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned);
-        if let Some(item_id) = filed {
-            return Ok(Landed {
-                content_id,
-                item_id,
-                url,
-                number,
-            });
-        }
         let added = match self
             .graphql(
                 graphql::ADD_TO_BOARD,

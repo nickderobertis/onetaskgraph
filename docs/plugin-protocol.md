@@ -1564,8 +1564,8 @@ plugin's crate documentation to the same figures.
 
 | Verb | Requests / points | Documents |
 | --- | --- | --- |
-| new copy | 4 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE (filed on the board through `projectV2Ids`), UPDATE_FIELDS |
-| copy --create | 3 | CREATION_CONTEXT, CREATE_ISSUE, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
+| new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
+| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
 | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
 | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
 | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it costs nothing |
@@ -1599,12 +1599,19 @@ not say which of its fields ran, so the refusal names both values the key may ho
 
 Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
 (<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in
-`crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql`:
+`crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql`, the first then put to
+GitHub itself:
 
-- `createIssue` accepts the board at creation: `CreateIssueInput.projectV2Ids: [ID!]`, "An
-  array of Node IDs for Projects V2 associated with this issue". A create sends the board
-  there and reads its board item off the payload's `Issue.projectItems`, so it sends no
-  `addProjectV2ItemById` unless the answer names no item on the board.
+- `createIssue` accepts the board at creation — `CreateIssueInput.projectV2Ids: [ID!]`, "An
+  array of Node IDs for Projects V2 associated with this issue" — but does not answer with the
+  board item. The credentialed journey run against a real board on 2026-10-01 with a create
+  sending the board there saw every one of its four creates answer with no item in
+  `Issue.projectItems`, and the `addProjectV2ItemById` that then had to follow was refused
+  "Content already exists in this project": GitHub filed the issue after answering, and
+  refuses a second filing rather than answering with the item it holds. So a create sends no
+  `projectV2Ids` and files the issue with `addProjectV2ItemById`, whose answer names the item;
+  what a new copy saves is the read before it, the board's fields and the repository's id in
+  one `CREATION_CONTEXT` request.
 - A comment cannot skip its target's read: `AddCommentInput.subjectId` admits
   `Issue` and `PullRequest`, so GitHub refuses a draft but accepts a project's issue, a
   document's issue, an issue on no board and a pull request alike. There is no refusal to map

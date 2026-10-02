@@ -553,10 +553,6 @@ struct State {
     /// up. Nothing else can produce that state, and it is not one a board is ever *seen*
     /// in — which is exactly why it needs a fixture to reach it.
     creation_reports_number: bool,
-    /// Whether `createIssue` files the issue on the board its `projectV2Ids` names, as GitHub
-    /// documents it does — `false` models an answer that named no item there, which is what
-    /// the source files with `addProjectV2ItemById` instead.
-    creation_files_on_board: bool,
     /// Which identifier the next guarded snapshot returns blank, for boundary validation.
     blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
@@ -1120,12 +1116,6 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
-    /// Answer every `createIssue` from here on without filing the issue on the board its
-    /// `projectV2Ids` names, so it lands on no board until `addProjectV2ItemById` files it.
-    fn creation_files_nothing(&self) {
-        self.state.lock().unwrap().creation_files_on_board = false;
-    }
-
     /// Answer every `createIssue` from here on with a `number` that is not an integer.
     fn creation_reports_an_unreadable_number(&self) {
         self.state.lock().unwrap().creation_number_is_unreadable = true;
@@ -1158,7 +1148,6 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
         creation_reports_number: true,
-        creation_files_on_board: true,
         blank_status_snapshot_id: None,
         origin_field,
         status_field,
@@ -1302,6 +1291,18 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
             return Some(format!(
                 "Could not resolve to a node with the global id of '{id}'."
             ));
+        }
+    }
+    // Filing an issue the board already holds is refused, which is what a real board
+    // answered to the filing that followed a create naming the board in `projectV2Ids`.
+    if query.contains("addProjectV2ItemById(input:$input)") {
+        let content = variables["input"]["contentId"].as_str();
+        if state
+            .items
+            .iter()
+            .any(|item| Some(item.content_id.as_str()) == content)
+        {
+            return Some("Content already exists in this project".to_owned());
         }
     }
     let operation = operation_name(query);
@@ -1638,24 +1639,20 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .then_some(created.number)
                 .map_or(Value::Null, |number| json!(number))
         };
-        // Filed at creation on the board `projectV2Ids` names, unless a case has made this
-        // board answer the way it would if GitHub had not.
-        let filed = state.creation_files_on_board
-            && input["projectV2Ids"]
-                .as_array()
-                .is_some_and(|boards| boards.iter().any(|board| board == "PVT_board"));
-        let memberships = if filed {
-            let nodes = json!([{"id":created.item_id,"project":{"id":"PVT_board","number":7}}]);
+        // A create naming the board in `projectV2Ids` is filed on it, as GitHub filed one
+        // when a real board was asked — after answering, so nothing of that filing is in the
+        // answer, and the `addProjectV2ItemById` that would then follow is refused.
+        let filed_at_creation = input["projectV2Ids"]
+            .as_array()
+            .is_some_and(|boards| boards.iter().any(|board| board == "PVT_board"));
+        if filed_at_creation {
             state.items.push(created);
-            nodes
         } else {
             state.pending.push(created);
-            json!([])
-        };
+        }
         // GitHub answers the creating mutation with the issue's own address and number,
         // which is the only place a run learns either before its board read catches up.
-        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}"),
-            "projectItems":{"nodes":memberships}});
+        let mut issue = json!({"id":id, "url":format!("https://github.example/{id}")});
         if !number.is_null() {
             issue["number"] = number;
         }
@@ -7967,8 +7964,7 @@ async fn a_mutation_that_answers_about_another_item_is_refused_as_malformed() {
             ],
             "returned no issue",
         ),
-        // Answered with no item on the board, the issue is filed by hand — and that answer
-        // naming no item is refused too.
+        // Filed by hand once created, and a filing that answers with no item is refused too.
         (
             vec![
                 empty_board.clone(),
@@ -10191,10 +10187,10 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
         .await
         .expect("one task");
     let gaps = fixture.mutation_gaps();
-    // `createIssue`, which files it on the board, and its board fields.
+    // `createIssue`, `addProjectV2ItemById` and its board fields.
     assert!(
-        gaps.len() == 1,
-        "a created task is two mutations, and this saw {}",
+        gaps.len() == 2,
+        "a created task is three mutations, and this saw {}",
         gaps.len() + 1
     );
     let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
@@ -10260,10 +10256,10 @@ async fn the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_
         .await
         .expect("one task");
     let gaps = fixture.mutation_gaps();
-    // `createIssue`, which files it on the board, and its board fields.
+    // `createIssue`, `addProjectV2ItemById` and its board fields.
     assert!(
-        gaps.len() == 1,
-        "a created task is two mutations, and this saw {}",
+        gaps.len() == 2,
+        "a created task is three mutations, and this saw {}",
         gaps.len() + 1
     );
     // No tolerance is subtracted here and none is needed: the ordering that makes this
@@ -10327,7 +10323,7 @@ async fn a_copy_of_a_project_of_many_tasks_is_not_refused_by_a_board_enforcing_t
     );
     assert_eq!(fixture.item(&plan.0).sub_issues, 8);
     assert!(
-        fixture.mutation_gaps().len() >= 20,
+        fixture.mutation_gaps().len() >= 30,
         "a project of eight tasks is far more than a handful of mutations"
     );
 }
@@ -10729,10 +10725,6 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
     ];
     for (operation, doing) in cases {
         let fixture = board(vec![Item::issue("I_far", "the far end").status("Todo")]);
-        if operation == "addProjectV2ItemById" {
-            // Sent only for a create GitHub answered without filing it on the board.
-            fixture.creation_files_nothing();
-        }
         fixture.script_for(operation, vec![Refusal::secondary_forbidden()]);
         let source = paced(&fixture.endpoint, no_waiting());
         let plan = source
@@ -10742,9 +10734,9 @@ async fn the_diagnostic_names_whichever_call_the_limiter_caught() {
                 status(StatusCategory::InProgress, "In Progress"),
             )))
             .await;
-        // A project write is the board's fields with the repository, `createIssue` — filing
-        // it on the board, or not and then `addProjectV2ItemById` — and the board fields; the
-        // two dependency operations need an item with a far end, so
+        // A project write is the board's fields with the repository, `createIssue`,
+        // `addProjectV2ItemById` and the board fields; the two dependency operations need an
+        // item with a far end, so
         // those reach the refusal through the task written under the project instead.
         let error = match plan {
             Err(error) => error,
@@ -16254,11 +16246,13 @@ async fn a_write_after_a_stale_search_preserves_this_processs_newer_metadata() {
     assert_eq!(fixture.requests("issue"), 1);
 }
 
-/// A create files its issue on the board as `createIssue` makes it, and reads the board's
-/// fields and the repository's id in one request before it: three requests where there were
-/// five, and `addProjectV2ItemById` only when GitHub answered with no item on this board.
+/// A create reads the board's fields and the repository's id in one request, creates the
+/// issue on no board and files it with `addProjectV2ItemById` — never through
+/// `CreateIssueInput.projectV2Ids`, whose filing GitHub does not answer with the item and
+/// after which the filing that has to follow is refused "Content already exists in this
+/// project", as this board refuses it.
 #[tokio::test]
-async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
+async fn a_create_files_its_issue_on_the_board_with_one_filing_after_one_context_read() {
     let fixture = board(vec![]);
     let writer = source(&fixture);
     let created = writer
@@ -16274,6 +16268,7 @@ async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
         [
             "boardFields",
             "createIssue",
+            "addProjectV2ItemById",
             "updateProjectV2ItemFieldValue"
         ],
         "{:#?}",
@@ -16288,7 +16283,7 @@ async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
         .into_iter()
         .find(|call| call[0] == "createIssue")
         .expect("createIssue was sent");
-    assert_eq!(created_input[1]["projectV2Ids"], json!(["PVT_board"]));
+    assert_eq!(created_input[1].get("projectV2Ids"), None);
     assert!(fixture.holds(&created.0), "the issue is on the board");
     assert_eq!(
         writer
@@ -16311,34 +16306,15 @@ async fn a_create_files_its_issue_on_the_board_as_it_creates_it() {
         .expect("a second create");
     assert_eq!(
         fixture.operations()[before..],
-        ["createIssue", "updateProjectV2ItemFieldValue"]
-    );
-
-    // Answered without an item on this board, the issue is filed on it by hand.
-    let fixture = board(vec![]);
-    fixture.creation_files_nothing();
-    let created = source(&fixture)
-        .write_task(&write(task(
-            "T-1",
-            "a step",
-            status(StatusCategory::Todo, "Todo"),
-        )))
-        .await
-        .expect("a create filed by hand");
-    assert_eq!(
-        fixture.operations(),
         [
-            "boardFields",
             "createIssue",
             "addProjectV2ItemById",
             "updateProjectV2ItemFieldValue"
         ]
     );
-    assert!(fixture.holds(&created.0));
 
     // And a filing GitHub refuses then takes the issue back, so nothing is left on no board.
     let fixture = board(vec![]);
-    fixture.creation_files_nothing();
     fixture.refuse("addProjectV2ItemById");
     let refused = source(&fixture)
         .write_task(&write(task(

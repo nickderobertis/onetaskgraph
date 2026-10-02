@@ -955,8 +955,8 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         "--json",
     ]);
     for (verb, sent, expected) in [
-        ("new copy", &new_calls, 4),
-        ("copy --create", &create_calls, 3),
+        ("new copy", &new_calls, 5),
+        ("copy --create", &create_calls, 4),
         ("bound copy", &bound_calls, 3),
         ("comment", &comment_calls, 2),
         ("recount", &recount_calls, 1),
@@ -998,9 +998,10 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         }
         println!("{verb}: {} requests, {points} declared points", sent.len());
     }
-    // The board's fields and the repository's id in one read, and the board filed on the
-    // issue as it is created — so no BOARD_FIELDS, REPOSITORY or ADD_TO_BOARD — and `--create`
-    // is the same without the origin lookup.
+    // The board's fields and the repository's id in one read — so no BOARD_FIELDS or
+    // REPOSITORY — then the issue created on no board and filed with ADD_TO_BOARD, because
+    // GitHub answers a create naming the board in `projectV2Ids` with no item and refuses the
+    // filing that then follows; `--create` is the same without the origin lookup.
     fn documents(sent: &[(String, Value)]) -> Vec<&str> {
         sent.iter().map(|(query, _)| query.as_str()).collect()
     }
@@ -1010,6 +1011,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             graphql::ORIGIN_LOOKUP,
             graphql::CREATION_CONTEXT,
             graphql::CREATE_ISSUE,
+            graphql::ADD_TO_BOARD,
             graphql::UPDATE_FIELDS
         ]
     );
@@ -1018,6 +1020,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         [
             graphql::CREATION_CONTEXT,
             graphql::CREATE_ISSUE,
+            graphql::ADD_TO_BOARD,
             graphql::UPDATE_FIELDS
         ]
     );
@@ -1026,7 +1029,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             .iter()
             .find(|(query, _)| query == graphql::CREATE_ISSUE)
             .unwrap();
-        assert_eq!(created["input"]["projectV2Ids"], json!(["PVT-board"]));
+        assert_eq!(created["input"].get("projectV2Ids"), None);
     }
     assert_eq!(
         bound_calls
