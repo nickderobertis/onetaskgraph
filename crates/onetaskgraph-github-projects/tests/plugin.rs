@@ -16549,15 +16549,31 @@ async fn a_write_whose_origin_cannot_be_put_back_says_which_key_it_left_moved() 
     assert_eq!(held.body.as_deref(), Some("as it stood"));
 }
 
-/// A content write refused for a rate limit, or because GitHub was briefly unwell, keeps that
-/// kind — and a rate limit the wait GitHub asked for — when the restore after it is refused
-/// too: a caller waiting out a limit is not told to stop instead, and is still told which key
-/// was left moved.
+/// A content write that fails for a rate limit, an outage, a credential or an answer this
+/// source cannot read keeps that kind — and a rate limit the wait GitHub asked for — when the
+/// restore after it is refused too: a caller waiting out a limit is not told to stop instead,
+/// and is still told which key was left moved.
 #[tokio::test]
 async fn a_double_refusal_keeps_the_content_writes_kind_and_wait() {
     for (refused, kind) in [
         (Refusal::secondary_forbidden().after(30), "rate limited"),
         (Refusal::unavailable(), "unavailable"),
+        (
+            Refusal {
+                status: "401 Unauthorized",
+                headers: String::new(),
+                body: json!({"message": "Bad credentials"}).to_string(),
+            },
+            "auth",
+        ),
+        (
+            Refusal {
+                status: "200 OK",
+                headers: String::new(),
+                body: "not json".to_owned(),
+            },
+            "malformed",
+        ),
     ] {
         let fixture = board(vec![
             Item::issue("I_1", "one")
@@ -16588,7 +16604,9 @@ async fn a_double_refusal_keeps_the_content_writes_kind_and_wait() {
                 },
                 "rate limited",
             )
-            | (SourceError::Unavailable { message: said }, "unavailable") => said.clone(),
+            | (SourceError::Unavailable { message: said }, "unavailable")
+            | (SourceError::Auth { message: said }, "auth")
+            | (SourceError::Malformed { message: said }, "malformed") => said.clone(),
             _ => panic!("a {kind} content write was reported as {error:?}"),
         };
         assert!(
@@ -16600,4 +16618,50 @@ async fn a_double_refusal_keeps_the_content_writes_kind_and_wait() {
         assert_eq!(held.origin.as_deref(), Some("plans:NEW"), "{kind}");
         assert_eq!(held.body.as_deref(), Some("as it stood"), "{kind}");
     }
+}
+
+/// When the board-field write carrying the origin is itself refused, GitHub does not say which
+/// of its fields ran, so a refused restore after it says the origin holds one of the two values
+/// rather than claiming it moved — and the item's body is as it stood.
+#[tokio::test]
+async fn a_refused_field_write_whose_restore_is_refused_does_not_claim_the_origin_moved() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one")
+            .body("as it stood")
+            .status("Todo")
+            .carrying("plans:OLD"),
+    ]);
+    fixture.refuse("updateProjectV2ItemFieldValue");
+    let mut item = task("I_1", "one, revised", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("a body that must not land".to_owned());
+    item.metadata
+        .insert("onetaskgraph.origin".to_owned(), json!("plans:NEW"));
+    item.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+    let error = source(&fixture)
+        .write_task(&ItemWrite {
+            target: Some(native("I_1")),
+            item,
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("the field write is refused");
+    let SourceError::Refused { message: said } = &error else {
+        panic!("a refused field write was reported as {error:?}");
+    };
+    assert!(
+        said.contains("updateProjectV2ItemFieldValue is refused"),
+        "{said}"
+    );
+    assert!(
+        said.contains("GitHub does not say whether that part of it ran")
+            && said.contains("item I_1 holds \"plans:NEW\" or \"plans:OLD\" there")
+            && said.contains("next: set onetaskgraph.origin on it back to \"plans:OLD\""),
+        "{said}"
+    );
+    assert!(!said.contains("still holds"), "{said}");
+    assert_eq!(fixture.requests("updateIssue"), 0);
+    let held = fixture.item("I_1");
+    assert_eq!(held.origin.as_deref(), Some("plans:OLD"));
+    assert_eq!(held.body.as_deref(), Some("as it stood"));
+    assert_eq!(held.title, "one");
 }

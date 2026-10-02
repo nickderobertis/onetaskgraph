@@ -1592,8 +1592,10 @@ fields first, then its parent and its `blockedBy`, and its title, body and state
 in order without undoing an earlier field when a later one fails, so that order is what makes
 a write refused part-way leave the item's body and metadata exactly as they stood; an origin
 a copy re-points, the one metadata key written before the body, is put back when a later write
-is refused, and when putting it back is refused too, the write's own refusal names that key,
-what it now holds and what it held.
+is refused, and when putting it back is refused too, the write's own refusal — its kind
+unchanged — names that key, what it now holds and what it held, and the step that restores it.
+When the refused write was the board-field write that carries the origin itself, GitHub does
+not say which of its fields ran, so the refusal names both values the key may hold.
 
 Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
 (<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in

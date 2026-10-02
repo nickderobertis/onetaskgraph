@@ -6872,6 +6872,10 @@ impl GitHubProjectsSource {
         // does over an item this call created, the issue is taken back: a write that
         // refused must not leave an item behind that nobody asked for, and one that does
         // makes the retry create a second.
+        // Whether the board-field write carrying a moved origin was answered as landing whole.
+        // When it was refused, GitHub does not say which of its fields ran before the one that
+        // failed, so the origin may or may not have moved.
+        let mut origin_landed = false;
         let landed = self
             .finish_write(
                 board.id.as_str(),
@@ -6886,6 +6890,7 @@ impl GitHubProjectsSource {
                 status_target.as_ref(),
                 priority_write.as_ref(),
                 &native,
+                &mut origin_landed,
             )
             .await;
         // An existing item's title, body and state go last, in one `updateIssue`, once its board
@@ -6923,14 +6928,27 @@ impl GitHubProjectsSource {
                             )
                             .await
                     {
+                        let left = if origin_landed {
+                            format!(
+                                "its {ORIGIN_KEY} was moved to {origin:?} before that and could \
+                                 not be put back to {before:?} ({restore}), so item {} still \
+                                 holds {origin:?} there",
+                                item.id.0
+                            )
+                        } else {
+                            format!(
+                                "the refused write carried its {ORIGIN_KEY} from {before:?} to \
+                                 {origin:?}, GitHub does not say whether that part of it ran, \
+                                 and putting it back to {before:?} was refused ({restore}), so \
+                                 item {} holds {origin:?} or {before:?} there",
+                                item.id.0
+                            )
+                        };
                         return Err(noting(
                             error,
                             &format!(
-                                "; its {ORIGIN_KEY} was moved to {origin:?} before that and could \
-                                 not be put back to {before:?} ({restore}), so item {} still \
-                                 holds {origin:?} there; next: set {ORIGIN_KEY} on it back to \
-                                 {before:?}, or run the write again",
-                                item.id.0
+                                "; {left}; next: set {ORIGIN_KEY} on it back to {before:?}, or \
+                                 run the write again"
                             ),
                         ));
                     }
@@ -7041,6 +7059,7 @@ impl GitHubProjectsSource {
         status_target: Option<&StatusTarget>,
         priority: Option<&PriorityWrite>,
         native: &[String],
+        origin_landed: &mut bool,
     ) -> Result<(), SourceError> {
         let mut fields = Vec::new();
         if let Some(field_id) = origin_field
@@ -7063,6 +7082,7 @@ impl GitHubProjectsSource {
         };
         self.set_item_fields(board_id, item_id, &fields, clear)
             .await?;
+        *origin_landed = true;
 
         // An existing issue closes in the `updateIssue` its write ends with; one created just
         // now closes here, once its option is selected.
