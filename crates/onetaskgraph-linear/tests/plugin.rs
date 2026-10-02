@@ -968,8 +968,8 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         .await
         .unwrap();
     // A source whose `status_mapping` names states and that is scoped to one project: its
-    // status narrowing by name and by type-but-not-name, a status written by name, and its
-    // writes filed under the scope.
+    // status narrowing by name, by type-but-not-name and by a type none of the five, its
+    // project and document reads narrowed to the scope, and a status written by name.
     let mapped = onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("work").unwrap(),

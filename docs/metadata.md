@@ -408,8 +408,9 @@ before, and the copy reports the link `unrecorded` rather than failing.
      `the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind` in the
      github-projects plugin tests holds the body slot; the Linear plugin's
      `a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record` holds its slot, and
-     `a_copy_into_linear_records_its_link_on_the_linear_item` in
-     `crates/onetaskgraph/tests/e2e/linear.rs` records one through the binary; and
+     `a_metadata_set_moves_only_the_slot_and_a_render_only_the_body_and_its_provenance_on_linear`
+     in `crates/onetaskgraph/tests/e2e/linear.rs` records one on a Linear item through the binary,
+     by a copy out of Linear; and
      `a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked`
      with `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` hold the
      stdio row. -->

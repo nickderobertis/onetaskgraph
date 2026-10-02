@@ -4182,8 +4182,8 @@ const METADATA_CLOSE_ESCAPED: &str = "\n\\-->";
 ///
 /// All three only ever occur inside a JSON string, where the escape means the same character,
 /// so the value parses back exactly; and with them escaped no value can close the code span or
-/// the HTML comment around it. The search phrase a metadata match narrows by is built with this
-/// too, so it is the bytes the slot holds.
+/// the HTML comment around it. A search phrase is not built with this: `slot_phrase` sends only
+/// a value none of whose characters any encoder escapes, which this leaves as written.
 fn slot_json(value: &impl serde::Serialize) -> Result<String, SourceError> {
     let encoded = serde_json::to_string(value).map_err(|error| SourceError::Malformed {
         message: error.to_string(),
