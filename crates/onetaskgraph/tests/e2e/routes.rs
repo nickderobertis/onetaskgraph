@@ -1219,3 +1219,145 @@ fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() 
         );
     }
 }
+
+#[test]
+fn a_configuration_whose_routes_cannot_hold_is_refused_at_load_naming_the_source_and_entry() {
+    for (routes, wanted) in [
+        (
+            json!([{"repositories": ["github.com/petsinc/*"], "to": "nowhere"}]),
+            "nowhere",
+        ),
+        (
+            json!([{"repositories": ["github.com/petsinc/*"], "to": NOTES}]),
+            "itself",
+        ),
+        (
+            json!([{"repositories": ["github.com/petsinc/*"], "to": "chained"}]),
+            "routes of its own",
+        ),
+        (json!([{"repositories": [], "to": TEAM}]), "empty"),
+        (
+            json!([{"repositories": ["github.com/pets*/x"], "to": TEAM}]),
+            "not a repository pattern",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&document(&json!({
+            NOTES: {
+                "plugin": "local-md",
+                "config": {"root": sandbox.subdirectory(NOTES)},
+                "routes": routes,
+            },
+            TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
+            "chained": {
+                "plugin": "local-md",
+                "config": {"root": sandbox.subdirectory("chained")},
+                "routes": [{"repositories": ["a.com/b/*"], "to": TEAM}],
+            },
+        })));
+        // Any verb, because the configuration is refused before any verb runs.
+        let refusal = refused(&sandbox, &["sources", "list"], 1);
+        assert!(
+            refusal.contains("sources.notes.routes.0") && refusal.contains(wanted),
+            "{routes}: refused naming the source and the entry:\n{refusal}"
+        );
+        assert!(refusal.contains("next:"), "{refusal}");
+    }
+}
+
+#[test]
+fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_their_layer() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    // No `routes` in any document.
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        NOTES: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(NOTES)}},
+        TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
+    })));
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nrepositories: [github.com/petsinc/api]",
+    );
+    let flags = [
+        "--set",
+        "sources.notes.routes.0.repositories=github.com/petsinc/*",
+        "--set",
+        "sources.notes.routes.0.to=team",
+    ];
+    let with = |verb: &[&str]| {
+        let mut arguments: Vec<&str> = flags.to_vec();
+        arguments.extend(verb);
+        arguments.push("--json");
+        let output = ok(&sandbox, &arguments);
+        serde_json::from_str::<Value>(&output).expect("JSON")
+    };
+    assert_eq!(
+        with(&[
+            "sources",
+            "route",
+            NOTES,
+            "--repository",
+            "github.com/petsinc/api"
+        ]),
+        json!({"source": NOTES, "destination": TEAM, "route": 0})
+    );
+    let copied = with(&["task", "copy", "plan:pets", "--to", NOTES]);
+    assert_eq!(source_of(&landed(&copied, "plan:pets")), TEAM, "{copied:#}");
+    let shown = with(&["config", "show"]);
+    let settings = shown["settings"].as_array().expect("settings");
+    for (key, value) in [
+        (
+            "sources.notes.routes.0.repositories",
+            json!("github.com/petsinc/*"),
+        ),
+        ("sources.notes.routes.0.to", json!("team")),
+    ] {
+        let setting = settings
+            .iter()
+            .find(|setting| setting["key"] == key)
+            .unwrap_or_else(|| panic!("config show names {key}: {shown:#}"));
+        assert_eq!(setting["value"], value);
+        assert_eq!(setting["origin"]["layer"], "flag", "{setting}");
+    }
+
+    // The environment layer spells the same entry the same way.
+    let output = sandbox
+        .command()
+        .env(
+            "ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__REPOSITORIES",
+            "github.com/petsinc/*",
+        )
+        .env("ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__TO", TEAM)
+        .args([
+            "sources",
+            "route",
+            NOTES,
+            "--repository",
+            "github.com/petsinc/api",
+            "--json",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&output)).expect("JSON"),
+        json!({"source": NOTES, "destination": TEAM, "route": 0})
+    );
+
+    // And a document's routes are shown whole, attributed to the document.
+    let sandbox = Sandbox::new();
+    folders(&sandbox);
+    let human = ok(&sandbox, &["config", "show"]);
+    let line = human
+        .lines()
+        .find(|line| line.starts_with("sources.notes.routes"))
+        .unwrap_or_else(|| panic!("config show prints routes:\n{human}"));
+    assert!(
+        line.contains("github.com/petsinc/*") && line.contains("file "),
+        "with its layer: {line}"
+    );
+}
