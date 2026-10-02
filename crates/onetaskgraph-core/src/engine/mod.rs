@@ -745,6 +745,35 @@ pub enum EngineError {
         link: String,
     },
 
+    /// `--create` was given beside a flag that says how to look for a counterpart, when
+    /// `--create` says there is none to look for.
+    #[error(
+        "--create cannot be given with {flag}: --create asserts the destination holds no \
+         counterpart, so there is nothing for {flag} to look for\n\
+         next: drop {flag} to create each item without looking, or drop --create to look."
+    )]
+    CreateWith {
+        /// The flag given beside `--create`.
+        flag: String,
+    },
+
+    /// `--create` named an item that itself records a counterpart at the destination.
+    ///
+    /// Refused rather than created: the item's own `onetaskgraph.copies` link — or its
+    /// origin — names an item there, so the caller's assertion that the destination holds
+    /// none is wrong for it, and creating another would duplicate it.
+    #[error(
+        "{item} already records a counterpart at the destination, {carrier}, and --create \
+         asserts it has none\n\
+         next: copy it without --create, which updates {carrier}."
+    )]
+    CreateCarried {
+        /// The item being copied.
+        item: String,
+        /// The destination item its link or its origin names.
+        carrier: String,
+    },
+
     /// A member copy named a task that is not a member of the project being copied.
     ///
     /// Refused before anything is written, because a copy that names members names the

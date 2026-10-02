@@ -1207,6 +1207,17 @@ pub struct TaskCopyArgs {
     #[arg(value_name = "ID", required = true)]
     pub id: Vec<String>,
 
+    /// Create each task at the destination without looking for a counterpart first.
+    ///
+    /// You assert the destination holds none — typically because you have just asked it
+    /// yourself — so the copy sends no origin lookup at all. That is sound because the lookup
+    /// is GitHub's search index and board filter, which lag a fresh write by the same amount
+    /// whoever asks: repeating your own query here could find nothing yours did not. Refused
+    /// beside --match-by and --recreate, which are ways of looking, and for a task whose own
+    /// link or origin already names an item at the destination.
+    #[arg(long)]
+    pub create: bool,
+
     #[command(flatten)]
     pub copy: CopyArgs,
 }

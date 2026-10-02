@@ -59,6 +59,9 @@ export type CopyOptions = {
   recreate?: boolean;
   dryRun?: boolean;
 };
+// `create` asserts the destination holds no counterpart of any task named, so each is created
+// without the correspondence lookup. Only `task copy` takes it.
+export type TaskCopyOptions = CopyOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = { body: string } | { bodyFile: string };
@@ -813,8 +816,17 @@ export class OnetaskgraphClient {
     if (options.direction) args.push("--direction", options.direction);
     return this.run("task deps", args);
   }
-  taskCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
-    return this.run("task copy", [...ids, "--to", to, ...copyFlags(options)]);
+  taskCopy(ids: string[], to: string, options: TaskCopyOptions = {}): Promise<CopyReport> {
+    if (options.create !== undefined && typeof options.create !== "boolean") {
+      throw new TypeError("taskCopy: create must be a boolean");
+    }
+    return this.run("task copy", [
+      ...ids,
+      "--to",
+      to,
+      ...copyFlags(options),
+      ...(options.create ? ["--create"] : []),
+    ]);
   }
   projectList(options: FilterOptions = {}): Promise<QueryResponseOfQualifiedProject> {
     const args: string[] = [];

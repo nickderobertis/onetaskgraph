@@ -70,7 +70,7 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
 onetaskgraph task show <ID> [--no-comments]
 onetaskgraph task show-many <ID>... [--no-comments]
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
-onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
+onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME]
 onetaskgraph task comment list   <ID>
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
@@ -418,6 +418,7 @@ copied from, which is what makes the next copy of it an update.
 | --- | --- |
 | `--dry-run` | Every read, no write, and the action each item would have got. |
 | `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
+| `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |

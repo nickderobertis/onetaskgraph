@@ -382,6 +382,40 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     assert "sealed cannot be written" in str(refused.value)
 
 
+def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """`create=True` creates without looking, and is refused where it cannot be true."""
+    client = Client(binary, cwd=folders(tmp_path))
+    # A task whose file the folder can record a link in, which the refusal below reads.
+    (tmp_path / "from" / "tasks" / "T-2.md").write_text(
+        "---\ntitle: Beta engine\nstatus: todo\n---\nthe rest\n", encoding="utf-8"
+    )
+
+    created = run(client.task_copy(ids=["from:T-2"], to="into", create=True))
+    assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
+        ("from:T-2", "into:T-2", "created")
+    ]
+    assert run(client.task_show(id="into:T-2")).items[0].item.metadata == {
+        "onetaskgraph.origin": "from:T-2"
+    }
+
+    # The copy recorded its link on the source task, so asserting there is no counterpart
+    # now is refused, naming the one the link names.
+    with pytest.raises(OnetaskgraphError) as carried:
+        run(client.task_copy(ids=["from:T-2"], to="into", create=True))
+    assert carried.value.exit_code == 1
+    assert "into:T-2" in str(carried.value)
+
+    # Beside a way of looking, refused before anything is read.
+    for refused_call in (
+        client.task_copy(ids=["from:T-1"], to="into", create=True, match_by="title"),
+        client.task_copy(ids=["from:T-1"], to="into", create=True, recreate=True),
+    ):
+        with pytest.raises(OnetaskgraphError) as refused:
+            run(refused_call)
+        assert refused.value.exit_code == 1
+        assert "--create cannot be given with" in str(refused.value)
+
+
 def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Copy a project and the tasks in it, then copy it again without duplicating them."""
     root = folders(tmp_path)

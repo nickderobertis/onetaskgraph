@@ -800,6 +800,11 @@ them do; this is the inventory of what is owed, not a status board.
     carries its failure in its own detail without refusing the others, the verb exiting
     non-zero exactly when some detail does; a GitHub board reads `n` items with their
     comments in `ceil(n / DETAIL_BATCH)` requests.
+71. `task copy --create` creates each task without the correspondence lookup — no origin
+    query reaches a GitHub board — and a later read in the same process finds what it
+    created; it is refused beside `--match-by` or `--recreate`, and for a task whose own
+    link or origin already names an item at the destination, naming that item, writing
+    nothing.
 
 ## What a copied document's references are pointed at
 

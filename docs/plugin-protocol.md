@@ -1526,3 +1526,16 @@ mutation. A standalone priority write selects the stored priority in its mutatio
 response, so its answer remains a read-back, including when the host did not keep
 the requested value, without resolving the issue a second time. The plugin's cost
 table records the requests and declared prices proved by the loopback journeys.
+
+`task copy --create` — `task_copy(..., create=True)` in Python, `taskCopy(ids, to, { create:
+true })` in TypeScript, `CopyRequest::create` for a Rust caller — creates each task at the
+destination without the correspondence lookup, so a GitHub Projects destination is sent no
+`ORIGIN_LOOKUP`. The caller asserts the destination holds no carrier of the task, and that is
+sound for a caller that has just run the origin query itself: the query reads GitHub's issue
+search and the board's field filter, both of which lag a fresh write, and they lag it by the
+same amount whoever repeats them — a copy asking again could find nothing the caller's own
+question did not. It is a rule of the copy engine rather than of any plugin. It is refused
+beside `--match-by` and `--recreate`, which are ways of looking, and for a task whose own
+`onetaskgraph.copies` link or origin already names an item at the destination, naming that
+item. The copy report is the one any copy prints, and a created item answers this process's
+later reads exactly as any created item does.

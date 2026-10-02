@@ -412,11 +412,12 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Copy(args),
         } => {
-            let request = copy_request(
+            let mut request = copy_request(
                 args.id.iter().map(String::as_str),
                 CopyScope::Tasks,
                 &args.copy,
             )?;
+            request.create = args.create;
             copy(out, loaded, &request).await
         }
 
@@ -999,6 +1000,8 @@ fn copy_request<'a>(
         })?,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
         recreate: args.recreate,
+        // Only `task copy` takes `--create`; it sets this on the request it builds.
+        create: false,
         dry_run: args.dry_run,
     })
 }

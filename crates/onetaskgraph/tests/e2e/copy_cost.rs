@@ -1016,3 +1016,98 @@ fn a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch() {
         "cost table: DETAIL_BATCH"
     );
 }
+
+/// `task copy --create`: each task is created without the correspondence lookup — no
+/// `ORIGIN_LOOKUP` and no other read of the board's index — a later read in the same
+/// process finds what it created, and every refusal it owes names what to do instead.
+#[test]
+fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
+    use onetaskgraph_github_projects::graphql;
+    let plan = Plan::of(0);
+    std::fs::write(
+        plan.root.join("tasks/A.md"),
+        "---\ntitle: First step\nstatus: Todo\n---\nfirst\n",
+    )
+    .unwrap();
+    std::fs::write(
+        plan.root.join("tasks/B.md"),
+        "---\ntitle: Second step\nstatus: Doing\ndepends_on: [A]\n---\nsecond\n",
+    )
+    .unwrap();
+
+    let (_, sent, report) = plan.measure(&[
+        "task", "copy", "plans:A", "plans:B", "--to", "board", "--create", "--json",
+    ]);
+    let landed = landed(&report);
+    assert_eq!(landed.len(), 2, "{report}");
+    for item in report["items"].as_array().unwrap() {
+        assert_eq!(item["action"], "created", "{report}");
+    }
+    assert!(
+        !sent.iter().any(|(document, _)| [
+            graphql::ORIGIN_LOOKUP,
+            graphql::SEARCH_ISSUES,
+            graphql::BOARD
+        ]
+        .contains(&document.as_str())),
+        "--create looks for nothing: {sent:#?}"
+    );
+    // The second task's dependency names the first by the id this same command created it
+    // under, read from this process's own record of what it wrote.
+    let first = native(&landed[0].1);
+    assert!(
+        sent.iter()
+            .any(|(document, variables)| document == graphql::ADD_BLOCKED_BY
+                && variables["input"]["blockingIssueId"] == first.as_str()),
+        "{sent:#?}"
+    );
+    assert!(
+        !sent
+            .iter()
+            .any(|(document, variables)| reads_one_issue(document)
+                && variables["id"] == first.as_str()),
+        "the item it created is answered from its own record: {sent:#?}"
+    );
+
+    // Beside a way of looking, refused before the board is asked anything.
+    for flag in [&["--match-by", "title"][..], &["--recreate"][..]] {
+        let before = plan.board.served().len();
+        let mut arguments = vec!["task", "copy", "plans:A", "--to", "board", "--create"];
+        arguments.extend_from_slice(flag);
+        let output = plan
+            .sandbox
+            .command()
+            .args(&arguments)
+            .assert()
+            .get_output()
+            .clone();
+        let said = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{said}");
+        assert!(said.contains(flag[0]) && said.contains("next:"), "{said}");
+        assert_eq!(plan.board.served().len(), before, "nothing was sent");
+    }
+
+    // The copy recorded where each landed, so a second `--create` of the first is refused,
+    // naming the item its link already names, and writes nothing.
+    let before = plan.board.served().len();
+    let output = plan
+        .sandbox
+        .command()
+        .args(["task", "copy", "plans:A", "--to", "board", "--create"])
+        .assert()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains(landed[0].1.as_str().unwrap()) && said.contains("next:"),
+        "{said}"
+    );
+    assert_eq!(mutations(&plan.board.served()[before..]), 0);
+
+    // Without `--create` the same copy follows its link and updates that item, as it always
+    // did.
+    let (_, _, again) = plan.measure(&["task", "copy", "plans:A", "--to", "board", "--json"]);
+    assert_eq!(again["items"][0]["destination"], landed[0].1, "{again}");
+    assert_ne!(again["items"][0]["action"], "created", "{again}");
+}
