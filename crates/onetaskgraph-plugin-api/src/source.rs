@@ -11,8 +11,8 @@ use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
     ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
     PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport, commentless,
-    documentless, unwritable, unwritable_field, unwritable_metadata,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
+    commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -87,6 +87,42 @@ pub trait TaskSource: Send + Sync {
     ///
     /// Returns a [`SourceError`] when the source could not answer.
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError>;
+
+    /// Fetch several tasks by their native ids, each with the first page of its comments
+    /// when `comments` names the page to read — one answer per id, in the order they were
+    /// given.
+    ///
+    /// Each answer is what [`get_task`](Self::get_task) answers for that id, so a task that
+    /// is not there is `Ok(None)` and a read that failed fails that id alone. Its
+    /// [`TaskDetailRead::comments`] is what [`task_comments`](Self::task_comments) answers
+    /// for `comments`. The engine passes `comments` only to a source declaring
+    /// [`Capabilities::comments`](crate::Capabilities::comments) native.
+    ///
+    /// Defaulted to exactly those calls, item by item, so a source that implements nothing
+    /// here answers as it always did. A source that can read many items — or an item and its
+    /// comments — in fewer requests than that overrides it, which is the whole reason it
+    /// exists: a caller holding twenty ids pays for one batch rather than forty reads.
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        let mut read = Vec::with_capacity(ids.len());
+        for id in ids {
+            read.push(match self.get_task(id).await {
+                Ok(Some(task)) => {
+                    let comments = match comments {
+                        Some(page) => Some(self.task_comments(id, page).await),
+                        None => None,
+                    };
+                    Ok(Some(TaskDetailRead { task, comments }))
+                }
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
+            });
+        }
+        read
+    }
 
     /// Fetch one project by its native id, or `None` when there is no such project.
     ///

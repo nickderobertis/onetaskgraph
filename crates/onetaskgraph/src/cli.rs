@@ -275,6 +275,14 @@ pub enum TaskCommand {
     List(TaskListArgs),
     /// Show one task by its qualified id, `<source>:<native-id>`.
     Show(TaskShowArgs),
+    /// Show several tasks by their qualified ids, each as `task show` reports it.
+    ///
+    /// One detail per id, in the order given, and the ids may span sources. An id that cannot
+    /// be read — no such task, a source nothing configures, comments a source refuses — says
+    /// why in its own detail's `errors` and does not refuse the others; the command exits
+    /// non-zero exactly when some detail carries an error. Each source is asked for its ids
+    /// together, so a source that reads many items in one request answers in few.
+    ShowMany(TaskShowManyArgs),
     /// Walk one task's dependency edges.
     Deps(DependencyArgs),
     /// Copy tasks into another configured source, by qualified id.
@@ -1098,6 +1106,19 @@ pub struct TaskShowArgs {
     pub no_comments: bool,
 }
 
+/// `onetaskgraph task show-many`.
+#[derive(Debug, Args)]
+pub struct TaskShowManyArgs {
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `TaskCopyArgs::id`: a `GlobalId` here would refuse an unqualified id as a bad invocation under clap's wording, and `qualified` in `main` converts each through `GlobalId::from_str` before any source is started, saying what a qualified id is and where to read the configured names.
+    /// The qualified ids, `<source>:<native-id>`, in the order their details are reported.
+    #[arg(value_name = "ID", required = true)]
+    pub ids: Vec<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Read each record without requesting its comments.
+    #[arg(long)]
+    pub no_comments: bool,
+}
+
 /// `onetaskgraph task show` and `onetaskgraph project show`.
 #[derive(Debug, Args)]
 pub struct ShowArgs {
@@ -1185,6 +1206,18 @@ pub struct TaskCopyArgs {
     #[arg(value_name = "ID", required = true)]
     pub id: Vec<String>,
 
+    /// Create each task at the destination without looking for a counterpart first.
+    ///
+    /// You assert the destination holds none — typically because you have just asked it
+    /// yourself — so the copy sends no origin lookup at all. That is sound because the lookup
+    /// is GitHub's search index and board filter, which lag a fresh write by the same amount
+    /// whoever asks: repeating your own query here could find nothing yours did not. Refused
+    /// beside --match-by and --recreate, which are ways of looking, and for a task whose own
+    /// link or origin already names an item at the destination.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `CopyRequest::create`: one enum of the ways a copy finds its target would replace `--match-by` and `--recreate`, which `CopyArgs` shares with `project copy` and `document copy`, so `create` is one more flag beside them, and the one combination it makes possible that means nothing is refused by `Engine::copy` as `EngineError::CreateWith`, naming both flags, before anything is read.
+    #[arg(long)]
+    pub create: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     #[command(flatten)]
     pub copy: CopyArgs,
 }

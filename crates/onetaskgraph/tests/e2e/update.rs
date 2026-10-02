@@ -570,8 +570,8 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
     );
     assert_eq!(
         requests_since(&board, from),
-        ["read", "updateIssue", "updateProjectV2ItemFieldValue"],
-        "one read of the item, one body update and one status write — nothing else"
+        ["read", "updateProjectV2ItemFieldValue", "updateIssue"],
+        "one read of the item, the status write, and the body update last — nothing else"
     );
     assert_eq!(written(&answer), ["status", "metadata"]);
     // The board meters its own requests, and the answer carries what this one spent.
@@ -610,7 +610,8 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
     assert_eq!(requests_since(&board, from), ["read"]);
 
     // A terminal status named by a word of its own lands on its mapped option and closes,
-    // and a changed priority is one field write beside it.
+    // and a changed priority rides in the same field request as that option: one read and two
+    // writes, the close last with the body.
     let from = board.served().len();
     let failed = answered(
         "board",
@@ -630,12 +631,12 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
     );
     assert_eq!(
         requests_since(&board, from),
-        [
-            "read",
-            "updateProjectV2ItemFieldValue",
-            "updateIssue",
-            "updateProjectV2ItemFieldValue"
-        ]
+        ["read", "updateProjectV2ItemFieldValue", "updateIssue"]
+    );
+    assert_eq!(
+        board.served()[from + 1].0,
+        onetaskgraph_github_projects::graphql::UPDATE_FIELDS,
+        "the option and the priority in one request"
     );
     assert_eq!(
         failed["task"]["status"],
@@ -677,10 +678,12 @@ fn a_board_update_is_one_read_one_body_update_and_one_status_write() {
 }
 
 #[test]
-fn a_board_item_in_no_priority_costs_its_update_one_read_of_the_boards_fields() {
+fn a_board_item_in_no_priority_costs_its_update_no_read_of_the_boards_fields() {
     // GitHub leaves an empty single-select out of an item's field values, so an item with no
-    // priority does not say which options the Priority field has. The update reads the
-    // board's fields once for that, reads none of the board's items, and writes the one field.
+    // priority does not say from its values which options the Priority field has. Its read by
+    // its own id carries the board's field definitions beside them, so the update reads
+    // nothing more — not the board's fields, none of the board's items — and writes the one
+    // field.
     let sandbox = Sandbox::new();
     let (config, board) = github_projects_with_board(&sandbox);
     sandbox.project_document(&document(&json!({
@@ -707,14 +710,14 @@ fn a_board_item_in_no_priority_costs_its_update_one_read_of_the_boards_fields() 
     );
     assert_eq!(
         requests_since(&board, from),
-        ["read", "read", "updateProjectV2ItemFieldValue"],
-        "the item, the board's fields, and the priority write"
+        ["read", "updateProjectV2ItemFieldValue"],
+        "the item, and the priority write"
     );
     assert!(
-        board.served()[from + 1]
-            .0
-            .contains("boardFields:repositoryOwner"),
-        "the second read is of the board's fields"
+        board.served()[from..]
+            .iter()
+            .all(|(document, _)| !document.contains("boardFields:repositoryOwner")),
+        "no read of the board's fields"
     );
     assert_eq!(
         board.board_item_reads().len(),
@@ -722,7 +725,7 @@ fn a_board_item_in_no_priority_costs_its_update_one_read_of_the_boards_fields() 
         "no read of the board's items"
     );
     assert_eq!(written(&answer), ["priority"]);
-    assert_eq!(answer["spent"]["requests"], 3, "{answer}");
+    assert_eq!(answer["spent"]["requests"], 2, "{answer}");
     assert_eq!(board.priority("T-1").as_deref(), Some("Urgent"));
 }
 

@@ -398,6 +398,32 @@ test("copy drives the real binary and reports what it did to each item", async (
       }),
     );
     await expect(copyClient.taskCopy(["from:T-1"], "sealed")).rejects.toThrow("cannot be written");
+
+    // `create` lands a task without looking for a counterpart, and once the copy has recorded
+    // its link on the source task, asserting there is none is refused naming it.
+    writeFileSync(
+      resolve(copyRoot, "from/tasks/T-2.md"),
+      "---\ntitle: Beta engine\nstatus: todo\n---\nthe rest\n",
+    );
+    const fresh = await copyClient.taskCopy(["from:T-2"], "into", { create: true });
+    expect(fresh.items).toEqual([
+      {
+        source: "from:T-2",
+        action: "created",
+        destination: "into:T-2",
+        via: "created",
+        link: "recorded",
+      },
+    ]);
+    await expect(copyClient.taskCopy(["from:T-2"], "into", { create: true })).rejects.toThrow(
+      "into:T-2",
+    );
+    await expect(
+      copyClient.taskCopy(["from:T-2"], "into", { create: true, recreate: true }),
+    ).rejects.toThrow("--create cannot be given with --recreate");
+    expect(() =>
+      copyClient.taskCopy(["from:T-2"], "into", { create: JSON.parse('"yes"') }),
+    ).toThrow("create must be a boolean");
   } finally {
     rmSync(copyRoot, { recursive: true, force: true });
   }
@@ -583,6 +609,22 @@ test("comments are added, listed, edited and deleted through the real binary", a
     expect(record.items).toEqual(shown.items);
     expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
     expect(shown.items[0]?.item.content).toBe("Long-form task content.");
+
+    // Several tasks at once, in the order asked, each as `taskShow` answers it — and an id
+    // naming nothing carries its failure in its own detail rather than refusing the others.
+    const many = await commentClient.taskShowMany(["plain:T-1", "notes:T-missing", "notes:T-1"]);
+    expect(many.details).toHaveLength(3);
+    expect(many.details[0]).toEqual(await commentClient.taskShow("plain:T-1"));
+    expect(many.details[2]).toEqual(shown);
+    expect(many.details[1]?.items).toEqual([]);
+    expect(many.details[1]?.errors[0]?.error.message).toContain(
+      "no task with the id notes:T-missing",
+    );
+    const records = await commentClient.taskShowMany(["notes:T-1"], { noComments: true });
+    expect(records.details).toEqual([record]);
+    expect(() =>
+      commentClient.taskShowMany(["notes:T-1"], { noComments: JSON.parse('"true"') }),
+    ).toThrow("noComments must be a boolean");
 
     // A source whose tasks have none carries no comments key, and refuses the verbs.
     expect("comments" in (await commentClient.taskShow("plain:T-1"))).toBe(false);

@@ -175,6 +175,13 @@ def test_every_generated_method_drives_the_binary(binary: Path, tmp_path: Path) 
         )
     ).items
     assert run(client.task_show(id=GlobalId(root="memory:T-1"))).items
+    shown_many = run(
+        client.task_show_many(ids=["memory:T-1", GlobalId(root="memory:P-1")], no_comments=True)
+    )
+    assert [len(detail.items) for detail in shown_many.details] == [1, 0]
+    assert "no task with the id memory:P-1" in str(
+        shown_many.details[1].errors[0].error.root.message
+    )
     assert run(client.task_deps(id="memory:T-1")).items
     assert run(client.project_list(source=["memory"])).items
     assert run(client.project_show(id="memory:P-1")).items
@@ -375,6 +382,40 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     assert "sealed cannot be written" in str(refused.value)
 
 
+def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """`create=True` creates without looking, and is refused where it cannot be true."""
+    client = Client(binary, cwd=folders(tmp_path))
+    # A task whose file the folder can record a link in, which the refusal below reads.
+    (tmp_path / "from" / "tasks" / "T-2.md").write_text(
+        "---\ntitle: Beta engine\nstatus: todo\n---\nthe rest\n", encoding="utf-8"
+    )
+
+    created = run(client.task_copy(ids=["from:T-2"], to="into", create=True))
+    assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
+        ("from:T-2", "into:T-2", "created")
+    ]
+    assert run(client.task_show(id="into:T-2")).items[0].item.metadata == {
+        "onetaskgraph.origin": "from:T-2"
+    }
+
+    # The copy recorded its link on the source task, so asserting there is no counterpart
+    # now is refused, naming the one the link names.
+    with pytest.raises(OnetaskgraphError) as carried:
+        run(client.task_copy(ids=["from:T-2"], to="into", create=True))
+    assert carried.value.exit_code == 1
+    assert "into:T-2" in str(carried.value)
+
+    # Beside a way of looking, refused before anything is read.
+    for refused_call in (
+        client.task_copy(ids=["from:T-1"], to="into", create=True, match_by="title"),
+        client.task_copy(ids=["from:T-1"], to="into", create=True, recreate=True),
+    ):
+        with pytest.raises(OnetaskgraphError) as refused:
+            run(refused_call)
+        assert refused.value.exit_code == 1
+        assert "--create cannot be given with" in str(refused.value)
+
+
 def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Copy a project and the tasks in it, then copy it again without duplicating them."""
     root = folders(tmp_path)
@@ -539,6 +580,21 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     record = run(client.task_show(id="notes:T-1", no_comments=True))
     assert record.comments is None
     assert record.items == shown.items
+
+    # Several tasks at once, in the order asked, each exactly as `task_show` answers it — and
+    # an id naming nothing carries its failure in its own detail rather than refusing the rest.
+    many = run(client.task_show_many(ids=["plain:T-1", "notes:T-missing", "notes:T-1"]))
+    assert len(many.details) == 3
+    # Compared as the documents they are: each generated root models what it nests on its own.
+    assert many.details[0].model_dump() == run(client.task_show(id="plain:T-1")).model_dump()
+    assert many.details[2].model_dump() == shown.model_dump()
+    assert many.details[1].items == []
+    assert many.details[1].comments is None
+    assert "no task with the id notes:T-missing" in str(
+        many.details[1].errors[0].error.root.message
+    )
+    records = run(client.task_show_many(ids=("notes:T-1",), no_comments=True))
+    assert [detail.model_dump() for detail in records.details] == [record.model_dump()]
 
     # A source whose tasks have none carries no comments key, and refuses the verbs.
     assert run(client.task_show(id="plain:T-1")).comments is None

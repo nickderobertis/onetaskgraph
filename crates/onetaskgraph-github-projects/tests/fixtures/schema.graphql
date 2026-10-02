@@ -18,6 +18,19 @@
 # `ProjectV2Item.fieldValueByName(name: String!): ProjectV2ItemFieldValue` is pinned from
 # https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
 # Priority writes select that value from their mutation payload instead of reading the issue again.
+#
+# `CreateIssueInput.projectV2Ids: [ID!]` — "An array of Node IDs for Projects V2 associated with
+# this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])` — was read from GitHub.com's own
+# published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
+# 2026-10-01, and is not carried below because this plugin does not send it: put to a real
+# board the same day, a create naming the board there was answered with no item in
+# `Issue.projectItems`, and the `addProjectV2ItemById` that then had to follow was refused
+# "Content already exists in this project". A create files its issue with that mutation alone.
+#
+# `AddCommentInput.subjectId` is declared there as `ID!` with
+# `@possibleTypes(concreteTypes: ["Issue", "PullRequest"], abstractType: "IssueOrPullRequest")`
+# (same artifact, same day): GitHub refuses a draft as a subject, and accepts any issue — a
+# project's, a document's, one on no board — so a comment's target is still read first.
 schema {
   query: Query
   mutation: Mutation

@@ -67,8 +67,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
-  comment types `Comment`, `CommentBody` and `NewComment`; the metering types `Metering` and
-  `Metered`; and `SourceError`.
+  comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
+  metering types `Metering` and `Metered`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -767,10 +767,10 @@ them do; this is the inventory of what is owed, not a status board.
     already holds its value; a folder of Markdown changes by exactly the named entries, over
     the in-process boundary and the stdio plugin protocol alike, and a status named by a word
     of its own keeps that word there and lands on the mapped option on a GitHub board.
-64. On a GitHub board an update of an existing issue is one read of it, at most one
-    `updateIssue` carrying title, body and state together, one field write each for
-    `Status` and `Priority`, and the `blockedBy` difference; one naming only what the issue
-    holds is the read alone. Linear sends one `issueUpdate` of what differs.
+64. On a GitHub board an update of an existing issue is one read of it, the `Status` and
+    `Priority` field writes together in one request, the `blockedBy` difference, and last
+    one `updateIssue` carrying title, body and state together; one naming only what the
+    issue holds is the read alone. Linear sends one `issueUpdate` of what differs.
 65. An update keeps the tasks it delivers in step exactly as `task status set` does when it
     names a status or a `delivers` list — the dropped ticket released — and re-evaluates
     nothing when it names neither; an update naming no field, a key both set and removed, a
@@ -794,6 +794,23 @@ them do; this is the inventory of what is owed, not a status board.
     each predicate pushed down or applied locally; both SDKs answer what the command
     line answers; and a location with an empty key or segment, a value with no `=`, and an
     origin that is not a qualified id are each refused naming the flag.
+70. `task show-many` answers one detail per id, in request order, each exactly what
+    `task show` prints for that id — with its comments or, under `--no-comments`, without
+    them — and an id naming no task, no configured source, or a GitHub draft's comments
+    carries its failure in its own detail without refusing the others, the verb exiting
+    non-zero exactly when some detail does; a GitHub board reads `n` items with their
+    comments in `ceil(n / DETAIL_BATCH)` requests.
+71. `task copy --create` creates each task without the correspondence lookup — no origin
+    query reaches a GitHub board — and a later read in the same process finds what it
+    created; it is refused beside `--match-by` or `--recreate`, and for a task whose own
+    link or origin already names an item at the destination, naming that item, writing
+    nothing.
+72. A bound re-copy of a GitHub board task changing any of its title, body, status,
+    priority and metadata is one read of it and at most two writes, and applies each change
+    alone and all of them together; a `task update` and a bound
+    re-copy each have every write they make refused in turn — whole, and as one aliased
+    field failing after the one before it landed — and leave the item's body and metadata
+    exactly as they stood.
 
 ## What a copied document's references are pointed at
 

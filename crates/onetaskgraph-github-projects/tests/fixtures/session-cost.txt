@@ -1,5 +1,5 @@
-requests 117
-node count 236850
+requests 118
+node count 246246
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -22,14 +22,17 @@ requests per call
     1       0  live origin field cleanup
     1       0  live origin field creation
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
+    1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1   20400  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies
     1     153  node-count and point-cost reconciliation while reading one draft
-    1     203  node-count and point-cost reconciliation while reading one issue
+    1     456  node-count and point-cost reconciliation while reading one issue
+    1     303  node-count and point-cost reconciliation while reading one issue with its comments
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count and point-cost reconciliation while reading the board
     1      50  node-count and point-cost reconciliation while reading the board's fields
+    1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
     1   20400  node-count and point-cost reconciliation while searching this board's issues
@@ -38,10 +41,9 @@ requests per call
     2   40800  reading a project's tasks
     4     400  reading a task's comments
     4     400  reading an issue's dependencies
-    6    1218  reading one issue
+    6    2736  reading one issue
     3   20451  reading the board
-    2     100  reading the board's fields
-    2       0  reading the destination repository
+    2     100  reading the board's fields and the destination repository
     1       0  reading which issue a comment is on
     2       0  recording a dependency
    10   89760  searching this board's issues
