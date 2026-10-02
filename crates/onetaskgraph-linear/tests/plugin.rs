@@ -6734,6 +6734,19 @@ async fn a_status_filter_narrows_a_mapped_category_by_name_and_another_by_type_a
         serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
             {"state":{"name":{"eqIgnoreCase":"Queued"}}}]})
     );
+    // A mapped category with a type of its own also asks for the issues that read as it by
+    // that type: with `backlog` mapped to `Proposed`, an issue at `Backlog` still reads as it.
+    assert_eq!(
+        filter_of(
+            serde_json::json!({"status_mapping":{"backlog":"Proposed"}}),
+            vec![StatusCategory::Backlog]
+        )
+        .await,
+        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
+            {"or":[{"state":{"name":{"eqIgnoreCase":"Proposed"}}},
+                   {"and":[{"state":{"type":{"in":["backlog"]}}},
+                           {"state":{"name":{"neqIgnoreCase":"Proposed"}}}]}]}]})
+    );
     assert_eq!(
         filter_of(
             serde_json::json!({"status_mapping":{"queued":"Queued"}}),
@@ -7031,9 +7044,9 @@ async fn the_states_report_names_each_mapped_state_present_or_missing_with_its_t
     assert_eq!(
         serde_json::to_value(&report).unwrap(),
         serde_json::json!({"source":"work","team":"ENG","states":[
-            {"category":"done","state":"Shipped","present":false},
+            {"category":"todo","state":"Todo","present":true,"type":"unstarted"},
             {"category":"queued","state":"queued","present":true,"type":"unstarted"},
-            {"category":"todo","state":"Todo","present":true,"type":"unstarted"}]})
+            {"category":"done","state":"Shipped","present":false}]})
     );
     assert_eq!(wire.try_iter().count(), 2, "two reads, and nothing written");
 }

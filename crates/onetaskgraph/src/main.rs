@@ -201,6 +201,33 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Sources {
             command: SourcesCommand::Fields(args),
         } => {
+            if let Some((name, config)) = linear_source(loaded, &args.source)? {
+                if args.apply {
+                    return Err(Failure::decided(
+                        "fields",
+                        format!(
+                            "source {name} uses plugin linear, and --apply is refused for it: \
+                             workflow states are team settings the people who own the team \
+                             decide, so this command reports them and never creates one.\n\
+                             next: run `onetaskgraph sources fields {name}` to see which mapped \
+                             states the team lacks, and add them in Linear's team settings."
+                        ),
+                    ));
+                }
+                let report = onetaskgraph_status_options::linear_workflow_states(
+                    &name,
+                    config,
+                    &loaded.secrets,
+                )
+                .await
+                .map_err(|error| Failure::decided("fields", format!("source {name}: {error}")))?;
+                let rendered = match loaded.config.output() {
+                    OutputFormat::Json => json(&report, "the fields report")?,
+                    OutputFormat::Text => render::workflow_states(&report),
+                };
+                emit(out, rendered.trim_end(), "the fields report")?;
+                return Ok(EXIT_OK);
+            }
             let (name, config) = github_projects_source(loaded, &args.source, "fields")?;
             let report = onetaskgraph_status_options::reconcile_fields(
                 &name,
@@ -689,10 +716,16 @@ fn github_projects_source(
             Failure::decided(verb, format!("no configured source is named {name}"))
         })?;
     if configured.plugin() != onetaskgraph_core::PluginKind::GithubProjects {
+        // `fields` reads a Linear source too, which `linear_source` took before this.
+        let available = if verb == "fields" {
+            "github-projects and linear sources"
+        } else {
+            "github-projects sources"
+        };
         return Err(Failure::decided(
             verb,
             format!(
-                "source {name} uses plugin {}, not github-projects; {verb} is only available for github-projects sources",
+                "source {name} uses plugin {}, not github-projects; {verb} is only available for {available}",
                 configured.plugin()
             ),
         ));
@@ -701,6 +734,26 @@ fn github_projects_source(
         .map_err(|error| Failure::decided(verb, format!("source {name}: {error}")))?;
     // llmlint: ignore-end[changed_behavior_has_e2e]
     Ok((name, config))
+}
+
+/// The configured `linear` source `source` names, with its configuration, or `None` when it
+/// names a source of another plugin — which `github_projects_source` then answers for.
+fn linear_source(
+    loaded: &Loaded,
+    source: &str,
+) -> Result<Option<(SourceName, onetaskgraph_status_options::LinearConfig)>, Failure> {
+    let Ok(name) = SourceName::try_from(source.to_owned()) else {
+        return Ok(None);
+    };
+    let Some(configured) = loaded.config.sources().get(&name) else {
+        return Ok(None);
+    };
+    if configured.plugin() != onetaskgraph_core::PluginKind::Linear {
+        return Ok(None);
+    }
+    let config = serde_json::from_value(configured.config().clone())
+        .map_err(|error| Failure::decided("fields", format!("source {name}: {error}")))?;
+    Ok(Some((name, config)))
 }
 
 /// Whether a guarded board setup verb plans or applies, from its `--apply` flag.
@@ -1156,6 +1209,10 @@ fn schema_bundle() -> Result<String, Failure> {
     )?;
     bundle["roots"]["FieldsReport"] =
         json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
+    bundle["roots"]["WorkflowStatesReport"] = json_value(
+        schemars::schema_for!(onetaskgraph_status_options::WorkflowStatesReport),
+        "the workflow states schema",
+    )?;
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;
     json(&bundle, "the schema bundle")
 }

@@ -213,10 +213,11 @@
 //! On a read, an issue at a state the mapping names is that category under the state's own
 //! name; every other state reads by its type, as it always has — the review states only
 //! people write, `Triage` among them, which nothing here ever writes. `filter_by_status`
-//! narrows a mapped category by its state names and a category the mapping leaves out by its
-//! type, *excluding* every state the mapping names, because those read as the category they
-//! are mapped to: a `todo` filter returning an issue at `Queued` would be a row that reads
-//! back as another category.
+//! narrows a mapped category by its state's name, and any category with a type of its own by
+//! that type *excluding* every state the mapping names, because those read as the category
+//! they are mapped to: `--status queued` returns the issues at `Queued` and never one at
+//! `Todo`, and a `todo` filter returning an issue at `Queued` would be a row that reads back as
+//! another category.
 //!
 //! A category the mapping does not mention keeps the behaviour of a source without the key
 //! exactly: `set_task_status` and the targeted update write the team's first state of the
@@ -689,6 +690,8 @@ impl StatusMapping {
             }
             entries.push((category, name));
         }
+        // In the contract's own category order, which is the order a report lists them in.
+        entries.sort_by_key(|(category, _)| CATEGORIES.iter().position(|held| held == category));
         Ok(Self { entries })
     }
 
@@ -1251,11 +1254,11 @@ impl LinearSource {
     /// The issue-side status narrowing for `statuses`, through this instance's mapping.
     ///
     /// **Without a mapping it is exactly what it always was** — one `state:{type:{in:[…]}}`
-    /// over the categories' workflow-state types. With one, each category asks for what it
-    /// reads as: a mapped category for the issues at its named state, by name; one the
-    /// mapping leaves out for the issues of its type *at no state the mapping names*, because
-    /// those read as the category they are mapped to and a `todo` filter returning an issue at
-    /// `Queued` would be a row that reads back as another category; a disabled one for nothing.
+    /// over the categories' workflow-state types. With one, each category asks for exactly
+    /// what reads as it: the issues at its named state, by name, when it is mapped; and the
+    /// issues of its type *at no state the mapping names*, because those read as the category
+    /// they are mapped to — a `todo` filter returning an issue at `Queued` would be a row that
+    /// reads back as another category. A category set to `null` asks for nothing.
     fn status_narrowing(&self, statuses: &[StatusCategory]) -> Value {
         if self.statuses.is_empty() {
             return json!({"state": {"type": {"in": statuses
@@ -1265,21 +1268,22 @@ impl LinearSource {
         }
         let mut alternatives = Vec::new();
         for category in statuses {
-            match self.statuses.target(*category) {
-                StateTarget::Named(name) => {
-                    alternatives.push(json!({"state": {"name": {"eqIgnoreCase": name}}}));
-                }
-                StateTarget::FirstOfType(_) => {
-                    let mut parts =
-                        vec![json!({"state": {"type": {"in": workflow_state_types(category)}}})];
-                    parts.extend(
-                        self.statuses
-                            .named()
-                            .map(|(_, name)| json!({"state": {"name": {"neqIgnoreCase": name}}})),
-                    );
-                    alternatives.push(Self::narrowed(parts));
-                }
-                StateTarget::Disabled { .. } => {}
+            let target = self.statuses.target(*category);
+            if let StateTarget::Named(name) = target {
+                alternatives.push(json!({"state": {"name": {"eqIgnoreCase": name}}}));
+            }
+            // Every issue that reads as this category by its type — at a state of the type and
+            // of no name the mapping claims — whether or not the category is mapped: with
+            // `backlog` mapped to `Proposed`, an issue at `Backlog` still reads as `backlog`.
+            let types = workflow_state_types(category);
+            if !types.is_empty() && !matches!(target, StateTarget::Disabled { .. }) {
+                let mut parts = vec![json!({"state": {"type": {"in": types}}})];
+                parts.extend(
+                    self.statuses
+                        .named()
+                        .map(|(_, name)| json!({"state": {"name": {"neqIgnoreCase": name}}})),
+                );
+                alternatives.push(Self::narrowed(parts));
             }
         }
         match alternatives.len() {
