@@ -2786,6 +2786,11 @@ pub fn linear_empty_workspace(sandbox: &Sandbox) -> Value {
     linear_server_over(sandbox, empty_dataset(), None, &[])
 }
 
+/// An empty Linear workspace refusing each operation `failing` names, once.
+pub fn linear_empty_workspace_failing(sandbox: &Sandbox, failing: &[&str]) -> Value {
+    linear_server_over(sandbox, empty_dataset(), None, failing)
+}
+
 /// The shared dataset's shape with nothing in it.
 ///
 /// Spelled from [`dataset`]'s own keys rather than restated, so a collection added there

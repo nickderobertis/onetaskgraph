@@ -219,7 +219,6 @@ impl Routes {
     }
 }
 
-/// The dotted key one entry is refused under.
 fn entry_key(source: &SourceName, index: usize) -> String {
     format!("sources.{source}.routes.{index}")
 }

@@ -65,14 +65,12 @@ fn refused(sandbox: &Sandbox, arguments: &[&str], code: i32) -> String {
     stderr(&output)
 }
 
-/// A JSON answer of a run that had to succeed.
 fn answer(sandbox: &Sandbox, arguments: &[&str]) -> Value {
     let mut with_json = arguments.to_vec();
     with_json.push("--json");
     serde_json::from_str(&ok(sandbox, &with_json)).expect("the command emits JSON")
 }
 
-/// Write one Markdown record under `root`.
 fn record(root: &Path, kind: &str, id: &str, front: &str) {
     let path = root.join(kind).join(format!("{id}.md"));
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
@@ -172,7 +170,6 @@ fn outcome<'a>(report: &'a Value, source: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("the report names {source}: {report:#}"))
 }
 
-/// The qualified id an outcome landed on.
 fn landed(report: &Value, source: &str) -> String {
     outcome(report, source)["destination"]
         .as_str()
@@ -180,7 +177,6 @@ fn landed(report: &Value, source: &str) -> String {
         .to_owned()
 }
 
-/// The source half of a qualified id.
 fn source_of(id: &str) -> &str {
     id.split_once(':').expect("a qualified id").0
 }
@@ -2484,5 +2480,195 @@ fn a_members_read_reports_a_home_its_source_fails_to_read() {
             }),
         "the home's failed read is reported, not passed off as a plan without members: \
          {partial:#}"
+    );
+}
+
+#[test]
+fn a_routed_project_copy_reports_what_the_plan_dropped_in_its_home_and_in_its_member() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    for (id, repository) in [
+        ("own", "github.com/nickderobertis/lib"),
+        ("own2", "github.com/nickderobertis/lib"),
+        ("pets", "github.com/petsinc/api"),
+        ("pets2", "github.com/petsinc/web"),
+    ] {
+        record(
+            &plan,
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\nproject: goal\nrepositories: [{repository}]"),
+        );
+    }
+    let first = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    let own2 = landed(&first, "plan:own2");
+    let pets2 = landed(&first, "plan:pets2");
+    for dropped in ["own2", "pets2"] {
+        std::fs::remove_file(plan.join(format!("tasks/{dropped}.md"))).expect("dropped");
+    }
+    let again = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    for (source, landed_on) in [("plan:own2", &own2), ("plan:pets2", &pets2)] {
+        let orphan = outcome(&again, source);
+        assert_eq!(orphan["action"], "orphaned", "{again:#}");
+        assert_eq!(orphan["destination"], json!(landed_on));
+    }
+    assert!(
+        answer(&sandbox, &["task", "show", &pets2])["items"][0].is_object(),
+        "an orphan is left exactly where it is"
+    );
+}
+
+#[test]
+fn a_routed_task_create_qualifies_its_edges_and_deliveries_from_where_it_lands() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+    );
+    let copied = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    let own = landed(&copied, "plan:own");
+    let pets = landed(&copied, "plan:pets");
+    let template = sandbox.project().join("task-template.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables:\n  goal: {description: The goal}\n---\n# {{ goal }}\n",
+    )
+    .expect("a template");
+    let created = answer(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            NOTES,
+            "--project",
+            "goal",
+            "--title",
+            "Routed from a template",
+            "--repository",
+            "github.com/petsinc/web",
+            "--template",
+            template.to_str().expect("a path"),
+            "--var",
+            "goal=ship it",
+            "--depends-on",
+            &own,
+            "--depends-on",
+            &pets,
+            "--delivers",
+            &own,
+            "--no-interactive",
+        ],
+    );
+    let id = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    assert_eq!(source_of(&id), TEAM, "{created:#}");
+    let held = &created["items"][0]["item"];
+    assert!(
+        held["content"]
+            .as_str()
+            .is_some_and(|body| body.contains("ship it")),
+        "the rendering landed in the routed source: {held:#}"
+    );
+    assert!(
+        held["metadata"]["onetaskgraph.template"].is_object(),
+        "with its provenance: {held:#}"
+    );
+    let mut edges = depends_on(&sandbox, &id);
+    edges.sort();
+    let mut wanted = vec![own.clone(), pets.clone()];
+    wanted.sort();
+    assert_eq!(edges, wanted, "one edge into its own source, one across");
+    assert_eq!(held["delivers"], json!([own]), "{held:#}");
+    let delivered = answer(&sandbox, &["task", "show", &own]);
+    assert_eq!(
+        delivered["items"][0]["item"]["delivered_by"],
+        json!([id]),
+        "the delivered task in the other source names its deliverer"
+    );
+}
+
+#[test]
+fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    record(
+        &plan,
+        "projects",
+        "goal",
+        "title: One goal\nstatus: Todo\nrepositories: [github.com/nickderobertis/onetaskgraph]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "lib",
+        "title: Library change\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/nickderobertis/lib]",
+    );
+    // Linear refuses to take its new issue back; the board refuses the home's member list.
+    let linear = crate::fixtures::linear_empty_workspace_failing(
+        &sandbox,
+        &[onetaskgraph_linear::graphql::ISSUE_DELETE],
+    );
+    let (board, _) = crate::fixtures::github_projects_with_board_failing(
+        &sandbox,
+        &["updateIssue(input:$input)"],
+    );
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        BOARD: {
+            "plugin": "github-projects",
+            "config": board,
+            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+        },
+        LINEAR: {"plugin": "linear", "config": linear},
+    })));
+    answer(&sandbox, &["project", "copy", "plan:goal", "--to", BOARD]);
+    record(
+        &plan,
+        "tasks",
+        "app",
+        "title: App consumes it\nstatus: todo\nproject: goal\n\
+         repositories: [github.com/petsinc/app]",
+    );
+    let refusal = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--member",
+            "plan:app",
+            "--to",
+            BOARD,
+        ],
+        1,
+    );
+    assert!(refusal.contains("could not be undone"), "{refusal}");
+    let left = refusal
+        .lines()
+        .find(|line| line.contains("still hold what it wrote"))
+        .unwrap_or_else(|| panic!("the refusal names what is left:\n{refusal}"));
+    let issue = left
+        .split([' ', ','])
+        .find(|word| word.starts_with("hellopatient:"))
+        .unwrap_or_else(|| panic!("what is left is named in the source it is in: {left}"));
+    let held = answer(&sandbox, &["task", "show", issue]);
+    assert_eq!(
+        held["items"][0]["item"]["title"], "App consumes it",
+        "and it is really there: {held:#}"
     );
 }

@@ -1884,8 +1884,41 @@ impl Engine {
                 self.orphans(destination, &id, &filed.native, &members)
                     .await?,
             );
+            // A routed plan's tasks are filed under its members too, so each member is walked
+            // in its own source for what the source plan no longer holds.
+            if self.routes.routes(&request.destination) {
+                for member in self.members_named(&filed, running).await? {
+                    let there = self.writable(&member.source)?;
+                    outcomes.extend(self.orphans(there, &id, &member.native, &members).await?);
+                }
+            }
         }
         Ok(outcomes)
+    }
+
+    /// The member projects `home` names: the list this copy already holds for it, grown
+    /// members included, or else the one the home itself records.
+    async fn members_named(
+        &self,
+        home: &GlobalId,
+        running: &Running,
+    ) -> Result<Vec<GlobalId>, EngineError> {
+        if let Some(held) = running.homes.get(&home.to_string()) {
+            return Ok(held.members.clone());
+        }
+        let at = self.writable(&home.source)?;
+        let Some(held) = at
+            .source()
+            .get_project(&home.native)
+            .await
+            .map_err(|error| refused(at, error))?
+        else {
+            return Ok(Vec::new());
+        };
+        members_of(home, &held.metadata).map_err(|message| EngineError::SourceRefused {
+            name: home.source.to_string(),
+            error: SourceError::Malformed { message },
+        })
     }
 
     /// The members a member copy names, per project and in the order they were named, and
