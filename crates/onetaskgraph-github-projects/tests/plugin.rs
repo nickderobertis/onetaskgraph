@@ -16548,3 +16548,56 @@ async fn a_write_whose_origin_cannot_be_put_back_says_which_key_it_left_moved() 
     assert_eq!(held.title, "one");
     assert_eq!(held.body.as_deref(), Some("as it stood"));
 }
+
+/// A content write refused for a rate limit, or because GitHub was briefly unwell, keeps that
+/// kind — and a rate limit the wait GitHub asked for — when the restore after it is refused
+/// too: a caller waiting out a limit is not told to stop instead, and is still told which key
+/// was left moved.
+#[tokio::test]
+async fn a_double_refusal_keeps_the_content_writes_kind_and_wait() {
+    for (refused, kind) in [
+        (Refusal::secondary_forbidden().after(30), "rate limited"),
+        (Refusal::unavailable(), "unavailable"),
+    ] {
+        let fixture = board(vec![
+            Item::issue("I_1", "one")
+                .body("as it stood")
+                .status("Todo")
+                .carrying("plans:OLD"),
+        ]);
+        fixture.script_for("updateIssue", vec![refused]);
+        fixture.refuse_after("updateProjectV2ItemFieldValue", 1);
+        let mut item = task("I_1", "one, revised", status(StatusCategory::Todo, "Todo"));
+        item.content = Some("a body that must not land".to_owned());
+        item.metadata
+            .insert("onetaskgraph.origin".to_owned(), json!("plans:NEW"));
+        item.repositories = vec![Repository::try_from("github.com/acme/work".to_owned()).unwrap()];
+        let error = paced(&fixture.endpoint, no_waiting())
+            .write_task(&ItemWrite {
+                target: Some(native("I_1")),
+                item,
+                depends_on: vec![],
+            })
+            .await
+            .expect_err("the content update is refused");
+        let said = match (&error, kind) {
+            (
+                SourceError::RateLimited {
+                    retry_after_seconds: Some(30),
+                    message: Some(said),
+                },
+                "rate limited",
+            )
+            | (SourceError::Unavailable { message: said }, "unavailable") => said.clone(),
+            _ => panic!("a {kind} content write was reported as {error:?}"),
+        };
+        assert!(
+            said.contains("so item I_1 still holds \"plans:NEW\" there")
+                && said.contains("next: set onetaskgraph.origin on it back to \"plans:OLD\""),
+            "{kind}: {said}"
+        );
+        let held = fixture.item("I_1");
+        assert_eq!(held.origin.as_deref(), Some("plans:NEW"), "{kind}");
+        assert_eq!(held.body.as_deref(), Some("as it stood"), "{kind}");
+    }
+}
