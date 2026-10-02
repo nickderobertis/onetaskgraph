@@ -323,6 +323,8 @@ struct Board {
     /// issue: the issue id, how the answer fails to arrive, and whether the delete landed
     /// behind it.
     unanswered: Vec<(String, NoAnswer, bool)>,
+    /// How this board answers every read of an issue's presence, when not truthfully.
+    presence_fault: Option<PresenceFault>,
 }
 
 /// How a call goes unanswered: GitHub's gateway timing out, or the connection dropped
@@ -331,10 +333,25 @@ struct Board {
 enum NoAnswer {
     GatewayTimeout,
     HungUp,
+    /// A `200` whose body stops short of the length its headers declared.
+    CutOff,
 }
 
-/// The status line the stand-in sends for a dropped connection, which it sends nothing for.
+/// The status the stand-in is handed for a dropped connection, which it sends nothing for.
 const HANG_UP: &str = "";
+
+/// The status the stand-in is handed for a `200` it cuts off part-way through its body.
+const CUT_OFF: &str = "200 OK, cut off";
+
+/// How this board answers a read of whether an issue is still there, when not truthfully.
+#[derive(Clone, Copy, Debug)]
+enum PresenceFault {
+    GatewayTimeout,
+    Forbidden,
+    InvalidJson,
+    NoNode,
+    SomeOtherNode,
+}
 
 impl Board {
     /// Take everything `vanishing_items` names off the board, as another deleter would.
@@ -456,6 +473,7 @@ impl Drive {
             immortal,
             refused: Vec::new(),
             unanswered: Vec::new(),
+            presence_fault: None,
         };
         Self {
             _exclusive: exclusive,
@@ -486,6 +504,14 @@ impl Drive {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .unanswered
             .push((id.to_owned(), how, lands));
+    }
+
+    /// Answer every read of an issue's presence with `fault` rather than the truth.
+    fn fault_presence_read(&self, fault: PresenceFault) {
+        STANDIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .presence_fault = Some(fault);
     }
 
     /// Whether the repository still holds the issue `id`.
@@ -786,6 +812,9 @@ async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failin
         ),
         ("PVTI_hung_landed", "I_hung_landed", NoAnswer::HungUp, true),
         ("PVTI_hung_lost", "I_hung_lost", NoAnswer::HungUp, false),
+        ("PVTI_cut_landed", "I_cut_landed", NoAnswer::CutOff, true),
+        ("PVTI_cut_lost", "I_cut_lost", NoAnswer::CutOff, false),
+        ("PVTI_never", "I_never", NoAnswer::GatewayTimeout, true),
     ];
     let drive = Drive::plant(
         cases
@@ -806,6 +835,11 @@ async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failin
     );
     for (_, issue, how, lands) in cases {
         drive.leave_issue_delete_unanswered(issue, how, lands);
+    }
+    // And one whose first delete landed, with every attempt after it unanswered too: what
+    // settles it is the repository read after the last, not any answer to a delete.
+    for _ in 1..3 {
+        drive.leave_issue_delete_unanswered("I_never", NoAnswer::GatewayTimeout, false);
     }
     let _in_flight = session_in_flight();
 
@@ -833,6 +867,12 @@ async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failin
                 "I_hung_landed",
                 "I_hung_landed",
                 "I_hung_lost",
+                "I_cut_landed",
+                "I_cut_landed",
+                "I_cut_lost",
+                "I_never",
+                "I_never",
+                "I_never",
             ]
             .map(str::to_owned)
             .to_vec()
@@ -926,6 +966,46 @@ async fn an_issue_delete_refused_outright_still_fails_the_cleanup() {
     assert_eq!(drive.refused(), vec!["I_elsewhere".to_owned()]);
 }
 
+#[tokio::test]
+async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
+    // Once a delete went unanswered, the repository read decides — so a read that does not
+    // answer the question is a failure, never taken as "gone".
+    for (fault, said) in [
+        (
+            PresenceFault::GatewayTimeout,
+            "presence query failed: HTTP 504",
+        ),
+        (PresenceFault::Forbidden, "presence query failed: HTTP 403"),
+        (
+            PresenceFault::InvalidJson,
+            "presence query returned invalid JSON",
+        ),
+        (PresenceFault::NoNode, "answered no data.node"),
+        (
+            PresenceFault::SomeOtherNode,
+            "answered a node that is not it",
+        ),
+    ] {
+        let drive = Drive::plant(
+            vec![("PVTI_mine", Some("I_mine"), artifact_title(RUNS.mine, NOW))],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        for _ in 0..3 {
+            drive.leave_issue_delete_unanswered("I_mine", NoAnswer::GatewayTimeout, true);
+        }
+        drive.fault_presence_read(fault);
+        let _in_flight = session_in_flight();
+
+        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+            .await
+            .expect_err("a presence read that settles nothing fails the cleanup");
+        assert!(refusal.contains(said), "{fault:?}: {refusal}");
+    }
+}
+
 fn sorted(mut names: Vec<String>) -> Vec<String> {
     names.sort();
     names
@@ -953,12 +1033,17 @@ fn serve(board: Arc<Mutex<Board>>) -> String {
                 // The request was read whole; closing now is a connection that never answered.
                 continue;
             }
+            // A cut-off answer declares more body than it sends, then closes.
+            let (status, declared) = if status == CUT_OFF {
+                ("200 OK", payload.len() + 64)
+            } else {
+                (status, payload.len())
+            };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  x-ratelimit-limit: 5000\r\nx-ratelimit-used: 1\r\n\
                  x-ratelimit-remaining: 4999\r\nx-ratelimit-resource: core\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                payload.len()
+                 Content-Length: {declared}\r\nConnection: close\r\n\r\n{payload}"
             );
             let _ = stream.write_all(response.as_bytes());
         }
@@ -1030,6 +1115,7 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
             return match how {
                 NoAnswer::GatewayTimeout => ("504 Gateway Timeout", "{}".to_owned()),
                 NoAnswer::HungUp => (HANG_UP, String::new()),
+                NoAnswer::CutOff => (CUT_OFF, "{\"data\":".to_owned()),
             };
         }
         if board.immortal(&issue) {
@@ -1053,6 +1139,18 @@ fn graphql(board: &Arc<Mutex<Board>>, request: &Value) -> (&'static str, String)
             .and_then(Value::as_str)
             .expect("a node id")
             .to_owned();
+        match board.presence_fault {
+            None => {}
+            Some(PresenceFault::GatewayTimeout) => return ("504 Gateway Timeout", "{}".to_owned()),
+            Some(PresenceFault::Forbidden) => {
+                return ("403 Forbidden", json!({"message":"Forbidden"}).to_string());
+            }
+            Some(PresenceFault::InvalidJson) => return ("200 OK", "not json".to_owned()),
+            Some(PresenceFault::NoNode) => return answered(json!({})),
+            Some(PresenceFault::SomeOtherNode) => {
+                return answered(json!({"node":{"id":"I_someone_else"}}));
+            }
+        }
         if board.holds_issue(&id) {
             return answered(json!({"node":{"id":id}}));
         }

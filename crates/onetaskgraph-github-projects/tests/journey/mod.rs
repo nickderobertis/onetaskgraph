@@ -833,7 +833,8 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
 /// `Query.node` is nullable and answers null for an id naming no object, which is the
 /// schema's own statement of "not there" — so nothing here reads how GitHub words or types
 /// the error it sends beside that null. An answer with no `data.node` at all, or a call
-/// GitHub did not answer, settles nothing and is reported as the failure it is.
+/// GitHub did not answer, settles nothing and is reported as the failure it is — and so does a
+/// node that is not the issue asked about, which is an answer to some other question.
 async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
     let response = match graphql_answer(
         token,
@@ -848,7 +849,10 @@ async fn issue_is_gone(token: &str, issue_id: &str) -> Result<bool, String> {
     };
     match response.pointer("/data/node") {
         Some(Value::Null) => Ok(true),
-        Some(_) => Ok(false),
+        Some(node) if node.get("id").and_then(Value::as_str) == Some(issue_id) => Ok(false),
+        Some(node) => Err(format!(
+            "live artifact issue presence of {issue_id} answered a node that is not it: {node}"
+        )),
         None => Err(format!(
             "live artifact issue presence of {issue_id} answered no data.node: {response}"
         )),
