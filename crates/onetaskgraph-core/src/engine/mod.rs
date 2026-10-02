@@ -35,14 +35,14 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
     MetadataMatch, MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, StatusCategory, Task, TaskQuery,
     TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::GlobalId;
-use crate::config::Config;
+use crate::config::{Config, Placement, Routes};
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
 
@@ -786,6 +786,27 @@ pub enum EngineError {
         destination: SourceName,
     },
 
+    /// A routed copy found an item's existing counterpart in a source other than the one its
+    /// repositories route it to now.
+    ///
+    /// Refused before anything is written. A repository changed after a copy is a person's
+    /// decision about where the work lives, and moving it silently would leave the
+    /// counterpart where it was, unlinked, beside a second one.
+    #[error(
+        "{item} was copied to {counterpart}, but its repositories now route it to {route}\n\
+         next: move or remove {counterpart} by hand and copy again, or restore {item}'s \
+         repositories so it routes to {source} again.",
+        source = .counterpart.source
+    )]
+    Misrouted {
+        /// The item being copied.
+        item: GlobalId,
+        /// The counterpart it already has.
+        counterpart: GlobalId,
+        /// The source it routes to now.
+        route: SourceName,
+    },
+
     /// A source refused something the copy asked of it.
     ///
     /// Distinct from a [`SourceFailure`], which leaves the other sources' results
@@ -908,6 +929,9 @@ pub struct Engine {
     sources: Vec<ConfiguredSource>,
     /// Which sources answer when a request names none.
     selection: Vec<SourceName>,
+    /// Where an item written to a source goes instead. Read from configuration and never
+    /// from a source, so it holds nothing of anybody's work.
+    routes: Routes,
 }
 
 impl Engine {
@@ -929,13 +953,34 @@ impl Engine {
                 .collect(),
             config.selected_sources(),
         )
+        .with_routes(config.routes())
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
     /// source it did not resolve from a configuration document.
     #[must_use]
     pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
-        Self { sources, selection }
+        Self {
+            sources,
+            selection,
+            routes: Routes::default(),
+        }
+    }
+
+    /// The same engine, placing what is written to each source by `routes`.
+    ///
+    /// [`build`](Self::build) takes them from the configuration; a caller holding sources
+    /// it built itself states them here, checked by [`Routes::new`].
+    #[must_use]
+    pub fn with_routes(mut self, routes: Routes) -> Self {
+        self.routes = routes;
+        self
+    }
+
+    /// Where an item with `repositories`, written to `source`, lands.
+    #[must_use]
+    pub fn place(&self, source: &SourceName, repositories: &[Repository]) -> Placement {
+        self.routes.place(source, repositories)
     }
 
     /// Every source that built, in configured-name order.

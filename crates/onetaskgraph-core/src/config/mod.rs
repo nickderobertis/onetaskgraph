@@ -23,6 +23,7 @@ mod environment_layer;
 mod error;
 mod layer;
 mod relative;
+mod routes;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -47,6 +48,7 @@ pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
 pub(crate) use relative::rebased;
 pub use relative::resolve_document_relative_paths;
+pub use routes::{Placement, RepositoryPattern, Route, Routes, SourceRoute};
 
 /// The variable that moves the credentials file somewhere else.
 pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";
@@ -78,9 +80,18 @@ pub struct SourceConfig {
     plugin: PluginKind,
     config: Value,
     document_dir: Option<DocumentDir>,
+    routes: Vec<Route>,
 }
 
 impl SourceConfig {
+    /// Where an item written to this source goes instead, in the order the entries are
+    /// tried. Empty for a source that routes nothing, which is every source a
+    /// configuration leaves `routes` off.
+    #[must_use]
+    pub fn routes(&self) -> &[Route] {
+        &self.routes
+    }
+
     /// The plugin kind that builds this source.
     #[must_use]
     pub fn plugin(&self) -> PluginKind {
@@ -121,6 +132,9 @@ struct SourceShape {
     plugin: String,
     #[serde(default = "empty_block")]
     config: Value,
+    /// Read by [`routes::parse`] rather than by serde, so a refusal names the entry.
+    #[serde(default)]
+    routes: Value,
 }
 
 /// A plugin block nobody wrote, which is different from one nobody may write.
@@ -237,15 +251,21 @@ impl Config {
                      ambiguous.",
                 )
             })?;
+            let routes = routes::parse(&name, &source.routes)?;
             sources.insert(
                 name,
                 SourceConfig {
                     plugin,
                     config: source.config,
                     document_dir: None,
+                    routes,
                 },
             );
         }
+        routes::check(
+            &routes_of(&sources),
+            &sources.keys().cloned().collect::<Vec<_>>(),
+        )?;
 
         let default_sources = shape
             .default_sources
@@ -295,6 +315,12 @@ impl Config {
         &self.sources
     }
 
+    /// Every source's routes, for placing an item written to one of them.
+    #[must_use]
+    pub fn routes(&self) -> Routes {
+        routes_of(&self.sources)
+    }
+
     /// Which sources answer when a command names none, or `None` for every one.
     #[must_use]
     pub fn default_sources(&self) -> Option<&[SourceName]> {
@@ -308,6 +334,15 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.sources.keys().cloned().collect())
     }
+}
+
+/// The routes every source declares, gathered for placing items.
+fn routes_of(sources: &BTreeMap<SourceName, SourceConfig>) -> Routes {
+    let mut routes = Routes::default();
+    for (name, source) in sources {
+        routes.insert(name.clone(), source.routes.clone());
+    }
+    routes
 }
 
 /// Check every `default_sources` entry against the sources that exist.
