@@ -782,6 +782,10 @@ async fn remove_live_artifacts(
 /// decides is the repository: [`issue_is_gone`] reads the issue back, and an issue that is no
 /// longer there is the outcome this delete was asking for, whichever attempt took it.
 ///
+/// An answer counts as the delete only when its payload says so — `deleteIssue` naming the
+/// repository the issue left; one that comes back without errors and without that is no
+/// evidence either way, so the repository decides it too.
+///
 /// A refusal GitHub answered on the *first* attempt fails the cleanup at once, as it always
 /// did — an issue this run never saw a delete of go is not one to explain away — and so does
 /// an issue still there after every attempt, naming what each kind of failure said.
@@ -798,7 +802,19 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
         )
         .await
         {
-            Ok(_) => return Ok(()),
+            Ok(response)
+                if response
+                    .pointer("/data/deleteIssue/repository/id")
+                    .is_some_and(Value::is_string) =>
+            {
+                return Ok(());
+            }
+            Ok(response) => {
+                answered = Some(format!(
+                    "GitHub answered the delete without confirming it: {response}"
+                ));
+                break;
+            }
             Err(Refusal::Answered(problem, _)) if unanswered.is_none() => return Err(problem),
             Err(Refusal::Answered(problem, _)) => {
                 answered = Some(problem);
@@ -815,15 +831,18 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
     if issue_is_gone(token, issue_id).await? {
         return Ok(());
     }
-    let unanswered = unanswered.unwrap_or_default();
-    Err(match answered {
-        Some(answered) => format!(
+    Err(match (answered, unanswered) {
+        (Some(answered), Some(unanswered)) => format!(
             "issue {issue_id} is still in the repository: {answered}, after an attempt GitHub \
              never answered ({unanswered})"
         ),
-        None => format!(
+        (Some(answered), None) => {
+            format!("issue {issue_id} is still in the repository: {answered}")
+        }
+        (None, unanswered) => format!(
             "issue {issue_id} is still in the repository after {ATTEMPTS} attempts GitHub never \
-             answered; the last: {unanswered}"
+             answered; the last: {}",
+            unanswered.unwrap_or_default()
         ),
     })
 }
