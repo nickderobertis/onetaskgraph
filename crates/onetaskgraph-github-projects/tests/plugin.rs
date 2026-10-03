@@ -15549,6 +15549,214 @@ async fn project_and_document_text_searches_ask_a_narrower_question_than_the_boa
     assert_eq!(fixture.requests("board"), 0);
 }
 
+/// Every row a project or document text search answers, walked a page of `limit` at a time.
+async fn walk_text_search(source: &dyn TaskSource, search: &TextSearch, limit: u32) -> Vec<String> {
+    let mut request = page(limit);
+    let mut ids = Vec::new();
+    loop {
+        let (items, next) = match search {
+            TextSearch::Projects(query) => {
+                let answer = source.query_projects(query, &request).await.unwrap();
+                (
+                    answer.items.into_iter().map(|p| p.id.0).collect::<Vec<_>>(),
+                    answer.next,
+                )
+            }
+            TextSearch::Documents(query) => {
+                let answer = source.query_documents(query, &request).await.unwrap();
+                (
+                    answer.items.into_iter().map(|d| d.id.0).collect(),
+                    answer.next,
+                )
+            }
+        };
+        ids.extend(items);
+        match next {
+            Some(cursor) => request = resume(&cursor.0, limit),
+            None => return ids,
+        }
+    }
+}
+
+#[tokio::test]
+async fn project_and_document_text_searches_walk_every_page_of_matches_once() {
+    // Seventy-five issues hold the text — a project, a document and a task of each number —
+    // so the search answers four pages of twenty, and the caller walks the survivors ten at
+    // a time across three of its own pages.
+    let widgets = || {
+        board(
+            (0..25)
+                .flat_map(|index| {
+                    [
+                        Item::issue(&format!("P_{index:02}"), &format!("widget plan {index}"))
+                            .sub_issues(1),
+                        design(&format!("D_{index:02}"), &format!("widget note {index}")),
+                        Item::issue(&format!("I_{index:02}"), &format!("widget task {index}")),
+                    ]
+                })
+                .map(|item| item.status("Todo"))
+                .collect(),
+        )
+    };
+    for (what, search, prefix) in [
+        (
+            "projects",
+            TextSearch::projects("widget", TextFields::Title),
+            "P",
+        ),
+        (
+            "documents",
+            TextSearch::documents(ProjectFilter::Any, "widget", TextFields::Title),
+            "D",
+        ),
+    ] {
+        let fixture = widgets();
+        let source = source(&fixture);
+        assert_eq!(
+            walk_text_search(source.as_ref(), &search, 10).await,
+            (0..25)
+                .map(|index| format!("{prefix}_{index:02}"))
+                .collect::<Vec<_>>(),
+            "{what}: every match, once, in the board's order"
+        );
+        assert_eq!(
+            search_sizes(&fixture),
+            [20; 4],
+            "{what}: the search is walked once to its end, whatever page the caller is on"
+        );
+        assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+    }
+}
+
+#[tokio::test]
+async fn project_and_document_text_searches_answer_with_what_this_process_wrote() {
+    let fixture = board(vec![
+        Item::issue("P_old", "Ship plan")
+            .status("Todo")
+            .sub_issues(1),
+        design("D_old", "Ship notes").status("Todo"),
+    ]);
+    // Every index this board keeps still answers both as they are now, after the writes below
+    // retitle them out of the text.
+    fixture.indexes_behind("P_old");
+    fixture.indexes_behind("D_old");
+    let source = source(&fixture);
+    source
+        .write_project(&ItemWrite {
+            target: Some(NativeId("P_old".to_owned())),
+            item: project("P_old", "Parked plan", status(StatusCategory::Todo, "Todo")),
+            depends_on: vec![],
+        })
+        .await
+        .expect("the project is retitled");
+    source
+        .write_document(&ItemWrite {
+            target: Some(NativeId("D_old".to_owned())),
+            item: document("D_old", "Parked notes"),
+            depends_on: vec![],
+        })
+        .await
+        .expect("the document is retitled");
+    // And two the search cannot see yet, because they were created a moment ago.
+    let fresh_project = source
+        .write_project(&write(project(
+            "ignored",
+            "Fresh ship plan",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("a project this board accepts");
+    let fresh_document = source
+        .write_document(&write(document("ignored", "Fresh ship notes")))
+        .await
+        .expect("a document this board accepts");
+    fixture.read_behind(2);
+
+    for (what, search, expected) in [
+        (
+            "projects holding the old title",
+            TextSearch::projects("ship", TextFields::Title),
+            vec![fresh_project.0.clone()],
+        ),
+        (
+            "projects holding the new title",
+            TextSearch::projects("parked", TextFields::Title),
+            vec!["P_old".to_owned()],
+        ),
+        (
+            "documents holding the old title",
+            TextSearch::documents(ProjectFilter::Any, "ship", TextFields::Title),
+            vec![fresh_document.0.clone()],
+        ),
+        (
+            "documents holding the new title",
+            TextSearch::documents(ProjectFilter::Orphans, "parked", TextFields::Title),
+            vec!["D_old".to_owned()],
+        ),
+    ] {
+        assert_eq!(search.selected(source.as_ref()).await, expected, "{what}");
+    }
+    assert!(
+        fixture
+            .searches()
+            .iter()
+            .all(|search| search.contains("in:title")),
+        "every answer came from a narrowed search: {:?}",
+        fixture.searches()
+    );
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn project_and_document_text_searches_narrow_by_whole_words_and_confirm_by_substring() {
+    let fixture = board(vec![
+        Item::issue("P_ship", "Ship it")
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_shipment", "Shipment plan")
+            .status("Todo")
+            .sub_issues(1),
+        design("D_ship", "Ship notes"),
+        design("D_shipment", "Shipment notes"),
+        Item::draft("D_draft", &format!("{DESIGN_TITLE_PREFIX}Ship draft")).status("Todo"),
+    ]);
+    let source = source(&fixture);
+    // The draft is a document of this board, read off its items connection.
+    assert_eq!(
+        selected_documents(source.as_ref(), &DocumentQuery::default()).await,
+        ["D_ship", "D_shipment", "D_draft"]
+    );
+    for (what, search, expected) in [
+        // `Shipment` holds "ship" as a substring and not as a word, so GitHub's token match
+        // does not name it: the narrowing a task text search already declares.
+        (
+            "a project word",
+            TextSearch::projects("ship", TextFields::Title),
+            vec!["P_ship"],
+        ),
+        // GitHub reads `ship-it` as the words `ship it`, which `Ship it` holds; the text
+        // `ship-it` is in no title, so the substring rule turns the candidate away.
+        (
+            "a project candidate the substring rule refuses",
+            TextSearch::projects("ship-it", TextFields::Title),
+            vec![],
+        ),
+        // A board draft is not an issue, so no search lists it, whatever its title holds.
+        (
+            "a document word",
+            TextSearch::documents(ProjectFilter::Any, "ship", TextFields::Title),
+            vec!["D_ship"],
+        ),
+        (
+            "a document candidate the substring rule refuses",
+            TextSearch::documents(ProjectFilter::Orphans, "ship-notes", TextFields::Title),
+            vec![],
+        ),
+    ] {
+        assert_eq!(search.selected(source.as_ref()).await, expected, "{what}");
+    }
+}
+
 #[tokio::test]
 async fn project_and_document_text_searches_cost_the_same_on_a_board_of_several_pages() {
     // The one-page board is `board_with_documents`; the other is the same board with 350
