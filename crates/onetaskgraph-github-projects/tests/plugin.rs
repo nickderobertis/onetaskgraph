@@ -15422,6 +15422,188 @@ async fn a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pa
     assert!(sent[1] > sent[0], "{sent:?}");
 }
 
+/// A project or a document text search, the two reads that once matched their text only
+/// after reading every issue of the board.
+#[derive(Clone, Debug)]
+enum TextSearch {
+    Projects(ProjectQuery),
+    Documents(DocumentQuery),
+}
+
+impl TextSearch {
+    fn projects(terms: &str, fields: TextFields) -> Self {
+        Self::Projects(ProjectQuery {
+            text: text(terms, fields),
+            ..ProjectQuery::default()
+        })
+    }
+
+    fn documents(project: ProjectFilter, terms: &str, fields: TextFields) -> Self {
+        Self::Documents(document_query(
+            LabelFilter::default(),
+            project,
+            text(terms, fields),
+        ))
+    }
+
+    async fn selected(&self, source: &dyn TaskSource) -> Vec<String> {
+        match self {
+            Self::Projects(query) => selected_projects(source, query).await,
+            Self::Documents(query) => selected_documents(source, query).await,
+        }
+    }
+}
+
+/// Every project and unscoped document text search below, the matches each returned when it
+/// read the whole board, and the qualifier it now sends instead. Each search's text is also
+/// held by an item of the other kinds, so a candidate the search names is kept only once its
+/// kind is confirmed.
+fn text_searches() -> Vec<(&'static str, TextSearch, Vec<&'static str>, &'static str)> {
+    vec![
+        (
+            "a project title",
+            TextSearch::projects("engine", TextFields::Title),
+            vec!["I_plan"],
+            "in:title \"engine\"",
+        ),
+        (
+            "a project title or content",
+            TextSearch::projects("ENGINE", TextFields::TitleOrContent),
+            vec!["I_plan"],
+            "in:title,body \"ENGINE\"",
+        ),
+        (
+            "a document title",
+            TextSearch::documents(ProjectFilter::Any, "runbook", TextFields::Title),
+            vec!["I_filed"],
+            "in:title \"runbook\"",
+        ),
+        (
+            "a document content",
+            TextSearch::documents(ProjectFilter::Any, "engine core", TextFields::Content),
+            vec!["I_design"],
+            "in:body \"engine core\"",
+        ),
+        (
+            "a document title or content",
+            TextSearch::documents(
+                ProjectFilter::Any,
+                "alpha design",
+                TextFields::TitleOrContent,
+            ),
+            vec!["I_design", "I_filed"],
+            "in:title,body \"alpha design\"",
+        ),
+        (
+            "an orphan document title or content",
+            TextSearch::documents(
+                ProjectFilter::Orphans,
+                "alpha design",
+                TextFields::TitleOrContent,
+            ),
+            vec!["I_design"],
+            "in:title,body \"alpha design\"",
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn project_and_document_text_searches_ask_a_narrower_question_than_the_board() {
+    for (what, search, expected, qualifier) in text_searches() {
+        let fixture = board_with_documents();
+        let source = source(&fixture);
+        assert_eq!(search.selected(source.as_ref()).await, expected, "{what}");
+        assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+        assert_eq!(
+            fixture.board_item_reads(),
+            Vec::<String>::new(),
+            "{what} walked the board's items"
+        );
+        assert_eq!(
+            fixture.searches(),
+            [format!("project:octo-org/7 is:issue {qualifier}")],
+            "{what} sent something other than one board-scoped search for its text"
+        );
+        // Asked again of the same source, the answer it holds for the command is the one
+        // the search returned: nothing more is sent.
+        let sent = fixture.operations();
+        assert_eq!(search.selected(source.as_ref()).await, expected, "{what}");
+        assert_eq!(fixture.operations(), sent, "{what} asked GitHub twice");
+    }
+
+    // A document read scoped to one project keeps its read of that project's sub-issues,
+    // text or none, and sends no search.
+    let fixture = board_with_documents();
+    let source = source(&fixture);
+    assert_eq!(
+        TextSearch::documents(
+            ProjectFilter::Is(NativeId("I_plan".to_owned())),
+            "runbook",
+            TextFields::Title,
+        )
+        .selected(source.as_ref())
+        .await,
+        ["I_filed"]
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(fixture.requests("board"), 0);
+}
+
+#[tokio::test]
+async fn project_and_document_text_searches_cost_the_same_on_a_board_of_several_pages() {
+    // The one-page board is `board_with_documents`; the other is the same board with 350
+    // more projects, documents and tasks that no search below matches — four pages of
+    // `ProjectV2.items` and of an unqualified board search at GitHub's 100.
+    let several_pages = || {
+        let fixture = board_with_documents();
+        for index in 0..350 {
+            let item = match index % 3 {
+                0 => Item::issue(
+                    &format!("P_filler_{index:03}"),
+                    &format!("filler plan {index}"),
+                )
+                .sub_issues(1),
+                1 => design(
+                    &format!("D_filler_{index:03}"),
+                    &format!("filler note {index}"),
+                ),
+                _ => Item::issue(&format!("I_filler_{index:03}"), &format!("filler {index}")),
+            };
+            fixture.filed_by_something_else(item.status("Todo").body("unrelated prose"));
+        }
+        fixture
+    };
+    for (what, search, expected, _) in text_searches() {
+        let mut sent = Vec::new();
+        for fixture in [board_with_documents(), several_pages()] {
+            let source = source(&fixture);
+            assert_eq!(search.selected(source.as_ref()).await, expected, "{what}");
+            assert_eq!(fixture.requests("board"), 0, "{what} read the board");
+            sent.push(fixture.operations());
+        }
+        assert!(!sent[0].is_empty(), "{what} sent nothing at all");
+        assert_eq!(
+            sent[0], sent[1],
+            "{what} sent more to a board of several pages than to a board of one"
+        );
+    }
+
+    // The same reads without a text do grow with the board, which is what makes the
+    // equality above a property of the text searches rather than of this fixture.
+    for (what, search) in [
+        ("projects", TextSearch::Projects(ProjectQuery::default())),
+        ("documents", TextSearch::Documents(DocumentQuery::default())),
+    ] {
+        let mut sent = Vec::new();
+        for fixture in [board_with_documents(), several_pages()] {
+            let source = source(&fixture);
+            search.selected(source.as_ref()).await;
+            sent.push(fixture.operations().len());
+        }
+        assert!(sent[1] > sent[0], "{what}: {sent:?}");
+    }
+}
+
 #[tokio::test]
 async fn an_item_this_process_wrote_out_of_a_predicate_is_not_returned_from_a_stale_index() {
     let fixture = board(vec![
@@ -15869,6 +16051,79 @@ async fn a_value_or_text_with_no_searchable_words_is_refused_before_any_request(
     );
     assert_eq!(fixture.requests("board"), 1);
     assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
+}
+
+#[tokio::test]
+async fn a_project_or_document_text_with_no_searchable_words_is_refused_before_any_request() {
+    // The same refusal a task text search gives, for the same reason: the search these reads
+    // send could not find the text, and the source does not read the board for it instead.
+    for (what, search) in [
+        ("projects", TextSearch::projects("--", TextFields::Title)),
+        (
+            "documents",
+            TextSearch::documents(ProjectFilter::Any, "--", TextFields::TitleOrContent),
+        ),
+        (
+            "orphan documents",
+            TextSearch::documents(ProjectFilter::Orphans, "?!", TextFields::Content),
+        ),
+        (
+            "one project's documents",
+            TextSearch::documents(
+                ProjectFilter::Is(NativeId("I_plan".to_owned())),
+                "--",
+                TextFields::Title,
+            ),
+        ),
+    ] {
+        let fixture = board_with_documents();
+        let source = source(&fixture);
+        let error = match &search {
+            TextSearch::Projects(query) => source
+                .query_projects(query, &page(10))
+                .await
+                .map(|_| ())
+                .expect_err(what),
+            TextSearch::Documents(query) => source
+                .query_documents(query, &page(10))
+                .await
+                .map(|_| ())
+                .expect_err(what),
+        };
+        assert!(
+            matches!(error, SourceError::Refused { .. }),
+            "{what}: {error:?}"
+        );
+        let message = refusal(error);
+        assert!(
+            message.contains("cannot search for the text")
+                && message.contains("GitHub's issue search indexes words")
+                && message.contains("holding a letter or a digit"),
+            "{what} says what, why and what to ask instead: {message}"
+        );
+        assert_eq!(
+            fixture.operations(),
+            Vec::<String>::new(),
+            "{what} asked GitHub something"
+        );
+    }
+
+    // A blank text is not refused: it keeps the read it always had.
+    let fixture = board_with_documents();
+    let projects = source(&fixture);
+    assert_eq!(
+        TextSearch::projects("   ", TextFields::Title)
+            .selected(projects.as_ref())
+            .await,
+        Vec::<String>::new()
+    );
+    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
+    let fixture = board_with_documents();
+    let documents = source(&fixture);
+    TextSearch::documents(ProjectFilter::Any, "   ", TextFields::Title)
+        .selected(documents.as_ref())
+        .await;
+    assert_eq!(fixture.requests("board"), 1);
 }
 
 #[tokio::test]

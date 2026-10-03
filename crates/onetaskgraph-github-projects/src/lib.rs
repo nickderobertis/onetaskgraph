@@ -130,7 +130,7 @@
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
 //! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. **A value with no letter or digit is refused** — the empty string, whitespace or punctuation alone — before any request, as a `SourceError::Refused` (wire kind `refused`) naming the value: GitHub's index holds words, so no bounded query can find such a value, and this source neither reads the whole board for it nor answers it as empty. |
 //! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
-//! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. **A text with no letter or digit that is not blank is refused** — `--` for one — before any request, as the same `refused` error naming the text, for the reason a metadata value like it is; a blank text is not refused, and keeps the board read it always had, confirmed by the same substring rule. A project or document query's text is applied by that same substring rule over the issues its read already holds, and narrows nothing. |
+//! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. **A text with no letter or digit that is not blank is refused** — `--` for one — before any request, as the same `refused` error naming the text, for the reason a metadata value like it is; a blank text is not refused, and keeps the board read it always had, confirmed by the same substring rule. A project query's text, and a document query's text when the query is scoped to no project, is that same board-scoped search for the same phrase in the same fields, refused on the same terms, every candidate confirmed by its kind and by the same substring rule, so it narrows exactly as a task's does; a document query scoped to one project reads that project's sub-issues and confirms its text over them. A board draft is not an issue, so no text search lists one, a draft titled as a document included. |
 //! | `search_content` | **Supported,** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
@@ -163,6 +163,8 @@
 //! declared semantics:** GitHub matches whole words where the substring rule this source and
 //! the local Markdown source confirm with would match inside one, so an item holding the text
 //! only inside a longer word is never a candidate. Every item returned does contain the text.
+//! A project query's text, and a document query's scoped to no project, is that same search
+//! and narrows on the same terms, its candidates confirmed by their kind as well.
 //! GitHub's issue search offers no qualifier for a label set, a status column or a priority,
 //! so those three are applied in process over the candidates, and a query carrying none of
 //! the six narrowing predicates reads the board. Declaring one `Unsupported` would make the
@@ -185,6 +187,7 @@
 //! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` — or, for a create that needs the repository's id too, [`graphql::CREATION_CONTEXT`], both in one request | the board's fields |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
 //! | which projects this board holds | [`graphql::SEARCH_ISSUES`] — an issue search scoped to the board | the board's issues, without their board items |
+//! | which projects hold a text, or which documents do when no project narrows the question | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text as one quoted phrase, `in:title`, `in:body` or both, as a task's text is sent — walked to its end in pages of twenty | the issues that match |
 //! | which tasks were commented on since an instant | [`graphql::SEARCH_ISSUES`] — the same board-scoped search with an `updated:>=` qualifier — then [`graphql::ISSUE_COMMENTS`] for each candidate it names | the issues updated since, and their comments |
 //! | which tasks hold a text, or a metadata value | [`graphql::SEARCH_ISSUES`] — the board-scoped search with the text and each value as quoted phrases, `in:title`, `in:body` or both, and an `updated:>=` qualifier too when comment activity is asked for — in pages of twenty, only as many as the caller's rows need | the issues that match |
 //! | which tasks were copied from one origin | [`graphql::ORIGIN_LOOKUP`] — the board's own `items` under its field filter on the origin field, and the same board-scoped search for the id `in:body`, in one request, each paged at three | the carriers of that origin, which is one item |
@@ -4700,6 +4703,37 @@ impl GitHubProjectsSource {
         self.with_own_writes(found).map(Some)
     }
 
+    /// The candidates for a project or unscoped document query carrying a searchable text,
+    /// read without enumerating the board — or `None` for a query with no text or a blank one,
+    /// which keeps the read it always had.
+    ///
+    /// The text is sent as the very phrase a task query's text is — see [`text_qualifiers`] —
+    /// in one board-scoped issue search walked to its end at [`SEARCH_PAGE_SIZE`], so what it
+    /// costs is the issues that match and never the board. Its answer is held for the command
+    /// under the same key [`Self::narrowed`] holds that search under, so a walk of the caller's
+    /// pages asks GitHub once. Every candidate is confirmed afterwards by its kind and by the
+    /// substring rule, exactly as an item of the wider read was, and is completed with what this
+    /// process wrote: see [`Self::with_own_writes`].
+    async fn text_searched(
+        &self,
+        text: Option<&TextQuery>,
+    ) -> Result<Option<Vec<Resolved>>, SourceError> {
+        let Some(also) = text_qualifiers(text) else {
+            return Ok(None);
+        };
+        let key = Narrowing::Search(also.clone()).key();
+        let cached = self.narrowed_cache()?.get(&key).cloned();
+        let found = match cached {
+            Some(found) => found,
+            None => {
+                let found = self.searched(&also).await?;
+                self.narrowed_cache()?.insert(key, found.clone());
+                found
+            }
+        };
+        self.with_own_writes(found).map(Some)
+    }
+
     /// Every item of this board that may carry `origin` — a superset of those that do — found
     /// by [`graphql::ORIGIN_LOOKUP`] and never by enumerating the board.
     ///
@@ -7924,6 +7958,26 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
     Some(format!("{fields} {}", phrases.join(" ")))
 }
 
+/// The search terms that narrow a board-scoped issue search to a project or document query's
+/// text, or `None` when it has none or a blank one: the phrase, in the fields, a task query
+/// carrying that text alone is sent as by [`narrowing_qualifiers`].
+fn text_qualifiers(text: Option<&TextQuery>) -> Option<String> {
+    narrowing_qualifiers(&TaskQuery {
+        text: text.cloned(),
+        ..TaskQuery::default()
+    })
+}
+
+/// Refuses a project or document query's text GitHub's issue search cannot find, before
+/// anything is asked of GitHub, on exactly the terms [`refuse_unsearchable`] refuses a task
+/// query's.
+fn refuse_unsearchable_text(text: Option<&TextQuery>) -> Result<(), SourceError> {
+    refuse_unsearchable(&TaskQuery {
+        text: text.cloned(),
+        ..TaskQuery::default()
+    })
+}
+
 /// Refuses a task query naming a text or a metadata value GitHub's issue search cannot find,
 /// before anything is asked of GitHub.
 ///
@@ -8725,12 +8779,17 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         validate_page(page)?;
+        refuse_unsearchable_text(query.text.as_ref())?;
         // The projects a board holds are found by an issue search scoped to that board,
         // never by walking the board's own item connection: what tells a project from a
-        // task is the `parent` each issue carries, which costs nothing to read.
-        let projects = self
-            .board_issues()
-            .await?
+        // task is the `parent` each issue carries, which costs nothing to read. A query
+        // carrying a text asks that search for the text too, so it reads the issues that
+        // hold it rather than every issue of the board.
+        let held = match self.text_searched(query.text.as_ref()).await? {
+            Some(searched) => searched,
+            None => self.board_issues().await?,
+        };
+        let projects = held
             .iter()
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
             .map(Resolved::project)
@@ -8755,9 +8814,12 @@ impl TaskSource for GitHubProjectsSource {
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         validate_page(page)?;
+        refuse_unsearchable_text(query.text.as_ref())?;
         // Narrowed to one project, this is the same sub-issue read a task list scoped to
         // that project makes — a document filed under a project is a sub-issue of it too,
-        // and which of them come back is the kind this caller asked for.
+        // and which of them come back is the kind this caller asked for. Unscoped, a query
+        // carrying a text asks the board-scoped issue search for it, as a task query does,
+        // and only one carrying none reads the board.
         let (held, membership) = match &query.project {
             ProjectFilter::Is(project) => (
                 self.project_children(project).await?,
@@ -8765,7 +8827,10 @@ impl TaskSource for GitHubProjectsSource {
                 &ProjectFilter::Any,
             ),
             ProjectFilter::Any | ProjectFilter::Orphans => {
-                (self.board().await?.items, &query.project)
+                match self.text_searched(query.text.as_ref()).await? {
+                    Some(searched) => (searched, &query.project),
+                    None => (self.board().await?.items, &query.project),
+                }
             }
         };
         // Filtered before paged, exactly as a task read is: a page of a filtered result is
