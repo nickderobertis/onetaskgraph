@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.58](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.57...onetaskgraph-core-v0.2.58) - 2026-10-03
+
+### Performance
+
+- *(github-projects)* search the board for project and document text ([#3231](https://github.com/nickderobertis/onetaskgraph/pull/3231))
+
 ## [0.2.56](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.2.55...onetaskgraph-core-v0.2.56) - 2026-10-02
 
 ### Added
