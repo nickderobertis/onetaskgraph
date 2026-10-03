@@ -15422,8 +15422,6 @@ async fn a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pa
     assert!(sent[1] > sent[0], "{sent:?}");
 }
 
-/// A project or a document text search, the two reads that once matched their text only
-/// after reading every issue of the board.
 #[derive(Clone, Debug)]
 enum TextSearch {
     Projects(ProjectQuery),
@@ -15549,7 +15547,6 @@ async fn project_and_document_text_searches_ask_a_narrower_question_than_the_boa
     assert_eq!(fixture.requests("board"), 0);
 }
 
-/// Every row a project or document text search answers, walked a page of `limit` at a time.
 async fn walk_text_search(source: &dyn TaskSource, search: &TextSearch, limit: u32) -> Vec<String> {
     let mut request = page(limit);
     let mut ids = Vec::new();
