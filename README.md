@@ -213,6 +213,14 @@ not an issue and is never returned by any of the three. Labels, status, priority
 are confirmed over the candidates, and a query carrying none of the three reads the board as
 before.
 
+`project list --search`, and `document list --search` without `--project P` — `--no-project`
+included — are the same board-scoped search, each candidate confirmed by its kind and by the
+substring rule, and narrow the same way: whole words only, so `ship` does not find a project
+titled `Shipment plan`, and no board draft — a draft titled as a design document included — is
+ever returned. A text with no letter or digit, such as `--`, is refused there before anything
+is sent. `document list --project P --search` sends no search: it reads that project's
+sub-issues and matches the text inside words too, as before.
+
 ![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 
 A task's **status** is set on its own with `task status set`, which writes that one field —

@@ -16272,14 +16272,6 @@ async fn a_project_or_document_text_with_no_searchable_words_is_refused_before_a
             "orphan documents",
             TextSearch::documents(ProjectFilter::Orphans, "?!", TextFields::Content),
         ),
-        (
-            "one project's documents",
-            TextSearch::documents(
-                ProjectFilter::Is(NativeId("I_plan".to_owned())),
-                "--",
-                TextFields::Title,
-            ),
-        ),
     ] {
         let fixture = board_with_documents();
         let source = source(&fixture);
@@ -16312,6 +16304,28 @@ async fn a_project_or_document_text_with_no_searchable_words_is_refused_before_a
             "{what} asked GitHub something"
         );
     }
+
+    // A document read scoped to one project sends no search, so nothing about GitHub's index
+    // bounds it: it answers such a text over that project's sub-issues, inside words, as it
+    // always did.
+    let fixture = board(vec![
+        Item::issue("I_plan", "Engine").sub_issues(2),
+        design("I_dashed", "Runbook -- v2").parent("I_plan"),
+        design("I_plain", "Runbook").parent("I_plan"),
+    ]);
+    let scoped = source(&fixture);
+    assert_eq!(
+        TextSearch::documents(
+            ProjectFilter::Is(NativeId("I_plan".to_owned())),
+            "--",
+            TextFields::Title,
+        )
+        .selected(scoped.as_ref())
+        .await,
+        ["I_dashed"]
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(fixture.requests("board"), 0);
 
     // A blank text is not refused: it keeps the read it always had.
     let fixture = board_with_documents();
