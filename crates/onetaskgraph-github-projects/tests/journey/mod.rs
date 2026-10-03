@@ -34,8 +34,9 @@ use onetaskgraph_github_projects::{
 use onetaskgraph_plugin_api::{
     Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
-    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceName,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceError,
+    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -1955,6 +1956,12 @@ async fn terminal_status_parts(
 /// this wait is for; and the source that did the writing completes every read from its own
 /// record of what it wrote, so asking *it* would answer yes before GitHub had caught up at
 /// all.
+///
+/// A read GitHub answers as unavailable — a `504 Gateway Timeout` from its search, which one
+/// run met here — is one more attempt that saw nothing, not the end of the wait: the wait
+/// exists to ride out GitHub not having caught up, and a gateway that timed out once has said
+/// nothing about the item. A wait that never sees the item and met such an answer still fails
+/// the journey, naming the latest of them; any other error ends the wait at once.
 async fn await_on_board(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     id: &NativeId,
@@ -1969,6 +1976,7 @@ async fn await_on_board(
             fields: TextFields::Title,
         })
     };
+    let mut unavailable = None;
     for _ in 0..30 {
         let reader = rebuilt();
         let seen = match kind {
@@ -1992,23 +2000,31 @@ async fn await_on_board(
                 )
                 .await
                 .map(|held| held.items.iter().any(|project| project.id == *id)),
-        }
-        .map_err(|error| {
-            format!(
-                "waiting for a created {} to reach the board failed: {error}",
-                kind.marker()
-            )
-        })?;
-        if seen {
-            return Ok(());
+        };
+        match seen {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error @ SourceError::Unavailable { .. }) => unavailable = Some(error),
+            Err(error) => {
+                return Err(format!(
+                    "waiting for a created {} to reach the board failed: {error}",
+                    kind.marker()
+                ));
+            }
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    Err(format!(
-        "the board never reported the {} this run created ({})",
-        kind.marker(),
-        id.0
-    ))
+    Err(match unavailable {
+        Some(error) => format!(
+            "waiting for a created {} to reach the board failed: {error}",
+            kind.marker()
+        ),
+        None => format!(
+            "the board never reported the {} this run created ({})",
+            kind.marker(),
+            id.0
+        ),
+    })
 }
 
 /// A fixture every part of which one source has now reported, and that source.
