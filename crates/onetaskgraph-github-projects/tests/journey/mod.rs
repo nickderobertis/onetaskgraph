@@ -1943,6 +1943,20 @@ async fn terminal_status_parts(
     Ok((option.to_owned(), state.to_owned(), reason.to_owned()))
 }
 
+/// How many times [`await_on_board`] asks, and how long it sleeps after each attempt that
+/// did not see the item.
+#[derive(Clone, Copy, Debug)]
+pub struct BoardWait {
+    pub attempts: u32,
+    pub interval: std::time::Duration,
+}
+
+/// The journey's own wait: thirty attempts a second apart.
+pub const BOARD_WAIT: BoardWait = BoardWait {
+    attempts: 30,
+    interval: std::time::Duration::from_secs(1),
+};
+
 /// Waits until the board itself reports an item this run just created.
 ///
 /// `addProjectV2ItemById` returns before GitHub's own `ProjectV2.items` connection lists
@@ -1962,13 +1976,17 @@ async fn terminal_status_parts(
 /// exists to ride out GitHub not having caught up, and a gateway that timed out once has said
 /// nothing about the item. A wait that never sees the item and met such an answer still fails
 /// the journey, naming the latest of them; any other error ends the wait at once.
-async fn await_on_board(
+///
+/// How long it waits is `wait`: the journey passes [`BOARD_WAIT`], and the loopback board in
+/// `tests/plugin.rs` passes a shorter bound to drive each of those answers.
+pub async fn await_on_board(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     id: &NativeId,
     kind: ItemKind,
     // Narrowed to this run's own titles, so the listing is this run's five artifacts
     // however much else the nominated board holds.
     prefix: &str,
+    wait: BoardWait,
 ) -> Result<(), String> {
     let ours = || {
         Some(TextQuery {
@@ -1977,7 +1995,7 @@ async fn await_on_board(
         })
     };
     let mut unavailable = None;
-    for _ in 0..30 {
+    for _ in 0..wait.attempts {
         let reader = rebuilt();
         let seen = match kind {
             ItemKind::Task => reader
@@ -2012,7 +2030,7 @@ async fn await_on_board(
                 ));
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(wait.interval).await;
     }
     Err(match unavailable {
         Some(error) => format!(
@@ -2173,7 +2191,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
-    await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix).await?;
+    await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix, BOARD_WAIT).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
             target: None,
@@ -2201,7 +2219,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
-    await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix).await?;
+    await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix, BOARD_WAIT).await?;
     let second_id = writer
         .write_task(&ItemWrite {
             target: None,

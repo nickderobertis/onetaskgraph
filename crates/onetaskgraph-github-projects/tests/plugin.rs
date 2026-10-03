@@ -15422,6 +15422,105 @@ async fn a_text_metadata_or_origin_query_costs_the_same_on_a_board_of_several_pa
     assert!(sent[1] > sent[0], "{sent:?}");
 }
 
+/// A short bound for the journey's own wait, so a wait that is not satisfied ends in
+/// milliseconds; the journey itself waits [`journey::BOARD_WAIT`].
+const SHORT_BOARD_WAIT: journey::BoardWait = journey::BoardWait {
+    attempts: 3,
+    interval: Duration::ZERO,
+};
+
+/// One canned HTTP failure that is not a rate limit, answered with `status`.
+fn http_failure(status: &'static str) -> Refusal {
+    Refusal {
+        status,
+        headers: String::new(),
+        body: json!({"message": status}).to_string(),
+    }
+}
+
+/// The credentialed journey's wait for a project to reach the board, run against this board:
+/// a fresh source per attempt, as the journey builds one, asking for `I_plan` by its title.
+async fn await_engine_project(fixture: &Fixture) -> Result<(), String> {
+    let rebuilt = || source(fixture);
+    journey::await_on_board(
+        &rebuilt,
+        &NativeId("I_plan".into()),
+        ItemKind::Project,
+        "engine",
+        SHORT_BOARD_WAIT,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn the_journeys_board_wait_rides_out_an_unavailable_search_and_sees_the_item() {
+    let fixture = board_with_documents();
+    fixture.script(vec![http_failure("504 Gateway Timeout")]);
+
+    let waited = await_engine_project(&fixture).await;
+
+    assert_eq!(
+        waited,
+        Ok(()),
+        "one gateway timeout is an attempt that saw nothing, not the end of the wait"
+    );
+    assert_eq!(
+        fixture.requests("search"),
+        2,
+        "the timed-out search and the one that found the project"
+    );
+}
+
+#[tokio::test]
+async fn the_journeys_board_wait_fails_naming_the_latest_answer_when_github_stays_unavailable() {
+    let fixture = board_with_documents();
+    fixture.script(vec![
+        http_failure("502 Bad Gateway"),
+        http_failure("503 Service Unavailable"),
+        http_failure("504 Gateway Timeout"),
+    ]);
+
+    let message = await_engine_project(&fixture)
+        .await
+        .expect_err("a board that never answers fails the journey");
+
+    assert!(
+        message.contains("waiting for a created project to reach the board failed")
+            && message.contains("504 Gateway Timeout"),
+        "it names the latest answer: {message}"
+    );
+    assert!(
+        !message.contains("502") && !message.contains("503"),
+        "and not an earlier one: {message}"
+    );
+    assert_eq!(
+        fixture.requests("search"),
+        3,
+        "bounded by the wait's own attempts"
+    );
+}
+
+#[tokio::test]
+async fn the_journeys_board_wait_ends_at_once_on_an_error_that_is_not_unavailability() {
+    let fixture = board_with_documents();
+    fixture.script(vec![http_failure("401 Unauthorized")]);
+
+    let message = await_engine_project(&fixture)
+        .await
+        .expect_err("a rejected credential is not something waiting fixes");
+
+    assert!(
+        message.contains("waiting for a created project to reach the board failed")
+            && message.contains("rejected the configured credential"),
+        "{message}"
+    );
+    assert_eq!(
+        fixture.requests("search"),
+        1,
+        "and no second attempt is made, although the board would answer one"
+    );
+}
+
 #[derive(Clone, Debug)]
 enum TextSearch {
     Projects(ProjectQuery),
