@@ -34,8 +34,9 @@ use onetaskgraph_github_projects::{
 use onetaskgraph_plugin_api::{
     Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
-    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceName,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceError,
+    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -1942,6 +1943,20 @@ async fn terminal_status_parts(
     Ok((option.to_owned(), state.to_owned(), reason.to_owned()))
 }
 
+/// How many times [`await_on_board`] asks, and how long it sleeps after each attempt that
+/// did not see the item.
+#[derive(Clone, Copy, Debug)]
+pub struct BoardWait {
+    pub attempts: u32,
+    pub interval: std::time::Duration,
+}
+
+/// The journey's own wait: thirty attempts a second apart.
+pub const BOARD_WAIT: BoardWait = BoardWait {
+    attempts: 30,
+    interval: std::time::Duration::from_secs(1),
+};
+
 /// Waits until the board itself reports an item this run just created.
 ///
 /// `addProjectV2ItemById` returns before GitHub's own `ProjectV2.items` connection lists
@@ -1955,13 +1970,23 @@ async fn terminal_status_parts(
 /// this wait is for; and the source that did the writing completes every read from its own
 /// record of what it wrote, so asking *it* would answer yes before GitHub had caught up at
 /// all.
-async fn await_on_board(
+///
+/// A read GitHub answers as unavailable — a `504 Gateway Timeout` from its search, which one
+/// run met here — is one more attempt that saw nothing, not the end of the wait: the wait
+/// exists to ride out GitHub not having caught up, and a gateway that timed out once has said
+/// nothing about the item. A wait that never sees the item and met such an answer still fails
+/// the journey, naming the latest of them; any other error ends the wait at once.
+///
+/// How long it waits is `wait`: the journey passes [`BOARD_WAIT`], and the loopback board in
+/// `tests/plugin.rs` passes a shorter bound to drive each of those answers.
+pub async fn await_on_board(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     id: &NativeId,
     kind: ItemKind,
     // Narrowed to this run's own titles, so the listing is this run's five artifacts
     // however much else the nominated board holds.
     prefix: &str,
+    wait: BoardWait,
 ) -> Result<(), String> {
     let ours = || {
         Some(TextQuery {
@@ -1969,7 +1994,8 @@ async fn await_on_board(
             fields: TextFields::Title,
         })
     };
-    for _ in 0..30 {
+    let mut unavailable = None;
+    for _ in 0..wait.attempts {
         let reader = rebuilt();
         let seen = match kind {
             ItemKind::Task => reader
@@ -1992,23 +2018,31 @@ async fn await_on_board(
                 )
                 .await
                 .map(|held| held.items.iter().any(|project| project.id == *id)),
+        };
+        match seen {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error @ SourceError::Unavailable { .. }) => unavailable = Some(error),
+            Err(error) => {
+                return Err(format!(
+                    "waiting for a created {} to reach the board failed: {error}",
+                    kind.marker()
+                ));
+            }
         }
-        .map_err(|error| {
-            format!(
-                "waiting for a created {} to reach the board failed: {error}",
-                kind.marker()
-            )
-        })?;
-        if seen {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(wait.interval).await;
     }
-    Err(format!(
-        "the board never reported the {} this run created ({})",
-        kind.marker(),
-        id.0
-    ))
+    Err(match unavailable {
+        Some(error) => format!(
+            "waiting for a created {} to reach the board failed: {error}",
+            kind.marker()
+        ),
+        None => format!(
+            "the board never reported the {} this run created ({})",
+            kind.marker(),
+            id.0
+        ),
+    })
 }
 
 /// A fixture every part of which one source has now reported, and that source.
@@ -2157,7 +2191,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
-    await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix).await?;
+    await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix, BOARD_WAIT).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
             target: None,
@@ -2185,7 +2219,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
-    await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix).await?;
+    await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix, BOARD_WAIT).await?;
     let second_id = writer
         .write_task(&ItemWrite {
             target: None,

@@ -938,3 +938,26 @@ repository reads are folded into the board-field reads beside them, the richer i
 nodes over the six of them, and the reconciliation probes three more read documents —
 `ISSUE_DETAIL`, `ISSUE_DETAILS` and `CREATION_CONTEXT` — at 303, 7,272 and 50 nodes.
 
+
+## Project and document text searches ask GitHub too, and what that moved
+
+A project query carrying a text, and a document query carrying one and scoped to no project,
+no longer read every issue of the board before matching it: each is the board-scoped issue
+search for the text as a phrase — the very search a task text query sends — walked to its end
+in pages of twenty, and every candidate confirmed by its kind and by the substring rule. A
+document query scoped to one project keeps its sub-issue read.
+`project_and_document_text_searches_ask_a_narrower_question_than_the_board` and
+`project_and_document_text_searches_cost_the_same_on_a_board_of_several_pages` in
+`tests/plugin.rs` hold both halves.
+
+**`session-cost.txt`** goes from 118 requests and 246,246 worst-case nodes to **119 and
+234,006**, and only its `searching this board's issues` line moves: 10 → 11 requests and
+89,760 → 77,520 nodes. The journey lists its own projects by title from two fresh sources,
+and each of those listings used to walk the unqualified board search at a hundred a page —
+the second walk then also answering a later whole-board read from the same source, which
+kept it. Each listing now sends the board-scoped search narrowed to the run's title prefix
+at twenty a page, and that later board read walks the unqualified search itself: two
+unqualified pages at 20,400 nodes each give way to two narrowed ones at 4,080 and one
+unqualified one, so one request more and 12,240 nodes fewer. On the one-page loopback board
+the narrowed search shows as a request more; on a board of hundreds of items each walk it
+replaces was one page per hundred items, paid again by every fresh source.
