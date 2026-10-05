@@ -19,9 +19,8 @@ use onetaskgraph_core::{
     ConfiguredSource, CopyItems, CopyRequest, CopyScope, Engine, GlobalId, ResolvedSource,
 };
 use onetaskgraph_plugin_api::{
-    MetadataKey, SecretResolver, SourceName, SourcePlugin as _, Status, StatusCategory, TaskUpdate,
+    MetadataKey, SourceName, SourcePlugin as _, Status, StatusCategory, TaskUpdate,
 };
-use secrecy::SecretString;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
@@ -65,11 +64,14 @@ fn report(budget: &str, value: usize, threshold: usize, detail: &str) {
     );
 }
 
-struct Secrets;
-impl SecretResolver for Secrets {
-    fn get(&self, _: &str) -> Option<SecretString> {
-        Some("fixture-key".into())
-    }
+/// The fixture's credential, and nothing of the host's: the variable the Linear source names,
+/// in an environment of its own.
+fn secrets() -> onetaskgraph_core::Secrets {
+    onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs([(
+        "LINEAR_API_KEY",
+        "fixture-key",
+    )]))
+    .expect("an environment with no credentials file")
 }
 
 fn issue(id: &str, state: &str, extra: Value) -> Value {
@@ -440,7 +442,7 @@ fn measure_linear_requests_per_status_write_warm() {
 fn engine(config: &Value, plan: Option<&Path>) -> Engine {
     let name = SourceName::new("patients").unwrap();
     let linear = onetaskgraph_linear::Plugin
-        .build(&name, config, &Secrets)
+        .build(&name, config, &secrets())
         .expect("the Linear source builds");
     let mut sources = vec![ConfiguredSource::Ready(ResolvedSource::adopt(
         name.clone(),
@@ -451,7 +453,7 @@ fn engine(config: &Value, plan: Option<&Path>) -> Engine {
         let name = SourceName::new("plan").unwrap();
         let local = onetaskgraph_core::plugin_for("local-md")
             .expect("local-md is registered")
-            .build(&name, &json!({"root": plan}), &Secrets)
+            .build(&name, &json!({"root": plan}), &secrets())
             .expect("the folder builds");
         sources.push(ConfiguredSource::Ready(ResolvedSource::adopt(
             name.clone(),
@@ -498,7 +500,7 @@ fn settlements() -> Vec<usize> {
         .expect("a runtime");
     let mut spent = Vec::new();
     runtime.block_on(async {
-        for at in 0..5 {
+        for (at, before) in before.iter().enumerate() {
             let id = format!("S-{at}");
             let mut update = TaskUpdate {
                 status: Some(Status {
@@ -519,7 +521,7 @@ fn settlements() -> Vec<usize> {
             spent.push(workspace.served().len() - from);
             let after = workspace.long_form("tasks", &id).expect("a description");
             let (text, slot) = split_slot(&after);
-            let (text_before, slot_before) = split_slot(&before[at]);
+            let (text_before, slot_before) = split_slot(before);
             assert_eq!(text, text_before, "{id}: the person's text, byte for byte");
             assert!(text.starts_with(PERSONS_TEXT), "{id}: {after}");
             assert_eq!(slot["caller.unrelated"], slot_before["caller.unrelated"]);
