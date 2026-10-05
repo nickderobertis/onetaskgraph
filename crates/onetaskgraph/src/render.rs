@@ -109,21 +109,29 @@ pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
         let kind = word(serde_json::to_value(mapped.kind()).unwrap_or_default());
         let category = word(serde_json::to_value(mapped.category()).unwrap_or_default());
         let held_by = match mapped.kind() {
-            onetaskgraph_plugin_api::ItemKind::Task => format!("workflow state of team {}", report.team()),
-            onetaskgraph_plugin_api::ItemKind::Project => "project status of this workspace".to_owned(),
+            onetaskgraph_plugin_api::ItemKind::Task => {
+                format!("workflow state of team {}", report.team())
+            }
+            onetaskgraph_plugin_api::ItemKind::Project => {
+                "project status of this workspace".to_owned()
+            }
         };
         let found = match (mapped.found(), mapped.created()) {
             (onetaskgraph_linear::Found::Present(found), true) => {
                 format!("created as a {held_by} ({found})")
             }
-            (onetaskgraph_linear::Found::Present(found), false) if found == mapped.expected_type() => {
+            (onetaskgraph_linear::Found::Present(found), false)
+                if found == mapped.expected_type() =>
+            {
                 format!("present as a {held_by} ({found})")
             }
             (onetaskgraph_linear::Found::Present(found), false) => format!(
                 "present as a {held_by} ({found}; {category} is created as {}, and this one is left as it is)",
                 mapped.expected_type()
             ),
-            (onetaskgraph_linear::Found::Missing, _) => format!("missing: no {held_by} has that name"),
+            (onetaskgraph_linear::Found::Missing, _) => {
+                format!("missing: no {held_by} has that name")
+            }
         };
         rendered.push_str(&format!(
             "{}: {kind} {category} -> {}: {found}\n",

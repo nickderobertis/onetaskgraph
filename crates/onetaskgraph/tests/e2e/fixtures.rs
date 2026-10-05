@@ -2948,6 +2948,19 @@ pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspa
     (config, LinearWorkspace { state, ledger })
 }
 
+/// A Linear workspace over `held` whose team holds exactly `states` — id, name and type — and
+/// whose workspace holds exactly the project `statuses` — name and type — in that order.
+pub fn linear_workspace_with(
+    sandbox: &Sandbox,
+    mut held: Value,
+    states: &[(&str, &str, &str)],
+    statuses: &[(&str, &str)],
+) -> (Value, LinearWorkspace) {
+    held["_linear_states"] = linear_states(states);
+    held["_linear_project_statuses"] = linear_statuses(statuses);
+    linear_workspace(sandbox, held)
+}
+
 /// What a journey reads of one Linear workspace it configured.
 #[derive(Clone)]
 pub struct LinearWorkspace {
@@ -2982,6 +2995,61 @@ impl LinearWorkspace {
             .iter()
             .find(|row| row["id"] == id)?;
         linear_state(row)["name"].as_str().map(str::to_owned)
+    }
+
+    /// The name of the project status one held project is at.
+    pub fn status_of(&self, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        let row = data["projects"]
+            .as_array()?
+            .iter()
+            .find(|row| row["id"] == id)?;
+        linear_project_status(&row["status"])["name"]
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// Every workflow state of the team, as `(name, type)`, in the order Linear lists them.
+    pub fn states(&self) -> Vec<(String, String)> {
+        Self::named(&self.state.lock().unwrap()["_linear_states"])
+    }
+
+    /// Every project status of the workspace, as `(name, type)`, in the order Linear lists them.
+    pub fn project_statuses(&self) -> Vec<(String, String)> {
+        Self::named(&self.state.lock().unwrap()["_linear_project_statuses"])
+    }
+
+    fn named(held: &Value) -> Vec<(String, String)> {
+        held.as_array()
+            .map(|held| {
+                held.iter()
+                    .map(|row| {
+                        (
+                            row["name"].as_str().unwrap_or_default().to_owned(),
+                            row["type"].as_str().unwrap_or_default().to_owned(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Refuse every create of a workflow state or project status named `name`, from now on,
+    /// as Linear refuses one the key may not make; [`Self::allow_create`] lifts it.
+    pub fn refuse_create(&self, name: &str) {
+        let mut data = self.state.lock().unwrap();
+        let refused = data["_linear_refuse_names"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut refused = refused;
+        refused.push(json!(name));
+        data["_linear_refuse_names"] = Value::Array(refused);
+    }
+
+    /// Lift every refusal [`Self::refuse_create`] set.
+    pub fn allow_create(&self) {
+        self.state.lock().unwrap()["_linear_refuse_names"] = json!([]);
     }
 
     /// The id of the held issue titled `title`, for one a command created.
@@ -3178,7 +3246,19 @@ fn linear_serve(
             );
         }
     });
-    json!({"endpoint":endpoint,"team":"FIX"})
+    json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
+}
+
+/// The `status_mapping` every Linear workspace here is configured with unless a journey gives
+/// its own: a name for each category the shared dataset and the shared journeys write, for
+/// both kinds, each one a name the workspace's vocabulary holds for both.
+///
+/// Linear has no built-in names, so without one a source reads every item as `unknown` and
+/// refuses every status write. `Doing` and `Shipped` are the dataset's own names for
+/// `in-progress` and `done`, so what the shared rows read back is what the dataset says.
+pub fn linear_default_mapping() -> Value {
+    json!({"backlog":"Backlog","todo":"Todo","queued":"Queued","in-progress":"Doing",
+           "done":"Shipped","cancelled":"Canceled"})
 }
 
 #[derive(Deserialize)]
@@ -3282,38 +3362,67 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     && variables.after.as_deref() != Some("")
             })
         }
-        graphql::TEAM => {
+        graphql::RESOLUTION => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
                 .is_ok_and(|values| {
                     values.len() == 1 && values.get("key").is_some_and(|value| !value.is_empty())
                 })
         }
-        graphql::ISSUE_STATE => {
-            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
-                .is_ok_and(|values| {
-                    values.len() == 2
-                        && ["name", "team"]
-                            .iter()
-                            .all(|key| values.get(*key).is_some_and(|value| !value.is_empty()))
-                })
+        // A created name carries a type of its own vocabulary and every member Linear
+        // requires of that create: a colour, and for a project status a place in the flow.
+        graphql::WORKFLOW_STATE_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["teamId", "name", "type", "color"],
+                    &[],
+                )
+                && variables
+                    .pointer("/input/type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| {
+                        ["backlog", "unstarted", "started", "completed", "canceled"].contains(&kind)
+                    })
         }
-        // The status set and the targeted update resolve a workflow state by its type.
-        graphql::ISSUE_STATE_OF_TYPE => {
-            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
-                .is_ok_and(|values| {
-                    values.len() == 2
-                        && values.get("type").is_some_and(|kind| {
-                            ["backlog", "unstarted", "started", "completed", "canceled"]
-                                .contains(&kind.as_str())
-                        })
-                        && values.get("team").is_some_and(|team| !team.is_empty())
-                })
+        graphql::PROJECT_STATUS_CREATE => {
+            exact_linear_variable_keys(variables, &["input"])
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &["name", "type", "color", "position"],
+                    &[],
+                )
+                && variables
+                    .pointer("/input/type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| {
+                        [
+                            "backlog",
+                            "planned",
+                            "started",
+                            "paused",
+                            "completed",
+                            "canceled",
+                        ]
+                        .contains(&kind)
+                    })
         }
-        graphql::TEAM_WORKFLOW_STATES => {
-            serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
-                .is_ok_and(|values| {
-                    values.len() == 1 && values.get("team").is_some_and(|team| !team.is_empty())
-                })
+        // A status write and a targeted update that read the issue back in the same request:
+        // the members a targeted update may send, at least one of them, and nothing else.
+        graphql::ISSUE_UPDATE_READ => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && variables
+                    .pointer("/input")
+                    .and_then(Value::as_object)
+                    .is_some_and(|input| !input.is_empty())
+                && valid_linear_write_input(
+                    variables.get("input"),
+                    &[],
+                    &["title", "description", "stateId", "priority"],
+                )
         }
         graphql::ISSUE_LABEL | graphql::PROJECT_LABEL => {
             serde_json::from_value::<std::collections::BTreeMap<String, String>>(variables.clone())
@@ -3321,11 +3430,6 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     values.len() == 1 && values.get("name").is_some_and(|value| !value.is_empty())
                 })
         }
-        // Linear's `projectStatuses` takes no arguments this plugin can send, so a request
-        // naming one is a request the real API would refuse.
-        graphql::PROJECT_STATUS => variables
-            .as_object()
-            .is_some_and(|values| values.is_empty()),
         graphql::ISSUE_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
                 && valid_linear_write_input(
@@ -3523,6 +3627,8 @@ fn valid_linear_write_input(value: Option<&Value>, required: &[&str], optional: 
         "projectId" => value.is_null() || value.as_str().is_some_and(|id| !id.is_empty()),
         // Linear's `priority` input is an `Int` on its own 0–4 scale.
         "priority" => value.as_u64().is_some_and(|number| number <= 4),
+        // A project status's place in the workspace's flow, a `Float`.
+        "position" => value.is_number(),
         _ => value.as_str().is_some_and(|text| !text.is_empty()),
     })
 }
@@ -3570,28 +3676,6 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-/// Every project status this workspace holds, as Linear's own `projectStatuses` answers.
-///
-/// The whole connection, unfiltered, because Linear takes no filter on it — so the plugin
-/// gets the same shape here that it gets from the real API and does its own matching. Each
-/// id is its own name, which is what lets a write's `statusId` read back as the status it
-/// named; the names are the shared dataset's, so a status a journey copies with is one this
-/// answers to.
-fn project_statuses() -> Vec<Value> {
-    let dataset = dataset();
-    let mut names = ["tasks", "projects"]
-        .iter()
-        .flat_map(|kind| dataset[kind].as_array().cloned().unwrap_or_default())
-        .filter_map(|item| item["status"]["name"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    names
-        .into_iter()
-        .map(|name| json!({"id": name, "name": name}))
-        .collect()
-}
-
 fn linear_response(
     request: &Value,
     recorded: Option<&Value>,
@@ -3610,11 +3694,10 @@ fn linear_response(
         graphql::LABELS,
         graphql::ISSUE_RELATIONS,
         graphql::PROJECT_RELATIONS,
-        graphql::TEAM,
-        graphql::ISSUE_STATE,
-        graphql::ISSUE_STATE_OF_TYPE,
-        graphql::TEAM_WORKFLOW_STATES,
-        graphql::PROJECT_STATUS,
+        graphql::RESOLUTION,
+        graphql::WORKFLOW_STATE_CREATE,
+        graphql::PROJECT_STATUS_CREATE,
+        graphql::ISSUE_UPDATE_READ,
         graphql::ISSUE_LABEL,
         graphql::PROJECT_LABEL,
         graphql::ISSUE_CREATE,
@@ -3648,35 +3731,39 @@ fn linear_response(
     if let Some(answer) = linear_comment_response(data, &vars, operation) {
         return answer;
     }
-    if operation == graphql::TEAM {
-        return Ok(json!({"teams":{"nodes":[{"id":"TEAM-1"}]}}));
+    if operation == graphql::RESOLUTION {
+        // The team, its states and the workspace's project statuses, as this workspace holds
+        // them now — so a name `sources fields --apply` created is in the next answer.
+        let team = vars["key"].as_str().unwrap_or_default();
+        let teams = if team.eq_ignore_ascii_case(LINEAR_TEAM) {
+            json!([{"id":"TEAM-1","states":{"nodes":data["_linear_states"]}}])
+        } else {
+            json!([])
+        };
+        return Ok(json!({"teams":{"nodes":teams},
+            "projectStatuses":{"nodes":data["_linear_project_statuses"]}}));
     }
-    if operation == graphql::ISSUE_STATE {
-        // A state of the team by name; any other name answers as itself, the one state this
-        // workspace has always taken a whole write's status name for.
-        let name = vars["name"].as_str().unwrap_or_default();
-        let id = linear_team_state(|state| state.1.eq_ignore_ascii_case(name))
-            .map_or_else(|| json!(name), |state| json!(state.0));
-        return Ok(json!({"workflowStates":{"nodes":[{"id":id}]}}));
+    if matches!(
+        operation,
+        graphql::WORKFLOW_STATE_CREATE | graphql::PROJECT_STATUS_CREATE
+    ) {
+        return linear_create_status_name(data, &vars, operation == graphql::PROJECT_STATUS_CREATE);
     }
-    if operation == graphql::ISSUE_STATE_OF_TYPE {
-        let kind = vars["type"].as_str().unwrap_or_default();
-        let nodes = LINEAR_TEAM_STATES
-            .iter()
-            .filter(|state| state.2 == kind)
-            .map(|state| json!({"id":state.0,"name":state.1}))
-            .collect::<Vec<_>>();
-        return Ok(json!({"workflowStates":{"nodes":nodes}}));
-    }
-    if operation == graphql::TEAM_WORKFLOW_STATES {
-        let nodes = LINEAR_TEAM_STATES
-            .iter()
-            .map(|state| json!({"id":state.0,"name":state.1,"type":state.2}))
-            .collect::<Vec<_>>();
-        return Ok(json!({"workflowStates":{"nodes":nodes}}));
-    }
-    if operation == graphql::PROJECT_STATUS {
-        return Ok(json!({"projectStatuses":{"nodes":project_statuses()}}));
+    if operation == graphql::ISSUE_UPDATE_READ {
+        let id = vars["id"].as_str().unwrap_or_default();
+        let held = data["tasks"]
+            .as_array()
+            .is_some_and(|tasks| tasks.iter().any(|task| task["id"] == id));
+        if !held {
+            return Err(LINEAR_ENTITY_MISSING);
+        }
+        linear_narrow_issue_update(data, &vars, operation)?;
+        let row = data["tasks"]
+            .as_array()
+            .and_then(|tasks| tasks.iter().find(|task| task["id"] == id))
+            .cloned()
+            .ok_or("update target does not exist")?;
+        return Ok(json!({"issueUpdate":{"success":true,"issue":linear_task(&row, data)}}));
     }
     if operation == graphql::ISSUE_LABEL {
         return Ok(json!({"issueLabels":{"nodes":[{"id":vars["name"]}]}}));
@@ -3868,6 +3955,8 @@ fn linear_write_item(
         .as_object()
         .ok_or("write input must be an object")?;
     let collection = if project { "projects" } else { "tasks" };
+    let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
+        "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let rows = data[collection]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
@@ -3896,16 +3985,31 @@ fn linear_write_item(
         .get(status_key)
         .and_then(Value::as_str)
         .ok_or("status id must be a string")?;
+    // A whole write names a state or a project status this workspace holds, by its id, and the
+    // item then reads back at it — as Linear refuses an id naming neither.
+    let (state, status) = if project {
+        let held = linear_held_status(&vocabulary, status_id)
+            .ok_or("statusId names no project status of the workspace")?;
+        let category = linear_status_category(held["type"].as_str().unwrap_or_default());
+        (
+            None,
+            json!({"name":held["name"],"category":category,"_linear_status":held}),
+        )
+    } else {
+        let held = linear_held_state(&vocabulary, status_id)
+            .ok_or("stateId names no state of the team")?;
+        (Some(held), Value::Null)
+    };
     let mut row = json!({
         "id": id,
         "title": input.get(title_key).and_then(Value::as_str).ok_or("title must be a string")?,
         "content": "",
-        "status": {"name":status_id,"category":"todo"},
+        "status": status,
         "labels": labels,
         "_linear_description": input.get("description").cloned().unwrap_or(Value::Null),
     });
-    if !project {
-        linear_put_state(&mut row, status_id);
+    if let Some(state) = state {
+        linear_put_state(&mut row, state);
     }
     if !project && let Some(project_id) = input.get("projectId").filter(|v| !v.is_null()) {
         row["project"] = project_id.clone();
@@ -4014,7 +4118,43 @@ fn linear_with_comments(mut held: Value) -> Value {
         .collect::<Vec<_>>();
     held["_linear_comments"] = Value::Array(seeded);
     held["_linear_clock"] = json!(0);
+    if held.get("_linear_states").is_none() {
+        held["_linear_states"] = Value::Array(
+            LINEAR_TEAM_STATES
+                .iter()
+                .chain(LINEAR_SHARED_STATES)
+                .map(|(id, name, kind)| json!({"id":id,"name":name,"type":kind}))
+                .collect(),
+        );
+    }
+    if held.get("_linear_project_statuses").is_none() {
+        held["_linear_project_statuses"] = linear_statuses(LINEAR_SHARED_PROJECT_STATUSES);
+    }
     held
+}
+
+/// `statuses` — name and `ProjectStatusType`, in the workspace's order — as this workspace
+/// holds its project statuses: each one's id is its name, and its position its place.
+pub fn linear_statuses(statuses: &[(&str, &str)]) -> Value {
+    Value::Array(
+        statuses
+            .iter()
+            .enumerate()
+            .map(|(at, (name, kind))| {
+                json!({"id":name,"name":name,"type":kind,"position":(at + 1) as f64})
+            })
+            .collect(),
+    )
+}
+
+/// `states` — id, name and `WorkflowState.type` — as this workspace holds its team's states.
+pub fn linear_states(states: &[(&str, &str, &str)]) -> Value {
+    Value::Array(
+        states
+            .iter()
+            .map(|(id, name, kind)| json!({"id":id,"name":name,"type":kind}))
+            .collect(),
+    )
 }
 
 /// The next instant of this workspace's clock, as Linear spells a `DateTime`.
@@ -4374,32 +4514,117 @@ pub const LINEAR_TEAM_STATES: &[(&str, &str, &str)] = &[
     ("STATE-triage", "Triage", "triage"),
 ];
 
-/// The team's first state the predicate holds of.
-fn linear_team_state(
-    wanted: impl Fn(&(&str, &str, &str)) -> bool,
-) -> Option<&'static (&'static str, &'static str, &'static str)> {
-    LINEAR_TEAM_STATES.iter().find(|state| wanted(state))
+/// The two states the shared dataset's own names stand for, beside the team's: `Doing` and
+/// `Shipped` are what [`linear_default_mapping`] writes `in-progress` and `done` as.
+const LINEAR_SHARED_STATES: &[(&str, &str, &str)] = &[
+    ("STATE-doing", "Doing", "started"),
+    ("STATE-shipped", "Shipped", "completed"),
+];
+
+/// The workspace's project statuses, in Linear's order: name and `ProjectStatusType`. A name
+/// for every category [`linear_default_mapping`] gives, so a project of any of them can be
+/// written, and Hello Patient's `In Progress` and `Done` beside them.
+const LINEAR_SHARED_PROJECT_STATUSES: &[(&str, &str)] = &[
+    ("Backlog", "backlog"),
+    ("Todo", "planned"),
+    ("Queued", "planned"),
+    ("Doing", "started"),
+    ("In Progress", "started"),
+    ("Shipped", "completed"),
+    ("Done", "completed"),
+    ("Canceled", "canceled"),
+];
+
+/// The state of this workspace's team whose id is `id`: its name and its type.
+fn linear_held_state(data: &Value, id: &str) -> Option<(String, String)> {
+    data["_linear_states"].as_array()?.iter().find_map(|state| {
+        (state["id"] == id).then(|| {
+            (
+                state["name"].as_str().unwrap_or_default().to_owned(),
+                state["type"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+    })
 }
 
-/// One issue row put at the team's workflow state `id`, which it then reads back as.
-///
-/// An id the team does not hold is the name a whole write resolved for a state this workspace
-/// does not model — the shared dataset's `Doing` or `Shipped` — and is kept as it always was:
-/// that name, read back as `todo`.
-fn linear_put_state(row: &mut Value, id: &str) {
-    match linear_team_state(|state| state.0 == id) {
-        Some((_, name, kind)) => {
-            row["_linear_state"] = json!({"name": name, "type": kind});
-            row["status"] = json!({"name": name, "category": linear_type_category(kind)});
-        }
-        None => {
-            if let Some(held) = row.as_object_mut() {
-                held.remove("_linear_state");
-            }
-            row["status"] = json!({"name": id, "category": "todo"});
-        }
+/// One issue row put at the team's workflow state `held`, which it then reads back as.
+fn linear_put_state(row: &mut Value, (name, kind): (String, String)) {
+    row["status"] = json!({"name": name, "category": linear_type_category(&kind)});
+    row["_linear_state"] = json!({"name": name, "type": kind});
+}
+
+/// The project status of this workspace whose id is `id`, as a project row holds it.
+fn linear_held_status(data: &Value, id: &str) -> Option<Value> {
+    data["_linear_project_statuses"]
+        .as_array()?
+        .iter()
+        .find(|status| status["id"] == id)
+        .map(|status| json!({"name":status["name"],"type":status["type"]}))
+}
+
+/// What Linear answers a mutation addressing an id it does not hold with: an errored
+/// response, `Entity not found: Issue`, rather than a null payload.
+pub const LINEAR_ENTITY_MISSING: &str = "Entity not found: Issue";
+
+/// The shared dataset's category for one `ProjectStatusType`, for a project row's own record.
+fn linear_status_category(kind: &str) -> &'static str {
+    match kind {
+        "planned" => "todo",
+        "started" | "paused" => "in-progress",
+        "completed" => "done",
+        "canceled" => "cancelled",
+        "backlog" => "backlog",
+        _ => "unknown",
     }
 }
+
+/// A workflow state of the team, or a project status of the workspace, created by
+/// `sources fields --apply` — refused, as Linear refuses one, when the workspace has been
+/// told to refuse that name, and when it already holds one so named.
+fn linear_create_status_name(
+    data: &mut Value,
+    vars: &Value,
+    project: bool,
+) -> Result<Value, &'static str> {
+    let input = &vars["input"];
+    let name = input["name"].as_str().ok_or("name must be a string")?;
+    if data["_linear_refuse_names"]
+        .as_array()
+        .is_some_and(|names| names.iter().any(|refused| refused == name))
+    {
+        return Err(LINEAR_REFUSED_CREATE);
+    }
+    let collection = if project {
+        "_linear_project_statuses"
+    } else {
+        "_linear_states"
+    };
+    let held = data[collection]
+        .as_array_mut()
+        .ok_or("fixture vocabulary is not an array")?;
+    if held.iter().any(|existing| {
+        existing["name"]
+            .as_str()
+            .is_some_and(|existing| existing.eq_ignore_ascii_case(name))
+    }) {
+        return Err("a name the vocabulary already holds");
+    }
+    let created = if project {
+        json!({"id":format!("STATUS-W{}", held.len() + 1),"name":name,"type":input["type"],
+               "position":input["position"]})
+    } else {
+        json!({"id":format!("STATE-W{}", held.len() + 1),"name":name,"type":input["type"]})
+    };
+    held.push(created.clone());
+    Ok(if project {
+        json!({"projectStatusCreate":{"success":true,"status":created}})
+    } else {
+        json!({"workflowStateCreate":{"success":true,"workflowState":created}})
+    })
+}
+
+/// What the workspace says when it refuses to create a name it has been told to refuse.
+pub const LINEAR_REFUSED_CREATE: &str = "You do not have permission to create that status";
 
 /// The shared dataset's category for one workflow-state type.
 fn linear_type_category(kind: &str) -> &'static str {
@@ -4418,6 +4643,9 @@ fn linear_type_category(kind: &str) -> &'static str {
 /// would let a filter spelled in the wrong vocabulary pass here and fail against Linear,
 /// which is exactly how `inIgnoreCase` reached a credentialed run.
 fn linear_project_status(v: &Value) -> Value {
+    if let Some(held) = v.get("_linear_status").filter(|held| held.is_object()) {
+        return held.clone();
+    }
     let category = v["category"].as_str().unwrap_or("");
     json!({"name":v["name"],"type":match category{"todo"=>"planned","in-progress"=>"started","done"=>"completed","cancelled"=>"canceled",_=>"backlog"}})
 }
@@ -4464,6 +4692,7 @@ fn linear_narrow_issue_update(
     operation: &str,
 ) -> Result<Value, &'static str> {
     let id = vars["id"].as_str().ok_or("update id must be a string")?;
+    let states = json!({"_linear_states": data["_linear_states"].clone()});
     let row = data["tasks"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?
@@ -4481,10 +4710,8 @@ fn linear_narrow_issue_update(
     }
     if let Some(state) = vars["input"].get("stateId").and_then(Value::as_str) {
         // A narrow write names a state of the team, which the issue then reads back as.
-        if linear_team_state(|held| held.0 == state).is_none() {
-            return Err("stateId names no state of the team");
-        }
-        linear_put_state(row, state);
+        let held = linear_held_state(&states, state).ok_or("stateId names no state of the team")?;
+        linear_put_state(row, held);
     }
     Ok(
         if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
@@ -4668,10 +4895,14 @@ fn linear_holds(row: &Value, filter: &Value, kind: LinearRow, data: &Value) -> b
                         .all(|(part, cmp)| linear_compares(state[part].as_str(), cmp))
                 })
             }
-            "status" => linear_compares(
-                linear_project_status(&row["status"])["type"].as_str(),
-                &wanted["type"],
-            ),
+            "status" => {
+                let status = linear_project_status(&row["status"]);
+                wanted.as_object().is_some_and(|parts| {
+                    parts
+                        .iter()
+                        .all(|(part, cmp)| linear_compares(status[part].as_str(), cmp))
+                })
+            }
             "project" => {
                 let held = row["project"].as_str();
                 wanted.as_object().is_some_and(|parts| {
