@@ -22,6 +22,7 @@ mod metadata;
 mod metering;
 mod query;
 mod source;
+mod status_mapping;
 mod update;
 mod work;
 mod write;
@@ -37,6 +38,7 @@ pub use query::{
     ProjectQuery, TaskQuery, TextFields, TextQuery,
 };
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
+pub use status_mapping::{StatusMapping, StatusName, StatusNames, UnmappedStatus};
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};
 pub use work::{
     DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, ItemKind, Label,

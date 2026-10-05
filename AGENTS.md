@@ -68,7 +68,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
-  metering types `Metering` and `Metered`; and `SourceError`.
+  metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
+  `StatusNames`, `StatusName` and `UnmappedStatus`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
