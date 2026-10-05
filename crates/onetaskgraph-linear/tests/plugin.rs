@@ -39,14 +39,44 @@ fn source(endpoint: &str) -> Box<dyn TaskSource> {
         .unwrap()
 }
 
+/// The `status_mapping` every writable source here carries: Linear has no built-in names, so
+/// a source without one refuses every status write.
+fn writable_mapping() -> serde_json::Value {
+    serde_json::json!({"todo":"Todo","in-progress":"In Progress","done":"Done"})
+}
+
 fn writable_source(endpoint: &str) -> Box<dyn TaskSource> {
     onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("work").unwrap(),
-            &serde_json::json!({"endpoint":endpoint,"team":"ENG"}),
+            &serde_json::json!({"endpoint":endpoint,"team":"ENG","status_mapping":writable_mapping()}),
             &Secrets(Some("fixture-key".into())),
         )
         .unwrap()
+}
+
+/// What [`onetaskgraph_linear::graphql::RESOLUTION`] answers: the team `TEAM` holding
+/// `states`, and the workspace's project `statuses`.
+fn resolution(states: serde_json::Value, statuses: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"teams":{"nodes":[{"id":"TEAM","states":{"nodes":states}}]},
+        "projectStatuses":{"nodes":statuses}})
+}
+
+/// The resolution a [`writable_source`] writes through: a workflow state and a project status
+/// for every name [`writable_mapping`] gives, under ids naming the kind and the name.
+fn writable_resolution() -> serde_json::Value {
+    resolution(
+        serde_json::json!([
+            {"id":"STATE","name":"Todo","type":"unstarted"},
+            {"id":"STATE-IN-PROGRESS","name":"In Progress","type":"started"},
+            {"id":"STATE-DONE","name":"Done","type":"completed"},
+        ]),
+        serde_json::json!([
+            {"id":"STATUS","name":"Todo","type":"planned","position":1.0},
+            {"id":"STATUS-IN-PROGRESS","name":"In Progress","type":"started","position":2.0},
+            {"id":"STATUS-DONE","name":"Done","type":"completed","position":3.0},
+        ]),
+    )
 }
 
 fn response_server(responses: Vec<serde_json::Value>) -> (String, mpsc::Receiver<String>) {
@@ -489,11 +519,10 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         }
     }
     for (document, mutation) in [
-        (graphql::TEAM, false),
-        (graphql::ISSUE_STATE, false),
-        (graphql::ISSUE_STATE_OF_TYPE, false),
-        (graphql::TEAM_WORKFLOW_STATES, false),
-        (graphql::PROJECT_STATUS, false),
+        (graphql::RESOLUTION, false),
+        (graphql::WORKFLOW_STATE_CREATE, true),
+        (graphql::PROJECT_STATUS_CREATE, true),
+        (graphql::ISSUE_UPDATE_READ, true),
         (graphql::ISSUE_LABEL, false),
         (graphql::PROJECT_LABEL, false),
         (graphql::ISSUE_CREATE, true),
@@ -632,13 +661,20 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
         "documents": page(serde_json::json!([])),
         "issueLabels": page(serde_json::json!([{"id":"L","name":"bug","color":null}])),
         "projectLabels": {"nodes":[{"id":"PL","name":"roadmap","color":null}]},
-        "teams": {"nodes":[{"id":"TEAM"}]},
-        "workflowStates": {"nodes":[{"id":"STATE","name":"In Progress","type":"started"}]},
-        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo"}]},
+        "teams": {"nodes":[{"id":"TEAM","states":{"nodes":[
+            {"id":"STATE","name":"In Progress","type":"started"},
+            {"id":"STATE-TODO","name":"Todo","type":"unstarted"}]}}]},
+        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo","type":"planned","position":1.0}]},
+        "workflowStateCreate": {"success":true,"workflowState":{"id":"NEW-STATE","name":"Queued","type":"unstarted"}},
+        "projectStatusCreate": {"success":true,"status":{"id":"NEW-STATUS","name":"Queued","type":"planned","position":2.0}},
         "issueCreate": {"success":true,"issue":{"id":"I"}},
-        // `priority` for the narrow priority write, which reads it back from this payload;
-        // every other issue write reads the id alone and passes over it.
-        "issueUpdate": {"success":true,"issue":{"id":"I","priority":2}},
+        // The whole issue, for a status write and a targeted update, which answer the task
+        // this payload reports; `priority` for the narrow priority write. Every other issue
+        // write reads the id alone and passes over the rest.
+        "issueUpdate": {"success":true,"issue":{"id":"I","identifier":"ENG-1","title":"issue",
+                        "description":null,"url":null,"createdAt":null,"updatedAt":null,
+                        "archivedAt":null,"state":{"name":"In Progress","type":"started"},
+                        "priority":2,"labels":{"nodes":[]},"project":null}},
         "projectCreate": {"success":true,"project":{"id":"P"}},
         "projectUpdate": {"success":true,"project":{"id":"P"}},
         "documentCreate": {"success":true,"document":{"id":"D"}},
@@ -1005,6 +1041,18 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         .set_task_status(&"I".into(), StatusCategory::InProgress)
         .await
         .unwrap();
+    // `sources fields --apply`, creating a name of each kind the superset lacks.
+    let report = onetaskgraph_linear::status_names(
+        &SourceName::new("work").unwrap(),
+        serde_json::from_value(serde_json::json!({"endpoint":endpoint,"team":"ENG",
+            "status_mapping":{"queued":"Queued"}}))
+        .unwrap(),
+        &Secrets(Some("fixture-key".into())),
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(report.refused.is_none(), "{report:?}");
     source.delete_task(&"I".into()).await.unwrap();
     source.delete_project(&"P".into()).await.unwrap();
     source.delete_document(&"D".into()).await.unwrap();
@@ -1175,10 +1223,10 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         onetaskgraph_linear::graphql::LABELS,
         onetaskgraph_linear::graphql::ISSUE_RELATIONS,
         onetaskgraph_linear::graphql::PROJECT_RELATIONS,
-        onetaskgraph_linear::graphql::TEAM,
-        onetaskgraph_linear::graphql::ISSUE_STATE,
-        onetaskgraph_linear::graphql::ISSUE_STATE_OF_TYPE,
-        onetaskgraph_linear::graphql::PROJECT_STATUS,
+        onetaskgraph_linear::graphql::RESOLUTION,
+        onetaskgraph_linear::graphql::WORKFLOW_STATE_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_STATUS_CREATE,
+        onetaskgraph_linear::graphql::ISSUE_UPDATE_READ,
         onetaskgraph_linear::graphql::ISSUE_LABEL,
         onetaskgraph_linear::graphql::PROJECT_LABEL,
         onetaskgraph_linear::graphql::ISSUE_CREATE,
@@ -1332,33 +1380,26 @@ async fn a_project_this_source_created_is_removed_again_over_real_http() {
 
 #[tokio::test]
 async fn writes_create_update_and_route_task_and_project_edges_over_real_http() {
-    let empty_page = |root: &str| serde_json::json!({(root):{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}});
     let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
+    // One source writes all four, so the resolution is read once, by the first write, and
+    // every write after it resolves its status from what that read answered. A create reads
+    // no relations first: an item that did not exist holds none to replace.
     let (endpoint, wire) = response_server(vec![
-        id_page("teams", "TEAM"),
-        id_page("workflowStates", "STATE"),
+        writable_resolution(),
         id_page("issueLabels", "LABEL"),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
-        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
         serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("teams", "TEAM"),
-        id_page("workflowStates", "STATE"),
         id_page("issueLabels", "LABEL"),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW"}}}),
         serde_json::json!({"issue":{"description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("teams", "TEAM"),
-        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("teams", "TEAM"),
-        serde_json::json!({"projectStatuses":{"nodes":[{"id":"STATUS","name":"Todo"}]}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW"}}}),
         serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
@@ -1380,11 +1421,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             r#"source work cannot resolve label "bug": found 2 matches with ids ["L-ONE", "L-TWO"]"#,
         ),
     ] {
-        let (endpoint, _) = response_server(vec![
-            id_page("teams", "TEAM"),
-            id_page("workflowStates", "STATE"),
-            labels,
-        ]);
+        let (endpoint, _) = response_server(vec![writable_resolution(), labels]);
         let refusal = writable_source(&endpoint)
             .write_task(&ItemWrite {
                 target: None,
@@ -1400,8 +1437,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     }
 
     let (endpoint, _) = response_server(vec![
-        id_page("teams", "TEAM"),
-        id_page("workflowStates", "STATE"),
+        writable_resolution(),
         serde_json::json!({"issueLabels":{"nodes":[{"id":"L-ONE"},{}]}}),
     ]);
     let malformed_duplicate = writable_source(&endpoint)
@@ -1418,7 +1454,13 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         "a response whose duplicate ids cannot be reported is malformed: {malformed_duplicate:?}"
     );
 
-    let missing_team = source("http://127.0.0.1:1")
+    let missing_team = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &serde_json::json!({"endpoint":"http://127.0.0.1:1","status_mapping":writable_mapping()}),
+            &Secrets(Some("fixture-key".into())),
+        )
+        .unwrap()
         .write_task(&ItemWrite {
             target: None,
             item: task.clone(),
@@ -1427,7 +1469,8 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         .await
         .unwrap_err();
     assert!(format!("{missing_team}").contains("config.team"));
-    let (unresolved_endpoint, unresolved_wire) = response_server(vec![empty_page("teams")]);
+    let (unresolved_endpoint, unresolved_wire) = response_server(vec![serde_json::json!({
+        "teams":{"nodes":[]},"projectStatuses":{"nodes":[]}})]);
     let unresolved_team = writable_source(&unresolved_endpoint)
         .write_task(&ItemWrite {
             target: None,
@@ -1437,7 +1480,8 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         .await
         .unwrap_err();
     assert!(
-        format!("{unresolved_team}").contains("cannot resolve configured team: found 0 matches")
+        format!("{unresolved_team}")
+            .contains("cannot resolve the configured team \"ENG\": found 0 matches")
     );
     drop(unresolved_wire);
     let native_task = DependencyEdge {
@@ -1637,12 +1681,9 @@ async fn an_unordered_project_edge_is_refused_before_anything_is_written_over_re
 /// An issue relation keeps `related`, because that vocabulary really does have it.
 #[tokio::test]
 async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
-    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
-        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
     ]);
     let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
@@ -1674,12 +1715,9 @@ async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
 
 #[tokio::test]
 async fn a_write_with_no_visible_description_or_metadata_sends_null_over_real_http() {
-    let page = |root: &str, nodes: serde_json::Value| serde_json::json!({(root):{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}});
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
-        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
     ]);
     let item = serde_json::from_value::<Task>(serde_json::json!({
         "id":"from:T", "title":"task", "content":null,
@@ -1740,8 +1778,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     );
     drop(wire);
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":""}}}),
     ]);
     assert!(
@@ -1760,11 +1797,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     );
     drop(wire);
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page(
-            "projectStatuses",
-            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
-        ),
+        writable_resolution(),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
     ]);
     assert!(
@@ -1784,17 +1817,13 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     for (responses, item, expected) in [
         (
-            vec![
-                page("teams", serde_json::json!([{"id":"TEAM"}])),
-                page("workflowStates", serde_json::json!([])),
-            ],
+            vec![resolution(serde_json::json!([]), serde_json::json!([]))],
             task(),
             "workflow state",
         ),
         (
             vec![
-                page("teams", serde_json::json!([{"id":"TEAM"}])),
-                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                writable_resolution(),
                 serde_json::json!({"issueCreate":{"success":false,"issue":null}}),
             ],
             task(),
@@ -1802,8 +1831,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         ),
         (
             vec![
-                page("teams", serde_json::json!([{"id":"TEAM"}])),
-                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                writable_resolution(),
                 serde_json::json!({"issueCreate":{"success":true}}),
             ],
             task(),
@@ -1811,8 +1839,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         ),
         (
             vec![
-                page("teams", serde_json::json!([{"id":"TEAM"}])),
-                page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+                writable_resolution(),
                 serde_json::json!({"issueCreate":{"issue":{"id":"NEW"}}}),
             ],
             task(),
@@ -1838,8 +1865,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         color: None,
     });
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         page("issueLabels", serde_json::json!([])),
     ]);
     let error = writable_source(&endpoint)
@@ -1852,10 +1878,10 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         .unwrap_err();
     assert!(format!("{error}").contains("label \"missing\""));
     drop(wire);
-    let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("projectStatuses", serde_json::json!([])),
-    ]);
+    let (endpoint, wire) = response_server(vec![resolution(
+        serde_json::json!([]),
+        serde_json::json!([]),
+    )]);
     let error = writable_source(&endpoint)
         .write_project(&ItemWrite {
             target: None,
@@ -1872,10 +1898,8 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         kind: DependencyKind::Blocks,
     };
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
-        serde_json::json!({"issue":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationCreate":{"success":false,"issueRelation":null}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1894,13 +1918,8 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         kind: DependencyKind::Blocks,
     };
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page(
-            "projectStatuses",
-            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
-        ),
+        writable_resolution(),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
-        serde_json::json!({"project":{"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1914,11 +1933,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     assert!(format!("{error}").contains("empty backend id"), "{error}");
     drop(wire);
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page(
-            "projectStatuses",
-            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
-        ),
+        writable_resolution(),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P"}}}),
         serde_json::json!({"project":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":false}}),
@@ -1949,14 +1964,15 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         ),
     ] {
         let (endpoint, wire) = response_server(vec![
-            page("teams", serde_json::json!([{"id":"TEAM"}])),
-            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
-            serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+            writable_resolution(),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"NEW"}}}),
             relation_response,
         ]);
+        // An update, because it is the write that reads the relations it replaces: a create
+        // holds none.
         let error = writable_source(&endpoint)
             .write_task(&ItemWrite {
-                target: None,
+                target: Some("NEW".into()),
                 item: task(),
                 depends_on: Vec::new(),
             })
@@ -1966,11 +1982,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         drop(wire);
     }
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page(
-            "projectStatuses",
-            serde_json::json!([{"id":"STATUS","name":"Todo"}]),
-        ),
+        writable_resolution(),
         serde_json::json!({"projectCreate":{"success":true}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1987,11 +1999,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
         serde_json::json!({"issueUpdate":{"success":true}}),
     ] {
-        let (endpoint, wire) = response_server(vec![
-            page("teams", serde_json::json!([{"id":"TEAM"}])),
-            page("workflowStates", serde_json::json!([{"id":"STATE"}])),
-            response,
-        ]);
+        let (endpoint, wire) = response_server(vec![writable_resolution(), response]);
         assert!(
             writable_source(&endpoint)
                 .write_task(&ItemWrite {
@@ -2008,14 +2016,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         serde_json::json!({"projectUpdate":{"success":false,"project":null}}),
         serde_json::json!({"projectUpdate":{"success":true}}),
     ] {
-        let (endpoint, wire) = response_server(vec![
-            page("teams", serde_json::json!([{"id":"TEAM"}])),
-            page(
-                "projectStatuses",
-                serde_json::json!([{"id":"STATUS","name":"Todo"}]),
-            ),
-            response,
-        ]);
+        let (endpoint, wire) = response_server(vec![writable_resolution(), response]);
         assert!(
             writable_source(&endpoint)
                 .write_project(&ItemWrite {
@@ -2029,8 +2030,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
         drop(wire);
     }
     let (endpoint, wire) = response_server(vec![
-        page("teams", serde_json::json!([{"id":"TEAM"}])),
-        page("workflowStates", serde_json::json!([{"id":"STATE"}])),
+        writable_resolution(),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
         serde_json::json!({"issue":{"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"issueRelationDelete":{"success":false}}),
@@ -2049,29 +2049,25 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
 }
 
 /// Linear's `projectStatuses` accepts no `filter`, so the plugin asks for the whole
-/// connection and matches the display name itself.
+/// connection — inside the one resolution document — and matches the display name itself.
 ///
-/// This is the one lookup of the five that works that way. It is here because sending the
-/// filter Linear does not take is a `GRAPHQL_VALIDATION_FAILED` refusal of the entire
-/// document, which no amount of correct handling further down recovers from.
+/// It is here because sending the filter Linear does not take is a
+/// `GRAPHQL_VALIDATION_FAILED` refusal of the entire document, which no amount of correct
+/// handling further down recovers from.
 #[tokio::test]
 async fn a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody() {
     let project = || {
         serde_json::from_value::<Project>(serde_json::json!({"id":"authored:P","title":"a project","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[],"metadata":{}})).unwrap()
     };
-    let teams = serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}});
-    let statuses =
-        |nodes: serde_json::Value| serde_json::json!({"projectStatuses":{"nodes":nodes}});
+    let statuses = |nodes: serde_json::Value| resolution(serde_json::json!([]), nodes);
 
     let (endpoint, wire) = response_server(vec![
-        teams.clone(),
         statuses(serde_json::json!([
-            {"id":"S-BACKLOG","name":"Backlog"},
-            {"id":"S-TODO","name":"todo"},
-            {"id":"S-DONE","name":"Done"}
+            {"id":"S-BACKLOG","name":"Backlog","type":"backlog","position":1.0},
+            {"id":"S-TODO","name":"todo","type":"planned","position":2.0},
+            {"id":"S-DONE","name":"Done","type":"completed","position":3.0}
         ])),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
     ]);
     writable_source(&endpoint)
         .write_project(&ItemWrite {
@@ -2081,11 +2077,10 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
         })
         .await
         .expect("the one status answering to the name resolves it");
-    let _team = wire.recv().unwrap();
     let asked = wire.recv().unwrap();
     assert!(
-        !asked.contains("filter"),
-        "the request Linear refuses outright is one naming a filter: {asked}"
+        asked.contains("projectStatuses{") && !asked.contains("projectStatuses("),
+        "the request Linear refuses outright is one passing projectStatuses an argument: {asked}"
     );
     let created = wire.recv().unwrap();
     assert!(
@@ -2094,13 +2089,12 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
     );
     drop(wire);
 
-    let (endpoint, wire) = response_server(vec![
-        teams.clone(),
-        statuses(serde_json::json!([
-            {"id":"S-ONE","name":"Todo"},
-            {"id":"S-TWO","name":"TODO"}
-        ])),
-    ]);
+    // Refused after one read and no second: the name is absent from an answer just read, so a
+    // refresh could tell nothing new.
+    let (endpoint, wire) = response_server(vec![statuses(serde_json::json!([
+        {"id":"S-ONE","name":"Todo","type":"planned","position":1.0},
+        {"id":"S-TWO","name":"TODO","type":"planned","position":2.0}
+    ]))]);
     let ambiguous = writable_source(&endpoint)
         .write_project(&ItemWrite {
             target: None,
@@ -2110,16 +2104,15 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
         .await
         .unwrap_err();
     assert!(
-        format!("{ambiguous}").contains("project status \"Todo\""),
-        "a name two statuses answer to under the same case-insensitive comparison Linear \
-         applied server-side is refused by name: {ambiguous}"
+        format!("{ambiguous}").contains("project status \"Todo\": found 2 matches"),
+        "a name two statuses answer to under the same case-insensitive comparison is refused \
+         by name: {ambiguous}"
     );
     drop(wire);
 
-    let (endpoint, wire) = response_server(vec![
-        teams,
-        statuses(serde_json::json!([{"id":"S-DONE","name":"Done"}])),
-    ]);
+    let (endpoint, wire) = response_server(vec![statuses(serde_json::json!([
+        {"id":"S-DONE","name":"Done","type":"completed","position":1.0}
+    ]))]);
     let absent = writable_source(&endpoint)
         .write_project(&ItemWrite {
             target: None,
@@ -2138,17 +2131,15 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
     // status that failed to match: reporting it as the latter would blame the caller for
     // naming a status that is in fact right there.
     for unreadable in [
-        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD"}]),
-        serde_json::json!([{"id":"S-TODO","name":"Todo"},{"id":"S-ODD","name":7}]),
+        serde_json::json!([{"id":"S-TODO","name":"Todo","type":"planned","position":1.0},{"id":"S-ODD","type":"planned","position":2.0}]),
+        serde_json::json!([{"id":"S-TODO","name":"Todo","type":"planned","position":1.0},{"id":"S-ODD","name":7,"type":"planned","position":2.0}]),
     ] {
-        // The create and its relation read are here so that dropping the unreadable node
-        // would carry the write all the way through: the refusal below is then the source
-        // rejecting the data, not the fixture running out of answers.
+        // The create is here so that dropping the unreadable node would carry the write all
+        // the way through: the refusal below is then the source rejecting the data, not the
+        // fixture running out of answers.
         let (endpoint, wire) = response_server(vec![
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
             statuses(unreadable.clone()),
             serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
-            serde_json::json!({"project":{"description":null,"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         ]);
         let malformed = writable_source(&endpoint)
             .write_project(&ItemWrite {
@@ -2171,8 +2162,7 @@ async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge(
     let task: Task = serde_json::from_value(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
     let page = |nodes: Vec<serde_json::Value>, more: bool| serde_json::json!({"issue":{"relations":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":if more {Some("next")} else {None}}}}});
     let mut responses = vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE"}]}}),
+        writable_resolution(),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I"}}}),
     ];
     responses.push(page(
@@ -2234,13 +2224,15 @@ fn factory_validates_config_and_missing_credentials() {
 async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     let body = include_str!("fixtures/issues.json");
     let (endpoint, request) = server("200 OK", "", body);
-    let source = source(&endpoint);
+    // Mapped, because a status reads as a category only through the mapping: both recorded
+    // issues are at a name it gives, so both come back from a filter asking for the two.
+    let source = writable_source(&endpoint);
     let query = TaskQuery {
         labels: LabelFilter {
             any_of: vec!["Bug".into()],
             ..Default::default()
         },
-        statuses: vec![StatusCategory::InProgress],
+        statuses: vec![StatusCategory::InProgress, StatusCategory::Todo],
         project: ProjectFilter::Is("p1".into()),
         ..Default::default()
     };
@@ -2301,7 +2293,12 @@ async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
         wire.contains(r#"{"or":[{"labels":{"some":{"name":{"eqIgnoreCase":"Bug"}}}}]}"#),
         "{wire}"
     );
-    assert!(wire.contains("started"));
+    assert!(
+        wire.contains(r#"{"or":[{"state":{"name":{"eqIgnoreCase":"In Progress"}}},{"state":{"name":{"eqIgnoreCase":"Todo"}}}]}"#),
+        "{wire}"
+    );
+    assert_eq!(page.items[0].status.category, StatusCategory::InProgress);
+    assert_eq!(page.items[1].status.category, StatusCategory::Todo);
     assert!(wire.contains("fixture-key"));
 }
 
@@ -3187,7 +3184,15 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(one.status.category, StatusCategory::Backlog);
+    // A source without a mapping has no name for any category, so `Backlog` — whatever its
+    // type — reads as unknown under its own name.
+    assert_eq!(
+        one.status,
+        Status {
+            category: StatusCategory::Unknown,
+            name: "Backlog".into()
+        }
+    );
     // A single-issue read carries the handle too, and the native id is untouched beside
     // it: `ISSUE` and `ISSUES` select `identifier` alike, so one verb cannot report it
     // while the other does not.
@@ -3196,8 +3201,10 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
     assert!(wire.recv().unwrap().contains("identifier"));
     let project = r#"{"data":{"project":{"id":"p1","name":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}}}"#;
     let (endpoint, _) = server("200 OK", "", project);
+    // Through the project side of a mapping naming `Done`: what a project reads as is its
+    // kind's mapping, never its `ProjectStatusType`.
     assert_eq!(
-        source(&endpoint)
+        writable_source(&endpoint)
             .get_project(&"p1".into())
             .await
             .unwrap()
@@ -3320,7 +3327,7 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         .remove(0);
     assert_eq!(edge.from.id(), "p3");
     let (endpoint, wire) = server("200 OK", "", include_str!("fixtures/projects.json"));
-    source(&endpoint)
+    writable_source(&endpoint)
         .query_projects(
             &ProjectQuery {
                 statuses: vec![StatusCategory::InProgress],
@@ -3333,7 +3340,11 @@ async fn query_shapes_reverse_project_edges_and_public_metadata_are_covered() {
         )
         .await
         .unwrap();
-    assert!(wire.recv().unwrap().contains("started"));
+    assert!(
+        wire.recv()
+            .unwrap()
+            .contains(r#"{"status":{"name":{"eqIgnoreCase":"In Progress"}}}"#)
+    );
     let caps = source("http://127.0.0.1:1").capabilities();
     assert_eq!(caps.max_page_size, onetaskgraph_linear::MAX_PAGE_SIZE);
     assert!(matches!(
@@ -3527,65 +3538,6 @@ async fn selected_malformed_task_project_and_relation_shapes_are_rejected() {
         .await
         .unwrap();
     assert!(wire.recv().unwrap().contains("eqIgnoreCase"));
-}
-
-/// `Draft` narrows to no Linear workflow-state type, exactly as `Unknown` does.
-///
-/// Linear's workflow states are `triage`, `backlog`, `unstarted`, `started`, `completed`
-/// and `canceled`; none of them is a draft. Asserted on the GraphQL this source really
-/// sends rather than on the mapping table, because a state name invented here would be
-/// a filter Linear rejects — and a state name borrowed from a *neighbouring* category
-/// would silently answer a draft query with that category's issues.
-#[tokio::test]
-async fn a_draft_filter_names_no_linear_workflow_state_the_way_an_unknown_one_does() {
-    let empty =
-        r#"{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}"#;
-    let mut sent = Vec::new();
-    for category in [StatusCategory::Draft, StatusCategory::Unknown] {
-        let (endpoint, wire) = server("200 OK", "", empty);
-        let page = source(&endpoint)
-            .query_tasks(
-                &TaskQuery {
-                    statuses: vec![category],
-                    ..Default::default()
-                },
-                &PageRequest {
-                    cursor: None,
-                    limit: 10,
-                },
-            )
-            .await
-            .expect("Linear answers");
-        assert!(page.items.is_empty());
-        sent.push(wire.recv().expect("the request reached the server"));
-    }
-
-    let draft = &sent[0];
-    assert!(
-        draft.contains(r#"{"state":{"type":{"in":[]}}}"#),
-        "a draft filter names no workflow-state type: {draft}"
-    );
-    for state in [
-        "triage",
-        "backlog",
-        "unstarted",
-        "started",
-        "completed",
-        "canceled",
-    ] {
-        assert!(
-            !draft.contains(&format!("\"{state}\"")),
-            "a draft filter must not borrow the `{state}` workflow state: {draft}"
-        );
-    }
-
-    // The two requests differ only in nothing: `Unknown` already narrows this way, and
-    // `Draft` joining it is what makes the pair the same query.
-    assert_eq!(
-        draft.split("\r\n\r\n").nth(1),
-        sent[1].split("\r\n\r\n").nth(1),
-        "draft and unknown send the same filter"
-    );
 }
 
 #[tokio::test]
@@ -3929,7 +3881,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
 
     // Created under no project: the configured team is what gives it one.
     let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
+        writable_resolution(),
         serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-LOOSE"}}}),
     ]);
     writable_source(&endpoint)
@@ -4803,342 +4755,6 @@ async fn malformed_comment_shapes_are_rejected_rather_than_read_past() {
     }
 }
 
-/// The `type` list a status filter narrowed `member` to, wherever in the filter it sits.
-fn narrowed_to(filter: &serde_json::Value, member: &str) -> Option<Vec<String>> {
-    if let Some(types) = filter
-        .get(member)
-        .and_then(|value| value.get("type"))
-        .and_then(|value| value.get("in"))
-        .and_then(serde_json::Value::as_array)
-    {
-        return Some(
-            types
-                .iter()
-                .map(|kind| kind.as_str().expect("a type is a string").to_owned())
-                .collect(),
-        );
-    }
-    filter
-        .get("and")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|parts| parts.iter().find_map(|part| narrowed_to(part, member)))
-}
-
-/// A server that honours the status filter it is sent, the way Linear does.
-///
-/// It holds one issue of every `WorkflowState.type` and one project of every
-/// `ProjectStatusType`, plus one of each spelled `queued`, which Linear documents for neither,
-/// and answers a filtered read with only the rows whose type the filter's `in` list names. So
-/// what comes back is decided by what this source sent, rather than by a scripted answer that
-/// would come back whatever it sent.
-fn status_honouring_server() -> (String, mpsc::Receiver<serde_json::Value>) {
-    let issues = [
-        "triage",
-        "backlog",
-        "unstarted",
-        "started",
-        "completed",
-        "canceled",
-        "queued",
-    ]
-    .map(|kind| {
-        serde_json::json!({"id":format!("i-{kind}"),"identifier":format!("ENG-{kind}"),
-            "title":kind,"description":null,"url":null,
-            "createdAt":null,"updatedAt":null,"project":null,
-            "state":{"name":kind,"type":kind},"priority":0,"labels":{"nodes":[]}})
-    });
-    let projects = [
-        "backlog",
-        "planned",
-        "started",
-        "paused",
-        "completed",
-        "canceled",
-        "queued",
-    ]
-    .map(|kind| {
-        serde_json::json!({"id":format!("p-{kind}"),"name":kind,"description":null,"url":null,
-            "createdAt":null,"updatedAt":null,
-            "status":{"name":kind,"type":kind},"labels":{"nodes":[]}})
-    });
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { break };
-            let mut bytes = vec![0; 65536];
-            let Ok(n) = stream.read(&mut bytes) else {
-                break;
-            };
-            bytes.truncate(n);
-            let request = sent(&String::from_utf8_lossy(&bytes));
-            let (root, member, nodes) = if request["query"]
-                .as_str()
-                .is_some_and(|query| query.contains("issues("))
-            {
-                ("issues", "state", &issues)
-            } else {
-                ("projects", "status", &projects)
-            };
-            let allowed = narrowed_to(&request["variables"]["filter"], member);
-            let kept = nodes
-                .iter()
-                .filter(|node| {
-                    allowed.as_ref().is_none_or(|allowed| {
-                        allowed
-                            .iter()
-                            .any(|kind| node[member]["type"].as_str() == Some(kind))
-                    })
-                })
-                .collect::<Vec<_>>();
-            if tx.send(request).is_err() {
-                break;
-            }
-            let body = serde_json::json!({"data":{(root):{"nodes":kept,
-                "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
-            .to_string();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
-    (format!("http://{addr}/graphql"), rx)
-}
-
-const EVERY_CATEGORY: [StatusCategory; 8] = [
-    StatusCategory::Draft,
-    StatusCategory::Backlog,
-    StatusCategory::Todo,
-    StatusCategory::Queued,
-    StatusCategory::InProgress,
-    StatusCategory::Done,
-    StatusCategory::Cancelled,
-    StatusCategory::Unknown,
-];
-
-/// Capability rule 1 for `queued`, at both levels: a filter this source declares native
-/// returns nothing that reads back as another category.
-///
-/// Linear has no claimed-and-not-started state, so `queued` has to narrow to nothing rather
-/// than borrow `unstarted` or `started`. Every category is driven, against a server that
-/// really narrows by what it is sent, so the ones Linear does have return rows and prove the
-/// server is not simply answering empty.
-#[tokio::test]
-async fn a_queued_filter_never_returns_an_item_that_reads_back_as_another_category() {
-    let (endpoint, wire) = status_honouring_server();
-    let source = source(&endpoint);
-    let page = PageRequest {
-        cursor: None,
-        limit: 50,
-    };
-    for category in EVERY_CATEGORY {
-        let tasks = source
-            .query_tasks(
-                &TaskQuery {
-                    statuses: vec![category],
-                    ..Default::default()
-                },
-                &page,
-            )
-            .await
-            .expect("a task read narrowed by status")
-            .items;
-        let task_filter = wire.recv().unwrap()["variables"]["filter"].clone();
-        let projects = source
-            .query_projects(
-                &ProjectQuery {
-                    statuses: vec![category],
-                    ..Default::default()
-                },
-                &page,
-            )
-            .await
-            .expect("a project read narrowed by status")
-            .items;
-        let project_filter = wire.recv().unwrap()["variables"]["filter"].clone();
-        for task in &tasks {
-            assert_eq!(
-                task.status.category, category,
-                "a {category:?} filter returned {} reading as {:?}",
-                task.id.0, task.status.category
-            );
-        }
-        for project in &projects {
-            assert_eq!(
-                project.status.category, category,
-                "a {category:?} filter returned {} reading as {:?}",
-                project.id.0, project.status.category
-            );
-        }
-        match category {
-            StatusCategory::Queued | StatusCategory::Draft | StatusCategory::Unknown => {
-                assert!(tasks.is_empty() && projects.is_empty(), "{category:?}");
-                assert_eq!(
-                    task_filter,
-                    serde_json::json!({"state":{"type":{"in":[]}}}),
-                    "a {category:?} task filter names no workflow-state type"
-                );
-                assert_eq!(
-                    project_filter,
-                    serde_json::json!({"status":{"type":{"in":[]}}}),
-                    "a {category:?} project filter names no project-status type"
-                );
-            }
-            _ => assert!(
-                !tasks.is_empty() && !projects.is_empty(),
-                "a {category:?} filter over a server that narrows returns the rows Linear has"
-            ),
-        }
-    }
-}
-
-/// The other half of rule 1: no Linear state or project status reads back as `queued` —
-/// not even one whose type is literally spelled that way, which Linear documents for neither
-/// and which therefore reads as `unknown`.
-#[tokio::test]
-async fn no_linear_state_or_project_status_reads_back_as_queued() {
-    let (endpoint, _wire) = status_honouring_server();
-    let source = source(&endpoint);
-    let page = PageRequest {
-        cursor: None,
-        limit: 50,
-    };
-    let tasks = source
-        .query_tasks(&TaskQuery::default(), &page)
-        .await
-        .unwrap()
-        .items;
-    let projects = source
-        .query_projects(&ProjectQuery::default(), &page)
-        .await
-        .unwrap()
-        .items;
-    assert_eq!((tasks.len(), projects.len()), (7, 7), "every row came back");
-    let read = tasks
-        .iter()
-        .map(|task| (task.id.0.as_str(), task.status.category))
-        .chain(
-            projects
-                .iter()
-                .map(|project| (project.id.0.as_str(), project.status.category)),
-        )
-        .collect::<Vec<_>>();
-    assert!(
-        read.iter()
-            .all(|(_, category)| *category != StatusCategory::Queued),
-        "{read:?}"
-    );
-    for id in ["i-queued", "p-queued"] {
-        assert!(
-            read.contains(&(id, StatusCategory::Unknown)),
-            "an undocumented `queued` type is unknown, never queued: {read:?}"
-        );
-    }
-}
-
-/// What `issue(id:)` answers for an issue in a workflow state of `name` and `kind`.
-fn issue_in_state(id: &str, name: &str, kind: &str) -> serde_json::Value {
-    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
-        "description":null,"url":null,
-        "createdAt":null,"updatedAt":null,"archivedAt":null,
-        "state":{"name":name,"type":kind},"priority":0,"labels":{"nodes":[]},"project":null}})
-}
-
-/// A status write reads the issue, resolves the configured team, finds that team's first
-/// workflow state of the category's type and sends `issueUpdate` carrying that `stateId` and
-/// nothing else — then answers with the name of the state it chose.
-#[tokio::test]
-async fn a_task_status_is_set_by_sending_only_a_state_of_that_type_in_the_configured_team() {
-    use onetaskgraph_linear::graphql;
-    for (category, kind) in [
-        (StatusCategory::Backlog, "backlog"),
-        (StatusCategory::Todo, "unstarted"),
-        (StatusCategory::InProgress, "started"),
-        (StatusCategory::Done, "completed"),
-        (StatusCategory::Cancelled, "canceled"),
-    ] {
-        let (endpoint, wire) = response_server(vec![
-            issue_in_state("I-1", "Triage", "triage"),
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-            serde_json::json!({"workflowStates":{"nodes":[
-                {"id":"S-FIRST","name":"First of its type"},
-                {"id":"S-SECOND","name":"Second of its type"},
-            ]}}),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
-        ]);
-        let answered = writable_source(&endpoint)
-            .set_task_status(&"ENG-1".into(), category)
-            .await
-            .expect("Linear takes the state");
-        assert_eq!(
-            answered,
-            Some(onetaskgraph_plugin_api::Status {
-                category,
-                name: "First of its type".into(),
-            })
-        );
-        let requests = wire
-            .iter()
-            .map(|request| sent(&request))
-            .collect::<Vec<_>>();
-        let shapes = requests
-            .iter()
-            .map(|request| (request["query"].clone(), request["variables"].clone()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            shapes,
-            vec![
-                (
-                    serde_json::json!(graphql::ISSUE),
-                    serde_json::json!({"id":"ENG-1"})
-                ),
-                (
-                    serde_json::json!(graphql::TEAM),
-                    serde_json::json!({"key":"ENG"})
-                ),
-                (
-                    serde_json::json!(graphql::ISSUE_STATE_OF_TYPE),
-                    serde_json::json!({"type":kind,"team":"TEAM"})
-                ),
-                // The backend id Linear answered the read with, and `stateId` alone: no
-                // title, description, label or project that could move with it.
-                (
-                    serde_json::json!(graphql::ISSUE_UPDATE),
-                    serde_json::json!({"id":"I-1","input":{"stateId":"S-FIRST"}})
-                ),
-            ],
-            "{category:?}"
-        );
-    }
-}
-
-/// A team can hold several states of one type, so an issue already in the category asked for
-/// keeps the state it is in: nothing is written, and the answer is the state Linear holds.
-#[tokio::test]
-async fn a_task_already_in_the_category_keeps_its_own_state_and_nothing_is_written() {
-    let (endpoint, wire) = response_server(vec![issue_in_state("I-1", "In Review", "started")]);
-    let answered = writable_source(&endpoint)
-        .set_task_status(&"I-1".into(), StatusCategory::InProgress)
-        .await
-        .unwrap();
-    assert_eq!(
-        answered,
-        Some(onetaskgraph_plugin_api::Status {
-            category: StatusCategory::InProgress,
-            name: "In Review".into(),
-        })
-    );
-    let requests = wire
-        .iter()
-        .map(|request| sent(&request))
-        .collect::<Vec<_>>();
-    assert_eq!(requests.len(), 1, "the read alone: {requests:?}");
-    assert_eq!(requests[0]["query"], onetaskgraph_linear::graphql::ISSUE);
-}
-
 /// What `project(id:)` answers for one project carrying `description`.
 fn held_project(id: &str, description: &str) -> serde_json::Value {
     serde_json::json!({"project":{"id":id,"name":"Fixture project","description":description,
@@ -5385,120 +5001,6 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     assert!(description.starts_with(&format!("{quoted}\n\n<!-- onetaskgraph.metadata `")));
 }
 
-#[tokio::test]
-async fn a_status_linear_has_no_state_for_is_refused_by_name_before_any_request() {
-    for category in [
-        StatusCategory::Draft,
-        StatusCategory::Queued,
-        StatusCategory::Unknown,
-    ] {
-        let (endpoint, wire) = response_server(Vec::new());
-        let refusal = writable_source(&endpoint)
-            .set_task_status(&"I-1".into(), category)
-            .await
-            .expect_err("no Linear workflow state is this category");
-        let word = serde_json::to_value(category).unwrap();
-        let word = word.as_str().unwrap();
-        assert!(
-            matches!(&refusal, SourceError::Refused { message }
-                if message.contains(&format!("status to {word}:"))
-                    && message.contains("disabled for this source")
-                    && message.contains("Linear has no workflow state of that kind")
-                    && message.contains("source work")),
-            "the refusal names the category and why: {refusal:?}"
-        );
-        assert!(wire.try_iter().next().is_none(), "nothing was sent");
-    }
-}
-
-#[tokio::test]
-async fn a_status_write_answers_none_for_no_issue_and_refuses_what_it_cannot_resolve() {
-    // No such issue, and an issue Linear has trashed: no such task, and nothing else asked.
-    for answer in [serde_json::json!({"issue":null}), {
-        let mut trashed = issue_in_state("I-1", "Triage", "triage");
-        trashed["issue"]["archivedAt"] = serde_json::json!("2026-09-04T12:00:00Z");
-        trashed
-    }] {
-        let (endpoint, wire) = response_server(vec![answer]);
-        assert_eq!(
-            writable_source(&endpoint)
-                .set_task_status(&"I-1".into(), StatusCategory::Done)
-                .await
-                .unwrap(),
-            None
-        );
-        assert_eq!(wire.iter().count(), 1);
-    }
-
-    // No configured team: refused the way every other write is, after the read alone.
-    let (endpoint, wire) = response_server(vec![issue_in_state("I-1", "Triage", "triage")]);
-    let refusal = source(&endpoint)
-        .set_task_status(&"I-1".into(), StatusCategory::Done)
-        .await
-        .expect_err("a status write needs the team its states belong to");
-    assert!(
-        matches!(&refusal, SourceError::Refused { message } if message.contains("config.team")),
-        "{refusal:?}"
-    );
-    assert_eq!(wire.iter().count(), 1);
-
-    let base = || {
-        vec![
-            issue_in_state("I-1", "Triage", "triage"),
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        ]
-    };
-    // A team with no state of that type: refused naming the type, and no update sent.
-    let (endpoint, wire) = response_server(
-        base()
-            .into_iter()
-            .chain([serde_json::json!({"workflowStates":{"nodes":[]}})])
-            .collect(),
-    );
-    let refusal = writable_source(&endpoint)
-        .set_task_status(&"I-1".into(), StatusCategory::InProgress)
-        .await
-        .expect_err("no state of the type to move to");
-    assert!(
-        matches!(&refusal, SourceError::Refused { message }
-            if message.contains("I-1") && message.contains("type started")),
-        "{refusal:?}"
-    );
-    assert_eq!(wire.iter().count(), 3, "no issueUpdate was sent");
-
-    // Linear saying the update did not land, and a state node it answered without a name.
-    for (tail, expected) in [
-        (
-            vec![
-                serde_json::json!({"workflowStates":{"nodes":[{"id":"S","name":"Done"}]}}),
-                serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
-            ],
-            "refused",
-        ),
-        (
-            vec![serde_json::json!({"workflowStates":{"nodes":[{"id":"S"}]}})],
-            "malformed",
-        ),
-        (vec![serde_json::json!({"viewer":{"id":"U"}})], "malformed"),
-    ] {
-        let (endpoint, _wire) = response_server(base().into_iter().chain(tail).collect());
-        let failure = writable_source(&endpoint)
-            .set_task_status(&"I-1".into(), StatusCategory::Done)
-            .await
-            .expect_err(expected);
-        match expected {
-            "refused" => assert!(
-                matches!(&failure, SourceError::Refused { message } if message.contains("unsuccessful")),
-                "{failure:?}"
-            ),
-            _ => assert!(
-                matches!(failure, SourceError::Malformed { .. }),
-                "{failure:?}"
-            ),
-        }
-    }
-}
-
 /// `body` with its first node's long-form field replaced by `visible` and a metadata slot
 /// holding `slot`.
 fn with_slot(
@@ -5542,7 +5044,9 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
             &slot,
         ),
     );
-    let task = source(&endpoint)
+    // Read through the mapping it is written back through, so the status it carries is one
+    // that source has a name for.
+    let task = writable_source(&endpoint)
         .query_tasks(&TaskQuery::default(), &page)
         .await
         .expect("the issue reads")
@@ -5634,8 +5138,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     // Written back as it was read, the lists land in the slot under their reserved keys,
     // beside the caller's metadata, rather than being dropped.
     let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE"}]}}),
+        writable_resolution(),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
         serde_json::json!({"issue":{"description":null,
             "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
@@ -5666,12 +5169,8 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
 
     // Written back without them, the caller's metadata goes back exactly and neither key does.
     let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE"}]}}),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
-        serde_json::json!({"issue":{"description":null,
-            "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-            "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
     ]);
     writable_source(&endpoint)
         .write_task(&ItemWrite {
@@ -6022,7 +5521,6 @@ async fn a_priority_off_linears_scale_is_refused_naming_the_field() {
 /// `0` included, so moving a task back to no priority is written rather than left out.
 #[tokio::test]
 async fn a_copy_sends_linears_priority_on_create_and_on_update_including_none() {
-    let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
     let no_relations = serde_json::json!({"issue":{"description":null,
         "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
         "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}});
@@ -6033,12 +5531,16 @@ async fn a_copy_sends_linears_priority_on_create_and_on_update_including_none() 
             } else {
                 (onetaskgraph_linear::graphql::ISSUE_CREATE, "issueCreate")
             };
-            let (endpoint, wire) = response_server(vec![
-                id_page("teams", "TEAM"),
-                id_page("workflowStates", "STATE"),
+            let mut answers = vec![
+                writable_resolution(),
                 serde_json::json!({(root):{"success":true,"issue":{"id":"I-OLD"}}}),
-                no_relations.clone(),
-            ]);
+            ];
+            // An update replaces the relations the issue holds, so it reads them; a create
+            // holds none.
+            if target.is_some() {
+                answers.push(no_relations.clone());
+            }
+            let (endpoint, wire) = response_server(answers);
             let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T",
                 "title":"task","content":"body","status":{"category":"todo","name":"Todo"},
                 "priority":priority,"labels":[],"repositories":[],"metadata":{}}))
@@ -6356,119 +5858,10 @@ async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent()
     );
 }
 
-/// One issue as `issue(id:)` answers it: in `Todo`, with a slot of its own.
-fn slotted_issue(id: &str, state: &str, kind: &str) -> serde_json::Value {
-    serde_json::json!({"issue":{"id":id,"identifier":identifier(id),"title":"Fixture issue",
-        "description":"The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.claim\":\"r-1\",\"team.kept\":[1]}\n-->",
-        "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
-        "state":{"name":state,"type":kind},"priority":0,"labels":{"nodes":[]},"project":null}})
-}
-
-#[tokio::test]
-async fn a_targeted_update_sends_one_issue_update_carrying_only_what_differs() {
-    use onetaskgraph_plugin_api::UpdatedField;
-    let (endpoint, wire) = response_server(vec![
-        slotted_issue("I-1", "Todo", "unstarted"),
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"STATE-DONE","name":"Done"}]}}),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
-        {
-            let mut read = slotted_issue("I-1", "Done", "completed");
-            read["issue"]["description"] = serde_json::json!(
-                "The prose.\n\n<!-- onetaskgraph.metadata\n{\"team.kept\":[1],\"team.landing\":\"merged\"}\n-->"
-            );
-            read
-        },
-    ]);
-    let update = TaskUpdate {
-        title: Some("Fixture issue".into()),
-        status: Some(Status {
-            category: StatusCategory::Done,
-            name: "Done".into(),
-        }),
-        metadata_set: std::collections::BTreeMap::from([(
-            MetadataKey::new("team.landing").unwrap(),
-            serde_json::json!("merged"),
-        )]),
-        metadata_remove: std::collections::BTreeSet::from(
-            [MetadataKey::new("team.claim").unwrap()],
-        ),
-        ..TaskUpdate::default()
-    };
-    let outcome = writable_source(&endpoint)
-        .update_task(&"I-1".into(), &update)
-        .await
-        .expect("the update lands")
-        .expect("the issue is held");
-    let sent: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
-    assert_eq!(sent.len(), 5, "{sent:#?}");
-    assert_eq!(
-        sent[3]["variables"],
-        serde_json::json!({"id":"I-1","input":{
-            "description":"The prose.\n\n<!-- onetaskgraph.metadata `{\"team.kept\":[1],\"team.landing\":\"merged\"}` -->",
-            "stateId":"STATE-DONE"}}),
-        "the unchanged title is not sent, and nothing else is"
-    );
-    assert_eq!(
-        outcome.written,
-        std::collections::BTreeSet::from([UpdatedField::Status, UpdatedField::Metadata])
-    );
-    assert_eq!(outcome.task.status.category, StatusCategory::Done);
-    assert!(!outcome.task.metadata.contains_key("team.claim"));
-}
-
-#[tokio::test]
-async fn a_targeted_update_naming_only_what_the_issue_holds_is_the_read_alone() {
-    let (endpoint, wire) = response_server(vec![slotted_issue("I-1", "Todo", "unstarted")]);
-    let update = TaskUpdate {
-        title: Some("Fixture issue".into()),
-        content: Some("The prose.".into()),
-        status: Some(Status {
-            category: StatusCategory::Todo,
-            name: "todo".into(),
-        }),
-        priority: Some(Priority::None),
-        metadata_set: std::collections::BTreeMap::from([(
-            MetadataKey::new("team.kept").unwrap(),
-            serde_json::json!([1]),
-        )]),
-        delivers: Some(Vec::new()),
-        ..TaskUpdate::default()
-    };
-    let outcome = writable_source(&endpoint)
-        .update_task(&"I-1".into(), &update)
-        .await
-        .expect("an answer")
-        .expect("the issue is held");
-    assert!(outcome.written.is_empty(), "{:?}", outcome.written);
-    assert_eq!(wire.iter().count(), 1, "the read alone");
-
-    // A task Linear does not hold is none, and a list naming the task itself is refused unread.
-    let (endpoint, wire) = response_server(vec![serde_json::json!({"issue":null})]);
-    assert_eq!(
-        writable_source(&endpoint)
-            .update_task(&"I-9".into(), &update)
-            .await
-            .unwrap(),
-        None
-    );
-    assert_eq!(wire.iter().count(), 1);
-    let refused = writable_source("http://127.0.0.1:9/graphql")
-        .update_task(
-            &"I-1".into(),
-            &TaskUpdate {
-                delivers: Some(vec![TaskRef::new("work:I-1".to_owned()).unwrap()]),
-                ..TaskUpdate::default()
-            },
-        )
-        .await
-        .expect_err("delivers names the task itself");
-    assert!(refused.to_string().contains("delivers"), "{refused}");
-}
-
 /// A source over `endpoint` on the team `ENG`, configured with `extra` beside it.
 fn configured_source(endpoint: &str, extra: serde_json::Value) -> Box<dyn TaskSource> {
-    let mut config = serde_json::json!({"endpoint":endpoint,"team":"ENG"});
+    let mut config =
+        serde_json::json!({"endpoint":endpoint,"team":"ENG","status_mapping":writable_mapping()});
     for (key, value) in extra.as_object().expect("an object") {
         config[key] = value.clone();
     }
@@ -6479,291 +5872,6 @@ fn configured_source(endpoint: &str, extra: serde_json::Value) -> Box<dyn TaskSo
             &Secrets(Some("fixture-key".into())),
         )
         .unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// The eight-entry mapping the Hello Patient team's states are written with.
-fn eng_mapping() -> serde_json::Value {
-    serde_json::json!({"status_mapping":{"backlog":"Proposed","draft":"Backlog","todo":"Todo",
-        "queued":"Queued","in-progress":"In Progress","unknown":"Needs Attention","done":"Done",
-        "cancelled":"Canceled"}})
-}
-
-/// The `workflowStates` answer for a team carrying ENG's state names and types — two of
-/// type `backlog` and two of type `unstarted`, so a state written by name and one written as
-/// the first of its type land in different places.
-fn eng_states() -> serde_json::Value {
-    let states = [
-        ("S-backlog", "Backlog", "backlog"),
-        ("S-proposed", "Proposed", "backlog"),
-        ("S-todo", "Todo", "unstarted"),
-        ("S-queued", "Queued", "unstarted"),
-        ("S-progress", "In Progress", "started"),
-        ("S-attention", "Needs Attention", "started"),
-        ("S-review", "In Review", "started"),
-        ("S-done", "Done", "completed"),
-        ("S-canceled", "Canceled", "canceled"),
-        ("S-triage", "Triage", "triage"),
-    ];
-    serde_json::json!({"workflowStates":{"nodes":states
-        .iter()
-        .map(|(id, name, kind)| serde_json::json!({"id":id,"name":name,"type":kind}))
-        .collect::<Vec<_>>()}})
-}
-
-/// `status_mapping` is refused where the configuration is read when it names a category
-/// that does not exist, sends two categories to one state, or names a blank state.
-#[test]
-fn a_status_mapping_this_source_could_not_honour_is_refused_when_it_is_read() {
-    let build = |mapping: serde_json::Value| {
-        onetaskgraph_linear::Plugin
-            .build(
-                &SourceName::new("work").unwrap(),
-                &serde_json::json!({"team":"ENG","status_mapping":mapping}),
-                &Secrets(Some("fixture-key".into())),
-            )
-            .err()
-            .map(|error| error.to_string())
-    };
-    let unknown = build(serde_json::json!({"shipped":"Done"})).expect("an unknown category");
-    assert!(
-        unknown.contains("`shipped`") && unknown.contains("`in-progress`"),
-        "{unknown}"
-    );
-    let twice = build(serde_json::json!({"todo":"Todo","queued":"todo"})).expect("one name twice");
-    assert!(
-        twice.contains("both todo and queued") && twice.contains("workflow state \"todo\""),
-        "{twice}"
-    );
-    let blank = build(serde_json::json!({"todo":" "})).expect("a blank name");
-    assert!(blank.contains("blank"), "{blank}");
-    assert!(build(eng_mapping()["status_mapping"].clone()).is_none());
-    assert!(
-        build(serde_json::json!({"queued":null,"draft":null})).is_none(),
-        "two disabled categories name no state"
-    );
-}
-
-/// A mapped category is written as the state the mapping names — found among the team's
-/// states by name, never as the first state of its type — and answers with that state's
-/// name; a category already in place is the read alone.
-#[tokio::test]
-async fn a_mapped_category_is_written_as_its_named_state() {
-    for (category, named, id, from) in [
-        (
-            StatusCategory::Queued,
-            "Queued",
-            "S-queued",
-            ("Todo", "unstarted"),
-        ),
-        (
-            StatusCategory::Backlog,
-            "Proposed",
-            "S-proposed",
-            ("Todo", "unstarted"),
-        ),
-        (
-            StatusCategory::Draft,
-            "Backlog",
-            "S-backlog",
-            ("Todo", "unstarted"),
-        ),
-        (
-            StatusCategory::Unknown,
-            "Needs Attention",
-            "S-attention",
-            ("Todo", "unstarted"),
-        ),
-        (
-            StatusCategory::Todo,
-            "Todo",
-            "S-todo",
-            ("Queued", "unstarted"),
-        ),
-    ] {
-        let (endpoint, wire) = response_server(vec![
-            issue_in_state("I-1", from.0, from.1),
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-            eng_states(),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
-        ]);
-        let status = configured_source(&endpoint, eng_mapping())
-            .set_task_status(&"I-1".into(), category)
-            .await
-            .unwrap()
-            .expect("the issue is held");
-        assert_eq!((status.category, status.name.as_str()), (category, named));
-        let requests = wire
-            .try_iter()
-            .map(|request| sent(&request))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            requests[2]["query"],
-            onetaskgraph_linear::graphql::TEAM_WORKFLOW_STATES
-        );
-        assert_eq!(
-            requests[3]["variables"],
-            serde_json::json!({"id":"I-1","input":{"stateId":id}}),
-            "{category:?}"
-        );
-    }
-    // Already at the named state: the read alone.
-    let (endpoint, wire) = response_server(vec![issue_in_state("I-1", "Queued", "unstarted")]);
-    let status = configured_source(&endpoint, eng_mapping())
-        .set_task_status(&"I-1".into(), StatusCategory::Queued)
-        .await
-        .unwrap()
-        .expect("the issue is held");
-    assert_eq!(status.name, "Queued");
-    assert_eq!(wire.try_iter().count(), 1, "the read alone");
-}
-
-/// A name the team lacks is refused naming the state, the team and the category, and no
-/// write is sent; a category the mapping sets to `null` is refused as disabled before any
-/// request, even one a source without the key would write as the first of its type.
-#[tokio::test]
-async fn a_mapped_state_the_team_lacks_or_a_null_category_is_refused_before_any_write() {
-    let (endpoint, wire) = response_server(vec![
-        issue_in_state("I-1", "Todo", "unstarted"),
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[
-            {"id":"S-todo","name":"Todo","type":"unstarted"}]}}),
-    ]);
-    let refused = configured_source(&endpoint, eng_mapping())
-        .set_task_status(&"I-1".into(), StatusCategory::Queued)
-        .await
-        .expect_err("the team has no Queued");
-    let said = refused.to_string();
-    assert!(
-        said.contains("\"Queued\"") && said.contains("team ENG") && said.contains("status queued"),
-        "{said}"
-    );
-    let requests = wire
-        .try_iter()
-        .map(|request| sent(&request))
-        .collect::<Vec<_>>();
-    assert!(
-        requests
-            .iter()
-            .all(|request| request["query"] != onetaskgraph_linear::graphql::ISSUE_UPDATE),
-        "{requests:?}"
-    );
-
-    let (endpoint, wire) = response_server(Vec::new());
-    let source = configured_source(
-        &endpoint,
-        serde_json::json!({"status_mapping":{"todo":null}}),
-    );
-    let refused = source
-        .set_task_status(&"I-1".into(), StatusCategory::Todo)
-        .await
-        .expect_err("todo is disabled");
-    assert!(
-        refused.to_string().contains("sets todo to null"),
-        "{refused}"
-    );
-    let refused = source
-        .update_task(
-            &"I-1".into(),
-            &TaskUpdate {
-                status: Some(Status {
-                    category: StatusCategory::Todo,
-                    name: "todo".into(),
-                }),
-                ..TaskUpdate::default()
-            },
-        )
-        .await
-        .expect_err("todo is disabled");
-    assert!(
-        refused.to_string().contains("sets todo to null"),
-        "{refused}"
-    );
-    assert!(wire.try_iter().next().is_none(), "nothing was sent");
-}
-
-/// An issue at a state the mapping names reads as that category under the state's own name;
-/// every other state — a review state, `Triage` — reads by its type, as without a mapping.
-#[tokio::test]
-async fn an_issue_reads_as_the_category_its_state_is_mapped_to_and_otherwise_by_type() {
-    for (name, kind, category) in [
-        ("Queued", "unstarted", StatusCategory::Queued),
-        ("Todo", "unstarted", StatusCategory::Todo),
-        ("Proposed", "backlog", StatusCategory::Backlog),
-        ("Backlog", "backlog", StatusCategory::Draft),
-        ("Needs Attention", "started", StatusCategory::Unknown),
-        ("In Review", "started", StatusCategory::InProgress),
-        ("Triage", "triage", StatusCategory::Unknown),
-    ] {
-        let (endpoint, _) = response_server(vec![issue_in_state("I-1", name, kind)]);
-        let task = configured_source(&endpoint, eng_mapping())
-            .get_task(&"I-1".into())
-            .await
-            .unwrap()
-            .expect("the issue is held");
-        assert_eq!(
-            (task.status.category, task.status.name.as_str()),
-            (category, name)
-        );
-    }
-}
-
-/// A mapped category narrows by its state's name, and one the mapping leaves out by its
-/// type *at no state the mapping names*; a source without a mapping sends exactly the one
-/// type narrowing it always did.
-#[tokio::test]
-async fn a_status_filter_narrows_a_mapped_category_by_name_and_another_by_type_alone() {
-    let filter_of = |extra: serde_json::Value, statuses: Vec<StatusCategory>| async move {
-        let (endpoint, wire) = response_server(vec![serde_json::json!({"issues":{"nodes":[],
-            "pageInfo":{"hasNextPage":false,"endCursor":null}}})]);
-        configured_source(&endpoint, extra)
-            .query_tasks(
-                &TaskQuery {
-                    statuses,
-                    ..TaskQuery::default()
-                },
-                &PageRequest {
-                    cursor: None,
-                    limit: 10,
-                },
-            )
-            .await
-            .unwrap();
-        sent(&wire.recv().unwrap())["variables"]["filter"].clone()
-    };
-    assert_eq!(
-        filter_of(eng_mapping(), vec![StatusCategory::Queued]).await,
-        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-            {"state":{"name":{"eqIgnoreCase":"Queued"}}}]})
-    );
-    // A mapped category with a type of its own also asks for the issues that read as it by
-    // that type: with `backlog` mapped to `Proposed`, an issue at `Backlog` still reads as it.
-    assert_eq!(
-        filter_of(
-            serde_json::json!({"status_mapping":{"backlog":"Proposed"}}),
-            vec![StatusCategory::Backlog]
-        )
-        .await,
-        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-            {"or":[{"state":{"name":{"eqIgnoreCase":"Proposed"}}},
-                   {"and":[{"state":{"type":{"in":["backlog"]}}},
-                           {"state":{"name":{"neqIgnoreCase":"Proposed"}}}]}]}]})
-    );
-    assert_eq!(
-        filter_of(
-            serde_json::json!({"status_mapping":{"queued":"Queued"}}),
-            vec![StatusCategory::Todo, StatusCategory::Queued]
-        )
-        .await,
-        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-            {"or":[{"and":[{"state":{"type":{"in":["unstarted"]}}},
-                           {"state":{"name":{"neqIgnoreCase":"Queued"}}}]},
-                   {"state":{"name":{"eqIgnoreCase":"Queued"}}}]}]})
-    );
-    assert_eq!(
-        filter_of(serde_json::json!({}), vec![StatusCategory::Todo]).await,
-        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-            {"state":{"type":{"in":["unstarted"]}}}]})
-    );
 }
 
 /// `project` narrows every read to that project and files every write there: an issue of
@@ -6823,12 +5931,8 @@ async fn a_project_scoped_source_reads_and_writes_that_project_alone() {
         "repositories":[],"metadata":{}}))
     .unwrap();
     let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[{"id":"S-todo"}]}}),
+        writable_resolution(),
         serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
-        serde_json::json!({"issue":{"description":null,
-            "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-            "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
     ]);
     configured_source(&endpoint, scope.clone())
         .write_task(&ItemWrite {
@@ -7043,15 +6147,12 @@ async fn the_cross_source_edge_scan_is_narrowed_to_this_source_and_the_far_ends_
             "description":"\"onetaskgraph.origin\":\"plan:F-1\"","url":null,"createdAt":null,
             "updatedAt":null,"project":{"id":"P-SCOPE"},"state":{"name":"Todo","type":"unstarted"},
             "priority":0,"labels":{"nodes":[]}});
+        // The status first, so a write the mapping cannot name is refused before the scan.
         let (endpoint, wire) = response_server(vec![
+            writable_resolution(),
             serde_json::json!({"issues":{"nodes":[decoy],
                 "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-            serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-            serde_json::json!({"workflowStates":{"nodes":[{"id":"S-todo"}]}}),
             serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
-            serde_json::json!({"issue":{"description":null,
-                "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
-                "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         ]);
         configured_source(&endpoint, extra)
             .write_task(&ItemWrite {
@@ -7065,9 +6166,9 @@ async fn the_cross_source_edge_scan_is_narrowed_to_this_source_and_the_far_ends_
             .try_iter()
             .map(|request| sent(&request))
             .collect::<Vec<_>>();
-        assert_eq!(requests[0]["query"], onetaskgraph_linear::graphql::ISSUES);
-        assert_eq!(requests[0]["variables"]["filter"], filter);
-        let description = requests[3]["variables"]["input"]["description"]
+        assert_eq!(requests[1]["query"], onetaskgraph_linear::graphql::ISSUES);
+        assert_eq!(requests[1]["variables"]["filter"], filter);
+        let description = requests[2]["variables"]["input"]["description"]
             .as_str()
             .expect("the far end is recorded in the slot")
             .to_owned();
@@ -7083,37 +6184,6 @@ async fn the_cross_source_edge_scan_is_narrowed_to_this_source_and_the_far_ends_
             "no native relation to the decoy"
         );
     }
-}
-
-/// `sources fields` reports each state the mapping names, present on the team with its type
-/// or missing from it, and writes nothing.
-#[tokio::test]
-async fn the_states_report_names_each_mapped_state_present_or_missing_with_its_type() {
-    let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"teams":{"nodes":[{"id":"TEAM"}]}}),
-        serde_json::json!({"workflowStates":{"nodes":[
-            {"id":"S-todo","name":"Todo","type":"unstarted"},
-            {"id":"S-queued","name":"Queued","type":"unstarted"}]}}),
-    ]);
-    let config: onetaskgraph_linear::LinearConfig = serde_json::from_value(serde_json::json!({
-        "endpoint":endpoint,"team":"ENG",
-        "status_mapping":{"todo":"Todo","queued":"queued","done":"Shipped","draft":null}}))
-    .unwrap();
-    let report = onetaskgraph_linear::workflow_states(
-        &SourceName::new("work").unwrap(),
-        config,
-        &Secrets(Some("fixture-key".into())),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        serde_json::to_value(&report).unwrap(),
-        serde_json::json!({"source":"work","team":"ENG","states":[
-            {"category":"todo","state":"Todo","present":true,"type":"unstarted"},
-            {"category":"queued","state":"queued","present":true,"type":"unstarted"},
-            {"category":"done","state":"Shipped","present":false}]})
-    );
-    assert_eq!(wire.try_iter().count(), 2, "two reads, and nothing written");
 }
 
 /// The slot is written on one line, its JSON inside a code span, with `<`, `>` and backticks
@@ -7323,54 +6393,4 @@ async fn a_malformed_code_span_slot_is_refused_rather_than_read_past() {
             "{description:?}: {refused:?}"
         );
     }
-}
-
-/// With a mapping, `unknown` narrows to the issues it reads as — at the state it is mapped to,
-/// or at a state of a type none of the five a category stands for (`Triage`) — and a metadata
-/// value an encoder might spell otherwise is not sent to Linear at all, leaving the
-/// confirmation to decide.
-#[tokio::test]
-async fn unknown_narrows_by_type_and_an_escapable_value_is_left_to_the_confirmation() {
-    let (endpoint, wire) = response_server(vec![serde_json::json!({"issues":{"nodes":[],
-        "pageInfo":{"hasNextPage":false,"endCursor":null}}})]);
-    configured_source(&endpoint, eng_mapping())
-        .query_tasks(
-            &TaskQuery {
-                statuses: vec![StatusCategory::Unknown],
-                metadata: vec![
-                    onetaskgraph_plugin_api::MetadataMatch::new(
-                        "caller.site",
-                        Vec::new(),
-                        "github.com/a/b",
-                    )
-                    .unwrap(),
-                ],
-                ..TaskQuery::default()
-            },
-            &PageRequest {
-                cursor: None,
-                limit: 10,
-            },
-        )
-        .await
-        .unwrap();
-    let mut excluded = vec![serde_json::json!({"state":{"type":{"nin":
-        ["backlog","unstarted","started","completed","canceled"]}}})];
-    for name in [
-        "Backlog",
-        "Proposed",
-        "Todo",
-        "Queued",
-        "In Progress",
-        "Done",
-        "Canceled",
-        "Needs Attention",
-    ] {
-        excluded.push(serde_json::json!({"state":{"name":{"neqIgnoreCase":name}}}));
-    }
-    assert_eq!(
-        sent(&wire.recv().unwrap())["variables"]["filter"],
-        serde_json::json!({"and":[{"team":{"key":{"eqIgnoreCase":"ENG"}}},
-            {"or":[{"state":{"name":{"eqIgnoreCase":"Needs Attention"}}},{"and":excluded}]}]})
-    );
 }

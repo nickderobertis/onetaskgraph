@@ -307,8 +307,8 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    Status, StatusCategory, StatusMapping, StatusName, Support, Task, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -362,70 +362,24 @@ pub mod graphql {
     pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
     pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
-    /// Resolve the configured team key to Linear's backend id.
-    pub const TEAM: &str =
-        "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id}} }";
-    /// Resolve an issue workflow-state display name.
+    /// Everything a status write resolves, in one request: the configured team's id, that
+    /// team's workflow states, and the workspace's project statuses, each with its type.
     ///
-    /// `$team` is an `ID!` and `$name` a `String!` because that is what each one's
-    /// *location* declares, not because of what this source passes: both carry a Linear
-    /// identifier string. `WorkflowStateFilter.team` is a `NullableTeamFilter`, whose `id`
-    /// is an `IDComparator`, whose `eq` is an `ID`; the sibling `name` reaches a
-    /// `StringComparator.eqIgnoreCase`, which is a `String`.
-    ///
-    /// That distinction is what the live lane was refused for on 2026-09-04, with HTTP 400
-    /// and `Variable "$team" of type "String!" used in position expecting type "ID".`
-    /// GraphQL admits a variable at a location only when the variable's type is the
-    /// location's type or that type's non-null form, and `String` is not `ID` however the
-    /// value is spelled — so `String!` there fails validation before any field is read,
-    /// while `ID!` is the non-null form of the location's own type and is accepted.
-    ///
-    /// It reached Linear because a variable inside an inline filter literal is not a root
-    /// argument, and the pinned-schema checks only compared root arguments. They now walk
-    /// into these literals too, so this class of drift fails here rather than in the live
-    /// lane.
-    pub const ISSUE_STATE: &str = "query($name:String!,$team:ID!){ workflowStates(filter:{name:{eqIgnoreCase:$name},team:{id:{eq:$team}}}){nodes{id}} }";
-    /// Find the configured team's workflow states of one `WorkflowState.type`, so a task's
-    /// status can be set by category alone.
-    ///
-    /// `name` is selected beside `id` because the status a narrow status write answers with
-    /// is the one Linear now holds, and a category alone does not say which of the team's
-    /// states of that type it is. `$type` is a `String!` at `StringComparator.eq`, which is a
-    /// `String`, and `$team` an `ID!` for the reason recorded on [`ISSUE_STATE`].
-    pub const ISSUE_STATE_OF_TYPE: &str = "query($type:String!,$team:ID!){ workflowStates(filter:{type:{eq:$type},team:{id:{eq:$team}}}){nodes{id name}} }";
-    /// Every workflow state of the configured team, with its type.
-    ///
-    /// What a category `status_mapping` names is written through — the state is found by its
-    /// name here, so a name the team lacks is refused naming the state, the team and the
-    /// category rather than as an unexplained empty lookup — and what `sources fields` reports
-    /// each mapped state against. A team holds a few dozen states at most, inside the one page
-    /// Linear answers an unpaged connection with. `$team` is an `ID!` for the reason recorded
-    /// on [`ISSUE_STATE`].
-    pub const TEAM_WORKFLOW_STATES: &str =
-        "query($team:ID!){ workflowStates(filter:{team:{id:{eq:$team}}}){nodes{id name type}} }";
-    /// List the workspace's project statuses, so one can be resolved by display name.
-    ///
-    /// Unlike `teams`, `workflowStates` and the two label connections, Linear's
-    /// `projectStatuses` accepts no `filter` argument: asking for one is refused outright
-    /// with `Unknown argument "filter" on field "Query.projectStatuses"`. The display name
-    /// is therefore matched locally over the whole connection, which a workspace holds few
-    /// enough of to answer in one page.
-    // llmlint: ignore[changed_behavior_has_e2e] The uncovered case the rule names — a status
-    // on a later page — is not a test that is missing but a document this repository has no
-    // evidence Linear would accept: `tests/fixtures/schema.graphql` pins `after` alone,
-    // because Linear's own refusal is where that correction came from, and its
-    // `ProjectStatusConnection` declares `nodes` and no `pageInfo`. Selecting a cursor field
-    // to page on would fail `pinned_schema_checks_selected_fields_arguments_and_fixture_keys`
-    // here and risk, against Linear, the same `GRAPHQL_VALIDATION_FAILED` this document was
-    // changed to stop sending. Reading one page is not what changed either: `teams`,
-    // `workflowStates` and `projectLabels` resolve a display name through the same `one_id`
-    // over the same unpaged connections, and did before this change. What did change is
-    // driven end to end — the CLI journey
-    // `linear_project_and_task_copies_write_native_relations_and_record_only_cross_source_edges`
-    // copies a project whose status is resolved this way, and
-    // `a_project_status_is_matched_locally_because_linear_narrows_that_connection_for_nobody`
-    // holds the match, the ambiguity and the absence against a real HTTP server.
-    pub const PROJECT_STATUS: &str = "query{ projectStatuses{nodes{id name}} }";
+    /// One document rather than three lookups, because a status write's cost is counted at
+    /// Linear's endpoint on a key every manager of a workspace shares: a source sends this once
+    /// and holds the answer for its own lifetime (see the ruling on the resolution cache in this
+    /// crate's module documentation). `Team.states` and `Query.projectStatuses` are each read
+    /// as the one page Linear answers an unpaged connection with — a team holds a few dozen
+    /// states at most, and a workspace a few dozen project statuses — and `projectStatuses`
+    /// takes no `filter`: Linear refuses one outright with `Unknown argument "filter" on field
+    /// "Query.projectStatuses"`, which is why a project status is matched by name here, locally.
+    /// `position` is read for one reason: a project status `sources fields --apply` creates is
+    /// placed after the workspace's last.
+    pub const RESOLUTION: &str = "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id states{nodes{id name type}}}} projectStatuses{nodes{id name type position}} }";
+    /// Create a workflow state on the configured team, for `sources fields --apply`.
+    pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";
+    /// Create a workspace project status, for `sources fields --apply`.
+    pub const PROJECT_STATUS_CREATE: &str = "mutation($input:ProjectStatusCreateInput!){ projectStatusCreate(input:$input){success status{id name type position}} }";
     /// Resolve an issue-label display name.
     pub const ISSUE_LABEL: &str =
         "query($name:String!){ issueLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
@@ -437,6 +391,12 @@ pub mod graphql {
         "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id}} }";
     /// Update an issue.
     pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id}} }";
+    /// Update an issue and read back, in the same request, everything a task is read as.
+    ///
+    /// What a status write and a targeted update answer with: the selection is [`ISSUE`]'s, so
+    /// the task they report — its status, and the `delivers` the engine keeps in step with it —
+    /// is what Linear holds after the write, with no read before it and none after.
+    pub const ISSUE_UPDATE_READ: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} }} }";
     /// Set an issue's priority on its own, and read back the priority Linear now holds.
     ///
     /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting `priority` in the payload
@@ -518,22 +478,17 @@ pub struct LinearConfig {
     /// GraphQL endpoint override, primarily for fixture servers.
     #[schemars(with = "String")]
     endpoint: Endpoint,
-    /// Per-instance mapping from a status category to the exact name of one workflow state
-    /// of the configured team, or `null` to disable that category.
+    /// Which workflow state of the configured team a task's status category is, and which of
+    /// the workspace's project statuses a project's is — the shared `status_mapping` grammar.
     ///
-    /// The keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,
-    /// `done`, `cancelled` and `unknown`. A mapped category is written as the named state by
-    /// every write — never as the first state of that state's type — and an issue at a state
-    /// the mapping names reads as that category, under that state's name; any other state
-    /// reads by its type, and `--status` returns exactly the issues that read as the
-    /// categories it names. A category this does not mention keeps the
-    /// behaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and
-    /// `cancelled` are written as the team's first state of the matching type, and `draft`,
-    /// `queued` and `unknown` are disabled. A name the team lacks is refused before any
-    /// write, and two categories mapped to one name are refused when this configuration is
-    /// read.
-    #[schemars(schema_with = "status_mapping_schema")]
-    status_mapping: std::collections::HashMap<StatusCategory, Option<StateName>>,
+    /// Linear has no built-in names, so this is the whole of what a status is written as and
+    /// read by: a category is written as exactly the name its kind maps it to, and a status
+    /// write it gives no name for is refused before any mutation, naming the key to set; an
+    /// item at a name its kind maps reads as that category under the name, and every other
+    /// name reads as `unknown`. A source without it reads every item as `unknown` and refuses
+    /// every status write. Two categories mapped to one name of one kind are refused when this
+    /// configuration is read.
+    status_mapping: StatusMapping,
     /// The id of one Linear project of the configured team, scoping this source to it.
     ///
     /// When set, every task read is narrowed to that project's issues, project and document
@@ -541,44 +496,6 @@ pub struct LinearConfig {
     /// no project is placed in it, and one naming another project is refused. Absent, the
     /// source reads and writes team-wide.
     project: Option<ProjectScope>,
-}
-
-/// The schema of `status_mapping`: an object whose values are workflow state names or `null`,
-/// and whose keys are the contract's own `StatusCategory`.
-///
-/// Built here rather than derived, because the derived schema of a map says nothing of its
-/// keys; the key schema is the contract's own, referenced rather than restated.
-fn status_mapping_schema(generator: &mut schemars::SchemaGenerator) -> Schema {
-    let mut schema = <std::collections::HashMap<StatusCategory, Option<StateName>> as schemars::JsonSchema>::json_schema(generator);
-    schema.insert(
-        "propertyNames".to_owned(),
-        generator.subschema_for::<StatusCategory>().to_value(),
-    );
-    schema
-}
-
-/// The name of one workflow state of a Linear team.
-///
-/// Validated on the way in rather than checked later, so a blank name — which no workflow
-/// state can have — is a state this type cannot hold.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize, schemars::JsonSchema)]
-#[serde(try_from = "String", into = "String")]
-#[schemars(rename = "LinearWorkflowStateName", extend("minLength" = 1))]
-struct StateName(String);
-impl From<StateName> for String {
-    fn from(value: StateName) -> Self {
-        value.0
-    }
-}
-impl TryFrom<String> for StateName {
-    type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.trim().is_empty() {
-            Err("a status_mapping workflow state name cannot be blank".into())
-        } else {
-            Ok(Self(value))
-        }
-    }
 }
 
 /// The id of one Linear project, which a scoped source holds alone.
@@ -671,180 +588,182 @@ impl Default for LinearConfig {
             api_key_env: EnvName("LINEAR_API_KEY".into()),
             team: None,
             endpoint: Endpoint(DEFAULT_ENDPOINT.into()),
-            status_mapping: std::collections::HashMap::new(),
+            status_mapping: StatusMapping::default(),
             project: None,
         }
     }
 }
 
-/// Where `category` sits in the contract's own order — the order a mapping is reported in.
+/// An item kind as this source's configuration and reports spell it.
+const fn kind_word(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Task => "task",
+        ItemKind::Project => "project",
+    }
+}
+
+/// What a name of `kind` is called in Linear, for a message.
+const fn vocabulary_word(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Task => "workflow state",
+        ItemKind::Project => "project status",
+    }
+}
+
+/// The `WorkflowState.type` a workflow state `sources fields --apply` creates for `category`
+/// is given, and the `ProjectStatusType` a project status it creates is given.
 ///
-/// An exhaustive match, so a status category the contract adds fails to compile here rather
-/// than going unordered, and the order is the contract's rather than a list restated beside it.
-const fn category_position(category: StatusCategory) -> usize {
+/// One row per category, fixed: a category is created as the type whose meaning is nearest
+/// it, and `draft`, `queued` and `unknown` — which no type of either vocabulary means — as the
+/// nearest neighbour's. An exhaustive match, so a category the contract adds fails to compile
+/// here rather than being created as something unstated.
+const fn created_types(category: StatusCategory) -> (&'static str, &'static str) {
     match category {
-        StatusCategory::Draft => 0,
-        StatusCategory::Backlog => 1,
-        StatusCategory::Todo => 2,
-        StatusCategory::Queued => 3,
-        StatusCategory::InProgress => 4,
-        StatusCategory::Done => 5,
-        StatusCategory::Cancelled => 6,
-        StatusCategory::Unknown => 7,
+        StatusCategory::Backlog | StatusCategory::Draft => ("backlog", "backlog"),
+        StatusCategory::Todo | StatusCategory::Queued => ("unstarted", "planned"),
+        StatusCategory::InProgress | StatusCategory::Unknown => ("started", "started"),
+        StatusCategory::Done => ("completed", "completed"),
+        StatusCategory::Cancelled => ("canceled", "canceled"),
     }
 }
 
-/// A `WorkflowState.type` a status category is written as when the mapping names no state for
-/// it — the closed set this source writes, which Linear's open vocabulary of read types
-/// (`triage`, `duplicate`, …) is wider than.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkflowType {
-    Backlog,
-    Unstarted,
-    Started,
-    Completed,
-    Canceled,
-}
-
-impl WorkflowType {
-    /// Every type this source writes, which is every type that reads as a category other than
-    /// `unknown`: a state of any other type — `triage`, `duplicate`, or one Linear adds — reads
-    /// as `unknown`. Held complete by the assertion beside [`Self::position`].
-    const ALL: [Self; 5] = [
-        Self::Backlog,
-        Self::Unstarted,
-        Self::Started,
-        Self::Completed,
-        Self::Canceled,
-    ];
-
-    /// Where this type sits in [`Self::ALL`] — an exhaustive match, so a type added here and
-    /// left out of that list fails to compile.
-    const fn position(self) -> usize {
-        match self {
-            Self::Backlog => 0,
-            Self::Unstarted => 1,
-            Self::Started => 2,
-            Self::Completed => 3,
-            Self::Canceled => 4,
-        }
-    }
-
-    /// The type a category reads back as and is written as, or `None` for one no type stands
-    /// for — `draft`, `queued` and `unknown`.
-    const fn of(category: StatusCategory) -> Option<Self> {
-        match category {
-            StatusCategory::Backlog => Some(Self::Backlog),
-            StatusCategory::Todo => Some(Self::Unstarted),
-            StatusCategory::InProgress => Some(Self::Started),
-            StatusCategory::Done => Some(Self::Completed),
-            StatusCategory::Cancelled => Some(Self::Canceled),
-            StatusCategory::Draft | StatusCategory::Queued | StatusCategory::Unknown => None,
-        }
-    }
-
-    /// The type as Linear spells it.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Backlog => "backlog",
-            Self::Unstarted => "unstarted",
-            Self::Started => "started",
-            Self::Completed => "completed",
-            Self::Canceled => "canceled",
-        }
+/// The type a name of `kind` that `sources fields --apply` creates for `category` is given.
+const fn created_type(category: StatusCategory, kind: ItemKind) -> &'static str {
+    let (state, status) = created_types(category);
+    match kind {
+        ItemKind::Task => state,
+        ItemKind::Project => status,
     }
 }
 
-const _: () = {
-    let mut index = 0;
-    while index < WorkflowType::ALL.len() {
-        assert!(WorkflowType::ALL[index].position() == index);
-        index += 1;
-    }
-};
+/// The colour every workflow state and project status `sources fields --apply` creates is
+/// given: Linear's own neutral grey, because both create inputs require one and nothing in a
+/// status mapping says which colour a name should be. A person recolours it in Linear.
+const CREATED_COLOR: &str = "#95a2b3";
 
-/// Where one category is written, as this instance's `status_mapping` resolves it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StateTarget<'a> {
-    /// The team's workflow state of exactly this name.
-    Named(&'a StateName),
-    /// The team's first workflow state of this type: a category the mapping does not mention,
-    /// as a source without the key writes it.
-    FirstOfType(WorkflowType),
-    /// No state, because the mapping sets the category to `null`.
-    DisabledByMapping,
-    /// No state, because the mapping leaves out a category no workflow state type stands for.
-    NoWorkflowType,
+/// One workflow state of the configured team, or one project status of the workspace.
+#[derive(Debug, Clone)]
+struct Held {
+    id: NativeId,
+    name: String,
+    /// Its `WorkflowState.type` or `ProjectStatusType`, verbatim: Linear adds types this
+    /// source must not refuse (`duplicate` among them).
+    // llmlint: ignore[invalid_states_unrepresentable] Linear's own open `String!` vocabulary, held verbatim for a report; an enum here would refuse a type Linear adds.
+    kind: String,
+    /// A project status's place in the workspace's project flow; zero for a workflow state,
+    /// which nothing here places.
+    position: f64,
 }
 
-/// This instance's `status_mapping`, read in both directions.
+/// What a status write resolves: the configured team's id, its workflow states and the
+/// workspace's project statuses.
 ///
-/// One entry per category the configuration names, at most once each and in the contract's
-/// category order, and no two of them naming one state — a state that read back as two
-/// categories would answer a status filter for either with the other's rows.
-#[derive(Debug, Clone, Default)]
-struct StatusMapping {
-    entries: Vec<(StatusCategory, Option<StateName>)>,
+/// Read in one request and held by one source instance for its own lifetime — never by the
+/// process, and never shared between sources — so every status write after the first sends
+/// its mutation alone. A name not found in it is looked for once more in a fresh read, so a
+/// name added in Linear after it was read is found; nothing a failed call answered is held.
+#[derive(Debug, Clone)]
+struct Vocabulary {
+    team: NativeId,
+    states: Vec<Held>,
+    statuses: Vec<Held>,
 }
 
-impl StatusMapping {
-    fn resolve(
-        configured: std::collections::HashMap<StatusCategory, Option<StateName>>,
-        instance: &SourceName,
-    ) -> Result<Self, SourceError> {
-        let mut configured: Vec<_> = configured.into_iter().collect();
-        configured.sort_by_key(|(category, _)| category_position(*category));
-        let mut entries: Vec<(StatusCategory, Option<StateName>)> = Vec::new();
-        for (category, name) in configured {
-            if let Some(name) = &name
-                && let Some((other, _)) = entries.iter().find(|(_, held)| {
-                    held.as_ref()
-                        .is_some_and(|held| held.0.eq_ignore_ascii_case(&name.0))
-                })
-            {
-                return Err(SourceError::Config {
+impl Vocabulary {
+    fn read(data: &Value, source: &SourceName, team: &str) -> Result<Self, SourceError> {
+        let teams = data
+            .pointer("/teams/nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing teams.nodes".into(),
+            })?;
+        let found = match teams.as_slice() {
+            [found] => found,
+            other => {
+                return Err(SourceError::Refused {
                     message: format!(
-                        "source {instance}: status_mapping sends both {} and {} to the workflow \
-                         state {:?}; one state cannot read back as two categories, so map one of \
-                         them to another state or to null",
-                        category_word(*other),
-                        category_word(category),
-                        name.0
+                        "source {source} cannot resolve the configured team {team:?}: found {} \
+                         matches; next: set team to the key of exactly one team this \
+                         credential can see",
+                        other.len()
                     ),
                 });
             }
-            entries.push((category, name));
-        }
-        Ok(Self { entries })
-    }
-
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    fn target(&self, category: StatusCategory) -> StateTarget<'_> {
-        match self.entries.iter().find(|(held, _)| *held == category) {
-            Some((_, Some(name))) => StateTarget::Named(name),
-            Some((_, None)) => StateTarget::DisabledByMapping,
-            None => WorkflowType::of(category)
-                .map_or(StateTarget::NoWorkflowType, StateTarget::FirstOfType),
-        }
-    }
-
-    /// The category a workflow state of this name reads as, when the mapping names it.
-    fn category_of(&self, state: &str) -> Option<StatusCategory> {
-        self.entries.iter().find_map(|(category, name)| {
-            name.as_ref()
-                .is_some_and(|name| name.0.eq_ignore_ascii_case(state))
-                .then_some(*category)
+        };
+        let held = |node: &Value, positioned: bool| -> Result<Held, SourceError> {
+            Ok(Held {
+                id: NativeId(backend_id(node, "id")?.into()),
+                name: str_at(node, "name")?.to_owned(),
+                kind: str_at(node, "type")?.to_owned(),
+                position: if positioned {
+                    node.get("position")
+                        .and_then(Value::as_f64)
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "missing number field position".into(),
+                        })?
+                } else {
+                    0.0
+                },
+            })
+        };
+        let nodes = |pointer: &str| {
+            data.pointer(pointer)
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!(
+                        "missing {}",
+                        pointer.trim_start_matches('/').replace('/', ".")
+                    ),
+                })
+        };
+        Ok(Self {
+            team: NativeId(backend_id(found, "id")?.into()),
+            states: nodes("/teams/nodes/0/states/nodes")?
+                .iter()
+                .map(|node| held(node, false))
+                .collect::<Result<_, _>>()?,
+            statuses: nodes("/projectStatuses/nodes")?
+                .iter()
+                .map(|node| held(node, true))
+                .collect::<Result<_, _>>()?,
         })
     }
 
-    /// Every workflow state name the mapping names, with its category.
-    fn named(&self) -> impl Iterator<Item = (StatusCategory, &StateName)> {
-        self.entries
+    fn of(&self, kind: ItemKind) -> &[Held] {
+        match kind {
+            ItemKind::Task => &self.states,
+            ItemKind::Project => &self.statuses,
+        }
+    }
+
+    /// The one name of `kind` matching `name` ignoring case, `None` when there is none, and a
+    /// refusal naming every id when there are several: a write must not guess between them.
+    fn find(
+        &self,
+        kind: ItemKind,
+        name: &str,
+        source: &SourceName,
+    ) -> Result<Option<&Held>, SourceError> {
+        let matched = self
+            .of(kind)
             .iter()
-            .filter_map(|(category, name)| name.as_ref().map(|name| (*category, name)))
+            .filter(|held| held.name.eq_ignore_ascii_case(name))
+            .collect::<Vec<_>>();
+        match matched.as_slice() {
+            [] => Ok(None),
+            [held] => Ok(Some(held)),
+            several => Err(SourceError::Refused {
+                message: format!(
+                    "source {source} cannot resolve {} {name:?}: found {} matches with ids {:?}",
+                    vocabulary_word(kind),
+                    several.len(),
+                    several
+                        .iter()
+                        .map(|held| held.id.0.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            }),
+        }
     }
 }
 
@@ -873,24 +792,30 @@ impl SourcePlugin for Plugin {
     }
 }
 
-/// What `onetaskgraph sources fields` reports for a `linear` source: each workflow state its
-/// `status_mapping` names, and whether the configured team has it.
+/// What `onetaskgraph sources fields` reports for a `linear` source: every name its
+/// `status_mapping` gives a task, checked against the configured team's workflow states, and
+/// every name it gives a project, checked against the workspace's project statuses.
 ///
-/// A plan and nothing else. Workflow states are settings of the team that the people who own
-/// it decide, so this source never creates, renames or retypes one; a state reported missing
-/// is added in Linear's own team settings.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
-pub struct WorkflowStatesReport {
+/// With `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on
+/// the team, a project status in the workspace — of the type its category derives
+/// ([`created_types`]), and the report names what it created. Nothing that exists is renamed,
+/// retyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and
+/// every name created before it is reported created.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct StatusNamesReport {
     /// The configured source name.
     pub source: SourceName,
     /// The configured team, as `team` names it.
     team: Team,
-    /// Every workflow state `status_mapping` names, in category order. Empty when the mapping
-    /// names none.
-    pub states: Vec<MappedWorkflowState>,
+    /// Every name `status_mapping` gives a task, then every name it gives a project, each in
+    /// category order. A bare name is reported once for each kind. Empty when it names none.
+    pub names: Vec<MappedStatusName>,
+    /// The create Linear refused, which stopped an `--apply`; absent when nothing was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<RefusedCreate>,
 }
 
-impl WorkflowStatesReport {
+impl StatusNamesReport {
     /// The configured team, as `team` names it.
     #[must_use]
     pub fn team(&self) -> &str {
@@ -898,110 +823,157 @@ impl WorkflowStatesReport {
     }
 }
 
-/// One workflow state `status_mapping` names, and whether the configured team has it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MappedWorkflowState {
-    category: StatusCategory,
-    state: StateName,
-    found: Found,
+/// A name `sources fields --apply` could not create, and why.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct RefusedCreate {
+    /// Whether it was a workflow state (`task`) or a project status (`project`).
+    pub kind: ItemKind,
+    /// The name it would have created.
+    pub name: StatusName,
+    /// What Linear said.
+    pub message: String,
 }
 
-/// Whether the configured team has a workflow state of the name the mapping gives.
+/// One name a `status_mapping` gives one kind, and whether that kind's vocabulary has it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MappedStatusName {
+    kind: ItemKind,
+    category: StatusCategory,
+    name: StatusName,
+    found: Found,
+    created: bool,
+}
+
+/// Whether a kind's vocabulary has a name of the one the mapping gives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
-    /// The team has it, of this `WorkflowState.type` — `backlog`, `unstarted`, `started`,
-    /// `completed`, `canceled`, `triage`, or another Linear names, reported verbatim because
-    /// Linear adds types (`duplicate` among them) this report must not refuse.
+    /// It has it, of this type — a `WorkflowState.type` (`backlog`, `unstarted`, `started`,
+    /// `completed`, `canceled`, `triage`, …) or a `ProjectStatusType` (`backlog`, `planned`,
+    /// `started`, `paused`, `completed`, `canceled`) — reported verbatim because Linear adds
+    /// types this report must not refuse.
     // llmlint: ignore[invalid_states_unrepresentable] Linear's own open `String!` vocabulary, reported verbatim; an enum here would refuse a type Linear adds, which a report must not.
     Present(String),
-    /// The team has no state of that name.
+    /// It has no name of that spelling.
     Missing,
 }
 
-impl MappedWorkflowState {
-    /// The category the mapping sends to the state.
+impl MappedStatusName {
+    /// Whether the name is a task's workflow state or a project's project status.
+    #[must_use]
+    pub fn kind(&self) -> ItemKind {
+        self.kind
+    }
+
+    /// The category the mapping sends to the name.
     #[must_use]
     pub fn category(&self) -> StatusCategory {
         self.category
     }
 
-    /// The state's name, as the mapping spells it.
+    /// The name, as the mapping spells it.
     #[must_use]
-    pub fn state(&self) -> &str {
-        &self.state.0
+    pub fn name(&self) -> &str {
+        self.name.as_str()
     }
 
-    /// Whether the team has it, and of which type.
+    /// Whether the vocabulary has it, and of which type.
     #[must_use]
     pub fn found(&self) -> &Found {
         &self.found
     }
+
+    /// Whether this run created it.
+    #[must_use]
+    pub fn created(&self) -> bool {
+        self.created
+    }
+
+    /// The type a name of this category is created as — what a present name of another type
+    /// differs from.
+    #[must_use]
+    pub fn expected_type(&self) -> &'static str {
+        created_type(self.category, self.kind)
+    }
 }
 
-/// [`MappedWorkflowState`] as it is written: `present`, and the state's `type` where it is.
+/// [`MappedStatusName`] as it is written: `present`, and the name's `type` where it is.
 ///
 /// The wire shape of the report, spelled once for its serialization and its schema, so the
 /// public type can hold only the combinations [`Found`] allows.
 #[derive(serde::Serialize, schemars::JsonSchema)]
-#[schemars(rename = "MappedWorkflowState")]
-struct MappedWorkflowStateWire<'a> {
-    /// The category the mapping sends to the state.
+#[schemars(rename = "MappedStatusName")]
+struct MappedStatusNameWire<'a> {
+    /// `task` for a workflow state of the team, `project` for a project status of the workspace.
+    kind: ItemKind,
+    /// The category the mapping sends to the name.
     category: StatusCategory,
-    /// The state's name, as the mapping spells it.
-    state: &'a StateName,
-    /// Whether the configured team has a workflow state of that name.
+    /// The name, as the mapping spells it.
+    name: &'a StatusName,
+    /// Whether that kind's vocabulary has a name of that spelling, ignoring case.
     present: bool,
-    /// The state's `WorkflowState.type` on the team — `backlog`, `unstarted`, `started`,
-    /// `completed`, `canceled`, `triage` or another Linear names — absent when it is missing.
+    /// The name's type in Linear — a `WorkflowState.type` for a task, a `ProjectStatusType`
+    /// for a project — absent when it is missing.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    state_type: Option<&'a str>,
+    found_type: Option<&'a str>,
+    /// The type `--apply` creates a missing name of this category and kind as; a present name
+    /// of another type is reported and left as it is.
+    expected_type: &'static str,
+    /// Whether this run created the name; absent when it did not.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    created: bool,
 }
 
-impl<'a> From<&'a MappedWorkflowState> for MappedWorkflowStateWire<'a> {
-    fn from(mapped: &'a MappedWorkflowState) -> Self {
-        let state_type = match &mapped.found {
+impl<'a> From<&'a MappedStatusName> for MappedStatusNameWire<'a> {
+    fn from(mapped: &'a MappedStatusName) -> Self {
+        let found_type = match &mapped.found {
             Found::Present(kind) => Some(kind.as_str()),
             Found::Missing => None,
         };
         Self {
+            kind: mapped.kind,
             category: mapped.category,
-            state: &mapped.state,
-            present: state_type.is_some(),
-            state_type,
+            name: &mapped.name,
+            present: found_type.is_some(),
+            found_type,
+            expected_type: mapped.expected_type(),
+            created: mapped.created,
         }
     }
 }
 
-impl serde::Serialize for MappedWorkflowState {
+impl serde::Serialize for MappedStatusName {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        MappedWorkflowStateWire::from(self).serialize(serializer)
+        MappedStatusNameWire::from(self).serialize(serializer)
     }
 }
 
-impl schemars::JsonSchema for MappedWorkflowState {
+impl schemars::JsonSchema for MappedStatusName {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        MappedWorkflowStateWire::schema_name()
+        MappedStatusNameWire::schema_name()
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> Schema {
-        MappedWorkflowStateWire::json_schema(generator)
+        MappedStatusNameWire::json_schema(generator)
     }
 }
 
-/// Report each workflow state one `linear` source's `status_mapping` names, as present on its
-/// team or missing from it, with its type. It writes nothing.
+/// Report every name one `linear` source's `status_mapping` gives each kind, as present in
+/// that kind's vocabulary with its type or missing from it — and, with `apply`, create every
+/// missing one first.
 ///
 /// # Errors
 ///
 /// [`SourceError::Config`] or [`SourceError::Auth`] for a source that cannot be built, a
-/// refusal for one with no `team`, and whatever else Linear could not answer.
-pub async fn workflow_states(
+/// refusal for one with no `team`, and whatever else Linear could not answer. A create Linear
+/// refuses is not an error here: it is [`StatusNamesReport::refused`], beside what was created.
+pub async fn status_names(
     name: &SourceName,
     config: LinearConfig,
     secrets: &dyn SecretResolver,
-) -> Result<WorkflowStatesReport, SourceError> {
+    apply: bool,
+) -> Result<StatusNamesReport, SourceError> {
     LinearSource::new(name, config, secrets)?
-        .workflow_states()
+        .status_names(apply)
         .await
 }
 
@@ -1014,10 +986,12 @@ struct LinearSource {
     /// `<this name>:<native>` is a Linear item Linear itself relates, so the reserved key
     /// is refused for it exactly as a bare id of the same kind is.
     name: SourceName,
-    /// Where each status category is written and how each workflow state reads.
+    /// Which name each status category is, for a task and for a project.
     statuses: StatusMapping,
     /// The one Linear project this source is scoped to, when it is.
     project: Option<ProjectScope>,
+    /// What a status write resolves, once it has been read; see [`Vocabulary`].
+    vocabulary: std::sync::Mutex<Option<std::sync::Arc<Vocabulary>>>,
 }
 
 impl LinearSource {
@@ -1026,7 +1000,16 @@ impl LinearSource {
         config: LinearConfig,
         secrets: &dyn SecretResolver,
     ) -> Result<Self, SourceError> {
-        let statuses = StatusMapping::resolve(config.status_mapping, name)?;
+        for kind in [ItemKind::Task, ItemKind::Project] {
+            StatusMapping::distinct(
+                name,
+                kind,
+                config
+                    .status_mapping
+                    .names(kind)
+                    .map(|(category, mapped)| (category, mapped.as_str())),
+            )?;
+        }
         let key = secrets
             .get(&config.api_key_env.0)
             .filter(|v| !v.expose_secret().trim().is_empty())
@@ -1039,8 +1022,9 @@ impl LinearSource {
             key,
             team: config.team,
             name: name.clone(),
-            statuses,
+            statuses: config.status_mapping,
             project: config.project,
+            vocabulary: std::sync::Mutex::new(None),
         })
     }
 }
@@ -1050,54 +1034,30 @@ enum WriteKind {
     Project,
 }
 enum Lookup<'a> {
-    Team(&'a str),
-    IssueState { name: &'a str, team: &'a NativeId },
-    ProjectStatus(&'a str),
     IssueLabel(&'a str),
     ProjectLabel(&'a str),
 }
 impl Lookup<'_> {
     fn query(&self) -> &'static str {
         match self {
-            Self::Team(_) => graphql::TEAM,
-            Self::IssueState { .. } => graphql::ISSUE_STATE,
-            Self::ProjectStatus(_) => graphql::PROJECT_STATUS,
             Self::IssueLabel(_) => graphql::ISSUE_LABEL,
             Self::ProjectLabel(_) => graphql::PROJECT_LABEL,
         }
     }
     fn connection(&self) -> &'static str {
         match self {
-            Self::Team(_) => "teams",
-            Self::IssueState { .. } => "workflowStates",
-            Self::ProjectStatus(_) => "projectStatuses",
             Self::IssueLabel(_) => "issueLabels",
             Self::ProjectLabel(_) => "projectLabels",
         }
     }
     fn diagnostic(&self) -> String {
         match self {
-            Self::Team(_) => "configured team".into(),
-            Self::IssueState { name, .. } => format!("workflow state {name:?}"),
-            Self::ProjectStatus(name) => format!("project status {name:?}"),
             Self::IssueLabel(name) | Self::ProjectLabel(name) => format!("label {name:?}"),
         }
     }
     fn variables(&self) -> Value {
         match self {
-            Self::Team(key) => json!({"key":key}),
-            Self::IssueState { name, team } => json!({"name":name,"team":team.0}),
             Self::IssueLabel(name) | Self::ProjectLabel(name) => json!({"name":name}),
-            // `PROJECT_STATUS` names nothing, for the reason recorded on that document.
-            Self::ProjectStatus(_) => json!({}),
-        }
-    }
-    /// The display name `one_id` matches locally, for the one lookup whose connection
-    /// Linear will not narrow server-side.
-    fn local_name(&self) -> Option<&str> {
-        match self {
-            Self::ProjectStatus(name) => Some(name),
-            _ => None,
         }
     }
 }
@@ -1119,6 +1079,8 @@ enum MutationRoot {
     CommentCreate,
     CommentUpdate,
     CommentDelete,
+    WorkflowStateCreate,
+    ProjectStatusCreate,
 }
 impl MutationRoot {
     fn as_str(self) -> &'static str {
@@ -1139,6 +1101,8 @@ impl MutationRoot {
             Self::CommentCreate => "commentCreate",
             Self::CommentUpdate => "commentUpdate",
             Self::CommentDelete => "commentDelete",
+            Self::WorkflowStateCreate => "workflowStateCreate",
+            Self::ProjectStatusCreate => "projectStatusCreate",
         }
     }
 }
@@ -1213,6 +1177,38 @@ enum GqlErrorCode {
     Other,
 }
 
+/// One GraphQL error Linear answered a request with, before it is made a [`SourceError`].
+struct Refusal(GqlError);
+
+impl Refusal {
+    /// Whether Linear refused because the id the request addressed names nothing.
+    ///
+    /// Linear answers a mutation addressing an id it does not hold with an errored response —
+    /// `Entity not found: Issue`, whose `userPresentableMessage` reads `Could not find
+    /// referenced Issue.` — rather than a null payload. Both spellings are recognised, so a
+    /// rewording of either one alone still reads as what it is; anything else is a refusal.
+    fn entity_missing(&self) -> bool {
+        let lowered = self.0.message.to_ascii_lowercase();
+        lowered.starts_with("entity not found")
+            || self
+                .0
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.get("userPresentableMessage"))
+                .and_then(Value::as_str)
+                .is_some_and(|said| {
+                    said.to_ascii_lowercase()
+                        .starts_with("could not find referenced")
+                })
+    }
+
+    fn into_error(self) -> SourceError {
+        SourceError::Refused {
+            message: self.0.said(),
+        }
+    }
+}
+
 /// How much of a failed response's body a refusal carries.
 ///
 /// Enough for Linear's own error envelope, which is one or two sentences naming the field
@@ -1251,8 +1247,36 @@ fn elided(said: &str) -> String {
 }
 
 impl LinearSource {
-    // llmlint: ignore[invalid_states_unrepresentable] This private generic transport accepts only variables constructed immediately at typed TaskSource call sites, never untrusted input; per-operation response mappers validate every external field before returning public values.
     async fn send(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        self.answer(query, variables)
+            .await?
+            .map_err(|refusal| refusal.into_error())
+    }
+
+    /// Send a mutation addressing one item by id, answering `None` when Linear refuses it
+    /// because there is no such item.
+    ///
+    /// What lets a status write answer "no such task" without reading the issue first: Linear
+    /// reports an id naming nothing as an errored response rather than a null payload, and
+    /// [`Refusal::entity_missing`] is how that refusal is told apart from every other.
+    async fn send_to_held(
+        &self,
+        query: &str,
+        variables: Value,
+    ) -> Result<Option<Value>, SourceError> {
+        match self.answer(query, variables).await? {
+            Ok(data) => Ok(Some(data)),
+            Err(refusal) if refusal.entity_missing() => Ok(None),
+            Err(refusal) => Err(refusal.into_error()),
+        }
+    }
+
+    // llmlint: ignore[invalid_states_unrepresentable] This private generic transport accepts only variables constructed immediately at typed TaskSource call sites, never untrusted input; per-operation response mappers validate every external field before returning public values.
+    async fn answer(
+        &self,
+        query: &str,
+        variables: Value,
+    ) -> Result<Result<Value, Refusal>, SourceError> {
         let response = self
             .client
             .post(&self.endpoint.0)
@@ -1288,7 +1312,18 @@ impl LinearSource {
             // alone names the whole call and nothing about what Linear objected to. The
             // body is Linear's answer to this request and holds no credential; it is cut
             // because a proxy in front of Linear can answer with a page.
-            let said = elided(&response.text().await.unwrap_or_default());
+            let text = response.text().await.unwrap_or_default();
+            // An id naming nothing is the one refusal a caller acts on rather than reports,
+            // so it reads the same whichever status Linear sends it under.
+            if let Some(missing) = serde_json::from_str::<Envelope>(&text)
+                .ok()
+                .and_then(|body| body.errors.into_iter().next())
+                .map(Refusal)
+                .filter(Refusal::entity_missing)
+            {
+                return Ok(Err(missing));
+            }
+            let said = elided(&text);
             return Err(SourceError::Unavailable {
                 message: if said.is_empty() {
                     format!("Linear returned HTTP {status}")
@@ -1300,7 +1335,7 @@ impl LinearSource {
         let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
             message: e.to_string(),
         })?;
-        if let Some(error) = body.errors.first() {
+        if let Some(error) = body.errors.into_iter().next() {
             if let Some(extensions) = error
                 .coded()
                 .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
@@ -1310,11 +1345,9 @@ impl LinearSource {
                     message: None,
                 });
             }
-            return Err(SourceError::Refused {
-                message: error.said(),
-            });
+            return Ok(Err(Refusal(error)));
         }
-        body.data.ok_or_else(|| SourceError::Malformed {
+        body.data.map(Ok).ok_or_else(|| SourceError::Malformed {
             message: "GraphQL response has no data".into(),
         })
     }
@@ -1389,7 +1422,7 @@ impl LinearSource {
         let mut parts = self.issue_scope();
         parts.extend(Self::label_parts(&query.labels));
         if !query.statuses.is_empty() {
-            parts.push(self.status_narrowing(&query.statuses));
+            parts.extend(self.status_narrowing(ItemKind::Task, &query.statuses));
         }
         match &query.project {
             ProjectFilter::Orphans => parts.push(json!({"project": {"null": true}})),
@@ -1445,67 +1478,56 @@ impl LinearSource {
         parts
     }
 
-    /// The issue-side status narrowing for `statuses`, through this instance's mapping.
+    /// The status narrowing for `statuses` over one kind's items, through this instance's
+    /// mapping — `state` on an issue, `status` on a project, each compared by name.
     ///
-    /// **Without a mapping it is exactly what it always was** — one `state:{type:{in:[…]}}`
-    /// over the categories' workflow-state types. With one, each category asks for exactly
-    /// what reads as it: the issues at its named state, by name, when it is mapped; and the
-    /// issues of its type *at no state the mapping names*, because those read as the category
-    /// they are mapped to — a `todo` filter returning an issue at `Queued` would be a row that
-    /// reads back as another category. A category set to `null` is never written, and still
-    /// asks for the issues of its type, which read as it.
-    fn status_narrowing(&self, statuses: &[StatusCategory]) -> Value {
-        if self.statuses.is_empty() {
-            return json!({"state": {"type": {"in": statuses
-                .iter()
-                .flat_map(workflow_state_types)
-                .collect::<Vec<_>>()}}});
-        }
+    /// Each category asks for exactly what reads as it: the items at the name its kind maps it
+    /// to, and — for `unknown` — every item at a name that kind's mapping does not name at
+    /// all. A category the kind has no name for asks for nothing, because nothing reads as it.
+    /// `None` is the one narrowing that is everything: `unknown` over a kind whose mapping
+    /// names nothing, where every item reads as `unknown`.
+    ///
+    /// Compared ignoring case, as a read matches a name: `eqIgnoreCase` for a mapped name and
+    /// `neqIgnoreCase` for every name an `unknown` excludes, because `in` and `nin` are the
+    /// case-sensitive list operators and a state spelled `TODO` reads as a mapping's `Todo`.
+    fn status_narrowing(&self, kind: ItemKind, statuses: &[StatusCategory]) -> Option<Value> {
+        let member = match kind {
+            ItemKind::Task => "state",
+            ItemKind::Project => "status",
+        };
+        let named = |name: &str, operator: &str| json!({ (member): {"name": {(operator): name}}});
         let mut alternatives = Vec::new();
         for category in statuses {
-            let target = self.statuses.target(*category);
-            if let StateTarget::Named(name) = target {
-                alternatives.push(json!({"state": {"name": {"eqIgnoreCase": name.0}}}));
+            if let Ok(name) = self.statuses.name_for(*category, kind) {
+                alternatives.push(named(name.as_str(), "eqIgnoreCase"));
             }
-            // Every issue that reads as this category by its type — at a state of the type and
-            // of no name the mapping claims — whether the category is mapped, left out or set
-            // to `null`: with `backlog` mapped to `Proposed` an issue at `Backlog` still reads
-            // as `backlog`, and with `cancelled` set to `null` an issue at `Canceled` still
-            // reads as `cancelled`, which a write can no longer move it to but a read reports.
-            let types = workflow_state_types(category);
-            // `unknown` has no type of its own: a state reads as it when its type is none of
-            // the five a category stands for — `Triage`'s `triage`, a `duplicate` state.
-            let by_type = if *category == StatusCategory::Unknown {
-                Some(
-                    json!({"state": {"type": {"nin": WorkflowType::ALL.map(WorkflowType::as_str)}}}),
-                )
-            } else {
-                (!types.is_empty()).then(|| json!({"state": {"type": {"in": types}}}))
-            };
-            if let Some(by_type) = by_type {
-                let mut parts = vec![by_type];
-                parts.extend(
-                    self.statuses
-                        .named()
-                        .map(|(_, name)| json!({"state": {"name": {"neqIgnoreCase": name.0}}})),
-                );
-                alternatives.push(Self::narrowed(parts));
+            if *category == StatusCategory::Unknown {
+                let unmapped: Vec<Value> = self
+                    .statuses
+                    .names(kind)
+                    .map(|(_, name)| named(name.as_str(), "neqIgnoreCase"))
+                    .collect();
+                if unmapped.is_empty() {
+                    return None;
+                }
+                alternatives.push(Self::narrowed(unmapped));
             }
         }
-        match alternatives.len() {
-            // Every category asked for is disabled: a type no state has, which matches nothing
-            // and is refused by nothing — what a disabled category always narrowed to.
-            0 => json!({"state": {"type": {"in": Vec::<&str>::new()}}}),
+        Some(match alternatives.len() {
+            // Nothing asked for has a name of this kind: a name no item is at, which matches
+            // nothing and is refused by nothing.
+            0 => json!({ (member): {"name": {"in": Vec::<&str>::new()}}}),
             1 => alternatives.pop().expect("one alternative"),
             _ => json!({ "or": alternatives }),
-        }
+        })
     }
 
     /// Whether one task this source read satisfies every predicate of `query` that a
     /// narrowing above only approximates — the metadata matches, the origin, the text and the
     /// priorities — by the contract's own statement of each.
     fn confirms(query: &TaskQuery, task: &Task) -> bool {
-        query.metadata_matches(&task.metadata)
+        (query.statuses.is_empty() || query.statuses.contains(&task.status.category))
+            && query.metadata_matches(&task.metadata)
             && query.origin_matches(&task.metadata)
             && (query.priorities.is_empty() || query.priorities.contains(&task.priority))
             && query
@@ -1525,18 +1547,13 @@ impl LinearSource {
     /// different set — one designated team rather than every team the project is in — so
     /// narrowing by it would drop projects the configured team really does hold.
     ///
-    /// **A project's status is not an issue's state, and they do not even share a
-    /// vocabulary.** An issue's is `WorkflowState`, reached through `IssueFilter.state`,
-    /// and its `type` is `backlog`, `unstarted`, `started`, `completed`, `canceled` or
-    /// `triage`. A project's is `ProjectStatus`, reached through `ProjectFilter.status` —
-    /// `ProjectFilter.state` exists and is *not* it: that member is a bare
-    /// `StringComparator` over a different thing — and its `type` is the `ProjectStatusType`
-    /// enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`. So the
-    /// nearest thing to an issue's `unstarted` is a project's `planned`, and `paused` has no
-    /// issue counterpart at all. [`project_status_types`] is that vocabulary and
-    /// [`workflow_state_types`] is the other; sending either one's words to the other's
-    /// connection matches nothing while refusing nothing, which is the worst way to be
-    /// wrong.
+    /// **A project's status is not an issue's state.** An issue's is a `WorkflowState` of the
+    /// team, reached through `IssueFilter.state`; a project's is a `ProjectStatus` of the
+    /// workspace, reached through `ProjectFilter.status` — `ProjectFilter.state` exists and is
+    /// *not* it: that member is a bare `StringComparator` over a different thing. The two are
+    /// different vocabularies of names, which is why `status_mapping` names each kind's
+    /// separately, and why each is narrowed by its own kind's names
+    /// ([`Self::status_narrowing`]).
     fn project_filter(
         &self,
         labels: &onetaskgraph_plugin_api::LabelFilter,
@@ -1545,7 +1562,7 @@ impl LinearSource {
         let mut parts = self.project_scope();
         parts.extend(Self::label_parts(labels));
         if !statuses.is_empty() {
-            parts.push(json!({"status": {"type": {"in": statuses.iter().flat_map(project_status_types).collect::<Vec<_>>()}}}));
+            parts.extend(self.status_narrowing(ItemKind::Project, statuses));
         }
         Self::narrowed(parts)
     }
@@ -1602,22 +1619,7 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {connection}.nodes"),
             })?;
-        // A node this comparison cannot read is malformed rather than a nonmatch: dropping
-        // it would turn Linear having answered nonsense into this source reporting no such
-        // status, which is a different thing and reads as the caller's mistake.
-        let matched = match lookup.local_name() {
-            Some(name) => {
-                let mut matched = Vec::new();
-                for node in nodes {
-                    if str_at(node, "name")?.eq_ignore_ascii_case(name) {
-                        matched.push(node);
-                    }
-                }
-                matched
-            }
-            None => nodes.iter().collect::<Vec<_>>(),
-        };
-        match matched.as_slice() {
+        match nodes.as_slice() {
             [] => Err(SourceError::Refused {
                 message: format!(
                     "source {} cannot resolve {}: found 0 matches",
@@ -1642,15 +1644,118 @@ impl LinearSource {
             }
         }
     }
-    async fn team_id(&self) -> Result<NativeId, SourceError> {
+
+    /// What a status write resolves, as this instance holds it — read in one request the first
+    /// time anything needs it, or again when `fresh` asks — and whether this call read it.
+    ///
+    /// Only an answer that read completely is held, so a failed or malformed read leaves the
+    /// next call reading again rather than resolving against nothing.
+    async fn vocabulary(
+        &self,
+        fresh: bool,
+    ) -> Result<(std::sync::Arc<Vocabulary>, bool), SourceError> {
+        if !fresh && let Some(held) = self.held_vocabulary() {
+            return Ok((held, false));
+        }
         let team = self.team.as_ref().ok_or_else(|| SourceError::Refused {
             message: format!(
-                "source {} needs config.team before it can create Linear items",
+                "source {} needs config.team before it can write a Linear item or a status",
                 self.name
             ),
         })?;
-        self.one_id(Lookup::Team(&team.0)).await
+        let data = self
+            .send(graphql::RESOLUTION, json!({"key": team.0}))
+            .await?;
+        let read = std::sync::Arc::new(Vocabulary::read(&data, &self.name, &team.0)?);
+        *self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read.clone());
+        Ok((read, true))
     }
+
+    fn held_vocabulary(&self) -> Option<std::sync::Arc<Vocabulary>> {
+        self.vocabulary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Drop what this instance holds, after a write carrying one of its ids failed: the id may
+    /// be what Linear refused, and the next write reads afresh rather than sending it again.
+    fn forget_vocabulary(&self) {
+        *self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    /// Hold one name `sources fields --apply` created beside the ones read, so the writes after
+    /// it resolve it without another read.
+    fn remember(&self, kind: ItemKind, held: Held) {
+        let mut guard = self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(vocabulary) = guard.as_mut() {
+            let vocabulary = std::sync::Arc::make_mut(vocabulary);
+            match kind {
+                ItemKind::Task => vocabulary.states.push(held),
+                ItemKind::Project => vocabulary.statuses.push(held),
+            }
+        }
+    }
+
+    async fn team_id(&self) -> Result<NativeId, SourceError> {
+        Ok(self.vocabulary(false).await?.0.team.clone())
+    }
+
+    /// The id and the name Linear holds of the name `category` is for `kind` — refused before
+    /// any request when the mapping gives that kind no name for it, and refused naming the name
+    /// when the kind's vocabulary lacks it even after one fresh read.
+    async fn status_id(
+        &self,
+        category: StatusCategory,
+        kind: ItemKind,
+    ) -> Result<(NativeId, String), SourceError> {
+        let name = self
+            .statuses
+            .name_for(category, kind)
+            .map_err(|why| why.refusal(&self.name, category, kind))?;
+        let (vocabulary, fresh) = self.vocabulary(false).await?;
+        if let Some(held) = vocabulary.find(kind, name.as_str(), &self.name)? {
+            return Ok((held.id.clone(), held.name.clone()));
+        }
+        if !fresh {
+            let (vocabulary, _) = self.vocabulary(true).await?;
+            if let Some(held) = vocabulary.find(kind, name.as_str(), &self.name)? {
+                return Ok((held.id.clone(), held.name.clone()));
+            }
+        }
+        let category_key = category_word(category);
+        let kind_key = kind_word(kind);
+        let held_by = match kind {
+            ItemKind::Task => format!(
+                "team {}",
+                self.team.as_ref().map_or("(none)", |team| team.0.as_str())
+            ),
+            ItemKind::Project => "this workspace".to_owned(),
+        };
+        Err(SourceError::Refused {
+            message: format!(
+                "source {} maps the {kind_key} status {category_key} to the {} {:?}, which {held_by} \
+                 does not have; next: run `onetaskgraph sources fields {} --apply` to create it, \
+                 or point status_mapping.{category_key}.{kind_key} of this source at a {} \
+                 {held_by} has",
+                self.name,
+                vocabulary_word(kind),
+                name.as_str(),
+                self.name,
+                vocabulary_word(kind),
+            ),
+        })
+    }
+
     async fn label_ids(
         &self,
         labels: &[Label],
@@ -1734,17 +1839,23 @@ impl LinearSource {
 
     /// Apply one targeted update to one issue; see [`TaskSource::update_task`].
     ///
-    /// One read of the issue, then one `issueUpdate` carrying only the members that differ
-    /// from it — `title`, `description` (content and metadata slot together), `stateId`,
-    /// `priority` — and, when the named edges differ from the ones the issue holds, its
-    /// relations replaced. Nothing is sent for a field already holding the requested value,
-    /// and nothing at all when nothing differs. A status is written by its category, exactly
-    /// as `set_task_status` writes one: an issue already in that category keeps the state it
-    /// is in, and one that is not moves to the state `status_mapping` names for it, or to the
-    /// team's first state of that type where the mapping names none. `delivers` lands in the
-    /// metadata slot under its reserved key, as a copy writes it.
+    /// **An update naming a status and nothing else reads nothing first:** it is one
+    /// `issueUpdate` carrying the `stateId` its category's task name resolves to, whose own
+    /// selection answers the task — see [`Self::status_written`]. Writing a category the issue
+    /// already reads as therefore sends the same state again, and an issue at a name the
+    /// mapping does not name, which reads as `unknown`, moves to the mapped `unknown` name.
     ///
-    /// The task answered is read back after the write, so its status is Linear's.
+    /// **Any other update reads the issue once**, then sends one `issueUpdate` carrying only
+    /// the members that differ from it — `title`, `description` (content and metadata slot
+    /// together), `stateId`, `priority` — and, when the named edges differ from the ones the
+    /// issue holds, its relations replaced. The read is what the description is merged from:
+    /// Linear has no conditional update, so writing the metadata slot without it would
+    /// overwrite whatever a person wrote there since. Nothing is sent for a field already
+    /// holding the requested value, and nothing at all when nothing differs. `delivers` lands
+    /// in the metadata slot under its reserved key, as a copy writes it.
+    ///
+    /// Either way the task answered is the one the mutation's own selection reports, so its
+    /// status is Linear's, and nothing is read after the write.
     async fn targeted_update(
         &self,
         id: &NativeId,
@@ -1760,8 +1871,28 @@ impl LinearSource {
             )
             .map_err(|message| SourceError::Refused { message })?;
         }
+        // Before any request: a category the mapping gives a task no name for is not one
+        // Linear could answer differently for another issue.
         if let Some(status) = &update.status {
-            self.writable(status.category)?;
+            self.statuses
+                .name_for(status.category, ItemKind::Task)
+                .map_err(|why| why.refusal(&self.name, status.category, ItemKind::Task))?;
+        }
+        if let Some(status) = update.status.as_ref().filter(|_| {
+            TaskUpdate {
+                status: None,
+                ..update.clone()
+            }
+            .is_empty()
+        }) {
+            let Some(task) = self.status_written(id, status.category).await? else {
+                return Ok(None);
+            };
+            return Ok(Some(TaskUpdateOutcome {
+                delivers_before: task.delivers.clone(),
+                written: std::iter::once(UpdatedField::Status).collect(),
+                task,
+            }));
         }
         let Some((before, description)) = self.issue_held(id).await? else {
             return Ok(None);
@@ -1835,7 +1966,7 @@ impl LinearSource {
             .as_ref()
             .filter(|status| status.category != before.status.category)
         {
-            let (state, _) = self.resolve_state(status.category, &before.id).await?;
+            let (state, _) = self.status_id(status.category, ItemKind::Task).await?;
             input.insert("stateId".into(), json!(state.0));
         }
         if let Some(priority) = update
@@ -1844,35 +1975,36 @@ impl LinearSource {
         {
             input.insert("priority".into(), json!(linear_priority(priority)));
         }
-        let sent = !input.is_empty();
-        if sent {
-            let data = self
+        let carries_state = input.contains_key("stateId");
+        let task = if input.is_empty() {
+            before.clone()
+        } else {
+            let answered = self
                 .send(
-                    graphql::ISSUE_UPDATE,
+                    graphql::ISSUE_UPDATE_READ,
                     json!({"id":before.id.0,"input":Value::Object(input)}),
                 )
-                .await?;
-            let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
-                .get("issue")
-                .filter(|issue| !issue.is_null())
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "missing issueUpdate.issue".into(),
-                })?;
-            written_is(issue, &before.id)?;
-        }
-        if let Some(prepared) = &relations {
-            self.write_relations(&before.id, prepared, WriteKind::Task)
-                .await?;
-        }
-        let task = if sent || relations.is_some() {
-            self.get_task(&before.id)
-                .await?
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!("task {id} was updated and then could not be read back"),
-                })?
-        } else {
-            before.clone()
+                .await
+                .and_then(|data| self.updated_issue(&data, &before.id));
+            match answered {
+                Ok(Some(task)) => task,
+                Ok(None) => {
+                    return Err(SourceError::Malformed {
+                        message: format!("task {id} was updated and then answered as no issue"),
+                    });
+                }
+                Err(error) => {
+                    if carries_state {
+                        self.forget_vocabulary();
+                    }
+                    return Err(error);
+                }
+            }
         };
+        if let Some(prepared) = &relations {
+            self.write_relations(&before.id, prepared, WriteKind::Task, false)
+                .await?;
+        }
         let mut written = update.changed(&before, &task);
         if relations.is_some() {
             written.insert(UpdatedField::DependsOn);
@@ -1882,6 +2014,67 @@ impl LinearSource {
             written,
             delivers_before: before.delivers,
         }))
+    }
+
+    /// Set one issue's state to the one `category`'s task name resolves to, in one
+    /// `issueUpdate` whose selection answers the task as Linear now holds it — or `None` when
+    /// Linear holds no such issue, which it says by refusing the mutation as naming nothing.
+    ///
+    /// No read before it, so this is the whole of a status write's cost once the resolution is
+    /// held: one request. The one exception is a source scoped to one project, which reads the
+    /// issue first — a write must not reach an issue filed elsewhere, and Linear has no update
+    /// conditional on where an issue is filed.
+    async fn status_written(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Task>, SourceError> {
+        let (state, _) = self.status_id(category, ItemKind::Task).await?;
+        let target = if self.project.is_some() {
+            match self.issue_held(id).await? {
+                Some((task, _)) => task.id,
+                None => return Ok(None),
+            }
+        } else {
+            id.clone()
+        };
+        // `stateId` alone, so nothing else about the issue can move: Linear's
+        // `IssueUpdateInput` makes every member optional and leaves an absent one as it was.
+        let answered = self
+            .send_to_held(
+                graphql::ISSUE_UPDATE_READ,
+                json!({"id":target.0,"input":{"stateId":state.0}}),
+            )
+            .await;
+        match answered {
+            Ok(Some(data)) => self.updated_issue(&data, &target),
+            Ok(None) => Ok(None),
+            Err(error) => {
+                self.forget_vocabulary();
+                Err(error)
+            }
+        }
+    }
+
+    /// The task an `issueUpdate` sent as [`graphql::ISSUE_UPDATE_READ`] answered with — `None`
+    /// for an issue in the trash or outside this source's scope, on the terms a read by id
+    /// answers — refusing an answer about another issue than the one asked for.
+    ///
+    /// `asked` may be the backend id or the identifier (`ENG-1`), because Linear takes either.
+    fn updated_issue(&self, data: &Value, asked: &NativeId) -> Result<Option<Task>, SourceError> {
+        let issue = mutation_payload(data, MutationRoot::IssueUpdate)?
+            .get("issue")
+            .filter(|issue| !issue.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing issueUpdate.issue".into(),
+            })?;
+        if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
+            written_is(issue, asked)?;
+        }
+        Ok(optional(&json!({ "issue": issue }), "issue", |v| {
+            map_task(v, &self.name, &self.statuses)
+        })?
+        .filter(|task| self.in_scope(task.project.as_ref())))
     }
 
     /// The one long-form field a Linear item has, with this source's own slot at the end.
@@ -1954,14 +2147,21 @@ impl LinearSource {
             .iter()
             .find(|edge| edge.to.kind == ItemKind::Project && edge.kind == DependencyKind::Related)
     }
+    /// Replace every relation `near` holds of `kind` with exactly `edges`: the ones it holds
+    /// are deleted, then each edge is created. `created` says `near` was created by the write
+    /// this follows, so it holds none and the read of what it holds is not sent.
     async fn write_relations(
         &self,
         near: &NativeId,
         edges: &[DependencyEdge],
         kind: WriteKind,
+        created: bool,
     ) -> Result<(), SourceError> {
         let mut cursor: Option<Cursor> = None;
         loop {
+            if created {
+                break;
+            }
             let data = self
                 .send(
                     if matches!(kind, WriteKind::Project) {
@@ -2160,7 +2360,8 @@ impl LinearSource {
                 loop {
                     let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":filter})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
-                        let page = connection(&data, "projects", map_project)?;
+                        let page =
+                            connection(&data, "projects", |v| map_project(v, &self.statuses))?;
                         (
                             page.items
                                 .into_iter()
@@ -2267,7 +2468,7 @@ impl TaskSource for LinearSource {
     ) -> Result<Page<Project>, SourceError> {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
         let d=self.send(PROJECTS,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
-        let page = connection(&d, "projects", map_project)?;
+        let page = connection(&d, "projects", |v| map_project(v, &self.statuses))?;
         // A project's text is applied here, over the page Linear answered: `search_title` and
         // `search_content` are declared for every level, and `ProjectFilter` is not asked for
         // a description match — so the rule decides, over every row of the page.
@@ -2276,9 +2477,10 @@ impl TaskSource for LinearSource {
                 .items
                 .into_iter()
                 .filter(|project| {
-                    query.text.as_ref().is_none_or(|text| {
-                        text_holds(&project.title, project.content.as_deref(), text)
-                    })
+                    (query.statuses.is_empty() || query.statuses.contains(&project.status.category))
+                        && query.text.as_ref().is_none_or(|text| {
+                            text_holds(&project.title, project.content.as_deref(), text)
+                        })
                 })
                 .collect(),
             next: page.next,
@@ -2330,33 +2532,17 @@ impl TaskSource for LinearSource {
             TaskRef::listed(key, near, Some(&self.name), entries.clone())
                 .map_err(|message| SourceError::Refused { message })?;
         }
-        if self.statuses.target(write.item.status.category) == StateTarget::DisabledByMapping {
-            return Err(self.disabled(write.item.status.category, true));
-        }
         let project = self.filed_in(write.item.project.as_ref(), "task")?;
+        // The status is resolved before anything else is sent: a category the mapping gives a
+        // task no name for is refused before any request, and a name the team lacks before any
+        // mutation. The mapping decides alone; the status's own name plays no part.
+        let (state, _) = self
+            .status_id(write.item.status.category, ItemKind::Task)
+            .await?;
         let edges = self
             .prepare_edges(&write.depends_on, WriteKind::Task)
             .await?;
         let team = self.team_id().await?;
-        // A mapped category is written as the state the mapping names, whatever the status
-        // was called where it came from; one the mapping leaves out keeps the lookup a source
-        // without the key has always made, by the status's own name.
-        let state = match self.statuses.target(write.item.status.category) {
-            StateTarget::Named(name) => {
-                self.named_state(&name.0, write.item.status.category)
-                    .await?
-                    .0
-            }
-            StateTarget::FirstOfType(_)
-            | StateTarget::DisabledByMapping
-            | StateTarget::NoWorkflowType => {
-                self.one_id(Lookup::IssueState {
-                    name: &write.item.status.name,
-                    team: &team,
-                })
-                .await?
-            }
-        };
         let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
         // The typed lists are what land, whatever the caller's own metadata held under their
         // keys: a key of either name travelling beside the field would be a second answer to
@@ -2395,7 +2581,9 @@ impl TaskSource for LinearSource {
                 MutationRoot::IssueCreate,
             ),
         };
-        let data = self.send(query, variables).await?;
+        let data = self.send(query, variables).await.inspect_err(|_| {
+            self.forget_vocabulary();
+        })?;
         let issue =
             mutation_payload(&data, root)?
                 .get("issue")
@@ -2403,7 +2591,8 @@ impl TaskSource for LinearSource {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
         let id = NativeId(backend_id(issue, "id")?.into());
-        self.write_relations(&id, &edges, WriteKind::Task).await?;
+        self.write_relations(&id, &edges, WriteKind::Task, write.target.is_none())
+            .await?;
         Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
@@ -2439,13 +2628,16 @@ impl TaskSource for LinearSource {
                 ),
             });
         }
+        // Through the project side of the mapping, before anything else is sent: the item's
+        // own status name plays no part, because a project's statuses are a vocabulary of
+        // their own that the name a status was read under elsewhere says nothing about.
+        let (status, _) = self
+            .status_id(write.item.status.category, ItemKind::Project)
+            .await?;
         let edges = self
             .prepare_edges(&write.depends_on, WriteKind::Project)
             .await?;
         let team = self.team_id().await?;
-        let status = self
-            .one_id(Lookup::ProjectStatus(&write.item.status.name))
-            .await?;
         let labels = self
             .label_ids(&write.item.labels, WriteKind::Project)
             .await?;
@@ -2473,14 +2665,16 @@ impl TaskSource for LinearSource {
                 MutationRoot::ProjectCreate,
             ),
         };
-        let data = self.send(query, variables).await?;
+        let data = self.send(query, variables).await.inspect_err(|_| {
+            self.forget_vocabulary();
+        })?;
         let project = mutation_payload(&data, root)?
             .get("project")
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.project", root.as_str()),
             })?;
         let id = NativeId(backend_id(project, "id")?.into());
-        self.write_relations(&id, &edges, WriteKind::Project)
+        self.write_relations(&id, &edges, WriteKind::Project, write.target.is_none())
             .await?;
         Ok(id)
     }
@@ -2760,34 +2954,19 @@ impl TaskSource for LinearSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        // Before any request: a category no workflow state has is not one Linear could
-        // answer differently for another issue.
-        self.writable(category)?;
-        let Some(task) = self.get_task(id).await? else {
-            return Ok(None);
-        };
-        // Already in the category asked for: its own state is left where it is. A team can
-        // hold several states of one type — `In Progress` and `In Review` are both `started`
-        // — and moving an issue from one to the other is a change nobody asked for.
-        if task.status.category == category {
-            return Ok(Some(task.status));
-        }
-        let (state_id, name) = self.resolve_state(category, id).await?;
-        // `stateId` alone, so nothing else about the issue can move: Linear's
-        // `IssueUpdateInput` makes every member optional and leaves an absent one as it was.
-        let data = self
-            .send(
-                graphql::ISSUE_UPDATE,
-                json!({"id":task.id.0,"input":{"stateId":state_id.0}}),
-            )
-            .await?;
-        let issue = mutation_payload(&data, MutationRoot::IssueUpdate)?
-            .get("issue")
-            .ok_or_else(|| SourceError::Malformed {
-                message: "missing issueUpdate.issue".into(),
-            })?;
-        backend_id(issue, "id")?;
-        Ok(Some(Status { category, name }))
+        Ok(self
+            .status_written(id, category)
+            .await?
+            .map(|task| task.status))
+    }
+    /// One `issueUpdate` and nothing before it — see `status_written` — answering the task
+    /// its own selection reports.
+    async fn set_task_status_reading(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Task>, SourceError> {
+        self.status_written(id, category).await
     }
     async fn set_task_priority(
         &self,
@@ -3107,81 +3286,6 @@ fn category_word(category: StatusCategory) -> String {
 }
 
 impl LinearSource {
-    /// The refusal of a category this source writes no workflow state for — before any request,
-    /// because nothing Linear could answer changes it.
-    fn writable(&self, category: StatusCategory) -> Result<(), SourceError> {
-        match self.statuses.target(category) {
-            StateTarget::DisabledByMapping => Err(self.disabled(category, true)),
-            StateTarget::NoWorkflowType => Err(self.disabled(category, false)),
-            StateTarget::Named(_) | StateTarget::FirstOfType(_) => Ok(()),
-        }
-    }
-
-    /// The refusal of a disabled category, saying which of the two it is.
-    fn disabled(&self, category: StatusCategory, configured: bool) -> SourceError {
-        let word = category_word(category);
-        SourceError::Refused {
-            message: if configured {
-                format!(
-                    "source {} cannot set a task's status to {word}: that category is disabled \
-                     for this source, because its status_mapping sets {word} to null; map \
-                     status_mapping.{word} to one of the team's workflow states to write it",
-                    self.name
-                )
-            } else {
-                format!(
-                    "source {} cannot set a task's status to {word}: that category is disabled \
-                     for this source, because Linear has no workflow state of that kind — its \
-                     workflow states are triage, backlog, unstarted, started, completed and \
-                     canceled; choose backlog, todo, in-progress, done or cancelled, or map \
-                     status_mapping.{word} to one of the team's workflow states",
-                    self.name
-                )
-            },
-        }
-    }
-
-    /// The team's workflow state a status of `category` is written as — the first Linear lists
-    /// of that type, and deliberately no choice beyond that: every state of this type reads
-    /// back as the category asked for, which is the whole of what a status write owes, and
-    /// nothing a category carries says which of several the caller meant — and its name.
-    async fn state_of(
-        &self,
-        category: StatusCategory,
-        state_type: &str,
-        task: &NativeId,
-    ) -> Result<(NativeId, String), SourceError> {
-        let team = self.team_id().await?;
-        let data = self
-            .send(
-                graphql::ISSUE_STATE_OF_TYPE,
-                json!({"type":state_type,"team":team.0}),
-            )
-            .await?;
-        let nodes = data
-            .get("workflowStates")
-            .and_then(|v| v.get("nodes"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "missing workflowStates.nodes".into(),
-            })?;
-        let Some(state) = nodes.first() else {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} cannot set task {} to {}: its configured team has no workflow \
-                     state of type {state_type}; add one to the team in Linear",
-                    self.name,
-                    task.0,
-                    category_word(category)
-                ),
-            });
-        };
-        Ok((
-            NativeId(backend_id(state, "id")?.into()),
-            str_at(state, "name")?.to_owned(),
-        ))
-    }
-
     /// The refusal a write naming `named` — a field or a reserved key — on a `what` gets.
     fn undeliverable(&self, named: &str, what: &str) -> SourceError {
         SourceError::Refused {
@@ -3252,7 +3356,10 @@ impl LinearSource {
     ) -> Result<Option<(Project, Option<String>)>, SourceError> {
         let data = self.send(PROJECT, json!({"id":id.0})).await?;
         Ok(optional(&data, "project", |v| {
-            Ok((map_project(v)?, optional_string(v, "description")?))
+            Ok((
+                map_project(v, &self.statuses)?,
+                optional_string(v, "description")?,
+            ))
         })?
         .filter(|(project, _)| self.in_scope(Some(&project.id))))
     }
@@ -3336,108 +3443,123 @@ impl LinearSource {
         acknowledged(document, id, MutationRoot::DocumentUpdate)
     }
 
-    /// The configured team's workflow states, every one with its type, in Linear's order.
-    async fn team_states(&self) -> Result<Vec<TeamState>, SourceError> {
-        let team = self.team_id().await?;
-        let data = self
-            .send(graphql::TEAM_WORKFLOW_STATES, json!({"team":team.0}))
-            .await?;
-        data.get("workflowStates")
-            .and_then(|v| v.get("nodes"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| SourceError::Malformed {
-                message: "missing workflowStates.nodes".into(),
-            })?
-            .iter()
-            .map(|node| {
-                Ok(TeamState {
-                    id: NativeId(backend_id(node, "id")?.into()),
-                    name: StateName::try_from(str_at(node, "name")?.to_owned())
-                        .map_err(|message| SourceError::Malformed { message })?,
-                    kind: str_at(node, "type")?.to_owned(),
-                })
-            })
-            .collect()
-    }
-
-    /// The team's workflow state `status_mapping` sends `category` to, by its name — or the
-    /// refusal naming the state, the team and the category when the team has none so named.
-    async fn named_state(
-        &self,
-        name: &str,
-        category: StatusCategory,
-    ) -> Result<(NativeId, String), SourceError> {
-        self.team_states()
-            .await?
-            .into_iter()
-            .find(|state| state.name.0.eq_ignore_ascii_case(name))
-            .map(|state| (state.id, state.name.0))
-            .ok_or_else(|| SourceError::Refused {
-                message: format!(
-                    "source {} maps status {} to the workflow state {name:?}, which team {} \
-                     does not have; next: add {name:?} to that team in Linear's team settings, \
-                     or point status_mapping.{} of this source at a state the team has",
-                    self.name,
-                    category_word(category),
-                    self.team.as_ref().map_or("(none)", |team| team.0.as_str()),
-                    category_word(category)
-                ),
-            })
-    }
-
-    /// The workflow state a status of `category` is written as — the state the mapping names,
-    /// or the team's first of the category's type — and its name.
-    async fn resolve_state(
-        &self,
-        category: StatusCategory,
-        task: &NativeId,
-    ) -> Result<(NativeId, String), SourceError> {
-        match self.statuses.target(category) {
-            StateTarget::Named(name) => self.named_state(&name.0, category).await,
-            StateTarget::FirstOfType(kind) => self.state_of(category, kind.as_str(), task).await,
-            StateTarget::DisabledByMapping => Err(self.disabled(category, true)),
-            StateTarget::NoWorkflowType => Err(self.disabled(category, false)),
-        }
-    }
-
-    /// What `sources fields` reports: each state the mapping names, present or missing on
-    /// the team, with its type.
-    async fn workflow_states(&self) -> Result<WorkflowStatesReport, SourceError> {
-        let held = self.team_states().await?;
-        let states = self
-            .statuses
-            .named()
-            .map(|(category, name)| {
-                let found = held
-                    .iter()
-                    .find(|state| state.name.0.eq_ignore_ascii_case(&name.0));
-                MappedWorkflowState {
-                    category,
-                    state: name.clone(),
-                    found: found.map_or(Found::Missing, |state| Found::Present(state.kind.clone())),
-                }
-            })
-            .collect();
-        // `team_states` has just resolved the configured team, so there is one.
+    /// What `sources fields` reports — and, with `apply`, does first: every name the mapping
+    /// gives each kind, checked against that kind's vocabulary, each missing one created when
+    /// `apply` asks.
+    ///
+    /// Created one at a time, tasks' then projects', each in category order, so a create Linear
+    /// refuses stops the run with every name before it created and reported so. A name present
+    /// under another type is reported with its type and left exactly as it is: nothing here
+    /// renames, retypes or deletes.
+    async fn status_names(&self, apply: bool) -> Result<StatusNamesReport, SourceError> {
         let team = self.team.clone().ok_or_else(|| SourceError::Refused {
             message: format!(
-                "source {} needs config.team to report its states",
+                "source {} needs config.team to report its status names",
                 self.name
             ),
         })?;
-        Ok(WorkflowStatesReport {
+        let (mut vocabulary, _) = self.vocabulary(false).await?;
+        let mut names = Vec::new();
+        let mut refused = None;
+        // After the workspace's last project status, in creation order, because a project
+        // status create requires a place in the workspace's project flow.
+        let mut position = vocabulary
+            .statuses
+            .iter()
+            .map(|held| held.position)
+            .fold(0.0_f64, f64::max);
+        for kind in [ItemKind::Task, ItemKind::Project] {
+            for (category, name) in self.statuses.names(kind) {
+                let found = vocabulary
+                    .find(kind, name.as_str(), &self.name)?
+                    .map(|held| held.kind.clone());
+                let mut mapped = MappedStatusName {
+                    kind,
+                    category,
+                    name: name.clone(),
+                    found: found.map_or(Found::Missing, Found::Present),
+                    created: false,
+                };
+                if apply && refused.is_none() && mapped.found == Found::Missing {
+                    position += 1.0;
+                    match self
+                        .create_status_name(
+                            kind,
+                            category,
+                            name.as_str(),
+                            &vocabulary.team,
+                            position,
+                        )
+                        .await
+                    {
+                        Ok(held) => {
+                            mapped.found = Found::Present(held.kind.clone());
+                            mapped.created = true;
+                            self.remember(kind, held);
+                            if let Some(held) = self.held_vocabulary() {
+                                vocabulary = held;
+                            }
+                        }
+                        Err(error) => {
+                            refused = Some(RefusedCreate {
+                                kind,
+                                name: name.clone(),
+                                message: error.to_string(),
+                            });
+                        }
+                    }
+                }
+                names.push(mapped);
+            }
+        }
+        Ok(StatusNamesReport {
             source: self.name.clone(),
             team,
-            states,
+            names,
+            refused,
         })
     }
-}
 
-/// One workflow state of the configured team.
-struct TeamState {
-    id: NativeId,
-    name: StateName,
-    kind: String,
+    /// Create one name of `kind` — a workflow state on the team, or a project status of the
+    /// workspace — of the type its category derives, in the fixed colour every created name
+    /// takes.
+    async fn create_status_name(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+        name: &str,
+        team: &NativeId,
+        position: f64,
+    ) -> Result<Held, SourceError> {
+        let kind_of = created_type(category, kind);
+        let (query, input, root, payload) = match kind {
+            ItemKind::Task => (
+                graphql::WORKFLOW_STATE_CREATE,
+                json!({"teamId": team.0, "name": name, "type": kind_of, "color": CREATED_COLOR}),
+                MutationRoot::WorkflowStateCreate,
+                "workflowState",
+            ),
+            ItemKind::Project => (
+                graphql::PROJECT_STATUS_CREATE,
+                json!({"name": name, "type": kind_of, "color": CREATED_COLOR, "position": position}),
+                MutationRoot::ProjectStatusCreate,
+                "status",
+            ),
+        };
+        let data = self.send(query, json!({ "input": input })).await?;
+        let created = mutation_payload(&data, root)?
+            .get(payload)
+            .filter(|created| !created.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("missing {}.{payload}", root.as_str()),
+            })?;
+        Ok(Held {
+            id: NativeId(backend_id(created, "id")?.into()),
+            name: str_at(created, "name")?.to_owned(),
+            kind: str_at(created, "type")?.to_owned(),
+            position,
+        })
+    }
 }
 
 /// `held` with its trailing metadata slot replaced by one holding exactly `slot`, and every
@@ -3659,90 +3781,26 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
     }
 }
 
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear's workflow-state strings follow the accepted 2026-08-24 contract; its authoritative enum is exposed only through an authenticated unversioned explorer, while real-HTTP tests cover every serialized and parsed value.
-/// A category as `WorkflowState.type` spells it — the vocabulary an **issue**'s state has.
+/// The status an issue's workflow state or a project's project status reads as, through this
+/// instance's `status_mapping` for that kind.
 ///
-/// Linear's workflow states are triage, backlog, unstarted, started, completed and
-/// canceled. None of them is a draft, so `Draft` narrows to nothing exactly as `Unknown`
-/// does rather than filtering on a state Linear does not have.
-///
-/// Linear has no type for work that is claimed and not yet started: `unstarted` is `todo` and
-/// `started` is `in-progress`, and a Linear issue reads back as one of those. So `queued`
-/// narrows to nothing by type, exactly as `draft` does — mapping it onto either neighbour would
-/// have a `queued` filter return an item that reads back as `todo` or `in-progress`, which is
-/// capability rule 1 broken. A state `status_mapping` names is what reads as either.
-fn workflow_state_types(s: &StatusCategory) -> Vec<&'static str> {
-    WorkflowType::of(*s)
-        .map(WorkflowType::as_str)
-        .into_iter()
-        .collect()
-}
-/// A category as `ProjectStatus.type` spells it — a **different** vocabulary, and a
-/// different enum: Linear declares that field `ProjectStatusType!`, whose members are
-/// backlog, planned, started, paused, completed and canceled.
-///
-/// Two of them have no issue counterpart and are why this cannot be the function above.
-/// `planned` is where `unstarted` would be, so it is what `Todo` narrows to; a project
-/// filtered with `unstarted` matches nothing and is refused by nothing, which is how this
-/// went unnoticed. And `paused` is a project that has started and is neither finished nor
-/// cancelled, so it reads as in progress — the same reading [`status`] gives it, which is
-/// what keeps this narrowing and that mapping the same claim rather than two.
-fn project_status_types(s: &StatusCategory) -> Vec<&'static str> {
-    match s {
-        StatusCategory::Draft => vec![],
-        StatusCategory::Backlog => vec!["backlog"],
-        StatusCategory::Todo => vec!["planned"],
-        // No `ProjectStatusType` is claimed-and-not-started either, so `queued` narrows to
-        // nothing here for the reason it does for an issue above.
-        StatusCategory::Queued => vec![],
-        StatusCategory::InProgress => vec!["started", "paused"],
-        StatusCategory::Done => vec!["completed"],
-        StatusCategory::Cancelled => vec!["canceled"],
-        StatusCategory::Unknown => vec![],
-    }
-}
-/// The category a Linear status name and type normalise to, at either level.
-///
-/// One mapper for both vocabularies, because the two are disjoint where they differ: no
-/// issue is ever `planned` or `paused`, and no project is ever `unstarted` or `triage`. It
-/// is the inverse of [`workflow_state_types`] and [`project_status_types`] together, and
-/// has to stay so: a category this reports and that filter cannot ask for is capability
-/// rule 1 broken, and the row would go missing rather than be refused.
-///
-/// **It never answers `Queued` or `Draft`**, and that is the other half of the same claim:
-/// both filters narrow those two to nothing, because no Linear state or project status means
-/// either, so a row this reported as one would be a row no filter for it could return. A type
-/// Linear does not document — even one spelled `queued` — is `Unknown`, never a guess. An
-/// issue reads as `queued` or `draft` only through [`issue_status`], at a state
-/// `status_mapping` names, and the status filter then narrows that category by the same name.
-fn status(v: &Value) -> Result<Status, SourceError> {
-    let name = str_at(v, "name")?.into();
-    let category = match str_at(v, "type")? {
-        "backlog" => StatusCategory::Backlog,
-        "unstarted" | "planned" => StatusCategory::Todo,
-        "started" | "paused" => StatusCategory::InProgress,
-        "completed" => StatusCategory::Done,
-        "canceled" => StatusCategory::Cancelled,
-        _ => StatusCategory::Unknown,
-    };
-    Ok(Status { category, name })
-}
-// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-/// The status an issue's workflow state reads as, through this instance's `status_mapping`.
-///
-/// A state whose name the mapping names reads as that category, under the state's own name —
-/// which is what lets two states of one type, `Todo` and `Queued`, read as two categories. Every
-/// other state reads by its type exactly as [`status`] reads it, so a team's review states, its
-/// triage state and every state the mapping leaves out read as they did without one.
-fn issue_status(v: &Value, statuses: &StatusMapping) -> Result<Status, SourceError> {
+/// A name the kind's mapping names reads as that category, under the name Linear holds — which
+/// is what lets two states of one type, `Todo` and `Queued`, read as two categories. Every
+/// other name reads as `unknown` under its own name, whatever its type: Linear has no built-in
+/// names, so a type is not a category, and reading one as if it were would report a category
+/// no write of this source could have put it at.
+fn mapped_status(
+    v: &Value,
+    statuses: &StatusMapping,
+    kind: ItemKind,
+) -> Result<Status, SourceError> {
     let name = str_at(v, "name")?;
-    match statuses.category_of(name) {
-        Some(category) => Ok(Status {
-            category,
-            name: name.to_owned(),
-        }),
-        None => status(v),
-    }
+    Ok(Status {
+        category: statuses
+            .category_of(kind, name)
+            .unwrap_or(StatusCategory::Unknown),
+        name: name.to_owned(),
+    })
 }
 fn str_at<'a>(v: &'a Value, k: &str) -> Result<&'a str, SourceError> {
     v.get(k)
@@ -3799,11 +3857,12 @@ fn map_task(v: &Value, source: &SourceName, statuses: &StatusMapping) -> Result<
         key: Some(str_at(v, "identifier")?.into()),
         title: str_at(v, "title")?.into(),
         content,
-        status: issue_status(
+        status: mapped_status(
             v.get("state").ok_or_else(|| SourceError::Malformed {
                 message: "missing state".into(),
             })?,
             statuses,
+            ItemKind::Task,
         )?,
         priority: issue_priority(v)?,
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
@@ -3878,7 +3937,7 @@ fn strip_delivery_keys(metadata: &mut std::collections::BTreeMap<String, Value>)
     metadata.remove(TaskRef::DELIVERS_KEY);
     metadata.remove(TaskRef::DELIVERED_BY_KEY);
 }
-fn map_project(v: &Value) -> Result<Project, SourceError> {
+fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
     strip_delivery_keys(&mut metadata);
     let repositories = Repository::from_metadata(&metadata)
@@ -3888,9 +3947,13 @@ fn map_project(v: &Value) -> Result<Project, SourceError> {
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
         content,
-        status: status(v.get("status").ok_or_else(|| SourceError::Malformed {
-            message: "missing status".into(),
-        })?)?,
+        status: mapped_status(
+            v.get("status").ok_or_else(|| SourceError::Malformed {
+                message: "missing status".into(),
+            })?,
+            statuses,
+            ItemKind::Project,
+        )?,
         labels: labels_of(v.get("labels").ok_or_else(|| SourceError::Malformed {
             message: "missing project labels".into(),
         })?)?,

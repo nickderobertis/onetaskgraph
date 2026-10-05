@@ -254,6 +254,37 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable_field(self.kind(), "status"))
     }
 
+    /// Set the status of one task this source holds, as [`set_task_status`](Self::set_task_status)
+    /// does, and answer with the whole task as this source now reads it — its
+    /// [`Task::delivers`] among what a caller keeping delivered tasks in step needs — or `None`
+    /// when this source holds no such task.
+    ///
+    /// Defaulted to exactly the two calls a caller would otherwise make: [`get_task`] first,
+    /// answering `None` with nothing written when it does, then `set_task_status`, the status
+    /// it answers put on the task read. A source whose status write answers the whole task in
+    /// the same round trip overrides it to save the read.
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    /// [`get_task`]: Self::get_task
+    ///
+    /// # Errors
+    ///
+    /// As [`get_task`](Self::get_task) and [`set_task_status`](Self::set_task_status).
+    async fn set_task_status_reading(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Task>, SourceError> {
+        let Some(mut task) = self.get_task(id).await? else {
+            return Ok(None);
+        };
+        let Some(status) = self.set_task_status(id, category).await? else {
+            return Ok(None);
+        };
+        task.status = status;
+        Ok(Some(task))
+    }
+
     /// Set the priority of one task this source holds, and change nothing else about it,
     /// answering with the priority as this source now reads it — or `None` when this source
     /// holds no such task.

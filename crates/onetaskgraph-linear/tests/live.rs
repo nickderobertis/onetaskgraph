@@ -1197,10 +1197,22 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let session = Session::open(SESSION_NAME, key, Exclusivity::OneAtATime)
         .unwrap_or_else(|declined| declined.refuse());
     let key = session.credential().expose().to_owned();
+    // The names the fixture files its issues and projects under are what this source's
+    // `status_mapping` gives `todo` and `done`: Linear has no built-in names, so a source
+    // without a mapping refuses every status write and reads every item as `unknown`.
+    let (open_state, done_state) = fixture_states(&key, &team)
+        .await
+        .unwrap_or_else(|error| panic!("the Linear live lane cannot file its fixture: {error}"));
+    let project_status = fixture_project_status(&key)
+        .await
+        .unwrap_or_else(|error| panic!("the Linear live lane cannot file its projects: {error}"));
     let source = onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("live").unwrap(),
-            &json!({"team":team}),
+            &json!({"team":team,"status_mapping":{
+                "todo":{"task":open_state,"project":project_status},
+                "done":{"task":done_state},
+            }}),
             &Environment,
         )
         .unwrap_or_else(|error| panic!("the Linear live lane cannot use this team: {error}"));
@@ -1243,12 +1255,6 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("the Linear live lane cannot reach its scratch team: {error}")
         });
-    let (open_state, done_state) = fixture_states(&key, &team)
-        .await
-        .unwrap_or_else(|error| panic!("the Linear live lane cannot file its fixture: {error}"));
-    let project_status = fixture_project_status(&key)
-        .await
-        .unwrap_or_else(|error| panic!("the Linear live lane cannot file its projects: {error}"));
     let run = LiveRun {
         key: key.clone(),
         id: Run::current(),

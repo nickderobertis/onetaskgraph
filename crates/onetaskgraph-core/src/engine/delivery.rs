@@ -115,18 +115,16 @@ impl Engine {
     ) -> Result<TaskStatusSet, EngineError> {
         let source = self.status_writable(&id.source)?;
         let no_such_task = || EngineError::NoSuchTask { id: id.to_string() };
+        // One call answering the task as it now reads, rather than a read and then a write: a
+        // source whose status write answers the whole task saves the read, and every other
+        // source makes exactly those two calls itself.
         let task = source
             .source()
-            .get_task(&id.native)
+            .set_task_status_reading(&id.native, category)
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(no_such_task)?;
-        let status = source
-            .source()
-            .set_task_status(&id.native, category)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(no_such_task)?;
+        let status = task.status.clone();
         let delivers = targets(&task.delivers, &id.source);
         let delivered = self
             .deliver(id, status.category, &delivers, &delivers)
