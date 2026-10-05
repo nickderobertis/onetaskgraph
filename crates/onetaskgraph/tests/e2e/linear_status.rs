@@ -20,7 +20,7 @@ use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
 
 /// The `hellopatient` source's `status_mapping`, exactly as ai-orchestrator writes it.
-fn hellopatient_mapping() -> Value {
+pub(crate) fn hellopatient_mapping() -> Value {
     json!({
         "backlog":     {"task": "Proposed",        "project": "Proposal"},
         "draft":       {"task": "Backlog",         "project": "Idea"},
@@ -34,7 +34,7 @@ fn hellopatient_mapping() -> Value {
 }
 
 /// The team's workflow states: the eight the mapping names, and `Triage` and `In Review`.
-const TEAM_STATES: &[(&str, &str, &str)] = &[
+pub(crate) const TEAM_STATES: &[(&str, &str, &str)] = &[
     ("S-proposed", "Proposed", "backlog"),
     ("S-backlog", "Backlog", "backlog"),
     ("S-todo", "Todo", "unstarted"),
@@ -48,7 +48,7 @@ const TEAM_STATES: &[(&str, &str, &str)] = &[
 ];
 
 /// Hello Patient's project statuses, in Linear's order.
-const PROJECT_STATUSES: &[(&str, &str)] = &[
+pub(crate) const PROJECT_STATUSES: &[(&str, &str)] = &[
     ("Idea", "backlog"),
     ("Proposal", "backlog"),
     ("Backlog", "backlog"),
