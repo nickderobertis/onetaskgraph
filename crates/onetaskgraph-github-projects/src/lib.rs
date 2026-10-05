@@ -587,9 +587,9 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
     Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UnmappedStatus, UpdatedField, WriteSupport,
+    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UnmappedStatus, UpdatedField, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -2160,41 +2160,42 @@ impl BoardStatuses {
     /// it does mention is exactly what it configures, so a per-kind object leaves the kind it
     /// omits unmapped rather than defaulted.
     fn resolve(configured: &StatusMapping, instance: &SourceName) -> Result<Self, SourceError> {
-        let resolve_kind = |kind: ItemKind| -> Result<[StatusTarget; CATEGORIES.len()], SourceError> {
-            // `CATEGORIES[position] == category` for every category — the crate's suite
-            // asserts it — so mapping the list in order fills each category's own slot.
-            let mut targets = CATEGORIES.map(shipped_default);
-            for (slot, category) in targets.iter_mut().zip(CATEGORIES) {
-                if !configured.mentions(category) {
-                    continue;
-                }
-                *slot = match configured.name_for(category, kind) {
-                    Err(why) => StatusTarget::Disabled(why),
-                    Ok(name) => {
-                        let option = ColumnName::try_from(name.as_str().to_owned())
-                            .map_err(|message| SourceError::Config { message })?;
-                        match category {
-                            StatusCategory::Done => {
-                                StatusTarget::Terminal(option, ClosedState::Completed)
-                            }
-                            StatusCategory::Cancelled => {
-                                StatusTarget::Terminal(option, ClosedState::NotPlanned)
-                            }
-                            _ => StatusTarget::Column(option),
-                        }
+        let resolve_kind =
+            |kind: ItemKind| -> Result<[StatusTarget; CATEGORIES.len()], SourceError> {
+                // `CATEGORIES[position] == category` for every category — the crate's suite
+                // asserts it — so mapping the list in order fills each category's own slot.
+                let mut targets = CATEGORIES.map(shipped_default);
+                for (slot, category) in targets.iter_mut().zip(CATEGORIES) {
+                    if !configured.mentions(category) {
+                        continue;
                     }
-                };
-            }
-            StatusMapping::distinct(
-                instance,
-                kind,
-                CATEGORIES
-                    .iter()
-                    .zip(&targets)
-                    .filter_map(|(category, target)| target.option().map(|o| (*category, o))),
-            )?;
-            Ok(targets)
-        };
+                    *slot = match configured.name_for(category, kind) {
+                        Err(why) => StatusTarget::Disabled(why),
+                        Ok(name) => {
+                            let option = ColumnName::try_from(name.as_str().to_owned())
+                                .map_err(|message| SourceError::Config { message })?;
+                            match category {
+                                StatusCategory::Done => {
+                                    StatusTarget::Terminal(option, ClosedState::Completed)
+                                }
+                                StatusCategory::Cancelled => {
+                                    StatusTarget::Terminal(option, ClosedState::NotPlanned)
+                                }
+                                _ => StatusTarget::Column(option),
+                            }
+                        }
+                    };
+                }
+                StatusMapping::distinct(
+                    instance,
+                    kind,
+                    CATEGORIES
+                        .iter()
+                        .zip(&targets)
+                        .filter_map(|(category, target)| target.option().map(|o| (*category, o))),
+                )?;
+                Ok(targets)
+            };
         Ok(Self {
             tasks: resolve_kind(ItemKind::Task)?,
             projects: resolve_kind(ItemKind::Project)?,
@@ -5555,12 +5556,9 @@ impl GitHubProjectsSource {
                 )
                 .await?;
                 item.closed = true;
-                item.status = self.statuses.status(
-                    ItemKind::Task,
-                    Some(&name),
-                    true,
-                    Some(reason.reason()),
-                );
+                item.status =
+                    self.statuses
+                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()));
                 item.option = Some(name);
             }
             StatusTarget::Column(_) => {
@@ -5701,16 +5699,24 @@ impl GitHubProjectsSource {
             return Ok(target);
         };
         let refusal = why.refusal(&self.name, category, kind);
-        Err(match (refusal, category, why) {
-            // Why there is no shipped default for draft, which is the question a person
-            // meeting this refusal on an unconfigured source asks.
-            (SourceError::Refused { message }, StatusCategory::Draft, UnmappedStatus::Unconfigured) => {
+        // Why there is no shipped default, which is the question a person meeting this
+        // refusal on a source that never mentioned the category asks.
+        let shipped_none = match category {
+            StatusCategory::Draft => Some(
+                "draft has no shipped default because GitHub draft issues cannot have \
+                 sub-issues, and this source stores a project's tasks as its issue's sub-issues",
+            ),
+            StatusCategory::Unknown => Some(
+                "unknown has no shipped default because this board keeps no open-ended status \
+                 word: every word classified unknown is written to the one board Status option \
+                 status_mapping.unknown names",
+            ),
+            _ => None,
+        };
+        Err(match (refusal, shipped_none, why) {
+            (SourceError::Refused { message }, Some(note), UnmappedStatus::Unconfigured) => {
                 SourceError::Refused {
-                    message: format!(
-                        "{message}; draft has no shipped default because GitHub draft issues \
-                         cannot have sub-issues, and this source stores a project's tasks as its \
-                         issue's sub-issues"
-                    ),
+                    message: format!("{message}; {note}"),
                 }
             }
             (refusal, _, _) => refusal,
@@ -6059,12 +6065,10 @@ impl GitHubProjectsSource {
                 return Err(self.closes_a_draft(status.category));
             }
             let landed = match &target {
-                StatusTarget::Terminal(_, reason) => self.statuses.status(
-                    ItemKind::Task,
-                    Some(&name),
-                    true,
-                    Some(reason.reason()),
-                ),
+                StatusTarget::Terminal(_, reason) => {
+                    self.statuses
+                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()))
+                }
                 _ => self
                     .statuses
                     .status(ItemKind::Task, Some(&name), false, None),
@@ -7093,12 +7097,10 @@ impl GitHubProjectsSource {
         }
 
         let written_status = match (incoming.written.work_status(), status_target.as_ref()) {
-            (Some((kind, _)), Some(StatusTarget::Terminal(_, reason))) => self.statuses.status(
-                kind,
-                written_option.as_deref(),
-                true,
-                Some(reason.reason()),
-            ),
+            (Some((kind, _)), Some(StatusTarget::Terminal(_, reason))) => {
+                self.statuses
+                    .status(kind, written_option.as_deref(), true, Some(reason.reason()))
+            }
             (Some((kind, _)), Some(StatusTarget::Column(_))) => {
                 self.statuses
                     .status(kind, written_option.as_deref(), false, None)

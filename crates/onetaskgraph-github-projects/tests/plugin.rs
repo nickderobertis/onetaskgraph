@@ -43,6 +43,10 @@ mod board;
 
 use board::{FIXTURE_BUDGET_LIMIT, Pricing, ample_allowance};
 
+// `status_mapping` scoped by item kind, over this file's board: a module of this target
+// rather than a target of its own because it is this board it drives.
+mod status_by_kind;
+
 struct Secrets;
 impl SecretResolver for Secrets {
     fn get(&self, var: &str) -> Option<SecretString> {

@@ -486,7 +486,7 @@ fn every_status_set_refusal_names_the_problem_and_the_next_action() {
         ),
         (
             vec!["board:T-3", "draft"],
-            "status draft is disabled for source board",
+            "source board has no task status name for draft",
         ),
         (
             vec!["frozen:T-1", "done"],

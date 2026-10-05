@@ -63,10 +63,19 @@ pub fn status_options(report: &StatusOptionsReport) -> String {
 pub fn fields(report: &FieldsReport) -> String {
     let mut rendered = String::new();
     for field in &report.fields {
+        // A Status name says which kind it is configured for — `task: Queued; project:
+        // Shipped` — because one field holds both kinds' options.
         let missing = if field.missing.is_empty() {
             "none".to_owned()
-        } else {
+        } else if field.kinds.is_empty() {
             field.missing.join(", ")
+        } else {
+            field
+                .kinds
+                .iter()
+                .map(|kind| format!("{}: {}", wire(&kind.kind), kind.missing.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ")
         };
         let name = field.field.name();
         let line = match (field.outcome, field.exists) {

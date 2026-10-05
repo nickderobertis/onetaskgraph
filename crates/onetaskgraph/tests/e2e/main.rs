@@ -58,6 +58,13 @@ mod failures;
 // into a plugin crate.
 mod fields;
 mod fixtures;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against the loopback GitHub board
+// and a folder of Markdown, with no credential and no network, in a few seconds. A copy, a
+// targeted update and the status verbs are the engine's, so they cannot sit behind the
+// GitHub Projects plugin crate's edge, which AGENTS.md forbids depending on the engine at any
+// depth; the plugin's own half is proven behind its own edge in its `tests/status_by_kind/`.
+mod github_status_by_kind;
 mod journeys;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against the loopback Linear
