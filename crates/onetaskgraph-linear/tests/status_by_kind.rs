@@ -220,7 +220,7 @@ impl Workspace {
                 let empty = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
                 json!({(root): {"description":null,"relations":empty,"inverseRelations":empty}})
             }
-            graphql::ISSUE_UPDATE_READ | graphql::ISSUE_UPDATE => {
+            graphql::ISSUE_UPDATE_READ | graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
                 let state = match input.get("stateId").and_then(Value::as_str) {
                     Some(state) => match held.states.iter().find(|held| held["id"] == state) {
                         Some(held) => Some(json!({"name":held["name"],"type":held["type"]})),
@@ -241,10 +241,10 @@ impl Workspace {
                         issue[member] = value.clone();
                     }
                 }
-                let answered = if query == graphql::ISSUE_UPDATE_READ {
-                    issue.clone()
-                } else {
-                    json!({"id":id})
+                let answered = match query.as_str() {
+                    graphql::ISSUE_UPDATE_READ => issue.clone(),
+                    graphql::ISSUE_REWRITE => json!({"id":id,"relations":no_relations()}),
+                    _ => json!({"id":id}),
                 };
                 json!({"issueUpdate":{"success":true,"issue":answered}})
             }
@@ -261,7 +261,7 @@ impl Workspace {
                     "labels":{"nodes":[]},"project":null}));
                 json!({"issueCreate":{"success":true,"issue":{"id":new}}})
             }
-            graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE => {
+            graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE | graphql::PROJECT_REWRITE => {
                 let status = input["statusId"].as_str().unwrap_or_default().to_owned();
                 let Some(status) = held
                     .statuses
@@ -285,7 +285,7 @@ impl Workspace {
                         return json!({"errors":[{"message":"Entity not found: Project"}]});
                     };
                     project["status"] = status;
-                    json!({"projectUpdate":{"success":true,"project":{"id":id}}})
+                    json!({"projectUpdate":{"success":true,"project":{"id":id,"relations":no_relations()}}})
                 }
             }
             graphql::WORKFLOW_STATE_CREATE | graphql::PROJECT_STATUS_CREATE => {
@@ -305,6 +305,11 @@ impl Workspace {
         };
         json!({ "data": data })
     }
+}
+
+/// A relation connection holding none.
+fn no_relations() -> Value {
+    json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}})
 }
 
 /// One request off the wire: its JSON body, once the whole of it has arrived.
@@ -341,6 +346,8 @@ fn document_name(query: &str) -> &'static str {
         ("PROJECT_RELATIONS", graphql::PROJECT_RELATIONS),
         ("ISSUE_UPDATE_READ", graphql::ISSUE_UPDATE_READ),
         ("ISSUE_UPDATE", graphql::ISSUE_UPDATE),
+        ("ISSUE_REWRITE", graphql::ISSUE_REWRITE),
+        ("PROJECT_REWRITE", graphql::PROJECT_REWRITE),
         ("ISSUE_CREATE", graphql::ISSUE_CREATE),
         ("PROJECT_CREATE", graphql::PROJECT_CREATE),
         ("PROJECT_UPDATE", graphql::PROJECT_UPDATE),
@@ -549,13 +556,9 @@ async fn building_a_source_sends_nothing_and_its_first_status_write_reads_the_re
         .unwrap();
     assert_eq!(
         workspace.names_since(from),
-        [
-            "ISSUE_UPDATE_READ",
-            "PROJECT_CREATE",
-            "PROJECT_UPDATE",
-            "PROJECT_RELATIONS"
-        ],
-        "no team, state or project-status read after the first"
+        ["ISSUE_UPDATE_READ", "PROJECT_CREATE", "PROJECT_REWRITE"],
+        "no team, state or project-status read after the first, and a rewrite reads the \
+         relations it replaces in its own answer"
     );
     assert_eq!(workspace.state_of("I-1").as_deref(), Some("Done"));
     assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));

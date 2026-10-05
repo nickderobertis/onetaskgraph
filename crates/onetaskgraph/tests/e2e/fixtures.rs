@@ -3406,6 +3406,26 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                         .contains(&kind)
                     })
         }
+        // A whole rewrite, beside the page size its relations are read back at.
+        graphql::ISSUE_REWRITE | graphql::PROJECT_REWRITE => {
+            let mut whole = variables.clone();
+            let first = whole
+                .as_object_mut()
+                .and_then(|variables| variables.remove("first"));
+            first
+                .as_ref()
+                .and_then(Value::as_u64)
+                .is_some_and(|first| first > 0)
+                && validate_linear_variables(
+                    if operation == graphql::ISSUE_REWRITE {
+                        graphql::ISSUE_UPDATE
+                    } else {
+                        graphql::PROJECT_UPDATE
+                    },
+                    &whole,
+                )
+                .is_ok()
+        }
         // A status write and a targeted update that read the issue back in the same request:
         // the members a targeted update may send, at least one of them, and nothing else.
         graphql::ISSUE_UPDATE_READ => {
@@ -3698,6 +3718,8 @@ fn linear_response(
         graphql::WORKFLOW_STATE_CREATE,
         graphql::PROJECT_STATUS_CREATE,
         graphql::ISSUE_UPDATE_READ,
+        graphql::ISSUE_REWRITE,
+        graphql::PROJECT_REWRITE,
         graphql::ISSUE_LABEL,
         graphql::PROJECT_LABEL,
         graphql::ISSUE_CREATE,
@@ -3748,6 +3770,25 @@ fn linear_response(
         graphql::WORKFLOW_STATE_CREATE | graphql::PROJECT_STATUS_CREATE
     ) {
         return linear_create_status_name(data, &vars, operation == graphql::PROJECT_STATUS_CREATE);
+    }
+    // A whole rewrite of an item, answering with the first page of the relations it holds.
+    if matches!(operation, graphql::ISSUE_REWRITE | graphql::PROJECT_REWRITE) {
+        let project = operation == graphql::PROJECT_REWRITE;
+        let mut answer = linear_write_item(data, &vars, false, project)?;
+        let id = vars["id"].as_str().unwrap_or_default();
+        let (key, suffix, root, payload) = if project {
+            (
+                "project_dependencies",
+                "Project",
+                "projectUpdate",
+                "project",
+            )
+        } else {
+            ("task_dependencies", "Issue", "issueUpdate", "issue")
+        };
+        answer[root][payload]["relations"] =
+            linear_relations(data, key, id, suffix, recorded)["relations"].clone();
+        return Ok(answer);
     }
     if operation == graphql::ISSUE_UPDATE_READ {
         let id = vars["id"].as_str().unwrap_or_default();

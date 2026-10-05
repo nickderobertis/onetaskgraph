@@ -404,6 +404,17 @@ pub mod graphql {
     /// an echo of what it sent. A document of its own rather than a wider [`ISSUE_UPDATE`],
     /// so every other issue write keeps asking for exactly what it reads.
     pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
+    /// Rewrite an issue whole, and read back in the same request the first page of the
+    /// relations it holds — the ones a whole write replaces.
+    ///
+    /// A whole write of an existing item replaces every relation it holds with the ones it was
+    /// given, so it has to know which it holds; selected here, that is the update's own answer
+    /// rather than a read of its own, and a re-write with no relations to replace is the one
+    /// request. The relations are read after the update, which moves none of them.
+    pub const ISSUE_REWRITE: &str = "mutation($id:String!,$input:IssueUpdateInput!,$first:Int!){ issueUpdate(id:$id,input:$input){success issue{id relations(first:$first){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}}}} }";
+    /// Rewrite a project whole, and read back the first page of its relations, on the terms of
+    /// [`ISSUE_REWRITE`].
+    pub const PROJECT_REWRITE: &str = "mutation($id:String!,$input:ProjectUpdateInput!,$first:Int!){ projectUpdate(id:$id,input:$input){success project{id relations(first:$first){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}}}} }";
     /// Create a project.
     pub const PROJECT_CREATE: &str =
         "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
@@ -1032,6 +1043,15 @@ impl LinearSource {
 enum WriteKind {
     Task,
     Project,
+}
+/// What a whole write already knows of the relations its item holds.
+enum HeldRelations<'a> {
+    /// None: the item was just created.
+    None,
+    /// The first page of them, as the rewrite's own answer reported it.
+    Page(&'a Value),
+    /// Nothing yet, so they are read.
+    Unread,
 }
 enum Lookup<'a> {
     IssueLabel(&'a str),
@@ -2002,7 +2022,7 @@ impl LinearSource {
             }
         };
         if let Some(prepared) = &relations {
-            self.write_relations(&before.id, prepared, WriteKind::Task, false)
+            self.write_relations(&before.id, prepared, WriteKind::Task, HeldRelations::Unread)
                 .await?;
         }
         let mut written = update.changed(&before, &task);
@@ -2148,44 +2168,53 @@ impl LinearSource {
             .find(|edge| edge.to.kind == ItemKind::Project && edge.kind == DependencyKind::Related)
     }
     /// Replace every relation `near` holds of `kind` with exactly `edges`: the ones it holds
-    /// are deleted, then each edge is created. `created` says `near` was created by the write
-    /// this follows, so it holds none and the read of what it holds is not sent.
+    /// are deleted, then each edge is created.
+    ///
+    /// `held` is what is already known of the ones it holds: none, for an item the write this
+    /// follows created; the first page of them, for one a rewrite's own answer reported; and
+    /// otherwise nothing, so they are read. Only a page that says there are more is followed.
     async fn write_relations(
         &self,
         near: &NativeId,
         edges: &[DependencyEdge],
         kind: WriteKind,
-        created: bool,
+        held: HeldRelations<'_>,
     ) -> Result<(), SourceError> {
         let mut cursor: Option<Cursor> = None;
-        loop {
-            if created {
-                break;
-            }
-            let data = self
-                .send(
-                    if matches!(kind, WriteKind::Project) {
-                        PROJECT_RELATIONS
+        let mut answered = match held {
+            HeldRelations::None => None,
+            HeldRelations::Page(page) => Some(page.clone()),
+            HeldRelations::Unread => Some(Value::Null),
+        };
+        while let Some(page) = answered.take() {
+            let relations = if page.is_null() {
+                let data = self
+                    .send(
+                        if matches!(kind, WriteKind::Project) {
+                            PROJECT_RELATIONS
+                        } else {
+                            ISSUE_RELATIONS
+                        },
+                        json!({"id":near.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
+                    )
+                    .await?;
+                let root = data
+                    .get(if matches!(kind, WriteKind::Project) {
+                        "project"
                     } else {
-                        ISSUE_RELATIONS
-                    },
-                    json!({"id":near.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
-                )
-                .await?;
-            let root = data
-                .get(if matches!(kind, WriteKind::Project) {
-                    "project"
-                } else {
-                    "issue"
-                })
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "missing relation item".into(),
-                })?;
-            let relations = root
-                .get("relations")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "missing relations".into(),
-                })?;
+                        "issue"
+                    })
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "missing relation item".into(),
+                    })?;
+                root.get("relations")
+                    .cloned()
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "missing relations".into(),
+                    })?
+            } else {
+                page
+            };
             for relation in relations
                 .get("nodes")
                 .and_then(Value::as_array)
@@ -2208,10 +2237,10 @@ impl LinearSource {
                 let deleted = self.send(query, json!({"id":id})).await?;
                 mutation_payload(&deleted, mutation)?;
             }
-            let Some(next) = page_next(relations)? else {
-                break;
-            };
-            cursor = Some(next);
+            if let Some(next) = page_next(&relations)? {
+                cursor = Some(next);
+                answered = Some(Value::Null);
+            }
         }
         // Linear requires an anchor at each end of a project relation and validates both
         // against an enum GraphQL cannot see: `ProjectRelationCreateInput` declares them
@@ -2566,9 +2595,10 @@ impl TaskSource for LinearSource {
         // no priority would report success for a priority the destination still carries.
         let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
         let (query, variables, root) = match &write.target {
+            // Its relations read back in the same request, so a rewrite needs no read of them.
             Some(id) => (
-                graphql::ISSUE_UPDATE,
-                json!({"id":id.0,"input":input}),
+                graphql::ISSUE_REWRITE,
+                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
                 MutationRoot::IssueUpdate,
             ),
             None => (
@@ -2591,7 +2621,8 @@ impl TaskSource for LinearSource {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
         let id = NativeId(backend_id(issue, "id")?.into());
-        self.write_relations(&id, &edges, WriteKind::Task, write.target.is_none())
+        let held = held_relations(write.target.as_ref(), issue)?;
+        self.write_relations(&id, &edges, WriteKind::Task, held)
             .await?;
         Ok(id)
     }
@@ -2650,9 +2681,10 @@ impl TaskSource for LinearSource {
         )?;
         let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
         let (query, variables, root) = match &write.target {
+            // Its relations read back in the same request, as an issue's are.
             Some(id) => (
-                graphql::PROJECT_UPDATE,
-                json!({"id":id.0,"input":input}),
+                graphql::PROJECT_REWRITE,
+                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
                 MutationRoot::ProjectUpdate,
             ),
             None => (
@@ -2674,7 +2706,8 @@ impl TaskSource for LinearSource {
                 message: format!("missing {}.project", root.as_str()),
             })?;
         let id = NativeId(backend_id(project, "id")?.into());
-        self.write_relations(&id, &edges, WriteKind::Project, write.target.is_none())
+        let held = held_relations(write.target.as_ref(), project)?;
+        self.write_relations(&id, &edges, WriteKind::Project, held)
             .await?;
         Ok(id)
     }
@@ -3231,6 +3264,24 @@ impl TaskSource for LinearSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
     }
+}
+
+/// What a whole write's own answer says of the relations its item holds: none for an item it
+/// created, and for one it rewrote the first page its selection read back.
+fn held_relations<'a>(
+    target: Option<&NativeId>,
+    written: &'a Value,
+) -> Result<HeldRelations<'a>, SourceError> {
+    if target.is_none() {
+        return Ok(HeldRelations::None);
+    }
+    written
+        .get("relations")
+        .filter(|relations| !relations.is_null())
+        .map(HeldRelations::Page)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "a rewrite answered without the relations it was asked for".into(),
+        })
 }
 
 /// Refuse a narrow project or document write whose payload names another item than the one it
