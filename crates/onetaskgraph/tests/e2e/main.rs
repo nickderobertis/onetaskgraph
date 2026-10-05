@@ -74,6 +74,11 @@ mod journeys;
 // plugin's own half is proven behind its own edge in its `tests/plugin.rs`.
 mod linear;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: each measurement drives the binary, or the engine the binary links,
+// against the loopback Linear workspace with no credential and no network, in about a second;
+// it reaches the engine, which the Linear crate's own edge may not depend on (AGENTS.md).
+mod linear_budget;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it, for the reason given on `linear` above: every journey drives the binary
 // against the loopback Linear workspace and folders of Markdown, with no credential and no
 // network, and the copies, the status narrowings and `sources fields` are the binary's verbs.

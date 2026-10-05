@@ -47,15 +47,19 @@
       "options": {
         "commands": [
           "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
-          "bash scripts/check-live-decline.sh onetaskgraph-linear"
+          "bash scripts/check-live-decline.sh onetaskgraph-linear",
+          "bash scripts/check-linear-budgets.sh"
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session. The third checks the Linear request budgets in this crate's budgets.yaml, each measured by a journey of the binary crate against the loopback Linear workspace with no credential; it depends on onetaskgraph:build because those journeys spawn the binary and run the engine it links, and its cargo invocation is that build's own unit, so it relinks nothing.",
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/scripts/check-live-decline.sh",
+        "{workspaceRoot}/scripts/check-linear-budgets.sh",
+        "{workspaceRoot}/scripts/linear-budget.sh",
+        "{workspaceRoot}/crates/onetaskgraph/tests/e2e/linear_budget.rs",
         {
           "env": "LINEAR_API_KEY"
         },
@@ -65,7 +69,8 @@
         {
           "env": "ONETASKGRAPH_LIVE_REQUIRED"
         }
-      ]
+      ],
+      "dependsOn": ["onetaskgraph:build"]
     },
     "coverage": {
       "executor": "nx:run-commands",

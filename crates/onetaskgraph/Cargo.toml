@@ -56,6 +56,9 @@ jsonschema.workspace = true
 onetaskgraph-github-projects.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
+# The Linear budget journeys build the plugin themselves, into an `Engine`, and hand it the
+# fixture's credential through the contract's own `SecretResolver`, which speaks this type.
+secrecy.workspace = true
 # The rendering journeys hash a created item's content and answers themselves, rather than
 # asking the engine that wrote the hashes to check its own work.
 sha2.workspace = true
