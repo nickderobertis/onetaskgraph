@@ -14,7 +14,7 @@ use std::{
 
 use onetaskgraph_linear::graphql;
 use onetaskgraph_plugin_api::{
-    ItemWrite, MetadataKey, NativeId, Project, SecretResolver, SourceError, SourceName,
+    ItemKind, ItemWrite, MetadataKey, NativeId, Project, SecretResolver, SourceError, SourceName,
     SourcePlugin, Status, StatusCategory, TaskSource, TaskUpdate,
 };
 use secrecy::SecretString;
@@ -1081,7 +1081,7 @@ async fn a_malformed_resolution_is_not_held_and_the_next_write_reads_it_again() 
 }
 
 #[tokio::test]
-async fn a_scoped_source_reads_an_issue_before_its_status_write_and_never_writes_one_elsewhere() {
+async fn a_scoped_source_writes_a_status_to_the_issue_it_names_wherever_it_is_filed() {
     let workspace = hello_patient("A");
     workspace.issue_in("I-IN", "Todo", "P-SCOPE");
     workspace.issue_in("I-OUT", "Todo", "P-OTHER");
@@ -1090,35 +1090,85 @@ async fn a_scoped_source_reads_an_issue_before_its_status_write_and_never_writes
         json!({"project": "P-SCOPE", "status_mapping": hellopatient()}),
     )
     .unwrap();
-    // Its own project's issue: read, because Linear has no update conditional on where an
-    // issue is filed, then written.
-    let answered = source
-        .set_task_status(&"I-IN".into(), StatusCategory::InProgress)
-        .await
-        .unwrap();
+    let in_progress = Some(Status {
+        category: StatusCategory::InProgress,
+        name: "In Progress".into(),
+    });
+    // Its own project's issue: the resolution and the mutation, and no read before it.
     assert_eq!(
-        answered,
-        Some(Status {
-            category: StatusCategory::InProgress,
-            name: "In Progress".into()
-        })
+        source
+            .set_task_status(&"I-IN".into(), StatusCategory::InProgress)
+            .await
+            .unwrap(),
+        in_progress
     );
     assert_eq!(
         workspace.names_since(0),
-        ["RESOLUTION", "ISSUE", "ISSUE_UPDATE_READ"]
+        ["RESOLUTION", "ISSUE_UPDATE_READ"]
     );
     assert_eq!(workspace.state_of("I-IN").as_deref(), Some("In Progress"));
-    // Another project's issue is no task of this source: read, and never written.
+    // Another project's issue of the team, named outright: the mutation alone, landing there
+    // and answered as it now reads.
     let from = workspace.count();
     assert_eq!(
         source
             .set_task_status(&"I-OUT".into(), StatusCategory::InProgress)
             .await
             .unwrap(),
-        None
+        in_progress
     );
-    assert_eq!(workspace.names_since(from), ["ISSUE"]);
-    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Todo"));
+    assert_eq!(workspace.names_since(from), ["ISSUE_UPDATE_READ"]);
+    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("In Progress"));
+    // And a targeted update naming a status alone, the same.
+    let from = workspace.count();
+    let outcome = source
+        .update_task(
+            &"I-OUT".into(),
+            &TaskUpdate {
+                status: Some(Status {
+                    category: StatusCategory::Done,
+                    name: String::new(),
+                }),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the issue named is written");
+    assert_eq!(outcome.task.status.name, "Done");
+    assert_eq!(workspace.names_since(from), ["ISSUE_UPDATE_READ"]);
+    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Done"));
+    // Reads stay scoped: the issue filed elsewhere is still no task of this source to read.
+    assert_eq!(source.get_task(&"I-OUT".into()).await.unwrap(), None);
+    assert!(source.get_task(&"I-IN".into()).await.unwrap().is_some());
+    // And a project write other than to its own project is refused before any request,
+    // whether checked ahead of a copy or sent.
+    workspace.project("P-OTHER", "Planned");
+    let from = workspace.count();
+    for target in [None, Some("P-OTHER")] {
+        let checked = source
+            .check_status_write(
+                ItemKind::Project,
+                StatusCategory::Done,
+                target.map(NativeId::from).as_ref(),
+            )
+            .await
+            .expect_err("another project");
+        let written = source
+            .write_project(&project_write(StatusCategory::Done, target))
+            .await
+            .expect_err("another project");
+        for refused in [checked, written] {
+            assert!(
+                refused
+                    .to_string()
+                    .contains("scoped to the Linear project P-SCOPE"),
+                "{refused}"
+            );
+        }
+    }
+    assert_eq!(workspace.names_since(from), Vec::<&str>::new());
+    assert_eq!(workspace.status_of("P-OTHER").as_deref(), Some("Planned"));
 }
 
 #[tokio::test]

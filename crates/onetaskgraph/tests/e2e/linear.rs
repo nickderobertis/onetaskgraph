@@ -449,6 +449,114 @@ fn a_project_scoped_linear_source_reads_and_writes_that_project_alone() {
     assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
 }
 
+/// The GraphQL documents of every request the workspace answered after the `from`th.
+fn documents_since(workspace: &LinearWorkspace, from: usize) -> Vec<String> {
+    workspace
+        .served()
+        .into_iter()
+        .skip(from)
+        .map(|(query, _)| query)
+        .collect()
+}
+
+#[test]
+fn a_project_scoped_linear_source_writes_a_status_to_the_issue_it_names_wherever_it_is_filed() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = scoped_workspace(&sandbox);
+    let plan = folder(
+        &sandbox,
+        "plan",
+        &[(
+            "projects/PY.md",
+            "---\ntitle: Another project\nstatus: done\n---\nbody\n",
+        )],
+    );
+    sandbox.project_document(&document(&json!({
+        "scoped": linear(&config, json!({"project": "LP-1"})),
+        "plan": markdown(&plan),
+    })));
+    let resolution = onetaskgraph_linear::graphql::RESOLUTION.to_owned();
+    let mutation = onetaskgraph_linear::graphql::ISSUE_UPDATE_READ.to_owned();
+
+    // An issue of the team filed in another project, named outright: the resolution and the
+    // one mutation, no read before it, and the issue answered as it now reads.
+    let from = workspace.served().len();
+    let answer = answered(
+        &sandbox,
+        &["--json", "task", "status", "set", "scoped:I-OUT", "done"],
+    );
+    assert_eq!(answer["id"], "scoped:I-OUT", "{answer:#}");
+    assert_eq!(
+        answer["status"],
+        json!({"category": "done", "name": "Shipped"}),
+        "{answer:#}"
+    );
+    assert_eq!(
+        documents_since(&workspace, from),
+        [resolution.clone(), mutation.clone()]
+    );
+    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Shipped"));
+    // And a targeted update naming the status alone, the same.
+    let from = workspace.served().len();
+    answered(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "scoped:I-OUT",
+            "--status",
+            "in-progress",
+        ],
+    );
+    assert_eq!(
+        documents_since(&workspace, from),
+        [resolution.clone(), mutation.clone()]
+    );
+    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Doing"));
+    // Its own project's issue, at the same cost.
+    let from = workspace.served().len();
+    answered(
+        &sandbox,
+        &["--json", "task", "status", "set", "scoped:I-IN", "done"],
+    );
+    assert_eq!(documents_since(&workspace, from), [resolution, mutation]);
+    assert_eq!(workspace.state_of("I-IN").as_deref(), Some("Shipped"));
+
+    // Everything else is still scoped: the issue written is no item of this source to read or
+    // list, and a write to another project is refused naming the scope before any request
+    // `write_project` sends — the copy's own discovery is all that reaches the workspace.
+    exits(&sandbox, &["task", "show", "scoped:I-OUT"], 1);
+    assert_eq!(
+        ids(&answered(
+            &sandbox,
+            &["--json", "task", "list", "--source", "scoped"]
+        )),
+        ["scoped:I-IN"]
+    );
+    let from = workspace.served().len();
+    let refused = exits(
+        &sandbox,
+        &["project", "copy", "plan:PY", "--to", "scoped", "--no-tasks"],
+        1,
+    );
+    let said = stderr(&refused);
+    assert!(said.contains("scoped to the Linear project LP-1"), "{said}");
+    assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
+    let written = [
+        onetaskgraph_linear::graphql::RESOLUTION,
+        onetaskgraph_linear::graphql::PROJECT_LABEL,
+        onetaskgraph_linear::graphql::PROJECT_CREATE,
+        onetaskgraph_linear::graphql::PROJECT_REWRITE,
+    ];
+    assert!(
+        documents_since(&workspace, from)
+            .iter()
+            .all(|query| !written.contains(&query.as_str())),
+        "write_project sent a request before refusing"
+    );
+}
+
 /// An issue, a project and a document each carrying prose with its own spacing and a slot
 /// closed the way Linear hands one back.
 fn slotted_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {

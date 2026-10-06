@@ -122,6 +122,71 @@ fn hellopatient(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace
     (config, workspace)
 }
 
+/// Hello Patient's workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
+/// and `tasks`; and the configuration of a source scoped to `LP-SCOPE` that reaches it.
+fn hellopatient_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
+    let projects = ["LP-SCOPE", "LP-ELSEWHERE"]
+        .iter()
+        .map(|id| {
+            json!({"id": id, "title": format!("Project {id}"), "content": format!("About {id}."),
+                   "status": {"name": "Planned", "category": "unknown",
+                              "_linear_status": {"name": "Planned", "type": "planned"}},
+                   "labels": []})
+        })
+        .collect::<Vec<_>>();
+    let mut dataset = held(tasks);
+    dataset["projects"] = json!(projects);
+    let (mut config, workspace) =
+        linear_workspace_with(sandbox, dataset, TEAM_STATES, PROJECT_STATUSES);
+    config["status_mapping"] = hellopatient_mapping();
+    config["project"] = json!("LP-SCOPE");
+    (config, workspace)
+}
+
+/// A status write through a source scoped to one project, each by a fresh invocation, to an
+/// issue filed in its project and to one filed in another project of its team: what each of
+/// `task status set` and `task update --status` sent, in that order.
+fn scoped_cold() -> Vec<usize> {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = hellopatient_scoped(
+        &sandbox,
+        vec![
+            issue("L-IN", "Todo", json!({"project": "LP-SCOPE"})),
+            issue("L-OUT", "Todo", json!({"project": "LP-ELSEWHERE"})),
+        ],
+    );
+    sandbox.project_document(&document(&json!({
+        "scoped": {"plugin": "linear", "config": config},
+    })));
+    let mut spent = Vec::new();
+    for id in ["L-IN", "L-OUT"] {
+        let qualified = format!("scoped:{id}");
+        spent.push(
+            counted(
+                &sandbox,
+                &workspace,
+                &["task", "status", "set", &qualified, "queued"],
+            )
+            .len(),
+        );
+        assert_eq!(workspace.state_of(id).as_deref(), Some("Queued"), "{id}");
+        spent.push(
+            counted(
+                &sandbox,
+                &workspace,
+                &["task", "update", &qualified, "--status", "in-progress"],
+            )
+            .len(),
+        );
+        assert_eq!(
+            workspace.state_of(id).as_deref(),
+            Some("In Progress"),
+            "{id}"
+        );
+    }
+    spent
+}
+
 /// A folder of Markdown holding `files`.
 fn folder(sandbox: &Sandbox, files: &[(&str, &str)]) -> PathBuf {
     let root = sandbox.subdirectory("plan");
@@ -298,13 +363,21 @@ fn measure_linear_requests_per_status_write_cold() {
         1,
         "one member project was created: {routed:#?}"
     );
-    let highest = set.max(update).max(project).max(member[0]);
+    // And a source scoped to one project, writing an issue of its own project and one filed
+    // in another project of its team.
+    let scoped = scoped_cold();
+    let highest = set
+        .max(update)
+        .max(project)
+        .max(member[0])
+        .max(scoped.iter().copied().max().unwrap_or_default());
     report(
         "linear-requests-per-status-write-cold",
         highest,
         &format!(
             "task status set {set}, task update --status {update}, write_project of a project \
-             copy {project}, write_project of a routed member {}",
+             copy {project}, write_project of a routed member {}, a scoped source's task status \
+             set and task update --status in its project and elsewhere {scoped:?}",
             member[0]
         ),
     );
@@ -438,16 +511,57 @@ fn measure_linear_requests_per_status_write_warm() {
     );
     let updated = updates[1..].iter().copied().max().unwrap_or_default();
     let rewritten = rewrites[1..].iter().copied().max().unwrap_or_default();
-    let highest = created.max(updated).max(rewritten);
+
+    // And in one Engine over a source scoped to one project, five status-only updates
+    // alternating between issues of its project and issues filed in another of its team.
+    let sandbox = Sandbox::new();
+    let tasks = (0..5)
+        .map(|at| {
+            let project = if at % 2 == 0 {
+                "LP-ELSEWHERE"
+            } else {
+                "LP-SCOPE"
+            };
+            issue(&format!("L-{at}"), "Todo", json!({"project": project}))
+        })
+        .collect();
+    let (config, workspace) = hellopatient_scoped(&sandbox, tasks);
+    let scoped_engine = self::engine(&config, None);
+    let mut scoped = Vec::new();
+    runtime.block_on(async {
+        for at in 0..5 {
+            let id = format!("L-{at}");
+            let from = workspace.served().len();
+            scoped_engine
+                .update_task(
+                    &global(&format!("patients:{id}")),
+                    &TaskUpdate {
+                        status: Some(Status {
+                            category: StatusCategory::Done,
+                            name: String::new(),
+                        }),
+                        ..TaskUpdate::default()
+                    },
+                )
+                .await
+                .expect("the status lands wherever the issue is filed");
+            scoped.push(workspace.served().len() - from);
+            assert_eq!(workspace.state_of(&id).as_deref(), Some("Done"), "{id}");
+        }
+    });
+    let scoped_updated = scoped[1..].iter().copied().max().unwrap_or_default();
+    let highest = created.max(updated).max(rewritten).max(scoped_updated);
     report(
         "linear-requests-per-status-write-warm",
         highest,
         &format!(
             "a copy's task creates after the first {:?}, status-only updates after the first \
-             {:?}, project rewrites after the first create {:?}",
+             {:?}, project rewrites after the first create {:?}, a scoped source's status-only \
+             updates after the first {:?}",
             &writes[1..],
             &updates[1..],
-            &rewrites[1..]
+            &rewrites[1..],
+            &scoped[1..]
         ),
     );
 }

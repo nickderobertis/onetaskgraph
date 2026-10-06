@@ -803,8 +803,10 @@ sources:
 ```
 
 A `linear` source's `project`, the id of one Linear project of the team, scopes the source to
-that project: every read is narrowed to it, a task written with no project is placed in it, and
-a write to any project but that one is refused naming the scope.
+that project: every read and listing is narrowed to it, a task written with no project is
+placed in it, and a write to any project but that one is refused naming the scope. A status-only
+write — `task status set`, or `task update` naming a status alone — is one mutation to the item
+it names, wherever that item is filed, with no read before it.
 
 ```yaml
 sources:
@@ -909,6 +911,9 @@ is still missing.
   already reads as sends a same-state update; setting `unknown` on an issue at a name the
   mapping does not give a task moves it to the mapped `unknown` name; and an issue Linear does
   not hold is reported from the mutation's own not-found refusal.
+- On Linear, a status-only write through a source scoped to one project (`project` set) goes
+  to the item it names wherever that item is filed, while reads, listings and creation stay
+  scoped.
 - On Linear, `sources fields --apply` creates every missing mapped name, as workflow states and
   project statuses, where it used to be refused.
 

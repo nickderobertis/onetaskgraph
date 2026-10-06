@@ -254,9 +254,9 @@
 //! issue at a name the mapping does not give moves it to the mapped `unknown` name, and an issue
 //! Linear does not hold is no such task from the mutation's own refusal — `Entity not found` —
 //! rather than from a read. That spelling is the one Linear documents for its own input
-//! validation; a live run has not yet re-observed it here. A source scoped to one project reads
-//! the issue first all the same, because Linear has no update conditional on where an issue is
-//! filed and a write must not reach one filed elsewhere. A targeted update naming anything else
+//! validation; a live run has not yet re-observed it here. A source scoped to one project is no
+//! exception: its status write goes to the issue it names wherever that issue is filed — see
+//! the scope's ruling below. A targeted update naming anything else
 //! keeps its one read of the issue: the metadata slot is merged into the description Linear
 //! holds, and writing it without that read would overwrite whatever a person wrote there since.
 //! A whole rewrite of an issue or a project reads the relations it replaces in its own answer
@@ -289,8 +289,18 @@
 //!
 //! With `project` set, every issue read carries `project:{id:{eq:…}}` beside the team, a
 //! project read carries `id:{eq:…}` and a document read the same project, and a read by id
-//! of anything filed elsewhere answers as no such item — so a status, a content, a metadata
-//! or a comment write to it is answered the same way. A task or a document written with no
+//! of anything filed elsewhere answers as no such item — so a content, a metadata or a comment
+//! write to it, each of which reads the item first, is answered the same way.
+//!
+//! **A status-only write is the exception, and goes to the item it names wherever that item is
+//! filed.** `task status set`, and a targeted update naming a status and nothing else, are one
+//! `issueUpdate` to the issue named, with no read before it — so a scoped source meets the same
+//! request budgets as an unscoped one — and answer the issue as it now reads, even when it is
+//! filed in another project of the team. Linear has no update conditional on where an issue is
+//! filed, so holding a status write to the scope would cost the read the budget refuses; the
+//! item was named outright, and the scope is what this source reads, lists and creates rather
+//! than where a status it is asked to set may land. Reads, listings and creation stay scoped. A
+//! task or a document written with no
 //! project is placed in that one, and one naming another is refused naming both. A project
 //! write other than to that project itself is refused: a project this source created would be
 //! one none of its reads could find.
@@ -1792,6 +1802,30 @@ impl LinearSource {
             .is_none_or(|scope| project.is_some_and(|project| project.0 == scope.0))
     }
 
+    /// The refusal of a project write to `target` — `None` for a new project — when this
+    /// source is scoped to another: it holds that project and no other, so it writes no other,
+    /// because a project it created would be one none of its reads could find. Asked before
+    /// any request is sent.
+    fn project_out_of_scope(&self, target: Option<&NativeId>) -> Option<SourceError> {
+        let scope = self.project.as_ref()?;
+        if target.is_some_and(|target| target.0 == scope.0) {
+            return None;
+        }
+        Some(SourceError::Refused {
+            message: format!(
+                "source {} is scoped to the Linear project {} and holds no other project, so it \
+                 cannot write {}; next: copy the project to a source with no `project`, or copy \
+                 its tasks here",
+                self.name,
+                scope.0,
+                target.map_or_else(
+                    || "a new one".to_owned(),
+                    |target| format!("the project {}", target.0)
+                ),
+            ),
+        })
+    }
+
     /// The project a task or a document written with `project` is filed under: that one, or
     /// the scope when it names none — and a refusal naming both when it names another.
     fn filed_in(
@@ -2221,23 +2255,17 @@ impl LinearSource {
     /// Linear holds no such issue, which it says by refusing the mutation as naming nothing.
     ///
     /// No read before it, so this is the whole of a status write's cost once the resolution is
-    /// held: one request. The one exception is a source scoped to one project, which reads the
-    /// issue first — a write must not reach an issue filed elsewhere, and Linear has no update
-    /// conditional on where an issue is filed.
+    /// held: one request — for a source scoped to one project as well. A status write goes to
+    /// the issue it names wherever that issue is filed, because the item is named outright and
+    /// the scope governs what this source reads, lists and creates, not where a status it is
+    /// asked to set may land.
     async fn status_written(
         &self,
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Task>, SourceError> {
         let (state, _) = self.status_id(category, ItemKind::Task).await?;
-        let target = if self.project.is_some() {
-            match self.issue_held(id).await? {
-                Some((task, _)) => task.id,
-                None => return Ok(None),
-            }
-        } else {
-            id.clone()
-        };
+        let target = id.clone();
         // `stateId` alone, so nothing else about the issue can move: Linear's
         // `IssueUpdateInput` makes every member optional and leaves an absent one as it was.
         let answered = self
@@ -2257,8 +2285,11 @@ impl LinearSource {
     }
 
     /// The task an `issueUpdate` sent as [`graphql::ISSUE_UPDATE_READ`] answered with — `None`
-    /// for an issue in the trash or outside this source's scope, on the terms a read by id
-    /// answers — refusing an answer about another issue than the one asked for.
+    /// for an issue in the trash, on the terms a read by id answers — refusing an answer about
+    /// another issue than the one asked for.
+    ///
+    /// Not narrowed to this source's scope: the issue was named outright and has been written,
+    /// so it is answered wherever it is filed.
     ///
     /// `asked` may be the backend id or the identifier (`ENG-1`), because Linear takes either.
     fn updated_issue(&self, data: &Value, asked: &NativeId) -> Result<Option<Task>, SourceError> {
@@ -2271,10 +2302,9 @@ impl LinearSource {
         if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
             written_is(issue, asked)?;
         }
-        Ok(optional(&json!({ "issue": issue }), "issue", |v| {
+        optional(&json!({ "issue": issue }), "issue", |v| {
             map_task(v, &self.name, &self.statuses)
-        })?
-        .filter(|task| self.in_scope(task.project.as_ref())))
+        })
     }
 
     /// The one long-form field a Linear item has, with this source's own slot at the end.
@@ -2817,27 +2847,8 @@ impl TaskSource for LinearSource {
         if let Some(key) = delivery_key_in(&write.item.metadata) {
             return Err(self.undeliverable(key, "project"));
         }
-        // A source scoped to one project holds that project and no other, so it writes no
-        // other: a project it created would be one none of its reads could find.
-        if let Some(scope) = &self.project
-            && write
-                .target
-                .as_ref()
-                .is_none_or(|target| target.0 != scope.0)
-        {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "source {} is scoped to the Linear project {} and holds no other project, \
-                     so it cannot write {}; next: copy the project to a source with no \
-                     `project`, or copy its tasks here",
-                    self.name,
-                    scope.0,
-                    write.target.as_ref().map_or_else(
-                        || "a new one".to_owned(),
-                        |target| format!("the project {}", target.0)
-                    ),
-                ),
-            });
+        if let Some(refused) = self.project_out_of_scope(write.target.as_ref()) {
+            return Err(refused);
         }
         // Through the project side of the mapping, before anything else is sent: the item's
         // own status name plays no part, because a project's statuses are a vocabulary of
@@ -3163,13 +3174,19 @@ impl TaskSource for LinearSource {
         Ok(Some(comment.clone()))
     }
     /// Resolved exactly as the write resolves it, through the instance's held vocabulary, so
-    /// the write that follows sends no read this did not.
+    /// the write that follows sends no read this did not — and a project write the scope
+    /// refuses is refused here first, before the resolution is read for it.
     async fn check_status_write(
         &self,
         kind: ItemKind,
         category: StatusCategory,
-        _target: Option<&NativeId>,
+        target: Option<&NativeId>,
     ) -> Result<(), SourceError> {
+        if kind == ItemKind::Project
+            && let Some(refused) = self.project_out_of_scope(target)
+        {
+            return Err(refused);
+        }
         self.status_id(category, kind).await.map(|_| ())
     }
     async fn set_task_status(
