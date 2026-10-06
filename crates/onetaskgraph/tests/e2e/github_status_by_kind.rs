@@ -16,11 +16,6 @@ use serde_json::{Value, json};
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 
-// llmlint: ignore-block[tests_mirror_real_usage] Every journey drives the compiled CLI against
-// the real loopback HTTP boundary. That a refused write sends no mutation is a wire effect, and
-// the fixture's received-request log is the server-side observation of it — the instrument
-// `fields.rs` and `write_order.rs` read — rather than an inspection of application internals.
-
 /// One sandbox configuring the fixture board as `board`, with `status_mapping` in place of the
 /// shared one, and a folder of Markdown as `plans` holding a task `A` and a project `P`.
 struct Setup {

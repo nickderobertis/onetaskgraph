@@ -2541,7 +2541,7 @@ impl TaskSource for LinearSource {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
-        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; this lower-level HTTP test separately asserts the serialized `started` predicate.
+        // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; `item_reads_and_transport_error_boundaries_are_exercised` separately asserts the serialized `status:{name:{eqIgnoreCase:…}}` predicate the mapping names.
         let d=self.send(PROJECTS,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         let page = connection(&d, "projects", |v| map_project(v, &self.statuses))?;
         // A project's text is applied here, over the page Linear answered: `search_title` and
