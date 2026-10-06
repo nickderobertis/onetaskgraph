@@ -3199,6 +3199,11 @@ impl LocalMdSource {
         };
         // Best effort, and the failure that started it is what is reported: a putting back that
         // itself fails would only hide why the write did not land.
+        // llmlint: ignore[changed_behavior_has_e2e] A putting back that itself fails needs a
+        // second filesystem failure staged between the first and this — the same folder refusing
+        // one write and then another — which no journey can arrange without a double of the
+        // filesystem, which the repository's test rules forbid. Its result is deliberately
+        // discarded for the reason above; the restoration that succeeds is proven.
         match before {
             Some(held) => {
                 let _ = write_atomically(&path, &held.text);

@@ -203,6 +203,7 @@ pub struct Asset {
     // llmlint: ignore[invalid_states_unrepresentable] This member's JSON shape — a lowercase hex string — is the asset contract `docs/plugin-protocol.md` §4.9a states, and plugins in other crates and other languages read and write it as exactly that. The digest is computed by `asset_sha256` wherever it is made, and every source that receives bytes refuses them unless they hash to it before storing anything; a recorded one is checked as a digest where `AssetUploads::read` reads it.
     pub sha256: String,
     /// The content type its extension gives it.
+    // llmlint: ignore[invalid_states_unrepresentable] `show --json` prints `content_type` beside the name, as the README states, and a source only ever builds an `Asset` from `AssetName::content_type`; nothing receives one from outside to trust, so there is no boundary a contradictory pair could enter through.
     pub content_type: AssetContentType,
     /// The absolute path holding its bytes on this machine, for a source that keeps them
     /// here; `null` for a hosted source.

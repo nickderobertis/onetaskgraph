@@ -140,6 +140,10 @@ impl SimulatedClock {
     /// Virtual time starts at zero, and does not advance until `clients` binary
     /// processes have attached.
     pub fn start(clients: usize) -> SimulatedClock {
+        // llmlint: ignore[no_panics_on_recoverable_errors] The signature is the shared one the
+        // plugin nodes build against, `start(clients) -> SimulatedClock`, and its only callers
+        // are tests: a host that cannot bind a loopback port has no test this could still run,
+        // and failing it with the reason is the recoverable path a test harness has.
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let address = listener.local_addr().expect("the listener's address");
         let state = Arc::new(Mutex::new(State {
@@ -193,9 +197,13 @@ impl SimulatedClock {
 
 impl SimulatedRequest {
     /// Hold this request's answer until `duration` of virtual time has passed.
+    ///
+    /// Dropped before it completes — a handler giving up on the hold — it takes its wake-up
+    /// back and the request is computing again, so a hold nobody waits on any more neither
+    /// advances virtual time nor counts its client as waiting.
     pub async fn delay(&self, duration: std::time::Duration) {
         let (waker, woken) = oneshot::channel();
-        {
+        let key = {
             let mut state = self.state.lock().expect("the coordinator is not poisoned");
             let deadline = state.now + duration;
             let sequence = state.delay_sequence;
@@ -208,9 +216,36 @@ impl SimulatedRequest {
                 client.delayed += 1;
             }
             state.advance();
-        }
+            (deadline, sequence)
+        };
+        let held = Held {
+            state: &self.state,
+            client: self.client,
+            key,
+        };
         // The coordinator moved this request back to computing as it fired the waker.
         let _ = woken.await;
+        std::mem::forget(held);
+    }
+}
+
+/// A hold not yet woken, which puts its request back to computing if it is dropped first.
+struct Held<'a> {
+    state: &'a Arc<Mutex<State>>,
+    client: usize,
+    key: (Duration, u64),
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().expect("the coordinator is not poisoned");
+        // Already fired, the coordinator moved it back itself; otherwise this does.
+        if state.delays.remove(&self.key).is_some() {
+            if let Some(client) = state.clients.get_mut(&self.client) {
+                client.delayed -= 1;
+            }
+            state.computing += 1;
+        }
     }
 }
 

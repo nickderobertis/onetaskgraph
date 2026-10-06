@@ -520,3 +520,34 @@ fn a_client_whose_coordinator_goes_away_or_answers_no_time_stops_saying_so() {
         );
     }
 }
+
+#[test]
+fn a_hold_a_handler_drops_before_it_wakes_takes_its_wake_up_back() {
+    let clock = SimulatedClock::start(1);
+    // Before the client attaches nothing advances, so the hold is still pending when the
+    // handler gives up on it.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let request = clock.request(0);
+    let gave_up = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            request.delay(Duration::from_secs(100)),
+        )
+        .await
+    });
+    assert!(gave_up.is_err(), "the hold was still pending");
+    drop(request);
+    // Had the hold's wake-up stayed behind, virtual time would stop at a hundred seconds on
+    // the way to the client's two hundred.
+    let output = client(&clock, 0, "sleep:200", None, 0)
+        .wait_with_output()
+        .expect("the client finishes");
+    assert_eq!(
+        reported(&output),
+        vec![("sleep:200".to_owned(), Duration::from_secs(200))]
+    );
+    assert_eq!(clock.now(), Duration::from_secs(200));
+}
