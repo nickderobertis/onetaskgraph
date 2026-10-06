@@ -439,9 +439,18 @@ pub mod graphql {
     /// states asked of each of fifty possible teams scored this document 30905 against Linear's
     /// limit of 10000, and the live journey's first status write was refused `Query too complex`.
     /// Two rather than one so a key matching more than one team is still seen, and refused, by
-    /// the exactly-one rule that reads this answer. Like [`super::MAX_PAGE_SIZE`], nothing
-    /// offline can hold this — complexity appears in no schema — and the live journey is what
-    /// guards it.
+    /// the exactly-one rule that reads this answer. `states` and `projectStatuses` stay at 250,
+    /// whole or refused, as above: a name a page cut off would read as missing.
+    ///
+    /// Under Linear's documented model — a property 0.1, an object 1, and a connection's
+    /// children multiplied by its `first`, or 50 without one — the refused document scores
+    /// 50 × (1 + 0.1 + 250 × (1.3 + 1.1)) + 250 × (1.4 + 1.1) = 30680, and this one
+    /// 2 × 601.1 + 625 = 1827.2. Linear's own figures run 225 above the model on both
+    /// documents it has reported here (30905 for the refused one, 17475 for [`PROJECTS`] at
+    /// 250), and one point more for every node of every connection at every depth — 752 here —
+    /// still leaves this under 2580, about a quarter of the limit. Like [`super::MAX_PAGE_SIZE`],
+    /// nothing offline can hold this — complexity appears in no schema — and the live journey
+    /// is what guards it.
     pub const RESOLUTION: &str = "query($key:String!){ teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Create a workflow state on the configured team, for `sources fields --apply`.
     pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";

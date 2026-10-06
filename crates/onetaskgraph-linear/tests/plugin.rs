@@ -1480,6 +1480,35 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
             .contains("cannot resolve the configured team \"ENG\": found 0 matches")
     );
     drop(unresolved_wire);
+    // The resolution asks for two teams rather than Linear's default page of fifty, which
+    // scored it over Linear's complexity limit: two, so a key matching more than one team is
+    // still seen, and refused rather than resolved against the first.
+    let state = serde_json::json!({"nodes":[{"id":"S","name":"Todo","type":"unstarted"}],
+        "pageInfo":{"hasNextPage":false}});
+    let (ambiguous_endpoint, ambiguous_wire) = response_server(vec![serde_json::json!({
+        "teams":{"nodes":[{"id":"T-1","states":state},{"id":"T-2","states":state}]},
+        "projectStatuses":{"nodes":[],"pageInfo":{"hasNextPage":false}}})]);
+    let ambiguous_team = writable_source(&ambiguous_endpoint)
+        .write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{ambiguous_team}")
+            .contains("cannot resolve the configured team \"ENG\": found 2 matches"),
+        "{ambiguous_team}"
+    );
+    assert!(
+        ambiguous_wire
+            .recv()
+            .unwrap()
+            .contains("teams(first:2,filter:"),
+        "the resolution asks for two teams"
+    );
+    drop(ambiguous_wire);
     let native_task = DependencyEdge {
         from: DependencyEndpoint::new("authored:NEAR".into(), ItemKind::Task).unwrap(),
         to: DependencyEndpoint::from_native("I-FAR".into(), ItemKind::Task),
