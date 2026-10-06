@@ -682,7 +682,8 @@ impl Engine {
         };
         let target = held.as_ref().map(|held| held.id.clone());
         // A document replaced holds exactly the assets this names: one it held and this does
-        // not name is removed with the write, rather than left behind unreferenced.
+        // not name is removed with the write, rather than left behind unreferenced — and one
+        // only its record of uploads names, on a source that lists none, is removed too.
         let held_assets = match &target {
             Some(target) => source
                 .source()
@@ -722,7 +723,10 @@ impl Engine {
             },
             depends_on: Vec::new(),
         };
-        let written = match (answers, carried.is_empty() && held_assets.is_empty()) {
+        let written = match (
+            answers,
+            carried.is_empty() && !assets::holds_any(&held_assets, recorded.as_ref()),
+        ) {
             (answers, false) => source
                 .source()
                 .write_document_with_assets(&write, answers, &assets::write_of(carried, recorded))
@@ -1017,7 +1021,11 @@ impl Engine {
         let provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
             .map_err(|error| EngineError::Template { error })?;
         let carried = self.carried_assets(regeneration, &rendered.body).await?;
-        let with_assets = !carried.is_empty() || !regeneration.held_assets.is_empty();
+        let with_assets = !carried.is_empty()
+            || assets::holds_any(
+                &regeneration.held_assets,
+                regeneration.recorded_assets.as_ref(),
+            );
         let changed = regeneration.content != rendered.body
             || !assets::same_set(&regeneration.held_assets, &carried)
             || regeneration.provenance.as_ref() != Some(&provenance)

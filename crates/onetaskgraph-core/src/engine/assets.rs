@@ -24,6 +24,12 @@ pub(super) enum Owner {
     Document,
 }
 
+/// Whether a record holds any asset: one its source lists, or — for a source that lists none,
+/// as one reached over the stdio protocol does — one its own record of uploads still names.
+pub(super) fn holds_any(listed: &[Asset], recorded: Option<&AssetUploads>) -> bool {
+    !listed.is_empty() || recorded.is_some_and(|recorded| !recorded.0.is_empty())
+}
+
 /// The assets a write of `content` carries: one payload per asset it references, in the order
 /// it first references them, each taken from `given` or else from `kept`.
 ///

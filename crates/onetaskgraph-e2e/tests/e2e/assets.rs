@@ -814,6 +814,57 @@ fn a_document_replaced_by_id_holds_exactly_the_replacing_calls_assets() {
     );
 }
 
+#[test]
+fn a_document_replaced_by_id_on_a_plugin_serving_assets_takes_its_uploads_away() {
+    // A destination over the protocol lists no assets, so what it serves is known only from its
+    // own record of uploads: a replacement naming none still has to take those away.
+    let folders = Folders::new();
+    let with = folders.text("with.md", "![x](./x.png)\n");
+    let none = folders.text("none.md", "no pictures\n");
+    let create = |body: &str, assets: &[&str]| {
+        let mut arguments = vec![
+            "document",
+            "create",
+            "served",
+            "--project",
+            "launch",
+            "--title",
+            "Replaced",
+            "--id",
+            "replaced",
+            "--body-file",
+            body,
+        ];
+        for asset in assets {
+            arguments.extend(["--asset", asset]);
+        }
+        folders.created(&arguments)
+    };
+    let x = folders.image("x", "x.png", &images::png(43, 75_000));
+    let id = create(&with, &[&x]);
+    let shown = folders.show("document", &id);
+    assert_eq!(recorded(&shown).len(), 1, "{shown}");
+
+    let writes_before = Folders::logged(&folders.served_log).len();
+    assert_eq!(create(&none, &[]), id);
+    let writes = Folders::logged(&folders.served_log);
+    let replacement = &writes[writes_before];
+    assert_eq!(replacement["target"], json!("replaced"));
+    assert_eq!(
+        replacement["received"],
+        json!([]),
+        "the replacement was a write of no assets at all"
+    );
+    let after = folders.show("document", &id);
+    assert!(
+        item(&after)["metadata"]
+            .get("onetaskgraph.assets")
+            .is_none(),
+        "{after}"
+    );
+    assert_eq!(item(&after)["content"], json!("no pictures\n"));
+}
+
 /// A rendered task and a rendered document in `notes`, each holding a 500 KB screenshot and a
 /// second picture, filed under the project `launch`.
 fn rendered_pair(folders: &Folders, seed: u64) -> (String, String, Vec<u8>, Vec<u8>) {
