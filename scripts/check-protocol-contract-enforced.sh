@@ -89,16 +89,16 @@ said=""
 run_case "unedited" "" pass
 
 run_case "a method missing from the list" \
-  's/^- `set_task_rendering` and `set_document_rendering`, a regenerate in place\.$/- `set_task_rendering`, a regenerate in place./' \
+  's/^- `set_task_rendering`, `set_project_rendering` and `set_document_rendering`, a regenerate in$/- `set_task_rendering` and `set_project_rendering`, a regenerate in/' \
   refuse
 names "a method missing from the list" \
   'template operation not carried `set_document_rendering` is declared in `NOT_METHODS`'
 
 run_case "a name no exemption backs" \
-  's/^- `write_task_rendered` and `write_document_rendered`, a create from a template;$/- `write_task_rendered`, `write_document_rendered` and `write_project_rendered`, a create from a template;/' \
+  's/^- `write_task_rendered`, `write_project_rendered` and `write_document_rendered`, a create from$/- `write_task_rendered`, `write_project_rendered`, `write_document_rendered` and `write_label_rendered`, a create from/' \
   refuse
 names "a name no exemption backs" \
-  'template operation not carried `write_project_rendered` is specified by docs/plugin-protocol.md'
+  'template operation not carried `write_label_rendered` is specified by docs/plugin-protocol.md'
 
 run_case "the list gone" \
   's/^The template operations are not carried\./The template operations are elsewhere./' \

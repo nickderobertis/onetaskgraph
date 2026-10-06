@@ -39,9 +39,10 @@ value, of the same JSON type — and this product never interprets it.
 
 ### `onetaskgraph.template`: where a rendered item came from
 
-A task or a document created or regenerated from a template — `task create`, `document
-create`, `task render`, `document render`, or the engine's `create_task` and
-`render_task` from Rust — records this entry; one created from a plain body records none:
+A task, a project or a document created or regenerated from a template — `task create`,
+`project create`, `document create`, `task render`, `project render`, `document render`, or
+the engine's `create_task`, `create_project` and `render_task` from Rust — records this entry,
+computed the same way for all three; one created from a plain body records none:
 
 ```json
 {"template": "<string>", "digest": "sha256:<hex>", "body_digest": "sha256:<hex>", "answers_digest": "sha256:<hex>"}
