@@ -4,7 +4,7 @@
 //! one engine, and the Rust caller that links the crate is the consumer a CLI-only proof would
 //! strand. This is also where an in-memory source's add-then-list is proven, because its work
 //! lives in the process that holds it and the journeys that drive the compiled binary can only
-//! read one invocation's answer — see `crates/onetaskgraph/tests/e2e/comments.rs`.
+//! read one invocation's answer — see `crates/onetaskgraph-e2e/tests/e2e/comments.rs`.
 
 use onetaskgraph_core::{
     CommentList, Config, ConfiguredSource, DeletedComment, Engine, EngineError, GlobalId,

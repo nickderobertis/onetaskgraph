@@ -1625,7 +1625,7 @@ later reads exactly as any created item does.
 ### GitHub Projects request costs
 
 Every request below is one GraphQL document priced at one point by the node-count model, so a
-row's requests are its points. `crates/onetaskgraph/tests/e2e/copy_cost.rs` pins each row
+row's requests are its points. `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` pins each row
 against the requests the loopback board served, and holds this table and the one in the
 plugin's crate documentation to the same figures.
 

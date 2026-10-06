@@ -1,9 +1,9 @@
 # The requests a Linear status write may send, counted at the loopback Linear's endpoint.
 #
-# Each budget's command is one journey of crates/onetaskgraph/tests/e2e/linear_budget.rs,
-# run through scripts/linear-budget.sh against the loopback workspace — Hello Patient's
-# vocabulary, configured with the per-kind `hellopatient` mapping — with no credential and
-# no network. `bash scripts/check-linear-budgets.sh`, this crate's `budget-check` target,
+# Each budget's command is one journey of
+# crates/onetaskgraph-linear-e2e/tests/e2e/linear_budget.rs, run through
+# scripts/linear-budget.sh against the loopback workspace — the example team's vocabulary,
+# configured with its per-kind mapping — with no credential and no network. `bash scripts/check-linear-budgets.sh`, this crate's `budget-check` target,
 # checks them all.
 #
 # The base each figure replaces is commit c9e75a8, measured through the same binary and

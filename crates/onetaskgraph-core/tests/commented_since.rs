@@ -3,7 +3,7 @@
 //! the engine, which reads that source's comments task by task — and the one answer both owe.
 //!
 //! The journey that drives the same predicate through the binary is
-//! `crates/onetaskgraph/tests/e2e/commented_since.rs`.
+//! `crates/onetaskgraph-e2e/tests/e2e/commented_since.rs`.
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_core::{

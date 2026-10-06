@@ -2,7 +2,7 @@
 //! `copy`, `tasks`, `set_task_priority` and `set_task_content` over real `in-memory` sources.
 //!
 //! The journeys that drive the same verbs through the binary, against every source kind, are
-//! in `crates/onetaskgraph/tests/e2e/priority.rs`.
+//! in `crates/onetaskgraph-e2e/tests/e2e/priority.rs`.
 
 use onetaskgraph_core::{
     Config, CopyItems, CopyRequest, CopyScope, Engine, EngineError, Failure, Filters, GlobalId,

@@ -101,8 +101,8 @@ for budget in linear-requests-per-status-write-cold linear-requests-per-status-w
   linear-requests-per-settlement-update-cold linear-requests-per-settlement-update-warm; do
   journey="linear_budget::measure_$(printf '%s' "$budget" | tr '-' '_')"
   case "$calls" in
-    *"-- $journey --exact"*) ;;
-    *) fail "budget $budget did not run its journey $journey; the stand-in was asked for: $calls" ;;
+    *"-p onetaskgraph-linear-e2e "*"--test e2e -- $journey --exact"*) ;;
+    *) fail "budget $budget did not run its journey $journey in the e2e target of onetaskgraph-linear-e2e, the Linear plugin's own e2e suite; the stand-in was asked for: $calls" ;;
   esac
 done
 

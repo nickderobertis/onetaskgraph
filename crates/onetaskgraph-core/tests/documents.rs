@@ -8,7 +8,7 @@
 //! could not make them pass.
 //!
 //! The journeys that prove the same behaviour end to end drive the compiled binary; see
-//! `crates/onetaskgraph/tests/e2e/`.
+//! `crates/onetaskgraph-e2e/tests/e2e/`.
 
 use std::num::NonZeroU32;
 

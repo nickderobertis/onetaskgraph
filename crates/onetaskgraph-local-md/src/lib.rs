@@ -11,7 +11,7 @@
 //! documents in the first place, and this one does: a third folder beside the other two.
 //!
 //! *Proven* means a shared journey drives it against the real binary over this source's
-//! own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
+//! own row in `crates/onetaskgraph-e2e-support/src/fixtures.rs`, and
 //! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
 //! [`capabilities`](TaskSource::capabilities) from parting.
 //!

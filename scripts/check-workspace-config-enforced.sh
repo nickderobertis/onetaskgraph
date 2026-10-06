@@ -132,6 +132,7 @@ PYTHON_PROJECT=sdks/python/project.json
 TYPESCRIPT_PROJECT=sdks/typescript/project.json
 CORE_PROJECT=crates/onetaskgraph-core/project.json
 WORKSPACE_PROJECT=workspace/project.json
+LINEAR_E2E_PROJECT=crates/onetaskgraph-linear-e2e/project.json
 COVERAGE_SCRIPT=scripts/rust-coverage.sh
 CONFTEST=sdks/python/tests/conftest.py
 
@@ -155,6 +156,24 @@ mutate "$PYTHON_PROJECT" 'del document["targets"]["test"]["dependsOn"]'
 expect check-workspace-config.sh "an SDK test target that spawns the binary without depending on its build" \
   "sdks/python/project.json: test spawns target/debug/onetaskgraph (through sdks/python/tests/conftest.py) but does not depend on onetaskgraph:build"
 restore "$PYTHON_PROJECT"
+
+# The Rust e2e suites are spawners by their tag, not by a registry entry, so each half of
+# that is watched refusing: a suite's test losing the build, its coverage losing the
+# instrumented build, and a crate linking the runner without the tag.
+mutate "$LINEAR_E2E_PROJECT" 'del document["targets"]["test"]["dependsOn"]'
+expect check-workspace-config.sh "an e2e suite whose test spawns the binary without depending on its build" \
+  "crates/onetaskgraph-linear-e2e/project.json: test spawns target/debug/onetaskgraph (through onetaskgraph-e2e-support) but does not depend on onetaskgraph:build"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"]["dependsOn"].remove("onetaskgraph:coverage")'
+expect check-workspace-config.sh "an e2e suite whose coverage does not depend on the instrumented build" \
+  "crates/onetaskgraph-linear-e2e/project.json: coverage spawns the instrumented binary"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["tags"].remove("layer:e2e")'
+expect check-workspace-config.sh "a crate linking the e2e runner without being tagged an e2e suite" \
+  "crates/onetaskgraph-linear-e2e/project.json: links onetaskgraph-e2e-support"
+restore "$LINEAR_E2E_PROJECT"
 
 # test, coverage and pack reach the build only through generate-check, so its edge going
 # is every one of them reported.

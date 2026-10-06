@@ -16,7 +16,7 @@ Keys are free-form, with two prefixes reserved:
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate
      rather than by words: `the_reserved_key_inventory_names_exactly_the_keys_the_code_spells`
-     in `crates/onetaskgraph/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
+     in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
 - `onetaskgraph.` belongs to this product. It defines exactly ten keys, each spelled
@@ -404,14 +404,14 @@ which says where *it* was copied to. A source that cannot hold it is copied from
 before, and the copy reports the link `unrecorded` rather than failing.
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour, row by
-     row: `crates/onetaskgraph/tests/e2e/copy_link.rs` records the link in a folder's front
+     row: `crates/onetaskgraph-e2e/tests/e2e/copy_link.rs` records the link in a folder's front
      matter and reports a one-line `metadata:` as not recorded, over both boundaries;
      `crates/onetaskgraph-core/tests/copy_link.rs` records it on an in-memory source;
      `the_copy_link_is_kept_in_the_body_slot_and_reads_back_on_every_kind` in the
      github-projects plugin tests holds the body slot; the Linear plugin's
      `a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record` holds its slot, and
      `a_metadata_set_moves_only_the_slot_and_a_render_only_the_body_and_its_provenance_on_linear`
-     in `crates/onetaskgraph/tests/e2e/linear.rs` records one on a Linear item through the binary,
+     in `crates/onetaskgraph-linear-e2e/tests/e2e/linear.rs` records one on a Linear item through the binary,
      by a copy out of Linear; and
      `a_plugin_whose_handshake_does_not_declare_metadata_updates_is_refused_without_being_asked`
      with `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` hold the
@@ -444,10 +444,10 @@ destination project keeps the ones it holds, which describe *its* plan. `task li
 <home> --members` reads `members` off the home on every request, and nothing else is kept.
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour, row by
-     row: `crates/onetaskgraph/tests/e2e/routes.rs` writes and reads both keys back through a
+     row: `crates/onetaskgraph-e2e/tests/e2e/routes.rs` writes and reads both keys back through a
      folder of Markdown, a GitHub board home with a Linear member, and a Linear home with a
      folder member; the in-memory row is the engine's own write path, driven by
-     `crates/onetaskgraph/tests/e2e/no_persistence.rs`. -->
+     `crates/onetaskgraph-e2e/tests/e2e/no_persistence.rs`. -->
 | source | where it keeps `onetaskgraph.members` and `onetaskgraph.member_of` |
 | --- | --- |
 | `local-md` | entries of the project file's front matter `metadata:` block |

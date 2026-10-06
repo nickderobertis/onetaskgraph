@@ -46,7 +46,7 @@
 //!
 //! ## Ruling: the row that declares nothing native is the fixture, not the defect
 //!
-//! The shared journey table in `crates/onetaskgraph/tests/e2e/fixtures.rs` carries two
+//! The shared journey table in `crates/onetaskgraph-e2e-support/src/fixtures.rs` carries two
 //! rows of this plugin. The second — *"in-memory (compensated: nothing native but its
 //! project table, forward-only)"* — declares every field it may as `Unsupported` and both
 //! dependency fields as `ForwardOnly`, over exactly the same dataset as the first.
