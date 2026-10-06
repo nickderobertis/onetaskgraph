@@ -982,11 +982,19 @@ def test_sources_fields_method_decodes_a_linear_sources_status_names(
                     {"id": "S-2", "name": "Queued", "type": "unstarted"},
                 ]
                 data = {
-                    "teams": {"nodes": [{"id": "TEAM-1", "states": {"nodes": states}}]},
+                    "teams": {
+                        "nodes": [
+                            {
+                                "id": "TEAM-1",
+                                "states": {"nodes": states, "pageInfo": {"hasNextPage": False}},
+                            }
+                        ]
+                    },
                     "projectStatuses": {
                         "nodes": [
                             {"id": "P-1", "name": "Planned", "type": "planned", "position": 1.0}
-                        ]
+                        ],
+                        "pageInfo": {"hasNextPage": False},
                     },
                 }
             response = json.dumps({"data": data}).encode()

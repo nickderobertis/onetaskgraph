@@ -412,13 +412,14 @@ pub mod graphql {
     /// Linear's endpoint on a key every manager of a workspace shares: a source sends this once
     /// and holds the answer for its own lifetime (see the ruling on the resolution cache in this
     /// crate's module documentation). `Team.states` and `Query.projectStatuses` are each read
-    /// as the one page Linear answers an unpaged connection with — a team holds a few dozen
-    /// states at most, and a workspace a few dozen project statuses — and `projectStatuses`
-    /// takes no `filter`: Linear refuses one outright with `Unknown argument "filter" on field
+    /// as one page of Linear's connection maximum, 250, and refused rather than read short when
+    /// either says it has more — a team holds a few dozen states at most, and a workspace a
+    /// few dozen project statuses, so a resolution that does not fit one page is not one this
+    /// source guesses at — and `projectStatuses` takes no `filter`: Linear refuses one outright with `Unknown argument "filter" on field
     /// "Query.projectStatuses"`, which is why a project status is matched by name here, locally.
     /// `position` is read for one reason: a project status `sources fields --apply` creates is
     /// placed after the workspace's last.
-    pub const RESOLUTION: &str = "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id states{nodes{id name type}}}} projectStatuses{nodes{id name type position}} }";
+    pub const RESOLUTION: &str = "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Create a workflow state on the configured team, for `sources fields --apply`.
     pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";
     /// Create a workspace project status, for `sources fields --apply`.
@@ -835,8 +836,38 @@ impl Vocabulary {
                     ),
                 })
         };
+        let team = NativeId(backend_id(found, "id")?.into());
+        // Read whole or not at all: a name on a page this did not read would be refused as
+        // missing, or a second name of that spelling would go unseen.
+        for (more, held) in [
+            (
+                "/teams/nodes/0/states/pageInfo/hasNextPage",
+                "workflow states of its team",
+            ),
+            (
+                "/projectStatuses/pageInfo/hasNextPage",
+                "project statuses of its workspace",
+            ),
+        ] {
+            let more = data.pointer(more).and_then(Value::as_bool).ok_or_else(|| {
+                SourceError::Malformed {
+                    message: format!(
+                        "missing boolean {}",
+                        more.trim_start_matches('/').replace('/', ".")
+                    ),
+                }
+            })?;
+            if more {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "source {source} reads the {held} in one page of 250, and Linear holds \
+                         more; next: archive the ones no longer used, so the rest fit one page"
+                    ),
+                });
+            }
+        }
         Ok(Self {
-            team: NativeId(backend_id(found, "id")?.into()),
+            team,
             states: nodes("/teams/nodes/0/states/nodes")?
                 .iter()
                 .map(|node| held(node, false))
@@ -1315,15 +1346,19 @@ enum GqlErrorCode {
 struct Refusal(GqlError);
 
 impl Refusal {
-    /// Whether Linear refused because the id the request addressed names nothing.
+    /// Whether Linear refused because the issue the request addressed is not there.
     ///
     /// Linear answers a mutation addressing an id it does not hold with an errored response —
     /// `Entity not found: Issue`, whose `userPresentableMessage` reads `Could not find
     /// referenced Issue.` — rather than a null payload. Both spellings are recognised, so a
-    /// rewording of either one alone still reads as what it is; anything else is a refusal.
+    /// rewording of either one alone still reads as what it is; an entity of any other kind,
+    /// and anything else, is a refusal.
     fn entity_missing(&self) -> bool {
         let lowered = self.0.message.to_ascii_lowercase();
-        lowered.starts_with("entity not found")
+        // The Issue the mutation addressed, and nothing it merely refers to: a state the input
+        // names that Linear does not hold is a refusal of the write, never no such task.
+        lowered.trim_end() == "entity not found: issue"
+            || lowered.starts_with("entity not found: issue ")
             || self
                 .0
                 .extensions
@@ -1332,7 +1367,7 @@ impl Refusal {
                 .and_then(Value::as_str)
                 .is_some_and(|said| {
                     said.to_ascii_lowercase()
-                        .starts_with("could not find referenced")
+                        .starts_with("could not find referenced issue")
                 })
     }
 

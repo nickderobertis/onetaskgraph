@@ -45,6 +45,8 @@ struct Held {
     malformed_next_resolution: bool,
     /// How an `issueUpdate` naming no issue is refused.
     missing: Missing,
+    /// Say the team's states run on past the page the resolution reads.
+    more_states: bool,
 }
 
 /// The spellings of Linear's refusal of a mutation naming nothing, each recognised on its own.
@@ -250,15 +252,15 @@ impl Workspace {
         let data = match query.as_str() {
             graphql::RESOLUTION if std::mem::take(&mut held.malformed_next_resolution) => {
                 json!({"teams":{"nodes":[{"id":format!("TEAM-{}", held.team)}]},
-                       "projectStatuses":{"nodes":held.statuses}})
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":false}}})
             }
             graphql::RESOLUTION => {
                 let teams = if variables["key"] == json!(held.team) {
-                    json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states}}])
+                    json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states,"pageInfo":{"hasNextPage":held.more_states}}}])
                 } else {
                     json!([])
                 };
-                json!({"teams":{"nodes":teams},"projectStatuses":{"nodes":held.statuses}})
+                json!({"teams":{"nodes":teams},"projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":false}}})
             }
             graphql::ISSUE => {
                 json!({"issue": held.issues.iter().find(|issue| issue["id"] == id)})
@@ -279,7 +281,12 @@ impl Workspace {
                 let state = match input.get("stateId").and_then(Value::as_str) {
                     Some(state) => match held.states.iter().find(|held| held["id"] == state) {
                         Some(held) => Some(json!({"name":held["name"],"type":held["type"]})),
-                        None => return json!({"errors":[{"message":"stateId is not valid"}]}),
+                        // As Linear refuses a reference to an entity it does not hold.
+                        None => {
+                            return json!({"errors":[{"message":"Entity not found: WorkflowState",
+                                "extensions":{"code":"INVALID_INPUT",
+                                    "userPresentableMessage":"Could not find referenced WorkflowState."}}]});
+                        }
                     },
                     None => None,
                 };
@@ -998,6 +1005,32 @@ async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_othe
             "a missing issue is no such task, however Linear spelled it"
         );
     }
+    // A referenced entity Linear does not hold — the state the write names — is a refusal of
+    // the write, never no such task.
+    let workspace = hello_patient("A");
+    workspace.issue("I-1", "Todo", None);
+    let held = source(&workspace, hellopatient());
+    held.set_task_status(&"I-1".into(), StatusCategory::Todo)
+        .await
+        .unwrap();
+    workspace
+        .held()
+        .states
+        .retain(|state| state["name"] != "Done");
+    workspace.add_state("A-state-Done-gone", "Done", "completed");
+    // The held resolution still carries the old id, which Linear no longer holds.
+    workspace
+        .held()
+        .states
+        .retain(|state| state["id"] != "A-state-Done");
+    let refused = held
+        .set_task_status(&"I-1".into(), StatusCategory::Done)
+        .await
+        .expect_err("a state Linear does not hold");
+    assert!(
+        matches!(&refused, SourceError::Refused { message } if message.contains("WorkflowState")),
+        "{refused:?}"
+    );
     // Any other refusal of the same mutation is a refusal, never no such task.
     let workspace = hello_patient("A");
     workspace.issue("I-1", "Todo", None);
@@ -1112,4 +1145,28 @@ async fn a_status_write_to_a_trashed_issue_answers_no_such_task() {
             .unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn a_resolution_that_does_not_fit_one_page_is_refused_rather_than_read_short() {
+    let workspace = hello_patient("A");
+    workspace.issue("I-1", "Todo", None);
+    workspace.held().more_states = true;
+    let source = source(&workspace, hellopatient());
+    let refused = source
+        .set_task_status(&"I-1".into(), StatusCategory::Done)
+        .await
+        .expect_err("more states than one page");
+    assert!(
+        refused
+            .to_string()
+            .contains("workflow states of its team in one page of 250, and Linear holds more"),
+        "{refused}"
+    );
+    assert_eq!(
+        workspace.names_since(0),
+        ["RESOLUTION"],
+        "nothing was written"
+    );
+    assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
 }

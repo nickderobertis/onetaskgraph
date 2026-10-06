@@ -82,7 +82,9 @@
 # `name`, `statusId` and `labelIds`: a narrow metadata write sends `description` alone, as
 # Linear's published schema allows. `IssueFilter.priority` therefore no longer stays out.
 #
-# Status by item kind carries a tenth date. `Team.states`, `ProjectStatus.position`,
+# Status by item kind carries a tenth date. `Team.states` with its `first`,
+# `Query.projectStatuses`'s `first`, the `pageInfo` of both their connections,
+# `ProjectStatus.position`,
 # `ProjectStatusFilter.name`, the two mutations `workflowStateCreate` and
 # `projectStatusCreate`, their inputs `WorkflowStateCreateInput` and
 # `ProjectStatusCreateInput`, their payloads `WorkflowStatePayload` and `ProjectStatusPayload`,
@@ -109,7 +111,7 @@ type Query {
   issueLabels(first: Int, after: String, filter: IssueLabelFilter): IssueLabelConnection!
   projectLabels(filter: ProjectLabelFilter): ProjectLabelConnection!
   teams(filter: TeamFilter): TeamConnection!
-  projectStatuses(after: String): ProjectStatusConnection!
+  projectStatuses(first: Int, after: String): ProjectStatusConnection!
 }
 type Mutation {
   issueCreate(input: IssueCreateInput!): IssuePayload!
@@ -259,16 +261,18 @@ type ProjectRelation {
 }
 type Team {
   id: ID!
-  states: WorkflowStateConnection!
+  states(first: Int): WorkflowStateConnection!
 }
 type TeamConnection {
   nodes: [Team!]!
 }
 type WorkflowStateConnection {
   nodes: [WorkflowState!]!
+  pageInfo: PageInfo!
 }
 type ProjectStatusConnection {
   nodes: [ProjectStatus!]!
+  pageInfo: PageInfo!
 }
 type WorkflowStatePayload {
   success: Boolean!

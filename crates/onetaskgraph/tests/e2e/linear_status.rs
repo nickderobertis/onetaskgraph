@@ -1317,3 +1317,65 @@ fn sources_fields_says_in_words_what_it_found_and_what_it_created() {
             .contains(&("Wrapped Up".to_owned(), "completed".to_owned()))
     );
 }
+
+#[test]
+fn unknown_is_every_item_of_a_kind_its_mapping_names_nothing_for() {
+    let sandbox = Sandbox::new();
+    let (config, _) = linear_workspace_with(
+        &sandbox,
+        held(
+            vec![
+                issue("I-TODO", "Todo", TEAM_STATES, json!({})),
+                issue("I-TRIAGE", "Triage", TEAM_STATES, json!({})),
+            ],
+            vec![
+                project("P-PLANNED", "Planned", PROJECT_STATUSES, json!({})),
+                project("P-IDEA", "Idea", PROJECT_STATUSES, json!({})),
+            ],
+        ),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    sandbox.project_document(&document(&json!({
+        // No mapping at all, and one naming a task's statuses alone.
+        "unmapped": linear(&config, json!({"status_mapping": {}})),
+        "tasks-only": linear(&config, json!({"status_mapping": {"todo": {"task": "Todo"}}})),
+    })));
+    let listed = |source: &str, verb: &str, category: &str| {
+        let mut ids = answered(
+            &sandbox,
+            &[
+                "--json", verb, "list", "--source", source, "--status", category,
+            ],
+        )["items"]
+            .as_array()
+            .expect("a page")
+            .iter()
+            .map(|item| item["id"].as_str().expect("an id").to_owned())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    assert_eq!(
+        listed("unmapped", "task", "unknown"),
+        ["unmapped:I-TODO", "unmapped:I-TRIAGE"]
+    );
+    assert_eq!(
+        listed("unmapped", "project", "unknown"),
+        ["unmapped:P-IDEA", "unmapped:P-PLANNED"]
+    );
+    assert_eq!(listed("unmapped", "task", "todo"), Vec::<String>::new());
+    assert_eq!(listed("tasks-only", "task", "todo"), ["tasks-only:I-TODO"]);
+    assert_eq!(
+        listed("tasks-only", "task", "unknown"),
+        ["tasks-only:I-TRIAGE"]
+    );
+    assert_eq!(
+        listed("tasks-only", "project", "unknown"),
+        ["tasks-only:P-IDEA", "tasks-only:P-PLANNED"]
+    );
+    assert_eq!(
+        listed("tasks-only", "project", "todo"),
+        Vec::<String>::new()
+    );
+}

@@ -3758,12 +3758,14 @@ fn linear_response(
         // them now — so a name `sources fields --apply` created is in the next answer.
         let team = vars["key"].as_str().unwrap_or_default();
         let teams = if team.eq_ignore_ascii_case(LINEAR_TEAM) {
-            json!([{"id":"TEAM-1","states":{"nodes":data["_linear_states"]}}])
+            json!([{"id":"TEAM-1","states":{"nodes":data["_linear_states"],
+                "pageInfo":{"hasNextPage":false}}}])
         } else {
             json!([])
         };
         return Ok(json!({"teams":{"nodes":teams},
-            "projectStatuses":{"nodes":data["_linear_project_statuses"]}}));
+            "projectStatuses":{"nodes":data["_linear_project_statuses"],
+                "pageInfo":{"hasNextPage":false}}}));
     }
     if matches!(
         operation,

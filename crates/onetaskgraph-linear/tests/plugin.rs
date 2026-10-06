@@ -58,8 +58,9 @@ fn writable_source(endpoint: &str) -> Box<dyn TaskSource> {
 /// What [`onetaskgraph_linear::graphql::RESOLUTION`] answers: the team `TEAM` holding
 /// `states`, and the workspace's project `statuses`.
 fn resolution(states: serde_json::Value, statuses: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({"teams":{"nodes":[{"id":"TEAM","states":{"nodes":states}}]},
-        "projectStatuses":{"nodes":statuses}})
+    let page = |nodes| serde_json::json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}});
+    serde_json::json!({"teams":{"nodes":[{"id":"TEAM","states":page(states)}]},
+        "projectStatuses":page(statuses)})
 }
 
 /// The resolution a [`writable_source`] writes through: a workflow state and a project status
@@ -665,8 +666,9 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
         "projectLabels": {"nodes":[{"id":"PL","name":"roadmap","color":null}]},
         "teams": {"nodes":[{"id":"TEAM","states":{"nodes":[
             {"id":"STATE","name":"In Progress","type":"started"},
-            {"id":"STATE-TODO","name":"Todo","type":"unstarted"}]}}]},
-        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo","type":"planned","position":1.0}]},
+            {"id":"STATE-TODO","name":"Todo","type":"unstarted"}],"pageInfo":{"hasNextPage":false}}}]},
+        "projectStatuses": {"nodes":[{"id":"STATUS","name":"Todo","type":"planned","position":1.0}],
+                            "pageInfo":{"hasNextPage":false}},
         "workflowStateCreate": {"success":true,"workflowState":{"id":"NEW-STATE","name":"Queued","type":"unstarted"}},
         "projectStatusCreate": {"success":true,"status":{"id":"NEW-STATUS","name":"Queued","type":"planned","position":2.0}},
         "issueCreate": {"success":true,"issue":{"id":"I"}},
@@ -1475,7 +1477,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         .unwrap_err();
     assert!(format!("{missing_team}").contains("config.team"));
     let (unresolved_endpoint, unresolved_wire) = response_server(vec![serde_json::json!({
-        "teams":{"nodes":[]},"projectStatuses":{"nodes":[]}})]);
+        "teams":{"nodes":[]},"projectStatuses":{"nodes":[],"pageInfo":{"hasNextPage":false}}})]);
     let unresolved_team = writable_source(&unresolved_endpoint)
         .write_task(&ItemWrite {
             target: None,
@@ -2100,8 +2102,8 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
         .expect("the one status answering to the name resolves it");
     let asked = wire.recv().unwrap();
     assert!(
-        asked.contains("projectStatuses{") && !asked.contains("projectStatuses("),
-        "the request Linear refuses outright is one passing projectStatuses an argument: {asked}"
+        asked.contains("projectStatuses(first:250){") && !asked.contains("filter:{name"),
+        "the request Linear refuses outright is one passing projectStatuses a filter: {asked}"
     );
     let created = wire.recv().unwrap();
     assert!(
