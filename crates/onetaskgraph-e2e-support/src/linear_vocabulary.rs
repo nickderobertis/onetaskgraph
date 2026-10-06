@@ -1,3 +1,4 @@
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Two suites configure this one team — the Linear plugin's and the engine's own, whose command-boundary and routing journeys write to it — and an e2e suite is a package of tests alone that nothing can depend on, so the shared harness is the one place both can read it from without a second spelling.
 //! One Linear team's vocabulary — its workflow states, its workspace's project statuses and the
 //! per-kind `status_mapping` configured over them — shared by every suite whose journeys drive
 //! a Linear source configured that way.

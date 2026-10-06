@@ -909,6 +909,7 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
 }
 
 /// The board this fixture keeps, and everything a request may change on it.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
     items: Vec<Value>,
     /// Every comment on every issue this board holds, oldest first.
@@ -2964,6 +2965,7 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -
 ///
 /// The handle is what lets a journey assert on the store rather than on what the binary said
 /// about it: an issue's raw description byte for byte, and which mutations a command sent.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspace) {
     let state = Arc::new(Mutex::new(linear_with_comments(held)));
     let ledger = Arc::new(Mutex::new(Vec::new()));

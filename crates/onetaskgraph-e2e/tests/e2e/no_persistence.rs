@@ -259,7 +259,7 @@ fn every_verb() -> Vec<Vec<String>> {
         // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two sub-second
         // subprocesses that read one file in the sandbox and reach no source: this journey's
         // claim is about every verb, so a verb it does not drive is a verb it proves nothing
-        // about, and it can only drive one from the binary crate that answers it.
+        // about, and it can only drive one through the binary that answers it.
         owned(&["template", "variables", TEMPLATE]),
         owned(&[
             "template",
