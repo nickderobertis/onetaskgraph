@@ -331,7 +331,7 @@ fn a_github_metadata_search_after_the_call_reads_a_value_a_person_rewrote() {
     a_metadata_search_reads_an_edited_slot_only_after_the_call("subprocess", hosted_github);
 }
 
-/// Hello Patient's workspace over two issues in `Todo`, and the source configuration that
+/// Hello Patient's workspace over three issues in `Todo`, and the source configuration that
 /// reaches it.
 fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
     let tasks = ["L-1", "L-2", "L-3"]
