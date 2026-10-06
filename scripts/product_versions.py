@@ -51,13 +51,18 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
         for crate in (
             "onetaskgraph",
             "onetaskgraph-core",
+            "onetaskgraph-e2e",
+            "onetaskgraph-e2e-support",
             "onetaskgraph-github-projects",
+            "onetaskgraph-github-projects-e2e",
             "onetaskgraph-in-memory",
             "onetaskgraph-linear",
+            "onetaskgraph-linear-e2e",
             "onetaskgraph-live",
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
             "onetaskgraph-status-options",
+            "onetaskgraph-status-options-e2e",
         )
     ),
     RegexVersionFile(

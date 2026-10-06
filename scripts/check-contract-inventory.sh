@@ -87,6 +87,11 @@ EXCEPTIONS = {
         "a free function, not one of the contract's types — the one check of the lowercase "
         "hex SHA-256 spelling `asset_sha256` produces, which reading a recorded upload applies"
     ),
+    "SIMULATED_CLOCK_VARIABLE": (
+        "a const, not one of the contract's types — the name of the variable that selects the "
+        "simulated `Clock`, spelled once for the binary that reads it and the harness that "
+        "hands it out"
+    ),
     "system_clock": (
         "a free function, not one of the contract's types — the real `Clock`, which the "
         "binary hands every in-process source when no test asked for simulated time"

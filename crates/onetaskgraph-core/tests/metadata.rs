@@ -3,7 +3,7 @@
 //! Every test drives the engine's own public methods over a real `in-memory` source, wrapped
 //! only to record which methods the engine called — and, in one test, to read a value back
 //! the way a source that normalises what it stores would. The journeys that drive the same
-//! verbs through the binary are in `crates/onetaskgraph/tests/e2e/metadata.rs`.
+//! verbs through the binary are in `crates/onetaskgraph-e2e/tests/e2e/metadata.rs`.
 
 use std::sync::{Arc, Mutex};
 

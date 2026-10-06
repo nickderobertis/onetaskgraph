@@ -234,7 +234,7 @@ pub fn resolve_available_with_clock(
             // clock it is handed yet — routing the hosted plugins' pacing through it is the
             // work this seam exists for — so nothing a source does can show which clock it was
             // built with. What is observable is proven: the binary settles one clock and
-            // attaches to a test's coordinator with it (`tests/e2e/clock.rs`), and every
+            // attaches to a test's coordinator with it (`crates/onetaskgraph-e2e/tests/e2e/clock.rs`), and every
             // built-in plugin builds through this call in every journey.
             plugin.build_with_clock(name, source.config(), secrets, Arc::clone(clock))
         };

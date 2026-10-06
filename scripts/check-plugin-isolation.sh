@@ -4,6 +4,11 @@
 #   1. No plugin crate depends on `onetaskgraph-core`, by any edge — normal, build or
 #      dev, at any depth.
 #   2. `onetaskgraph-plugin-api` depends on no other crate of this workspace.
+#   3. Nothing depends on `onetaskgraph-core` directly but the binary and a test-only e2e
+#      suite: a crate whose project.json is tagged `layer:e2e` and whose manifest says
+#      `publish = false`. Such a suite is not a plugin crate — it drives the engine in process
+#      beside the binary — and nothing depends on it, so its edge marks nothing else affected.
+#      This is the local half of deny.toml's wrapper list for the engine.
 #
 # Both are read from the REAL dependency graph via `cargo metadata`, never from a list
 # maintained beside it — a hand-maintained list is a rule that stops being true quietly.
@@ -86,7 +91,22 @@ from collections import deque
 PLUGINS = set(os.environ["PLUGINS"].split())
 API = "onetaskgraph-plugin-api"
 ENGINE = os.environ["ENGINE"]
+BINARY = "onetaskgraph"
+E2E_TAG = "layer:e2e"
 PREFIX = "check-plugin-isolation:"
+
+
+def is_unpublished_e2e_suite(package):
+    """Whether a package is a test-only e2e suite: tagged `layer:e2e`, and never published."""
+    if package.get("publish") != []:
+        return False
+    project = os.path.join(os.path.dirname(package["manifest_path"]), "project.json")
+    try:
+        with open(project, encoding="utf-8") as handle:
+            tags = json.load(handle).get("tags", [])
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(tags, list) and E2E_TAG in tags
 
 def path_to_engine(start):
     """The crates from `start` to the engine, innermost first, or None."""
@@ -135,6 +155,14 @@ try:
                 print(f"{PREFIX} {name} -> {target} ({kind}): a plugin crate may not depend on the engine")
             if name == API and target in workspace:
                 print(f"{PREFIX} {name} -> {target} ({kind}): the contract crate may depend on no other crate of this workspace")
+            if (
+                target == ENGINE
+                and name not in PLUGINS
+                and name != BINARY
+                and name in workspace
+                and not is_unpublished_e2e_suite(package)
+            ):
+                print(f"{PREFIX} {name} -> {target} ({kind}): only the binary and a test-only e2e suite (tagged {E2E_TAG} in its project.json, publish = false in its manifest) may depend on the engine")
 
     # The engine is named in one place, and a rename there that no package answers to
     # would disarm the walk in silence — every plugin would come back clean.

@@ -171,7 +171,7 @@ what is still there.
 
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
-2. `crates/onetaskgraph/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
+2. `crates/onetaskgraph-e2e/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
    `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
    compares the tree with itself: it fails, naming the path, if any file was created or
    changed during the run, and says which sentinels a new file held. It asserts on the
@@ -214,7 +214,11 @@ against real Nx; reasoning about the configuration does not count.
    on the split and the one that fails silently — an over-broad `implicitDependencies`
    entry or a too-wide `namedInputs` glob makes every engine commit run every plugin's
    tests, and nothing complains.
-3. Editing one plugin selects that crate and its dependents — never a sibling plugin.
+3. Editing one plugin selects that crate and its dependents — never a sibling plugin, and
+   never the e2e suite of a sibling plugin: a change to the Linear plugin selects
+   `onetaskgraph-linear-e2e` and not `onetaskgraph-github-projects-e2e` or
+   `onetaskgraph-status-options-e2e`, and the GitHub Projects plugin the other way round.
+   Editing the engine or the binary selects every e2e suite.
 4. Editing a script selects `scripts` and `workspace`, and **no** crate. `scripts/` is a
    project like any other; before it was, Nx mapped none to it and a script-only change
    selected nothing at all, so the checks that change could break ran only because a
@@ -223,7 +227,10 @@ against real Nx; reasoning about the configuration does not count.
 Nx cannot read a Cargo manifest, so each Rust `project.json` mirrors its crate's Cargo
 dependencies as `implicitDependencies`; `scripts/check-nx-graph.sh` fails when the two
 disagree either way, because a missing edge under-runs the gate and an extra one over-runs
-it.
+it. A `layer:e2e` crate is reconciled by a rule of its own, because what it exercises is
+not all an edge: each Cargo dependency it has is an `implicitDependencies` entry or a
+`{workspaceRoot}/crates/<crate>/**/*` entry of its `default` named input, the binary is always
+the latter, and an edge may also name a crate the binary links — never anything else.
 
 **The `scripts` project depends on nothing, and the edge that exists runs the other way.**
 `workspace` depends on it, because a dozen of the checks that project owns are scripts, so
@@ -294,7 +301,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
   builds dev and test at `debug = 1`; nothing in the tree names a target directory of its
-  own. The Rust integration tests, both SDKs' tests and generators and the distribution
+  own. The Rust e2e suites, both SDKs' tests and generators and the distribution
   journey all spawn `target/debug/onetaskgraph`, and the binary crate's `test` target once
   kept a private directory because another target's `cargo build` could replace that file
   between a test resolving it and spawning it. What replaced the private directory is
@@ -305,7 +312,10 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   with, and every switch between them replaces the file; every target that spawns the file
   depends on that build; no other target invokes cargo on the package; and no source a
   spawner runs invokes cargo at all. The inventory of spawners lives in that guard and is
-  reconciled against a scan of `sdks/` and `scripts/` for the path, both ways.
+  reconciled against a scan of `sdks/` and `scripts/` for the path, both ways; every
+  `layer:e2e` crate is a spawner by its tag, and never builds the `onetaskgraph` package
+  itself — it finds the file beside its own test executable, so an instrumented run finds the
+  instrumented build `onetaskgraph:coverage` made, which its `coverage` target depends on.
 - **The tests that reach a real API are ordinary tests, and that reverses an earlier
   decision.** They were a separate `test-live` target on every project, run by a workflow of
   their own on a schedule and on every pull request, deliberately outside the required set —
@@ -549,13 +559,28 @@ correction like that back to the documentation it disagrees with — a refusal o
 Linear is evidence about Linear that a published schema does not outrank.
 
 Each drives the real binary as a subprocess, and each runs against **every** configured
-source kind through one shared fixture table — `crates/onetaskgraph/tests/e2e/fixtures.rs`
-— so a plugin is never proven by a suite of its own writing. That coverage is not a habit:
+source kind through one shared fixture table —
+`crates/onetaskgraph-e2e-support/src/fixtures.rs` — so a plugin is never proven by a suite of
+its own writing. That coverage is not a habit:
 `scripts/check-journey-matrix.sh`, a target in `check`, reconciles the table against the
 registry both ways and fails naming the plugin, so a plugin that lands without a row
 cannot merge. A plugin whose source has not landed carries a `Pending` row, which is a
 journey of its own — it asserts that plugin refuses with its own message — rather than a
 placeholder.
+
+**The journeys live in test-only workspace members split by the crate each exercises, never
+in the binary crate's own `tests/`.** `crates/onetaskgraph-e2e` holds the engine's and the
+command line's own; `crates/onetaskgraph-linear-e2e`, `crates/onetaskgraph-github-projects-e2e`
+and `crates/onetaskgraph-status-options-e2e` hold the journeys that exercise only that one
+crate. Each is `publish = false`, holds nothing but `tests/`, and has a `test` target that
+depends on `onetaskgraph:build`; the harness they share — the sandbox, the runner and how it
+finds that build without `CARGO_BIN_EXE_*`, the loopback servers and the table above — is
+`crates/onetaskgraph-e2e-support`, once. A plugin suite's graph edge is its plugin alone, and
+the binary, the engine and the harness are named in its own `default` named input instead: Nx
+treats a change to a `{workspaceRoot}` input as touching the project, which is what selects it
+when the binary or the engine changes, without the edge through them that would make a change
+to the *other* hosted plugin select it too. A journey that crosses more than one plugin is the
+engine's, and goes in `onetaskgraph-e2e`.
 
 The list grows as features land, and the suite is what says which of
 them do; this is the inventory of what is owed, not a status board.
@@ -646,7 +671,7 @@ them do; this is the inventory of what is owed, not a status board.
     location-like string is left alone, every copy reports what it rewrote, what it left
     unresolved and how many of those were ambiguous, and a dry run reports the same figures
     and writes nothing.
-    <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This list is the inventory of journeys, and this sentence is held by the three it names in `crates/onetaskgraph/tests/e2e/rendered.rs`: `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged`. -->
+    <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This list is the inventory of journeys, and this sentence is held by the three it names in `crates/onetaskgraph-e2e/tests/e2e/rendered.rs`: `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged`. -->
     A rendered document whose references a copy rewrote arrives with
     `body_digest` the digest of the rendering as the copy rewrote its references, its other
     three provenance fields carried; its stored answers and `answers_digest` still name the
@@ -802,10 +827,10 @@ them do; this is the inventory of what is owed, not a status board.
     `repositories` and a malformed pattern; set by `--set` or the environment alone they route
     `sources route` and a copy, and `config show` names their layer; `sources route` answers
     from configuration alone and refuses an unknown source and a malformed origin by name.
-71. A mixed plan copied to a GitHub board routing `github.com/petsinc/*` to Linear lands its
-    home, its document and its other tasks on the board and its petsinc tasks in a Linear
+71. A mixed plan copied to a GitHub board routing `github.com/widgetco/*` to Linear lands its
+    home, its document and its other tasks on the board and its widgetco tasks in a Linear
     member project, the two naming each other and their edges recorded both ways; an
-    all-petsinc plan lands wholly in Linear with its document; a member copy adding a petsinc
+    all-widgetco plan lands wholly in Linear with its document; a member copy adding a widgetco
     task creates the member once and reuses it; and a re-copy creates nothing.
 72. Over two folders of Markdown, `task create`, `task copy`, `document copy`, `project copy
     --no-tasks` and `project copy --member` each place by the rule, a home wholly routed keeps

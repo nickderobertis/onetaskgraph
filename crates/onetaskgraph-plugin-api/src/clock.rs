@@ -26,6 +26,15 @@ pub trait Clock: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
 
+/// The variable that puts a process of this build on a simulated clock.
+///
+/// Its value is `<address>/<client>`: a test's coordinator's loopback address and the
+/// process's 0-based client number. Unset or empty, the process runs on [`system_clock`]. It
+/// does not begin `ONETASKGRAPH_`, so the configuration's environment layer never reads it as a
+/// setting. Named here, beside the clock it selects, so the binary that reads it and the test
+/// harness that hands it out spell it once between them.
+pub const SIMULATED_CLOCK_VARIABLE: &str = "OTG_SIMULATED_CLOCK";
+
 /// One clock, shared by everything a process builds.
 pub type SharedClock = std::sync::Arc<dyn Clock>;
 

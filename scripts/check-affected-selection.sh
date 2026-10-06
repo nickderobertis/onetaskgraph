@@ -9,7 +9,11 @@
 #      split, and it is the one that fails silently: an over-broad implicitDependencies
 #      entry, or a namedInputs glob reaching past its own crate, makes every engine commit
 #      run every plugin's tests and nothing complains.
-#   3. Editing one plugin marks that plugin and its dependents — never a sibling plugin.
+#   3. Editing one plugin marks that plugin and its dependents — never a sibling plugin,
+#      and never the e2e suite of a sibling plugin. Each hosted plugin's journeys live in a
+#      test-only e2e suite whose only graph edge is that plugin; the binary and the engine
+#      they also run on are named in the suite's own inputs instead, so editing either of
+#      those marks every suite, and editing one plugin marks its own suite alone.
 #
 # The fourth is the scripts project's own, and it fails the same silent way:
 #
@@ -67,6 +71,16 @@ if [ ! -r "$ROOT/scripts/read-lines.sh" ] || ! source "$ROOT/scripts/read-lines.
   exit 1
 fi
 read_lines PLUGINS < <(bash "$ROOT/scripts/plugin-crates.sh" | tr -d '\r')
+
+# The e2e suites, one per crate whose journeys exercise it alone, and the engine's own. Named
+# here rather than read from a tag, because which suite each edit must and must not select is
+# the expectation itself: a suite that lost its edge, or gained one through the engine, is
+# exactly what a derived list would follow silently.
+readonly LINEAR_E2E=onetaskgraph-linear-e2e
+readonly GITHUB_E2E=onetaskgraph-github-projects-e2e
+readonly STATUS_OPTIONS_E2E=onetaskgraph-status-options-e2e
+readonly ENGINE_E2E=onetaskgraph-e2e
+readonly E2E_SUITES="$ENGINE_E2E $LINEAR_E2E $GITHUB_E2E $STATUS_OPTIONS_E2E"
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -213,6 +227,9 @@ for plugin in "${PLUGINS[@]}"; do
 done
 expect_selected "editing the engine" onetaskgraph-core "$selection"
 expect_selected "editing the engine" onetaskgraph "$selection"
+for suite in $E2E_SUITES; do
+  expect_selected "editing the engine" "$suite" "$selection"
+done
 report_on_failure "editing onetaskgraph-core" "$selection" "$before"
 reset_scratch
 
@@ -230,6 +247,9 @@ for plugin in "${PLUGINS[@]}"; do
   [ "$plugin" = "onetaskgraph-linear" ] && continue
   expect_not_selected "editing one plugin" "$plugin" "$selection"
 done
+expect_selected "editing one plugin" "$LINEAR_E2E" "$selection"
+expect_not_selected "editing one plugin" "$GITHUB_E2E" "$selection"
+expect_not_selected "editing one plugin" "$STATUS_OPTIONS_E2E" "$selection"
 report_on_failure "editing onetaskgraph-linear" "$selection" "$before"
 reset_scratch
 
@@ -242,6 +262,8 @@ for plugin in "${PLUGINS[@]}"; do
   [ "$plugin" = "onetaskgraph-github-projects" ] && continue
   expect_not_selected "editing the other hosted plugin" "$plugin" "$selection"
 done
+expect_selected "editing the other hosted plugin" "$GITHUB_E2E" "$selection"
+expect_not_selected "editing the other hosted plugin" "$LINEAR_E2E" "$selection"
 report_on_failure "editing onetaskgraph-github-projects" "$selection" "$before"
 reset_scratch
 
@@ -259,7 +281,25 @@ expect_not_selected "editing a script" onetaskgraph-core "$selection"
 expect_not_selected "editing a script" onetaskgraph "$selection"
 expect_not_selected "editing a script" sdk-python "$selection"
 expect_not_selected "editing a script" sdk-typescript "$selection"
+for suite in $E2E_SUITES; do
+  expect_not_selected "editing a script" "$suite" "$selection"
+done
 report_on_failure "editing scripts/read-lines.sh" "$selection" "$before"
+reset_scratch
+
+# 6. The binary changed, and every journey that spawns it re-runs — through the input each
+#    suite names, since no crate can depend on a package that is only binaries — while no
+#    plugin can see it.
+selection="$(select_after_editing crates/onetaskgraph/src/main.rs)"
+before=$failures
+expect_selected "editing the binary" onetaskgraph "$selection"
+for suite in $E2E_SUITES; do
+  expect_selected "editing the binary" "$suite" "$selection"
+done
+for plugin in "${PLUGINS[@]}"; do
+  expect_not_selected "editing the binary" "$plugin" "$selection"
+done
+report_on_failure "editing crates/onetaskgraph/src/main.rs" "$selection" "$before"
 reset_scratch
 
 if [ "$failures" -ne 0 ]; then

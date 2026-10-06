@@ -2198,7 +2198,7 @@ impl Engine {
     /// exited. Reading the destination is also what makes a document copied on its own
     /// work, which a same-run mapping never could.
     ///
-    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This comment is required to state the rule; it is held by the journeys `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph/tests/e2e/rendered.rs`, and the entry's fields are `TemplateProvenance`'s own.
+    // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This comment is required to state the rule; it is held by the journeys `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph-e2e/tests/e2e/rendered.rs`, and the entry's fields are `TemplateProvenance`'s own.
     /// Tasks and projects are not touched. A document's content is rewritten, and so is
     /// one thing beside it: when this substitutes at least one reference into a rendering
     /// that still hashes to the `body_digest` its [`TemplateProvenance`] records, the copy
@@ -4419,7 +4419,7 @@ fn outgoing(
 /// A task whose id is `<its project's id>/<rest>` is offered as `<rest>` under the
 /// destination project it is filed in, so a destination whose ids are paths files it in that
 /// project rather than the source's. Any other id, and every update, is left as it is. The
-/// `a_project_copied_*` journeys in `crates/onetaskgraph/tests/e2e/copy.rs` hold the Markdown
+/// `a_project_copied_*` journeys in `crates/onetaskgraph-e2e/tests/e2e/copy.rs` hold the Markdown
 /// plugin's id shape to this rule.
 fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
     if let (Item::Task(task), Some(filed)) = (item, filed)

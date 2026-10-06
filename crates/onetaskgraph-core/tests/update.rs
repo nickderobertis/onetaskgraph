@@ -5,7 +5,7 @@
 //! its own" is observed rather than assumed. What each test asserts is read back through the
 //! source itself afterwards, and for `local-md` through the bytes of its file. The journeys
 //! that drive the same operation through the binary, over GitHub Projects and Linear too, are
-//! in `crates/onetaskgraph/tests/e2e/update.rs`.
+//! in `crates/onetaskgraph-e2e/tests/e2e/update.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

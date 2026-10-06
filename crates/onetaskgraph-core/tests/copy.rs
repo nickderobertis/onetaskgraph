@@ -6,7 +6,7 @@
 //! makes and a copy typed at a shell have to be the same call — and the consumer a
 //! command-line-only copy would strand is this one, the Rust caller that links the crate.
 //! The journeys that drive the same verb as a user does are in
-//! `crates/onetaskgraph/tests/e2e/`.
+//! `crates/onetaskgraph-e2e/tests/e2e/`.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -2894,7 +2894,7 @@ async fn a_well_behaved_copy_still_walks_every_page_of_every_loop_it_has() {
 }
 
 // The reference rewrite at the engine's own boundary. Driven the way a user drives it,
-// against stores that outlive one invocation, in `crates/onetaskgraph/tests/e2e/copy.rs`.
+// against stores that outlive one invocation, in `crates/onetaskgraph-e2e/tests/e2e/copy.rs`.
 
 /// One record of a store, with the location its source reports and the origin it records.
 ///

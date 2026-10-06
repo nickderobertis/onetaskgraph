@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.3.1...onetaskgraph-local-md-v0.3.2) - 2026-10-06
+
+### Added
+
+- *(projects)* render a project's description from a template, with provenance and stored answers ([#3334](https://github.com/nickderobertis/onetaskgraph/pull/3334))
+
 ## [0.2.52](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.2.51...onetaskgraph-local-md-v0.2.52) - 2026-09-29
 
 ### Added

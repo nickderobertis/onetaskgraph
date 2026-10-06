@@ -42,13 +42,9 @@ use tokio::sync::oneshot;
 
 use crate::Environment;
 
-/// The variable that puts this process on a simulated clock.
-///
-/// Its value is `<address>/<client>`: the coordinator's loopback address and this process's
-/// 0-based client number. Unset or empty, the process runs on [`system_clock`]. It does not
-/// begin `ONETASKGRAPH_`, so the configuration's environment layer never reads it as a
-/// setting.
-pub const SIMULATED_CLOCK_VARIABLE: &str = "OTG_SIMULATED_CLOCK";
+/// The variable that puts this process on a simulated clock; see
+/// [`onetaskgraph_plugin_api::SIMULATED_CLOCK_VARIABLE`].
+pub use onetaskgraph_plugin_api::SIMULATED_CLOCK_VARIABLE;
 
 /// Which clock a value of [`SIMULATED_CLOCK_VARIABLE`] asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]

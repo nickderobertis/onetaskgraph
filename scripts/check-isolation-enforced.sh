@@ -7,7 +7,7 @@
 # splitting `onetaskgraph-plugin-api` out of `onetaskgraph-core`, so it is the last one
 # that should be taken on trust.
 #
-# So the forbidden edge is introduced for real, in a scratch clone, five ways — four
+# So the forbidden edge is introduced for real, in a scratch clone, seven ways — six
 # against the local guard and one against deny.toml's wrapper restriction, which is the
 # half of this rule that is a required check. Each case asserts on the DIAGNOSTIC as well
 # as the exit status: a guard that refuses without naming the crate and the path sends the
@@ -196,6 +196,28 @@ else
     fi
   done
 fi
+reset_fixture
+
+# 6. The test-only e2e suites may depend on the engine — the control above passes with two of
+#    them doing so — and that allowance is theirs alone. The shared e2e harness is test-only
+#    too, but it is a library every suite links, not a suite, so an engine edge from it is
+#    refused; and a suite that stops being unpublished loses the allowance with it.
+add_dependency onetaskgraph-e2e-support dependencies 'onetaskgraph-core.workspace = true'
+run_guard
+expect_refused "the shared e2e harness, which is no e2e suite, depending on the engine" \
+  onetaskgraph-e2e-support onetaskgraph-core "only the binary and a test-only e2e suite"
+reset_fixture
+
+python3 - "$scratch/repo/crates/onetaskgraph-e2e/Cargo.toml" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().replace("publish = false\n", "", 1))
+PY
+run_guard
+expect_refused "an e2e suite that would be published depending on the engine" \
+  onetaskgraph-e2e onetaskgraph-core "publish = false"
 reset_fixture
 
 if [ "$failures" -ne 0 ]; then

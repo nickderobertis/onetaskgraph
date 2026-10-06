@@ -2,7 +2,7 @@
 //! [`Engine::copy`], and read back what landed.
 //!
 //! The journeys that drive the same verbs as a user does are in
-//! `crates/onetaskgraph/tests/e2e/assets.rs`. These are the library half the copy verb owes:
+//! `crates/onetaskgraph-e2e/tests/e2e/assets.rs`. These are the library half the copy verb owes:
 //! a folder of Markdown holding the assets, and an `in-memory` destination declaring them
 //! native, which serves each at a URL as a hosted destination does — and which a copy that
 //! cannot finish has to leave exactly as it found it.

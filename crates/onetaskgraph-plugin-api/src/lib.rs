@@ -35,7 +35,7 @@ pub use asset::{
     rewrite_asset_references, serve_asset_references,
 };
 pub use capability::{Capabilities, DependencySupport, Support};
-pub use clock::{Clock, SharedClock, system_clock};
+pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};
 pub use comment::{Comment, CommentBody, NewComment, TaskDetailRead, commentless};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};

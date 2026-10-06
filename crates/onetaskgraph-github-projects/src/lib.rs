@@ -125,7 +125,7 @@
 //!
 //! One verdict per field of [`Capabilities`], and what `Native` means when this source
 //! says it. *Proven* means a shared journey drives it against the real
-//! binary over this source's own row in `crates/onetaskgraph/tests/e2e/fixtures.rs`, and
+//! binary over this source's own row in `crates/onetaskgraph-e2e-support/src/fixtures.rs`, and
 //! `every_row_declares_exactly_what_its_plugin_reports` is what keeps this list and
 //! [`capabilities`](TaskSource::capabilities) from parting.
 //!
@@ -235,7 +235,7 @@
 //! refused part-way leave the item's body, and every metadata key in it, exactly as it stood;
 //! the one piece of metadata written before the body, an origin a copy re-points, is put back
 //! when a later write is refused — and when putting it back is refused too, the write's own
-//! refusal names that key, what it now holds and what it held. `crates/onetaskgraph/tests/e2e/write_order.rs` refuses each
+//! refusal names that key, what it now holds and what it held. `crates/onetaskgraph-github-projects-e2e/tests/e2e/write_order.rs` refuses each
 //! of those writes in turn, whole and as one aliased field failing after the one before it.
 //!
 //! **Two facts about GitHub the write rows rest on, each read off GitHub's published schema
@@ -10301,7 +10301,7 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
 /// What [`TaskSource::end_command`] leaves of this source's held state, asserted on the state
 /// itself, for the two things no journey can observe.
 ///
-/// The journeys in `crates/onetaskgraph/tests/e2e/end_command.rs` prove through the engine,
+/// The journeys in `crates/onetaskgraph-e2e/tests/e2e/end_command.rs` prove through the engine,
 /// with and without the call, that a settlement, a board listing and a metadata search each
 /// read afresh after it — the resolved records, the written-item overlay, the board and its
 /// search, and the narrowed searches. What they cannot reach is the held field definitions,
