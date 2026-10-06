@@ -136,6 +136,221 @@ def reference(name):
     )
 
 
+FENCE = re.compile(r"(`{3,}|~{3,})(.*)")
+LIST_MARKER = re.compile(r"(?:[-+*]|([0-9]{1,9})[.)])(?=[ \t]|$)")
+QUOTE = re.compile(r" {0,3}> ?")
+# A setext heading's underline, which only a paragraph line can precede, and a thematic break.
+UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*")
+BREAK = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})")
+
+
+def columns(text, column=0):
+    """How many columns of indentation `text`, starting at `column`, opens with, a tab reaching
+    the next multiple of 4, and how many characters that indentation is."""
+    start = column
+    for index, character in enumerate(text):
+        if character == " ":
+            column += 1
+        elif character == "\t":
+            column += 4 - column % 4
+        else:
+            return column - start, index
+    return column - start, len(text)
+
+
+def code_spans(content, start, end, ranges):
+    """Add to `ranges` every inline code span in `content[start:end]`: a run of backticks, not
+    escaped, closed by the next run of exactly as many."""
+    at = start
+    while at < end:
+        if content[at] != "`":
+            at += 1
+            continue
+        run_end = at
+        while run_end < end and content[run_end] == "`":
+            run_end += 1
+        if escaped(content, at):
+            at += 1
+            continue
+        length = run_end - at
+        search = run_end
+        closed = None
+        while search < end:
+            if content[search] != "`":
+                search += 1
+                continue
+            close_end = search
+            while close_end < end and content[close_end] == "`":
+                close_end += 1
+            if close_end - search == length:
+                closed = close_end
+                break
+            search = close_end
+        if closed is None:
+            at = run_end
+            continue
+        ranges.append((at, closed))
+        at = closed
+
+
+def code(content):
+    """The (start, end) offsets of `content` that are code, as CommonMark reads it: fenced and
+    indented code blocks, in a list item or a block quote too, and inline code spans.
+
+    A line scan rather than a parser, because this peer imports nothing outside the standard
+    library. It reads a block quote only where one opens a line, so a quote opened inside a list
+    item on the same line as its marker is read as text; the engine reads it as CommonMark does.
+    """
+    ranges = []
+    offset = 0
+    containers = []
+    fence = None
+    previous = "start"
+    paragraph = None
+    quoted = 0
+
+    def flush(until):
+        if paragraph is not None:
+            code_spans(content, paragraph, until, ranges)
+        return None
+
+    for line in content.split("\n"):
+        line_start = offset
+        line_end = offset + len(line)
+        offset = line_end + 1
+        body = line
+        depth = 0
+        while True:
+            quote = QUOTE.match(body)
+            if not quote:
+                break
+            body = body[quote.end():]
+            depth += 1
+        indent, skipped = columns(body, len(line) - len(body))
+        blank = skipped == len(body)
+        if depth > quoted and fence is None:
+            # A block quote opening interrupts a paragraph, so no code span runs into it.
+            paragraph = flush(line_start)
+            previous = "start"
+        quoted = depth
+        if fence is not None:
+            character, length, base, fence_depth = fence
+            if depth >= fence_depth and (blank or indent >= base):
+                closer = FENCE.match(body[skipped:]) if indent - base <= 3 else None
+                if (
+                    closer
+                    and closer.group(1)[0] == character
+                    and len(closer.group(1)) >= length
+                    and not closer.group(2).strip()
+                ):
+                    fence = None
+                    previous = "block"
+                ranges.append((line_start, line_end))
+                continue
+            # A line less indented than the list item the fence opened in ends both, and so does
+            # one outside the block quote it opened in.
+            fence = None
+            previous = "block"
+        if blank:
+            paragraph = flush(line_start)
+            if previous == "code":
+                ranges.append((line_start, line_end))
+            else:
+                previous = "blank"
+            continue
+        # A line less indented than a list item's content leaves the item, unless it is a lazy
+        # continuation of the item's paragraph, which no line opening a block of its own is.
+        rest = body[skipped:]
+        lazy = previous == "text" and not (
+            rest.startswith("#") or FENCE.match(rest) or LIST_MARKER.match(rest)
+        )
+        while containers and indent < containers[-1] and not lazy:
+            containers.pop()
+        column = indent
+        at = line_end - len(rest)
+        can_code = previous in ("blank", "start", "code", "block")
+        interrupting = previous == "text"
+        kind = "text"
+        opened_item = False
+        while True:
+            base = containers[-1] if containers else 0
+            if column - base >= 4:
+                kind = "code" if can_code else "text"
+                break
+            if (interrupting and UNDERLINE.fullmatch(rest)) or BREAK.fullmatch(rest):
+                kind = "block"
+                break
+            marker = LIST_MARKER.match(rest)
+            after = rest[marker.end():] if marker else ""
+            if marker and interrupting and (
+                not after.strip() or (marker.group(1) is not None and int(marker.group(1)) != 1)
+            ):
+                marker = None
+            if marker:
+                gap, gap_skipped = columns(after)
+                if not after.strip():
+                    containers.append(column + marker.end() + 1)
+                    rest = ""
+                    kind = "block"
+                    opened_item = True
+                    break
+                width = gap if gap <= 4 else 1
+                containers.append(column + marker.end() + width)
+                rest = after[gap_skipped:] if gap <= 4 else after[1:]
+                column = containers[-1] + (gap - width)
+                at = line_end - len(rest)
+                can_code = True
+                interrupting = False
+                opened_item = True
+                continue
+            opened = FENCE.match(rest)
+            if opened and not (opened.group(1)[0] == "`" and "`" in opened.group(2)):
+                fence = (opened.group(1)[0], len(opened.group(1)), base, depth)
+                kind = "fence"
+            elif rest.startswith("#"):
+                kind = "block"
+            break
+        if kind in ("code", "fence") or opened_item or kind == "block" or previous != "text":
+            paragraph = flush(line_start)
+        if kind in ("code", "fence"):
+            ranges.append((at, line_end))
+            previous = kind
+            continue
+        if kind == "block":
+            if rest:
+                code_spans(content, at, line_end, ranges)
+            previous = "block" if rest else "start"
+            continue
+        if paragraph is None:
+            paragraph = at
+        previous = "text"
+    flush(len(content))
+    return ranges
+
+
+def escaped(content, at):
+    """Whether the character at `at` is escaped: preceded by an odd number of backslashes."""
+    count = 0
+    while at - count > 0 and content[at - count - 1] == "\\":
+        count += 1
+    return count % 2 == 1
+
+
+def rewrite(content, name, url):
+    """`content` with every reference to `name` outside code, and not escaped, pointed at `url`."""
+    spans = code(content)
+
+    def in_code(at):
+        return any(start <= at < end for start, end in spans)
+
+    def point(found):
+        if escaped(content, found.start()) or in_code(found.start()) or in_code(found.end(1)):
+            return found.group(0)
+        return found.group(1) + url
+
+    return reference(name).sub(point, content)
+
+
 def store_assets(item, payloads, recorded):
     """Serve each asset of a write and point the item at them, as §4.9a asks.
 
@@ -205,7 +420,7 @@ def store_assets(item, payloads, recorded):
     content = item.get("content") or ""
     rewritten = content
     for name, upload in uploads.items():
-        rewritten = reference(name).sub(lambda found: found.group(1) + upload["url"], rewritten)
+        rewritten = rewrite(rewritten, name, upload["url"])
     metadata = dict(item.get("metadata") or {})
     entry = metadata.get(TEMPLATE_KEY)
     if (

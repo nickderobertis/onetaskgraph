@@ -661,7 +661,11 @@ Markdown image whose target is `./<name>`:
 `.jpg`, `.jpeg`, `.gif` or `.webp`. That is the only shape that is an asset reference: an
 image at an absolute URL, one whose target has a directory (`./img/before.png`) or starts
 `../`, one with no `./` (`before.png`), and a plain link to `./before.png` are content like
-any other, stored, shown and copied exactly as written.
+any other, stored, shown and copied exactly as written. So is an image outside the
+convention's reach because it is not an image at all: one whose `!` is escaped
+(`\![before](./before.png)`), and image syntax inside an inline code span, a fenced code block
+or an indented code block, which is how a document shows the convention without using it. A
+record whose only image syntax is of those kinds holds no asset.
 
 `task create`, `task render`, `document create` and `document render` store an asset from
 `--asset PATH`, repeatable, under the file's base name:

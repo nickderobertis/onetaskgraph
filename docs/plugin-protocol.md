@@ -814,7 +814,11 @@ against this document implements nothing more.
 A task's or a document's content references an image **asset** as a Markdown image whose
 target is `./<name>` — `![<alt>](./<name>)` — where `<name>` is a bare file name, with no `/`,
 no `\` and no `..`, ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`.
-Nothing else is a reference, and every other link is content like any other.
+Only an image outside code is one: an image whose `!` is escaped with a backslash, and image
+syntax inside an inline code span or a fenced or indented code block — as CommonMark decides
+what is code, in a list item or a block quote too — is not, and a plugin rewriting references
+leaves it byte for byte. Nothing else is a reference, and every other link is content like any
+other.
 
 Only a plugin that declared `assets` `"native"` (§4.2) is ever sent a write carrying assets.
 Such a write is a `write_task` or a `write_document` whose `params` carry, beside `write`, the

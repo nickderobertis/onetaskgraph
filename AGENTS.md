@@ -914,7 +914,8 @@ them do; this is the inventory of what is owed, not a status board.
     one of every accepted extension, upper and mixed case included — and `show --json` lists
     each as `{name, sha256, content_type, path}` in the order the content first references it,
     `[]` for a record holding none; every link outside `![alt](./<name>)` is stored, shown and
-    copied as written. Each refusal a create owes names the file or the reference and writes
+    copied as written, and so is an image escaped or inside code, which is no reference —
+    copied into a folder of Markdown and into a plugin serving assets alike. Each refusal a create owes names the file or the reference and writes
     nothing; a render keeps, replaces by name and drops; two records keep their own bytes under
     one name; and a record replaced or removed takes its assets with it.
 83. A copy carries a record's assets: into a folder of Markdown byte for byte with the content

@@ -1174,6 +1174,221 @@ fn a_copy_of_a_record_with_no_asset_reference_sends_no_asset_member_to_any_plugi
     }
 }
 
+/// A template whose content holds image syntax that is no reference — escaped, in code spans,
+/// in fenced code blocks of both fences and in an indented code block — naming both an asset the
+/// record holds and one it does not, and after it a real reference to each picture its answers
+/// name.
+const CODE_PICTURES: &str = r#"---
+onetaskgraph_template: 1
+variables:
+  shots:
+    description: The pictures it shows
+    type: list
+---
+# The change
+
+Escaped: \![escaped](./screen.png) and \![gone](./ghost.png)
+
+Spans: `![span](./screen.png)` and ``![double](./ghost.png)``
+
+```
+![fenced](./screen.png)
+![fenced too](./ghost.png)
+```
+
+~~~md
+![tilde](./screen.png)
+~~~
+
+    ![indented](./screen.png)
+    ![indented too](./ghost.png)
+{% for shot in shots %}
+![{{ shot }}](./{{ shot }})
+{% endfor %}
+"#;
+
+/// Each kind of image syntax [`CODE_PICTURES`] holds that is no reference, as it reads in the
+/// rendered content.
+const NOT_REFERENCES: [&str; 9] = [
+    r"\![escaped](./screen.png)",
+    r"\![gone](./ghost.png)",
+    "`![span](./screen.png)`",
+    "``![double](./ghost.png)``",
+    "```\n![fenced](./screen.png)\n![fenced too](./ghost.png)\n```",
+    "~~~md\n![tilde](./screen.png)\n~~~",
+    "    ![indented](./screen.png)\n    ![indented too](./ghost.png)\n",
+    "![tilde](./screen.png)",
+    "![fenced](./screen.png)",
+];
+
+/// A task and a document in `notes` rendered from [`CODE_PICTURES`] with `shots`, each given
+/// `assets` as `--asset`.
+fn code_pair(folders: &Folders, shots: &str, assets: &[String]) -> (String, String) {
+    let template = folders.text("code-pictures.md", CODE_PICTURES);
+    let answers = folders.text("code-shots.yaml", &format!("shots: [{shots}]\n"));
+    let create = |verb: &str| {
+        let mut arguments = vec![
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Code",
+            "--template",
+            &template,
+            "--answers",
+            &answers,
+            "--no-interactive",
+        ];
+        for asset in assets {
+            arguments.extend(["--asset", asset.as_str()]);
+        }
+        folders.created(&arguments)
+    };
+    (create("task"), create("document"))
+}
+
+#[test]
+fn image_syntax_escaped_or_in_code_is_no_reference_and_a_copy_leaves_it_byte_for_byte() {
+    let folders = Folders::new();
+    let screen = images::png(170, SCREENSHOT);
+    let screen_path = folders.image("code", "screen.png", &screen);
+    let ghost_path = folders.image("code", "ghost.png", &images::png(171, 50_000));
+
+    // `ghost.png` is named only by syntax that is no reference: given as an asset, it is one the
+    // content does not reference, and refused by name with nothing written.
+    let template = folders.text("code-pictures.md", CODE_PICTURES);
+    let answers = folders.text("code-shots.yaml", "shots: [screen.png]\n");
+    for verb in ["task", "document"] {
+        let said = folders.refused(&[
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Code",
+            "--template",
+            &template,
+            "--answers",
+            &answers,
+            "--no-interactive",
+            "--asset",
+            &screen_path,
+            "--asset",
+            &ghost_path,
+        ]);
+        assert!(said.contains("ghost.png"), "{verb}: {said}");
+        assert!(!folders.notes.join(format!("{verb}s")).exists(), "{verb}");
+    }
+
+    let (task, document) = code_pair(&folders, "screen.png", &[screen_path]);
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let source = folders.show(verb, id);
+        let content = item(&source)["content"]
+            .as_str()
+            .expect("content")
+            .to_owned();
+        for kind in NOT_REFERENCES {
+            assert!(content.contains(kind), "{verb} holds {kind:?}: {content}");
+        }
+        // The one reference is the real one, and its asset is the only one held.
+        assert_eq!(
+            listed(&source),
+            vec![(
+                "screen.png".to_owned(),
+                sha256(&screen),
+                "image/png".to_owned()
+            )]
+        );
+        assert_eq!(held_bytes(&source), vec![screen.clone()]);
+
+        // Into a folder of Markdown: the content, every non-reference included, is as it was.
+        let report = folders.copy(&[verb, "copy", id, "--to", "back"]);
+        carried_whole(&source, &folders.show(verb, &landed(&report)));
+
+        // Into a plugin serving assets: only the real reference is pointed at its URL.
+        let writes_before = Folders::logged(&folders.served_log).len();
+        let report = folders.copy(&[verb, "copy", id, "--to", "served"]);
+        let write = &Folders::logged(&folders.served_log)[writes_before];
+        assert_eq!(
+            write["received"],
+            json!([{"name": "screen.png", "content_type": "image/png",
+                    "decoded_sha256": sha256(&screen)}]),
+            "{verb}: the real reference's asset alone reached the plugin"
+        );
+        let copied = folders.show(verb, &landed(&report));
+        let uploads = recorded(&copied);
+        assert_eq!(uploads.len(), 1, "{uploads:?}");
+        let url = &uploads[0].2;
+        assert_eq!(
+            item(&copied)["content"],
+            json!(content.replace(
+                "![screen.png](./screen.png)",
+                &format!("![screen.png]({url})")
+            )),
+            "{verb}: every non-reference is byte for byte as it was"
+        );
+        assert_eq!(
+            item(&copied)["metadata"]["onetaskgraph.template"]["body_digest"],
+            json!(body_digest(
+                item(&copied)["content"].as_str().expect("content")
+            ))
+        );
+    }
+}
+
+#[test]
+fn a_record_whose_only_image_syntax_is_escaped_or_in_code_is_a_record_without_assets() {
+    let folders = Folders::new();
+    // Created with no `--asset` at all: nothing it names is a reference it would not hold.
+    let (task, document) = code_pair(&folders, "", &[]);
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let source = folders.show(verb, id);
+        assert_eq!(source["assets"], json!([]), "{verb}");
+        let content = item(&source)["content"]
+            .as_str()
+            .expect("content")
+            .to_owned();
+        assert_eq!(
+            item(&source)["metadata"]["onetaskgraph.template"]["body_digest"],
+            json!(body_digest(&content))
+        );
+        // A render changes nothing, and stores nothing.
+        let rendered = stdout(&folders.exits(&[verb, "render", id, "--no-interactive"], 0));
+        assert_eq!(folders.show(verb, id), source, "{verb}: {rendered}");
+        let own = Path::new(item(&source)["location"]["path"].as_str().expect("a path"))
+            .with_extension("assets");
+        assert!(!own.exists(), "{verb}: no asset storage");
+        // It copies, unchanged, into a plugin that has never heard of assets and into one that
+        // serves them, and neither is sent an asset member.
+        for to in ["plain", "served", "back"] {
+            let report = folders.copy(&[verb, "copy", id, "--to", to]);
+            let copied = folders.show(verb, &landed(&report));
+            assert_eq!(item(&copied)["content"], json!(content), "{verb} into {to}");
+            assert_eq!(copied["assets"], json!([]), "{verb} into {to}");
+            assert_eq!(
+                item(&copied)["metadata"]["onetaskgraph.template"],
+                item(&source)["metadata"]["onetaskgraph.template"],
+                "{verb} into {to}: its provenance is carried as it was"
+            );
+            assert!(
+                item(&copied)["metadata"]
+                    .get("onetaskgraph.assets")
+                    .is_none()
+            );
+        }
+    }
+    for log in [&folders.plain_log, &folders.served_log] {
+        let writes = Folders::logged(log);
+        assert_eq!(writes.len(), 2);
+        for write in writes {
+            assert_eq!(write["members"], json!(["write"]), "{write}");
+        }
+    }
+}
+
 /// The destination's `onetaskgraph.assets`, by name, as `(sha256, url)`.
 fn recorded(shown: &Value) -> Vec<(String, String, String)> {
     let mut recorded: Vec<(String, String, String)> =
@@ -2047,6 +2262,14 @@ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
         "![multi\nline](./a.png) ![unclosed](./a.png",
         "![spaced](./a.png \n![title](./a.png \"t\")\n![dangling](./a.png ",
         "![newline](./a.png\n)",
+        // Only an image outside code is a reference: each of these is text.
+        "\\![escaped](./a.png) \\\\![after](./x.jpg) `![span](./a.png)` ``![x](./y.gif)``",
+        "```\n![fenced](./a.png)\n```\n![real](./x.jpg)\n~~~~md\n![tilde](./y.gif)\n~~~\n~~~~",
+        "para\n    ![continued](./a.png)\n\n    ![indented](./x.jpg)\n\n![real](./y.gif)",
+        "- item\n\n  ```\n  ![listed](./a.png)\n  ```\n\n      ![code](./x.jpg)\n\n  ![real](./y.gif)",
+        "> ```\n> ![quoted](./a.png)\n> ```\n>\n>     ![code](./x.jpg)\n\n![a`](./y.gif)` `unclosed ![u](./z.webp)",
+        "1. one\n   ```\n   ![n](./a.png)\n   ```\n# h\n    ![after heading](./x.jpg)\n```\n![open](./y.gif)",
+        "    ![first line](./a.png)\n![real](./x.jpg) ```![triple](./y.gif)``` `` ` ![mixed](./z.webp) ``",
     ];
     let (peer_names, peer_contents) = peer_reading(&folders, &names, &contents);
     let accepted: Vec<bool> = names
