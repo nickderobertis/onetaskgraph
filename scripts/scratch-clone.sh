@@ -63,11 +63,8 @@ scratch_clone() {
 # extract_tar_stream <destination>
 #
 # Unpacks the tar stream on standard input into <destination>, then reads what is left of
-# the stream to its end. bsdtar — macOS's tar — stops at the end-of-archive marker and exits
-# with the record padding after it still unread, so the producer's last write can land on a
-# closed pipe; where SIGPIPE is ignored, as on a hosted runner, it fails `tar: Write error`
-# and fails the copy under pipefail, by timing alone. Draining is what makes that write whole.
-# scripts/check-tar-drained.sh refuses an extraction from a pipe anywhere else.
+# the stream to its end, which macOS's tar does not; scripts/check-tar-drained.sh says why
+# that matters and refuses an extraction from a pipe anywhere else.
 extract_tar_stream() {
   tar -xf - -C "$1" && cat >/dev/null
 }

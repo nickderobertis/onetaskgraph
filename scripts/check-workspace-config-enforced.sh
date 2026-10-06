@@ -244,6 +244,7 @@ if behind or not inheriting:
 ')"; then
   printf '%s\n' "$output" >&2
   echo "check-workspace-config-enforced: a bump to 9.9.9 left a crate that inherits its version behind, or found none inheriting" >&2
+  echo "check-workspace-config-enforced: next: give each crate named above 'version.workspace = true', or restore scripts/set-version.sh's write of [workspace.package] version, then rerun" >&2
   failures=$((failures + 1))
 fi
 (cd "$ROOT" && git ls-files -z -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' pyproject.toml sdks npm bun.lock) \
