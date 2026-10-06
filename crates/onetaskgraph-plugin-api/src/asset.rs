@@ -223,6 +223,7 @@ pub struct AssetPayload {
     // llmlint: ignore[invalid_states_unrepresentable] This member's JSON shape — a lowercase hex string — is the asset contract `docs/plugin-protocol.md` §4.9a states, and plugins in other crates and other languages read and write it as exactly that. The digest is computed by `asset_sha256` wherever it is made, and every source that receives bytes refuses them unless they hash to it before storing anything; a recorded one is checked as a digest where `AssetUploads::read` reads it.
     pub sha256: String,
     /// The content type its extension gives it.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract `docs/plugin-protocol.md` §4.9a states carries the content type beside the name on the wire, for a plugin that does not derive it; every source receiving a payload refuses one whose type is not its name's through `AssetPayload::checked` before storing anything, and `AssetPayload::of` is the one constructor that derives it.
     pub content_type: AssetContentType,
     /// Its bytes, or absent when the destination already records them by `sha256`.
     #[serde(
@@ -236,6 +237,47 @@ pub struct AssetPayload {
 }
 
 impl AssetPayload {
+    /// Refuse a payload whose content type is not the one its name's extension gives it, or
+    /// whose bytes, when it carries them, do not hash to its digest — the check every source
+    /// receiving one makes before it stores anything.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Refused`] naming the asset and what disagrees.
+    pub fn checked(&self) -> Result<(), SourceError> {
+        if self.content_type != self.name.content_type() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the asset {} is sent as {}, which is not the content type its name gives \
+                     it, {}",
+                    self.name,
+                    self.content_type.as_str(),
+                    self.name.content_type().as_str()
+                ),
+            });
+        }
+        if !is_sha256(&self.sha256) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the asset {} carries the sha256 {:?}, which is not a lowercase hex SHA-256",
+                    self.name, self.sha256
+                ),
+            });
+        }
+        if let Some(bytes) = &self.bytes
+            && asset_sha256(bytes) != self.sha256
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the asset {}'s bytes do not hash to the sha256 {} it carries; next: send \
+                     the bytes that digest names",
+                    self.name, self.sha256
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// A payload carrying `bytes`, its digest and content type taken from them and from the
     /// name.
     #[must_use]

@@ -75,6 +75,7 @@ pub(crate) fn resolved(
 ) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
     let mut files = Vec::with_capacity(write.assets.len());
     for payload in &write.assets {
+        payload.checked()?;
         if files.iter().any(|(name, _)| name == &payload.name) {
             return Err(SourceError::Refused {
                 message: format!(

@@ -462,13 +462,56 @@ pub(crate) struct DocumentAssetWriteParams {
 
 /// A `write_task` or `write_document` as the reference host reads it: a plain write, or —
 /// when `assets` is present — one carrying the record's whole asset set.
+///
+/// Read through [`RawServedWrite`], so a write carrying `recorded_assets` without `assets` —
+/// a shape §4.9a does not have — is refused as malformed where it is decoded rather than
+/// represented here.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(
+    try_from = "RawServedWrite<T>",
+    bound(deserialize = "T: Deserialize<'de>")
+)]
 pub(crate) struct ServedWriteParams<T> {
     pub(crate) write: ItemWrite<T>,
+    /// The record's assets, for a write that carries them.
+    pub(crate) assets: Option<AssetWrite>,
+}
+
+/// [`ServedWriteParams`] exactly as the line spells it, before its members are checked
+/// against one another.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub(crate) struct RawServedWrite<T> {
+    write: ItemWrite<T>,
     #[serde(default)]
-    pub(crate) assets: Option<Vec<onetaskgraph_plugin_api::AssetPayload>>,
+    assets: Option<Vec<onetaskgraph_plugin_api::AssetPayload>>,
     #[serde(default)]
-    pub(crate) recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
+    recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
+}
+
+impl<T> TryFrom<RawServedWrite<T>> for ServedWriteParams<T> {
+    type Error = String;
+
+    fn try_from(raw: RawServedWrite<T>) -> Result<Self, Self::Error> {
+        let assets = match (raw.assets, raw.recorded_assets) {
+            (None, Some(_)) => {
+                return Err(
+                    "a write carrying `recorded_assets` names its assets in `assets` \
+                            (docs/plugin-protocol.md §4.9a)"
+                        .to_owned(),
+                );
+            }
+            (None, None) => None,
+            (Some(assets), recorded_assets) => Some(AssetWrite {
+                assets,
+                recorded_assets,
+            }),
+        };
+        Ok(Self {
+            write: raw.write,
+            assets,
+        })
+    }
 }
 
 /// `write_project` parameters (§4.9).
@@ -849,13 +892,21 @@ mod tests {
         for sent in [wire, task] {
             let served: super::ServedWriteParams<Value> =
                 serde_json::from_value(sent).expect("the host reads the write");
-            assert_eq!(served.assets, Some(whole().assets));
-            assert_eq!(served.recorded_assets, whole().recorded_assets);
+            assert_eq!(served.assets, Some(whole()));
         }
         let plain: super::ServedWriteParams<Value> = serde_json::from_value(json!({
             "write": {"target": null, "item": {}, "depends_on": []}
         }))
         .expect("the host reads a plain write");
-        assert!(plain.assets.is_none() && plain.recorded_assets.is_none());
+        assert!(plain.assets.is_none());
+        let orphaned = serde_json::from_value::<super::ServedWriteParams<Value>>(json!({
+            "write": {"target": null, "item": {}, "depends_on": []},
+            "recorded_assets": {}
+        }))
+        .expect_err("recorded uploads without assets are refused");
+        assert!(
+            orphaned.to_string().contains("recorded_assets"),
+            "{orphaned}"
+        );
     }
 }

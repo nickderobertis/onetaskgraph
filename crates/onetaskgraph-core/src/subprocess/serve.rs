@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    AssetWrite, Document, Page, Project, SecretResolver, SourceError, SourceName, Status,
-    StatusCategory, Task, TaskSource, TaskUpdateOutcome,
+    Document, Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -521,25 +521,10 @@ async fn dispatch(
         }
         "write_task" => {
             let params: ServedWriteParams<Task> = decode(method, params)?;
-            if params.assets.is_none() && params.recorded_assets.is_some() {
-                return Err(SourceError::Malformed {
-                    message: format!(
-                        "{method} carries `recorded_assets` without `assets`; a write carrying \
-                         assets names them in `assets` (docs/plugin-protocol.md §4.9a)"
-                    ),
-                });
-            }
             match params.assets {
                 Some(assets) => encode(
                     source
-                        .write_task_with_assets(
-                            &params.write,
-                            None,
-                            &AssetWrite {
-                                assets,
-                                recorded_assets: params.recorded_assets,
-                            },
-                        )
+                        .write_task_with_assets(&params.write, None, &assets)
                         .await?,
                 ),
                 None => encode(json!({ "id": source.write_task(&params.write).await? })),
@@ -569,25 +554,10 @@ async fn dispatch(
         }
         "write_document" => {
             let params: ServedWriteParams<Document> = decode(method, params)?;
-            if params.assets.is_none() && params.recorded_assets.is_some() {
-                return Err(SourceError::Malformed {
-                    message: format!(
-                        "{method} carries `recorded_assets` without `assets`; a write carrying \
-                         assets names them in `assets` (docs/plugin-protocol.md §4.9a)"
-                    ),
-                });
-            }
             match params.assets {
                 Some(assets) => encode(
                     source
-                        .write_document_with_assets(
-                            &params.write,
-                            None,
-                            &AssetWrite {
-                                assets,
-                                recorded_assets: params.recorded_assets,
-                            },
-                        )
+                        .write_document_with_assets(&params.write, None, &assets)
                         .await?,
                 ),
                 None => encode(json!({ "id": source.write_document(&params.write).await? })),

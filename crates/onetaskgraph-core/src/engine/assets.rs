@@ -5,9 +5,12 @@
 //! which refusals it owes before anything is written, and which bytes a destination that
 //! already serves an asset is not sent again.
 
+use std::collections::BTreeMap;
+
 use onetaskgraph_plugin_api::{
-    Asset, AssetName, AssetPayload, AssetUploads, AssetWrite, asset_references,
+    Asset, AssetName, AssetPayload, AssetUploads, AssetWrite, SourceError, asset_references,
 };
+use serde_json::Value;
 
 use super::EngineError;
 use crate::resolve::ResolvedSource;
@@ -93,6 +96,19 @@ pub(super) fn write_of(assets: Vec<AssetPayload>, recorded: Option<AssetUploads>
         assets,
         recorded_assets: recorded,
     }
+}
+
+/// What a record's `onetaskgraph.assets` says its source serves, read and checked.
+///
+/// # Errors
+///
+/// [`SourceError::Malformed`] naming the key when the record holds something that is not an
+/// upload record: a source that wrote one it cannot vouch for is refused rather than read as
+/// holding none, which would send every asset it serves again.
+pub(super) fn recorded(
+    metadata: &BTreeMap<String, Value>,
+) -> Result<Option<AssetUploads>, SourceError> {
+    AssetUploads::read(metadata).map_err(|message| SourceError::Malformed { message })
 }
 
 /// Refuse writing `record`, which carries `asset`, to a source whose plugin stores no assets.

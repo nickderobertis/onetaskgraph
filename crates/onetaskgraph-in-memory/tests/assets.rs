@@ -204,3 +204,51 @@ async fn a_payload_whose_bytes_do_not_hash_to_its_digest_is_refused_and_nothing_
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn a_name_given_twice_and_a_reuse_of_bytes_this_source_never_held_are_refused() {
+    let source = source("native");
+    let write = |assets: AssetWrite| {
+        let source = &source;
+        async move {
+            source
+                .write_task_with_assets(
+                    &ItemWrite {
+                        target: None,
+                        item: task("![a](./a.png)"),
+                        depends_on: Vec::new(),
+                    },
+                    None,
+                    &assets,
+                )
+                .await
+                .expect_err("refused")
+        }
+    };
+    let twice = write(carrying(&[("a.png", b"one"), ("a.png", b"two")])).await;
+    assert!(twice.to_string().contains("given twice"), "{twice}");
+
+    // A record a caller handed over claims an upload this source never received.
+    let mut claimed = carrying(&[("a.png", b"never sent")]);
+    let upload = AssetUploads(std::collections::BTreeMap::from([(
+        name("a.png"),
+        onetaskgraph_plugin_api::AssetUpload {
+            sha256: claimed.assets[0].sha256.clone(),
+            url: "in-memory://assets/elsewhere".to_owned(),
+        },
+    )]));
+    claimed.assets[0].bytes = None;
+    claimed.recorded_assets = Some(upload);
+    let unbacked = write(claimed).await;
+    assert!(
+        unbacked.to_string().contains("carries no bytes"),
+        "{unbacked}"
+    );
+    assert!(
+        source
+            .get_task(&NativeId::from("T-1"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

@@ -203,6 +203,24 @@ test("image assets are stored with a created task and document and listed on sho
   expect(unreferenced.message).toContain("pixel.gif");
 });
 
+test("asset options that are not a list of paths are refused before the binary runs", async () => {
+  await expect(
+    client.taskCreate("notes", "P-1", "Refused", {
+      body: "x",
+      assets: "pixel.gif" as unknown as string[],
+    }),
+  ).rejects.toThrow("taskCreate: assets");
+  await expect(
+    client.documentCreate("notes", "P-1", "Refused", { body: "x", assets: ["-pixel.gif"] }),
+  ).rejects.toThrow("documentCreate: assets is not a path");
+  await expect(client.taskRender("notes:none", { assets: [""] })).rejects.toThrow(
+    "taskRender: assets is not a path",
+  );
+  await expect(client.documentRender("notes:none", { assets: [""] })).rejects.toThrow(
+    "documentRender: assets is not a path",
+  );
+});
+
 test("a render stores the assets it is given, replacing a stored one by name", async () => {
   const pictured = resolve(root, "pictured.md");
   writeFileSync(

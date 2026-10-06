@@ -424,3 +424,74 @@ fn the_binary_refuses_a_simulated_clock_it_cannot_read_or_reach_naming_the_varia
         assert!(said.contains(&variable) && said.contains(problem), "{said}");
     }
 }
+
+/// A coordinator that answers the attach with `greeting` and then answers every line with
+/// `reply`, or closes the connection when `reply` is `None`.
+fn misbehaving(greeting: &'static str, reply: Option<&'static str>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    let address = listener.local_addr().expect("its address").to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let mut writer = stream.try_clone().expect("a writer");
+            let mut lines = std::io::BufRead::lines(std::io::BufReader::new(stream));
+            let _ = lines.next();
+            let _ = writeln!(writer, "{greeting}");
+            for line in lines {
+                if line.is_err() {
+                    break;
+                }
+                match reply {
+                    Some(reply) => {
+                        let _ = writeln!(writer, "{reply}");
+                    }
+                    None => break,
+                }
+            }
+        }
+    });
+    address
+}
+
+#[test]
+fn the_binary_refuses_a_coordinator_that_does_not_acknowledge_it() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&one_source(SourceBoundary::Direct));
+    let (variable, _) = SimulatedClock::start(1).client_env(0).remove(0);
+    let output = sandbox
+        .command()
+        .env(&variable, format!("{}/0", misbehaving("nope", None)))
+        .args(["sources", "list"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(1));
+    let said = stderr(&output);
+    assert!(
+        said.contains(&variable) && said.contains("\"nope"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_client_whose_coordinator_goes_away_or_answers_no_time_stops_saying_so() {
+    let (variable, _) = SimulatedClock::start(1).client_env(0).remove(0);
+    for (reply, scenario) in [(None, "sleep:5"), (Some("now 0 not-a-time"), "compute:1")] {
+        let output = Command::new(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                "clock::clock_client_process_entry",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(SCENARIO, scenario)
+            .env(&variable, format!("{}/0", misbehaving("attached", reply)))
+            .output()
+            .expect("the client runs");
+        assert!(!output.status.success(), "{scenario}");
+        let said = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(
+            said.contains("closed its connection or answered with something that is not a time"),
+            "{scenario}: {said}"
+        );
+    }
+}

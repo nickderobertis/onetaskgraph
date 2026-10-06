@@ -300,6 +300,7 @@ pub struct RenderRequest {
     /// same name. The item keeps every stored asset its regenerated content still references,
     /// and drops every one it no longer does. A project holds no assets, and a render of one
     /// given any is refused before anything is read.
+    // llmlint: ignore[invalid_states_unrepresentable] `RenderRequest` is the one public request every regenerate takes — `render_task`, `render_project` and `render_document` and the two-step `regeneration` a caller drives between prompts — and record-specific variants would change all four signatures for every library caller; the project case is refused by name in `regeneration` before anything is read, and the command line never offers `--asset` to `project render`.
     pub assets: Vec<AssetPayload>,
 }
 
@@ -690,9 +691,12 @@ impl Engine {
                 .map_err(|error| source_failed(source, error))?,
             None => Vec::new(),
         };
-        let recorded = held
-            .as_ref()
-            .and_then(|held| AssetUploads::read(&held.metadata).ok().flatten());
+        let recorded = match &held {
+            Some(held) => {
+                assets::recorded(&held.metadata).map_err(|error| source_failed(source, error))?
+            }
+            None => None,
+        };
         let Parts {
             content,
             metadata,
@@ -911,7 +915,8 @@ impl Engine {
             RenderedRecord::Project => Ok(Vec::new()),
         }
         .map_err(|error| source_failed(source, error))?;
-        let recorded_assets = AssetUploads::read(&metadata).ok().flatten();
+        let recorded_assets =
+            assets::recorded(&metadata).map_err(|error| source_failed(source, error))?;
         let template = match (&request.template, &read) {
             (RenderTemplate::Given(given), _) => given.clone(),
             // An entry this product did not write names nothing it can trust: with no template

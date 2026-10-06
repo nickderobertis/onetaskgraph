@@ -1429,6 +1429,235 @@ fn the_reference_host_carries_a_copys_assets_and_refuses_a_rendered_create_with_
     assert!(!hosted.join("tasks").join("rendered.md").exists());
 }
 
+/// One line of the stdio protocol written to `host` and the response it answers with.
+fn exchange(
+    host: &mut std::process::Child,
+    reader: &mut impl std::io::BufRead,
+    request: &Value,
+) -> Value {
+    use std::io::Write as _;
+    let input = host.stdin.as_mut().expect("the host's input");
+    writeln!(input, "{request}").expect("the request is written");
+    input.flush().expect("flushed");
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("the host answers");
+    serde_json::from_str(&line).expect("one JSON response")
+}
+
+#[test]
+fn the_reference_host_refuses_a_write_recording_uploads_it_carries_no_assets_for() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("hosted");
+    let mut host = std::process::Command::new(env!("CARGO_BIN_EXE_onetaskgraph-source"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("the host starts");
+    let mut reader = std::io::BufReader::new(host.stdout.take().expect("the host's output"));
+    let initialized = exchange(
+        &mut host,
+        &mut reader,
+        &json!({"id": "0", "method": "initialize", "params": {
+            "protocol_version": 2,
+            "engine": {"name": "onetaskgraph", "version": "0"},
+            "source_name": "hosted",
+            "config": {"kind": "local-md", "config": {"root": root}},
+            "secrets": {},
+        }}),
+    );
+    assert_eq!(
+        initialized["result"]["capabilities"]["assets"],
+        json!("native")
+    );
+    let item = |kind: &str| match kind {
+        "task" => json!({"id": "t", "title": "T", "content": "x",
+                         "status": {"category": "todo", "name": "todo"}, "labels": []}),
+        _ => json!({"id": "d", "title": "D", "content": "x", "labels": []}),
+    };
+    for (index, kind) in ["task", "document"].into_iter().enumerate() {
+        let answered = exchange(
+            &mut host,
+            &mut reader,
+            &json!({"id": format!("{}", index + 1), "method": format!("write_{kind}"),
+            "params": {
+                "write": {"target": null, "item": item(kind), "depends_on": []},
+                "recorded_assets": {}
+            }}),
+        );
+        assert_eq!(
+            answered["error"]["kind"],
+            json!("malformed"),
+            "{kind}: {answered}"
+        );
+        assert!(
+            answered["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("recorded_assets")),
+            "{kind}: {answered}"
+        );
+    }
+    drop(host.stdin.take());
+    assert!(host.wait().expect("the host exits").success());
+    assert!(Folders::files(&root).is_empty(), "nothing was written");
+}
+
+#[test]
+fn a_source_over_the_protocol_refuses_a_regenerate_storing_assets_before_sending_anything() {
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetWrite, NativeId, SourceName, SourcePlugin,
+    };
+    let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs(
+        std::iter::empty::<(String, String)>(),
+    ))
+    .expect("no credentials");
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("hosted");
+    let source = onetaskgraph_core::SubprocessPlugin
+        .build(
+            &SourceName::new("hosted").expect("a name"),
+            &json!({
+                "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                "settings": {"kind": "local-md", "config": {"root": root}},
+            }),
+            &secrets,
+        )
+        .expect("the source starts");
+    let assets = AssetWrite {
+        assets: vec![AssetPayload::of(
+            AssetName::new("a.png").expect("a name"),
+            images::png(140, 50_000),
+        )],
+        recorded_assets: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let id = NativeId::from("t");
+    for refused in [
+        runtime.block_on(source.set_task_rendering_with_assets(
+            &id,
+            "![a](./a.png)",
+            &json!({}),
+            &Default::default(),
+            &assets,
+        )),
+        runtime.block_on(source.set_document_rendering_with_assets(
+            &id,
+            "![a](./a.png)",
+            &json!({}),
+            &Default::default(),
+            &assets,
+        )),
+    ] {
+        let refused = refused.expect_err("refused");
+        assert!(
+            refused.to_string().contains("regenerate in place")
+                && refused.to_string().contains("stdio plugin protocol"),
+            "{refused}"
+        );
+    }
+    assert!(Folders::files(&root).is_empty(), "nothing was written");
+}
+
+/// What the Python peer's own reading of the convention answers for `inputs`: each name's
+/// acceptance, and each content rewritten with every reference pointed at `https://h/<name>`.
+fn peer_reading(names: &[&str], contents: &[&str]) -> Value {
+    let script = r#"
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("peer", sys.argv[1])
+peer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(peer)
+asked = json.loads(sys.stdin.read())
+def rewrite(content):
+    rewritten = content
+    for name in asked["names"]:
+        if peer.ASSET_NAME.fullmatch(name):
+            rewritten = peer.reference(name).sub(
+                lambda found, name=name: found.group(1) + "https://h/" + name, rewritten
+            )
+    return rewritten
+print(json.dumps({
+    "names": [bool(peer.ASSET_NAME.fullmatch(name)) for name in asked["names"]],
+    "contents": [rewrite(content) for content in asked["contents"]],
+}))
+"#;
+    let mut child = std::process::Command::new(interpreter())
+        .args([
+            "-c",
+            script,
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/e2e/asset_store.py")
+                .to_string_lossy(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("python runs");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("its input")
+            .write_all(
+                json!({"names": names, "contents": contents})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .expect("the inputs are written");
+    }
+    let output = child.wait_with_output().expect("python finishes");
+    assert!(output.status.success(), "{}", stderr(&output));
+    serde_json::from_slice(&output.stdout).expect("JSON")
+}
+
+#[test]
+fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
+    use onetaskgraph_plugin_api::{AssetName, rewrite_asset_references};
+    let names = [
+        "a.png",
+        "Scan.JpEg",
+        "x.jpg",
+        "y.gif",
+        "z.webp",
+        "W.PNG",
+        ".x.png",
+        "a/b.png",
+        "a\\b.png",
+        "..png",
+        "a..b.png",
+        "a b.png",
+        ".png",
+        "a.txt",
+        "a(b).png",
+        "a.png.txt",
+        "",
+    ];
+    let contents = [
+        "![a](./a.png) ![w](./W.PNG \"title\") ![again](./a.png)",
+        "![nested](./img/a.png) ![up](../a.png) ![bare](a.png) [plain](./a.png)",
+        "![remote](https://example.invalid/a.png) ![x](./x.jpg)\n![y](./y.gif)",
+        "![multi\nline](./a.png) ![unclosed](./a.png",
+    ];
+    let peer = peer_reading(&names, &contents);
+    let accepted: Vec<bool> = names
+        .iter()
+        .map(|name| AssetName::new(*name).is_ok())
+        .collect();
+    assert_eq!(peer["names"], json!(accepted));
+    let served: std::collections::BTreeMap<AssetName, String> = names
+        .iter()
+        .filter_map(|name| AssetName::new(*name).ok())
+        .map(|name| (name.clone(), format!("https://h/{name}")))
+        .collect();
+    let rewritten: Vec<String> = contents
+        .iter()
+        .map(|content| rewrite_asset_references(content, &served))
+        .collect();
+    assert_eq!(peer["contents"], json!(rewritten));
+}
+
 /// The first-column names of the table headed `header` inside `section`.
 fn table(section: &str, header: &str) -> Vec<String> {
     let mut lines = section.lines().skip_while(|line| *line != header);

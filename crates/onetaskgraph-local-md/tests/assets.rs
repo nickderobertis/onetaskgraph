@@ -426,3 +426,27 @@ async fn replacing_and_removing_assets_leaves_a_file_a_person_put_beside_them() 
         "only assets are ever removed"
     );
 }
+
+#[tokio::test]
+async fn a_payload_sent_as_a_content_type_its_name_does_not_give_is_refused() {
+    let (root, source) = folder();
+    let mut write = carrying(&[("a.png", b"png")]);
+    write.assets[0].content_type = onetaskgraph_plugin_api::AssetContentType::Gif;
+    let refused = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("typed", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &write,
+        )
+        .await
+        .expect_err("refused");
+    assert!(
+        refused.to_string().contains("a.png") && refused.to_string().contains("image/gif"),
+        "{refused}"
+    );
+    assert!(!root.path().join("tasks").exists());
+}

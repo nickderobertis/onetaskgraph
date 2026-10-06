@@ -681,6 +681,8 @@ struct Prior {
     /// already say the destination serves — `None` when it held none and no write of this
     /// copy carried any, so putting it back writes it exactly as it did before assets.
     assets: Option<Vec<AssetPayload>>,
+    /// What its `onetaskgraph.assets` says the destination serves, checked where it was read.
+    recorded: Option<AssetUploads>,
 }
 
 /// One item that landed with an edge whose far end was not written yet.
@@ -3437,11 +3439,14 @@ impl Engine {
             return Ok(None);
         };
         let edges = forward_edges(destination, id, kind).await?;
-        let assets = held_assets(destination, kind, id, &item).await?;
+        let recorded =
+            assets::recorded(described(&item).1).map_err(|error| refused(destination, error))?;
+        let assets = held_assets(destination, kind, id, recorded.as_ref()).await?;
         Ok(Some(Prior {
             item,
             edges,
             assets,
+            recorded,
         }))
     }
 
@@ -3489,6 +3494,7 @@ impl Engine {
         // overwrites holds any: what lands then holds exactly the assets this copy carries.
         let held_assets = prior.as_ref().and_then(|prior| prior.assets.clone());
         let carrying = !item.assets.is_empty() || held_assets.is_some();
+        let recorded = prior.as_ref().and_then(|prior| prior.recorded.clone());
         if let (Some(id), Some(mut prior)) = (target.clone(), prior) {
             if carrying && prior.assets.is_none() {
                 // Putting this item back then has to take away the assets this write adds.
@@ -3501,40 +3507,34 @@ impl Engine {
             });
         }
         let landed = match landing {
-            Item::Task(task) if carrying => {
-                let recorded = AssetUploads::read(&task.metadata).ok().flatten();
-                destination
-                    .source()
-                    .write_task_with_assets(
-                        &ItemWrite {
-                            target: target.clone(),
-                            item: *task,
-                            depends_on: edges.to_vec(),
-                        },
-                        None,
-                        &assets::write_of(item.assets.clone(), recorded),
-                    )
-                    .await
-                    .map(|written| written.id)
-                    .map_err(|error| refused(destination, error))?
-            }
-            Item::Document(document) if carrying => {
-                let recorded = AssetUploads::read(&document.metadata).ok().flatten();
-                destination
-                    .source()
-                    .write_document_with_assets(
-                        &ItemWrite {
-                            target: target.clone(),
-                            item: *document,
-                            depends_on: Vec::new(),
-                        },
-                        None,
-                        &assets::write_of(item.assets.clone(), recorded),
-                    )
-                    .await
-                    .map(|written| written.id)
-                    .map_err(|error| refused(destination, error))?
-            }
+            Item::Task(task) if carrying => destination
+                .source()
+                .write_task_with_assets(
+                    &ItemWrite {
+                        target: target.clone(),
+                        item: *task,
+                        depends_on: edges.to_vec(),
+                    },
+                    None,
+                    &assets::write_of(item.assets.clone(), recorded.clone()),
+                )
+                .await
+                .map(|written| written.id)
+                .map_err(|error| refused(destination, error))?,
+            Item::Document(document) if carrying => destination
+                .source()
+                .write_document_with_assets(
+                    &ItemWrite {
+                        target: target.clone(),
+                        item: *document,
+                        depends_on: Vec::new(),
+                    },
+                    None,
+                    &assets::write_of(item.assets.clone(), recorded.clone()),
+                )
+                .await
+                .map(|written| written.id)
+                .map_err(|error| refused(destination, error))?,
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -3761,7 +3761,7 @@ fn changes(
 /// that keeps them beside the record says so in the assets it lists, and stores the references
 /// as written.
 fn lands_as_held(item: &Planned, held: &Prior, outgoing: &mut Item) -> bool {
-    let Some(recorded) = AssetUploads::read(described(&held.item).1).ok().flatten() else {
+    let Some(recorded) = &held.recorded else {
         let holds: Vec<onetaskgraph_plugin_api::Asset> = held
             .assets
             .iter()
@@ -3855,7 +3855,7 @@ async fn held_assets(
     destination: &ResolvedSource,
     kind: Level,
     id: &NativeId,
-    item: &Item,
+    recorded: Option<&AssetUploads>,
 ) -> Result<Option<Vec<AssetPayload>>, EngineError> {
     let owner = match kind {
         Level::Task => assets::Owner::Task,
@@ -3873,13 +3873,11 @@ async fn held_assets(
     if listed.is_empty() {
         return Ok(None);
     }
-    let recorded = AssetUploads::read(described(item).1).ok().flatten();
     let mut held = Vec::with_capacity(listed.len());
     for asset in listed {
         // Bytes the destination's own record says it serves are not read back: putting them
         // back reuses what it serves.
         let bytes = if recorded
-            .as_ref()
             .is_some_and(|recorded| recorded.reusable(&asset.name, &asset.sha256).is_some())
         {
             None
@@ -3922,10 +3920,9 @@ async fn restore(
     prior: &Prior,
 ) -> Result<(), SourceError> {
     if let Some(held) = &prior.assets {
-        let recorded = AssetUploads::read(described(&prior.item).1).ok().flatten();
         let assets = AssetWrite {
             assets: held.clone(),
-            recorded_assets: recorded,
+            recorded_assets: prior.recorded.clone(),
         };
         match &prior.item {
             Item::Task(task) => {

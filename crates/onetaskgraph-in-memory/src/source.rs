@@ -10,8 +10,8 @@ use onetaskgraph_plugin_api::{
     Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId, NewComment,
     Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
     SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, asset_sha256,
-    assetless, commentless, documentless, serve_asset_references, unwritable, unwritable_field,
+    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, assetless,
+    commentless, documentless, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -1128,25 +1128,32 @@ impl InMemorySource {
         }
         let mut uploads = AssetUploads::default();
         for payload in &assets.assets {
+            payload.checked()?;
+            if uploads.0.contains_key(&payload.name) {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the asset {} is given twice; next: give each asset once",
+                        payload.name
+                    ),
+                });
+            }
             let url = match &payload.bytes {
                 Some(bytes) => {
-                    if asset_sha256(bytes) != payload.sha256 {
-                        return Err(SourceError::Refused {
-                            message: format!(
-                                "the asset {}'s bytes do not hash to the sha256 {} it carries",
-                                payload.name, payload.sha256
-                            ),
-                        });
-                    }
                     self.held()?
                         .blobs
                         .insert(payload.sha256.clone(), bytes.clone());
                     served_at(&payload.sha256, &payload.name)
                 }
+                // Reused only when this source really holds the bytes the record names: a
+                // record a caller handed over is no evidence of an upload on its own.
                 None => assets
                     .recorded_assets
                     .as_ref()
                     .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
+                    .filter(|_| {
+                        self.held()
+                            .is_ok_and(|held| held.blobs.contains_key(&payload.sha256))
+                    })
                     .map(str::to_owned)
                     .ok_or_else(|| SourceError::Refused {
                         message: format!(

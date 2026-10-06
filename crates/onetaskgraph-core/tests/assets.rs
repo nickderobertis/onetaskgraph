@@ -411,3 +411,102 @@ async fn a_rendering_edited_by_hand_keeps_its_provenance_verbatim_when_its_refer
         "carried verbatim"
     );
 }
+
+#[tokio::test]
+async fn a_project_render_given_assets_is_refused_before_anything_is_read() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = engine(root.path(), json!({}));
+    let refused = engine
+        .render_project(
+            &"notes:launch".parse().expect("an id"),
+            &onetaskgraph_core::RenderRequest {
+                assets: vec![AssetPayload::of(name("shot.png"), vec![1])],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(
+        refused,
+        EngineError::AssetNotReferenced {
+            record: "project notes:launch".to_owned(),
+            asset: "shot.png".to_owned(),
+        }
+    );
+}
+
+/// Take away the reference and the asset of the record whose file is `file` under `root`.
+fn unpicture(root: &Path, file: &str) {
+    let path = root.join(file);
+    let text = std::fs::read_to_string(&path).expect("the record's file");
+    std::fs::write(&path, text.replace("![shot](./shot.png)", "no picture now"))
+        .expect("the reference gone");
+    std::fs::remove_dir_all(path.with_extension("assets")).expect("its assets gone");
+}
+
+#[tokio::test]
+async fn a_copy_of_a_record_that_dropped_its_assets_takes_them_away_and_an_undo_puts_them_back() {
+    let root = tempfile::tempdir().expect("a folder");
+    std::fs::create_dir_all(root.path().join("projects")).expect("a projects folder");
+    std::fs::write(
+        root.path().join("projects/launch.md"),
+        "---\ntitle: Launch\nstatus: todo\n---\n",
+    )
+    .expect("a project");
+    let engine = engine(
+        root.path(),
+        json!({"capabilities": {"assets": "native", "half_written_titles": ["Second"]}}),
+    );
+    let first = create(&engine, "First", &[1; 32]).await;
+    let second = create(&engine, "Second", &[2; 32]).await;
+    let project: GlobalId = "notes:launch".parse().expect("an id");
+    let projects = CopyScope::Projects { tasks: true };
+    let report = engine
+        .copy(&copy_of(std::slice::from_ref(&project), projects.clone()))
+        .await
+        .expect("the first copy lands");
+    let copied = report
+        .items
+        .iter()
+        .find(|outcome| outcome.source == first)
+        .map(|outcome| destination(&outcome.action))
+        .expect("the first task landed");
+    let before = landed(&engine, &copied).await;
+
+    // Both tasks drop their pictures; the second's update is refused after it was applied, so
+    // the first's removal is put back.
+    for task in [&first, &second] {
+        unpicture(root.path(), &format!("tasks/{}.md", task.native));
+    }
+    engine
+        .copy(&copy_of(std::slice::from_ref(&project), projects.clone()))
+        .await
+        .expect_err("the second task's update is refused");
+    assert_eq!(landed(&engine, &copied).await, before);
+    let held = engine
+        .task_without_comments(&copied)
+        .await
+        .expect("read")
+        .assets
+        .expect("listed");
+    assert_eq!(held[0].sha256, asset_sha256(&[1; 32]));
+
+    // Copied on its own, the first task lands without the asset it no longer references.
+    engine
+        .copy(&copy_of(std::slice::from_ref(&first), CopyScope::Tasks))
+        .await
+        .expect("the copy lands");
+    let task = engine.task_without_comments(&copied).await.expect("read");
+    assert_eq!(task.assets, Some(Vec::new()));
+    assert_eq!(
+        task.response.items[0].item.content.as_deref(),
+        Some("no picture now\n")
+    );
+    assert!(
+        !task.response.items[0]
+            .item
+            .metadata
+            .contains_key("onetaskgraph.assets"),
+        "a record holding no asset records nothing about assets"
+    );
+}
