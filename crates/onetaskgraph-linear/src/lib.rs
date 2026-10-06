@@ -846,8 +846,9 @@ fn held_name(node: &Value) -> Result<StatusName, SourceError> {
 ///
 /// Read in one request and held by one source instance for its own lifetime — never by the
 /// process, never shared between sources, and kept across [`TaskSource::end_command`] — so
-/// every status write after the first sends its mutation alone. A name not found in it is looked for once more in a fresh read, so a
-/// name added in Linear after it was read is found; nothing a failed call answered is held.
+/// every status write after the first sends its mutation alone. A name not found in it is
+/// looked for once more in a fresh read, so a name added in Linear after it was read is found;
+/// nothing a failed call answered is held.
 #[derive(Debug, Clone)]
 struct Vocabulary {
     team: NativeId,

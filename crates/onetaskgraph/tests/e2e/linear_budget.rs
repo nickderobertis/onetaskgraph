@@ -606,7 +606,8 @@ fn global(id: &str) -> GlobalId {
 const PERSONS_TEXT: &str = "A person's own words, edited by hand.";
 
 /// Five settlement-shaped updates in one Engine — a status and one `onepipeline.*` key each,
-/// with `Engine::end_command` after each as the write-back worker calls it — and what each cost, every one checked to have kept the person's text and the unrelated key.
+/// with `Engine::end_command` after each as the write-back worker calls it — and what each
+/// cost, every one checked to have kept the person's text and the unrelated key.
 fn settlements() -> Vec<usize> {
     let sandbox = Sandbox::new();
     let tasks = (0..5)
