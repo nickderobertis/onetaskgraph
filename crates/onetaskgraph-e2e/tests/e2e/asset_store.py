@@ -138,7 +138,7 @@ def reference(name):
 
 FENCE = re.compile(r"(`{3,}|~{3,})(.*)")
 LIST_MARKER = re.compile(r"(?:[-+*]|([0-9]{1,9})[.)])(?=[ \t]|$)")
-QUOTE = re.compile(r" {0,3}> ?")
+HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
 # A setext heading's underline, which only a paragraph line can precede, and a thematic break.
 UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*")
 BREAK = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})")
@@ -190,50 +190,99 @@ def code_spans(content, start, end, ranges):
         at = closed
 
 
+class Line:
+    """One line of content being read left to right: where the reading is, and at which column."""
+
+    def __init__(self, text):
+        self.text = text
+        self.at = 0
+        self.column = 0
+
+    def indent(self):
+        """The columns of indentation from here, and how many characters they are."""
+        return columns(self.text[self.at:], self.column)
+
+    def rest(self):
+        return self.text[self.at:]
+
+    def skip(self, count, width):
+        self.at += count
+        self.column += width
+
+    def blank(self):
+        return not self.rest().strip()
+
+
+def continues(line, container):
+    """Whether `line` continues the open `container`, reading past its marker when it does."""
+    width, count = line.indent()
+    if container == "quote":
+        if width > 3 or not line.text.startswith(">", line.at + count):
+            return False
+        line.skip(count + 1, width + 1)
+        if line.text.startswith(" ", line.at):
+            line.skip(1, 1)
+        return True
+    if line.blank():
+        return True
+    if line.column + width < container:
+        return False
+    while line.column < container:
+        step, _ = columns(line.text[line.at : line.at + 1], line.column)
+        line.skip(1, step)
+    return True
+
+
+def opens_block(rest):
+    """Whether `rest`, read at a block's start, opens a block other than a paragraph."""
+    return bool(
+        rest.startswith(">")
+        or FENCE.match(rest)
+        or HEADING.match(rest)
+        or BREAK.fullmatch(rest)
+        or LIST_MARKER.match(rest)
+    )
+
+
 def code(content):
     """The (start, end) offsets of `content` that are code, as CommonMark reads it: fenced and
-    indented code blocks, in a list item or a block quote too, and inline code spans.
+    indented code blocks, in whatever block quotes and list items hold them, and inline code
+    spans.
 
     A line scan rather than a parser, because this peer imports nothing outside the standard
-    library. It reads a block quote only where one opens a line, so a quote opened inside a list
-    item on the same line as its marker is read as text; the engine reads it as CommonMark does.
+    library. Each line is read as CommonMark reads it: first past the markers of every block
+    quote and list item still open, in order, then past any it opens, then as a code block, a
+    fence, a heading or paragraph text.
     """
     ranges = []
     offset = 0
+    # Each open container: "quote" for a block quote, or the content column of a list item.
     containers = []
     fence = None
     previous = "start"
     paragraph = None
-    quoted = 0
+    empty_level = 0
 
     def flush(until):
         if paragraph is not None:
             code_spans(content, paragraph, until, ranges)
         return None
 
-    for line in content.split("\n"):
+    for text in content.split("\n"):
         line_start = offset
-        line_end = offset + len(line)
+        line_end = offset + len(text)
         offset = line_end + 1
-        body = line
-        depth = 0
-        while True:
-            quote = QUOTE.match(body)
-            if not quote:
+        line = Line(text)
+        matched = 0
+        for container in containers:
+            if not continues(line, container):
                 break
-            body = body[quote.end():]
-            depth += 1
-        indent, skipped = columns(body, len(line) - len(body))
-        blank = skipped == len(body)
-        if depth > quoted and fence is None:
-            # A block quote opening interrupts a paragraph, so no code span runs into it.
-            paragraph = flush(line_start)
-            previous = "start"
-        quoted = depth
+            matched += 1
+        width, count = line.indent()
         if fence is not None:
-            character, length, base, fence_depth = fence
-            if depth >= fence_depth and (blank or indent >= base):
-                closer = FENCE.match(body[skipped:]) if indent - base <= 3 else None
+            character, length, level = fence
+            if matched >= level:
+                closer = FENCE.match(line.rest()[count:]) if width <= 3 else None
                 if (
                     closer
                     and closer.group(1)[0] == character
@@ -244,87 +293,107 @@ def code(content):
                     previous = "block"
                 ranges.append((line_start, line_end))
                 continue
-            # A line less indented than the list item the fence opened in ends both, and so does
-            # one outside the block quote it opened in.
+            # A line outside a container the fence opened in ends the fence with it.
             fence = None
             previous = "block"
-        if blank:
+        if line.blank():
             paragraph = flush(line_start)
-            if previous == "code":
+            del containers[matched:]
+            if previous == "empty" and len(containers) == empty_level:
+                # A list item may begin with at most one blank line: one opened empty ends here.
+                containers.pop()
+            if previous == "code" and matched == len(containers):
                 ranges.append((line_start, line_end))
             else:
                 previous = "blank"
             continue
-        # A line less indented than a list item's content leaves the item, unless it is a lazy
-        # continuation of the item's paragraph, which no line opening a block of its own is.
-        rest = body[skipped:]
-        lazy = previous == "text" and not (
-            rest.startswith("#") or FENCE.match(rest) or LIST_MARKER.match(rest)
+        # A container the line does not continue stays open only for a lazy continuation of
+        # its paragraph, which no line opening a block of its own is.
+        lazy = (
+            matched < len(containers)
+            and previous == "text"
+            and (width >= 4 or not opens_block(line.rest()[count:]))
         )
-        while containers and indent < containers[-1] and not lazy:
-            containers.pop()
-        column = indent
-        at = line_end - len(rest)
-        can_code = previous in ("blank", "start", "code", "block")
-        interrupting = previous == "text"
-        kind = "text"
-        opened_item = False
-        while True:
-            base = containers[-1] if containers else 0
-            if column - base >= 4:
-                kind = "code" if can_code else "text"
+        if matched < len(containers) and not lazy:
+            paragraph = flush(line_start)
+            del containers[matched:]
+            previous = "block"
+        opened = False
+        while not lazy:
+            width, count = line.indent()
+            rest = line.rest()[count:]
+            if width >= 4:
                 break
-            if (interrupting and UNDERLINE.fullmatch(rest)) or BREAK.fullmatch(rest):
-                kind = "block"
-                break
-            marker = LIST_MARKER.match(rest)
+            if rest.startswith(">"):
+                line.skip(count, width)
+                containers.append("quote")
+                continues(line, "quote")
+                opened = True
+                continue
+            marker = None if BREAK.fullmatch(rest) else LIST_MARKER.match(rest)
             after = rest[marker.end():] if marker else ""
-            if marker and interrupting and (
+            if marker and previous == "text" and not opened and (
                 not after.strip() or (marker.group(1) is not None and int(marker.group(1)) != 1)
             ):
                 marker = None
-            if marker:
-                gap, gap_skipped = columns(after)
-                if not after.strip():
-                    containers.append(column + marker.end() + 1)
-                    rest = ""
-                    kind = "block"
-                    opened_item = True
-                    break
-                width = gap if gap <= 4 else 1
-                containers.append(column + marker.end() + width)
-                rest = after[gap_skipped:] if gap <= 4 else after[1:]
-                column = containers[-1] + (gap - width)
-                at = line_end - len(rest)
-                can_code = True
-                interrupting = False
-                opened_item = True
-                continue
-            opened = FENCE.match(rest)
-            if opened and not (opened.group(1)[0] == "`" and "`" in opened.group(2)):
-                fence = (opened.group(1)[0], len(opened.group(1)), base, depth)
-                kind = "fence"
-            elif rest.startswith("#"):
-                kind = "block"
-            break
+            if not marker:
+                break
+            line.skip(count + marker.end(), width + marker.end())
+            gap, gap_count = line.indent()
+            if not after.strip():
+                containers.append(line.column + 1)
+                line.skip(len(line.rest()), 0)
+            elif gap > 4:
+                containers.append(line.column + 1)
+                line.skip(1, 1)
+            else:
+                containers.append(line.column + gap)
+                line.skip(gap_count, gap)
+            opened = True
+        if opened:
+            paragraph = flush(line_start)
+        width, count = line.indent()
+        rest = line.rest()[count:]
+        at = line_start + line.at + count
+        can_code = opened or previous in ("start", "blank", "code", "block", "fence", "empty")
         # llmlint: ignore-block[structural_pattern_matching] `match`/`case` is a syntax error
         # before Python 3.10, and this peer runs on whichever `python3` or `python` the host
-        # has, as the note on `dispatch` below says; these are the line's three outcomes.
-        if kind in ("code", "fence") or opened_item or kind == "block" or previous != "text":
+        # has, as the note on `dispatch` below says; these are the leaf a line ends in.
+        if lazy or (width >= 4 and not can_code):
+            kind = "text"
+        elif width >= 4:
+            kind = "code"
+            at = line_start + line.at
+        elif not rest:
+            kind = "empty"
+        elif FENCE.match(rest) and not (
+            rest[0] == "`" and "`" in FENCE.match(rest).group(2)
+        ):
+            opened_fence = FENCE.match(rest)
+            fence = (opened_fence.group(1)[0], len(opened_fence.group(1)), len(containers))
+            kind = "fence"
+        elif (previous == "text" and not opened and UNDERLINE.fullmatch(rest)) or (
+            BREAK.fullmatch(rest) or HEADING.match(rest)
+        ):
+            kind = "block"
+        else:
+            kind = "text"
+        if kind != "text" or previous != "text" or opened:
             paragraph = flush(line_start)
         if kind in ("code", "fence"):
             ranges.append((at, line_end))
             previous = kind
-            continue
-        if kind == "block":
-            if rest:
-                code_spans(content, at, line_end, ranges)
-            previous = "block" if rest else "start"
-            continue
+        elif kind == "block":
+            code_spans(content, at, line_end, ranges)
+            previous = "block"
+        elif kind == "empty":
+            previous = "empty"
+            empty_level = len(containers)
+        else:
+            if paragraph is None:
+                paragraph = at
+            previous = "text"
         # llmlint: ignore-end[structural_pattern_matching]
-        if paragraph is None:
-            paragraph = at
-        previous = "text"
     flush(len(content))
     return ranges
 

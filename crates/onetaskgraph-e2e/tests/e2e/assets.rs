@@ -1389,6 +1389,65 @@ fn a_record_whose_only_image_syntax_is_escaped_or_in_code_is_a_record_without_as
     }
 }
 
+/// Content whose list item opens a block quote holding a fence, and after it a real reference
+/// to the very asset the fenced image names.
+const QUOTED_FENCE: &str = "# Nested\n\n- > ~~~\n  > ![example](./before.png)\n  > ~~~\n\n\
+                            ![real](./before.png)\n";
+
+#[test]
+fn a_fence_in_a_quote_in_a_list_item_stays_code_through_a_copy_into_a_plugin_serving_assets() {
+    let folders = Folders::new();
+    let before = images::png(180, SCREENSHOT);
+    let before_path = folders.image("quoted", "before.png", &before);
+    let body = folders.text("quoted.md", QUOTED_FENCE);
+    for verb in ["task", "document"] {
+        let id = folders.created(&[
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Quoted",
+            "--body-file",
+            &body,
+            "--asset",
+            &before_path,
+        ]);
+        let source = folders.show(verb, &id);
+        assert_eq!(item(&source)["content"], json!(QUOTED_FENCE), "{verb}");
+        assert_eq!(
+            listed(&source),
+            vec![(
+                "before.png".to_owned(),
+                sha256(&before),
+                "image/png".to_owned()
+            )]
+        );
+
+        let writes_before = Folders::logged(&folders.served_log).len();
+        let report = folders.copy(&[verb, "copy", &id, "--to", "served"]);
+        let write = &Folders::logged(&folders.served_log)[writes_before];
+        assert_eq!(
+            write["received"],
+            json!([{"name": "before.png", "content_type": "image/png",
+                    "decoded_sha256": sha256(&before)}]),
+            "{verb}"
+        );
+        let copied = folders.show(verb, &landed(&report));
+        let uploads = recorded(&copied);
+        assert_eq!(uploads.len(), 1, "{uploads:?}");
+        let url = &uploads[0].2;
+        let expected = QUOTED_FENCE.replace("![real](./before.png)", &format!("![real]({url})"));
+        assert!(
+            expected.contains("  > ![example](./before.png)\n"),
+            "the fenced image is left as written"
+        );
+        assert_eq!(item(&copied)["content"], json!(expected), "{verb}");
+        assert_eq!(write["answered"]["content"], json!(expected), "{verb}");
+    }
+}
+
 /// The destination's `onetaskgraph.assets`, by name, as `(sha256, url)`.
 fn recorded(shown: &Value) -> Vec<(String, String, String)> {
     let mut recorded: Vec<(String, String, String)> =
@@ -2270,6 +2329,9 @@ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
         "> ```\n> ![quoted](./a.png)\n> ```\n>\n>     ![code](./x.jpg)\n\n![a`](./y.gif)` `unclosed ![u](./z.webp)",
         "1. one\n   ```\n   ![n](./a.png)\n   ```\n# h\n    ![after heading](./x.jpg)\n```\n![open](./y.gif)",
         "    ![first line](./a.png)\n![real](./x.jpg) ```![triple](./y.gif)``` `` ` ![mixed](./z.webp) ``",
+        // A block quote opened after a list marker, holding a fence: its image is code.
+        "- > ~~~\n  > ![example](./a.png)\n  > ~~~\n\n![real](./a.png)",
+        "1. > > ```\n   > > ![deep](./a.png)\n   > > ```\n   > ![quoted](./x.jpg)\n- ![item](./y.gif)",
     ];
     let (peer_names, peer_contents) = peer_reading(&folders, &names, &contents);
     let accepted: Vec<bool> = names
