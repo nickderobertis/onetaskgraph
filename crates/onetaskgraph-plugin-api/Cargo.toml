@@ -14,6 +14,8 @@ async-trait.workspace = true
 # An asset's bytes cross the out-of-process protocol as base64.
 base64.workspace = true
 chrono.workspace = true
+# Image syntax inside a code span or a code block is no asset reference.
+pulldown-cmark.workspace = true
 schemars.workspace = true
 secrecy.workspace = true
 serde.workspace = true

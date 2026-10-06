@@ -8,7 +8,10 @@
 //! file name with no `/`, no `\` and no `..`, ending, case-insensitively, in `.png`, `.jpg`,
 //! `.jpeg`, `.gif` or `.webp`. Nothing else is an asset reference: every other link, absolute
 //! or relative, an image whose target has a directory or no `./`, and a plain link to
-//! `./<name>.png`, is left exactly as written. [`asset_references`] is the one reader of the
+//! `./<name>.png`, is left exactly as written. Only an image outside code is a reference: one
+//! whose `!` is escaped with a backslash, and image syntax inside an inline code span or a
+//! fenced or indented code block — as CommonMark decides what is code — is text like any
+//! other, so a record whose only image syntax is of those kinds holds no asset. [`asset_references`] is the one reader of the
 //! convention and [`rewrite_asset_references`] the one writer, so the engine and every plugin
 //! agree about which text is a reference.
 //!
@@ -440,13 +443,49 @@ struct Reference {
     name: AssetName,
 }
 
+/// The byte ranges of `content` that are code: every code span, and every code block, fenced
+/// or indented, fences included — read as CommonMark reads them, in whatever container they
+/// sit.
+fn code(content: &str) -> Vec<std::ops::Range<usize>> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    Parser::new_ext(content, Options::empty())
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Code(_) | Event::Start(Tag::CodeBlock(_)) => Some(range),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the byte at `at` is escaped: preceded by an odd number of backslashes.
+fn escaped(content: &str, at: usize) -> bool {
+    content.as_bytes()[..at]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
 /// Every asset reference in `content`, in order, duplicates included.
+///
+/// An image whose `!` is escaped, or whose `!` or target sits inside code, is not one.
 fn references(content: &str) -> Vec<Reference> {
     let mut found = Vec::new();
+    // Most content has no image syntax at all, and then nothing is parsed.
+    if !content.contains("![") {
+        return found;
+    }
+    let code = code(content);
+    let in_code = |at: usize| code.iter().any(|range| range.contains(&at));
     let mut from = 0;
     while let Some(at) = content[from..].find("![") {
         let start = from + at;
         from = start + 2;
+        if escaped(content, start) || in_code(start) {
+            continue;
+        }
         let Some(alt_end) = content[from..].find(']').map(|end| from + end) else {
             break;
         };
@@ -468,6 +507,9 @@ fn references(content: &str) -> Vec<Reference> {
             .split_once(')')
             .is_some_and(|(between, _)| !between.contains('\n'));
         let target = &content[target_start..target_end];
+        if in_code(target_start) {
+            continue;
+        }
         if let (true, Some(name)) = (closes, target.strip_prefix(REFERENCE_PREFIX))
             && let Ok(name) = AssetName::new(name)
         {
@@ -587,6 +629,40 @@ mod tests {
         assert_eq!(
             asset_references(content),
             vec![name("one.png"), name("six.JpEg")]
+        );
+    }
+
+    #[test]
+    fn an_escaped_image_and_image_syntax_inside_code_are_not_references() {
+        let content = "\\![escaped](./a.png) `![span](./b.png)` ``![x](./c.png)``\n\
+                       \n```\n![fenced](./d.png)\n```\n\n~~~md\n![tilde](./e.png)\n~~~\n\n    \
+                       ![indented](./f.png)\n\n- item\n\n  ```\n  ![listed](./g.png)\n  ```\n\n\
+                       > ```\n> ![quoted](./h.png)\n> ```\n\n![real](./real.png) \\\\![after](./i.png)\n\
+                       ![a`](./j.png)`";
+        assert_eq!(
+            asset_references(content),
+            vec![name("real.png"), name("i.png")]
+        );
+        let served = BTreeMap::from([
+            (name("a.png"), "https://h/a".to_owned()),
+            (name("d.png"), "https://h/d".to_owned()),
+            (name("real.png"), "https://h/real".to_owned()),
+        ]);
+        assert_eq!(
+            rewrite_asset_references(content, &served),
+            content.replace("(./real.png)", "(https://h/real)")
+        );
+        assert!(
+            asset_references("```\n![a](./a.png)\n").is_empty(),
+            "unclosed fence"
+        );
+        assert_eq!(
+            asset_references("    text\n![a](./a.png)"),
+            vec![name("a.png")]
+        );
+        assert_eq!(
+            asset_references("para\n    ![a](./a.png)"),
+            vec![name("a.png")]
         );
     }
 
