@@ -512,6 +512,53 @@ async fn a_copy_of_a_record_that_dropped_its_assets_takes_them_away_and_an_undo_
 }
 
 #[tokio::test]
+async fn an_upload_record_of_the_right_shape_with_a_bad_digest_or_no_url_is_refused_and_left_as_it_was()
+ {
+    let good = "a".repeat(64);
+    for (sha256, url) in [
+        ("A".repeat(64), "in-memory://kept.png"),
+        ("abc".to_owned(), "in-memory://kept.png"),
+        (good, ""),
+    ] {
+        let root = tempfile::tempdir().expect("a folder");
+        let recorded = json!({"kept.png": {"sha256": sha256, "url": url}});
+        let engine = engine(
+            root.path(),
+            json!({
+                "capabilities": {"assets": "native", "documents": "native"},
+                "tasks": [{
+                    "id": "landed", "title": "Pictured", "content": "old",
+                    "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                    "metadata": {
+                        "onetaskgraph.origin": "notes:pictured",
+                        "onetaskgraph.assets": recorded,
+                    },
+                }],
+            }),
+        );
+        let task = create(&engine, "Pictured", &[1; 8]).await;
+        let refused = engine
+            .copy(&copy_of(std::slice::from_ref(&task), CopyScope::Tasks))
+            .await
+            .expect_err("refused");
+        assert!(
+            refused.to_string().contains("onetaskgraph.assets")
+                && refused.to_string().contains("kept.png"),
+            "{refused}"
+        );
+        let held = engine
+            .task(&"into:landed".parse().expect("an id"))
+            .await
+            .expect("read")
+            .items
+            .remove(0)
+            .item;
+        assert_eq!(held.content.as_deref(), Some("old"));
+        assert_eq!(held.metadata["onetaskgraph.assets"], recorded);
+    }
+}
+
+#[tokio::test]
 async fn a_record_holding_a_malformed_upload_record_is_refused_and_left_as_it_was() {
     let root = tempfile::tempdir().expect("a folder");
     // The copy's destination already holds the task's counterpart, whose record of what it
