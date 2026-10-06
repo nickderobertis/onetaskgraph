@@ -490,7 +490,62 @@ pub struct DocumentCreateArgs {
     pub id: Option<NativeId>,
 }
 
-/// `onetaskgraph task render` and `onetaskgraph document render`.
+/// `onetaskgraph project create`.
+///
+/// What `document create` names about an item, less the project it is filed under — a project
+/// is filed under none — with the id it is written under required, and a status.
+#[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("rendered").args(["template", "template_loader"]).multiple(false))]
+pub struct ProjectCreateArgs {
+    /// The configured source to create it in.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CopyArgs::to`: `main` converts
+    /// it through `SourceName::new` with the next action a user needs.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+
+    /// Write it under this id: a project the source holds by it is replaced, and otherwise
+    /// one is created under it.
+    #[arg(long = "id", value_name = "NATIVE-ID", value_parser = native_id)]
+    pub id: NativeId,
+
+    /// Its title.
+    #[arg(long, value_name = "TITLE")]
+    pub title: String,
+
+    /// Its status category: `todo` for a new project when none is given, and the status it
+    /// holds for one being replaced.
+    #[arg(long = "status", value_name = "CATEGORY")]
+    pub status: Option<StatusArg>,
+
+    /// Give it this label. Repeat for several; given, they replace the labels a project being
+    /// replaced holds.
+    #[arg(long = "label", value_name = "L")]
+    pub label: Vec<String>,
+
+    /// A repository it concerns, as a normalized origin (`github.com/owner/name`). Repeat for
+    /// several; given, they replace the repositories a project being replaced holds.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — `main` converts each through the
+    /// contract's own `Repository` and refuses one naming the problem.
+    #[arg(long = "repository", value_name = "R")]
+    pub repository: Vec<String>,
+
+    /// Set one caller-owned metadata key to one JSON value. Repeat for several; a key in the
+    /// reserved `onetaskgraph.` namespace is refused, and every other key a project being
+    /// replaced holds is kept.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `MetadataSetArgs::key`: `main`
+    /// converts each through `MetadataKey::new` and parses its value as JSON before anything
+    /// is built.
+    #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
+    pub metadata: Vec<String>,
+
+    #[command(flatten)]
+    pub body: CreateBodyArgs,
+}
+
+/// `onetaskgraph task render`, `onetaskgraph project render` and `onetaskgraph document render`.
 // llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for mutually exclusive options, so the template's sources are separate optional fields; the ArgGroup and `conflicts_with` on them refuse any two together where they are typed (exit 2), and `template::input` converts them to the one `TemplateInput` enum before anything else reads them.
 #[derive(Debug, Args)]
 pub struct RenderArgs {
@@ -541,7 +596,8 @@ pub struct RenderArgs {
 }
 // llmlint: ignore-end[invalid_states_unrepresentable]
 
-/// `onetaskgraph task answers` and `onetaskgraph document answers`.
+/// `onetaskgraph task answers`, `onetaskgraph project answers` and
+/// `onetaskgraph document answers`.
 #[derive(Debug, Args)]
 pub struct AnswersArgs {
     /// The item's qualified id, `<source>:<native-id>`.
@@ -849,6 +905,23 @@ pub enum ProjectCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+    /// Create — or, with --id naming one it holds, replace — a project, its description
+    /// rendered from a template or given as it is.
+    ///
+    /// Rendered from a template, it records where it came from under the reserved
+    /// `onetaskgraph.template` metadata key, and a source that keeps an authoring file
+    /// (local-md) stores the answers beside it for a later `project render`. Replacing a
+    /// project replaces its content, answers and provenance whole, and keeps its metadata,
+    /// status, labels and repositories but for what is named here.
+    Create(ProjectCreateArgs),
+    /// Regenerate one project's description from its template in place, and nothing else
+    /// about it.
+    ///
+    /// The answers start from the ones stored beside it when they are in step with its
+    /// provenance; --var, --answers and --unset are laid over them.
+    Render(RenderArgs),
+    /// Print the template answers stored beside one project.
+    Answers(AnswersArgs),
 }
 
 /// What `onetaskgraph document` can do.

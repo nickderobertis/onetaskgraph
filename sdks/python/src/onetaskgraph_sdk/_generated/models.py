@@ -15,6 +15,7 @@ from .item_type import ItemType as ItemType
 from .linear_config import LinearConfig as LinearConfig
 from .location import Location as Location
 from .metadata_set import MetadataSet as MetadataSet
+from .native_id import NativeId as NativeId
 from .page_of_document import Page as PageOfDocument
 from .priority import Priority as Priority
 from .query_plan import QueryPlan as QueryPlan
@@ -70,6 +71,7 @@ __all__ = [
     "LinearConfig",
     "Location",
     "MetadataSet",
+    "NativeId",
     "PageOfDocument",
     "Priority",
     "QueryPlan",

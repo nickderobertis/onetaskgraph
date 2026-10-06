@@ -433,6 +433,15 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Task, args).await,
+        Command::Project {
+            command: ProjectCommand::Create(args),
+        } => rendered::create_project(out, loaded, args).await,
+        Command::Project {
+            command: ProjectCommand::Render(args),
+        } => rendered::regenerate(out, loaded, RenderedRecord::Project, args).await,
+        Command::Project {
+            command: ProjectCommand::Answers(args),
+        } => rendered::stored(out, loaded, RenderedRecord::Project, args).await,
         Command::Document {
             command: DocumentCommand::Create(args),
         } => rendered::create_document(out, loaded, args).await,
@@ -1517,6 +1526,9 @@ mod tests {
                 "project deps",
                 "project copy",
                 "project metadata set",
+                "project create",
+                "project render",
+                "project answers",
                 "document list",
                 "document show",
                 "document copy",

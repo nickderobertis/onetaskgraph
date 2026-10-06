@@ -1,7 +1,7 @@
 {
   "data": {
     "project": {
-      "description": "A near item whose far end lives in another source.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:P-9\",\"kind\":\"project\"}]}\n-->",
+      "content": "A near item whose far end lives in another source.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:P-9\",\"kind\":\"project\"}]}\n-->",
       "relations": {
         "nodes": [
           {

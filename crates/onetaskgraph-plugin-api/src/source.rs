@@ -732,6 +732,20 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// The template answers the project `id` was last rendered from, on exactly the terms of
+    /// [`task_template_answers`](Self::task_template_answers).
+    ///
+    /// # Errors
+    ///
+    /// As [`task_template_answers`](Self::task_template_answers).
+    async fn project_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Ok(None)
+    }
+
     /// Create or update one task exactly as [`write_task`](Self::write_task) does, keeping
     /// `answers` — the answers its content was rendered from — beside it in the same write
     /// where this source keeps answers at all.
@@ -767,6 +781,21 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<NativeId, SourceError> {
         let _ = answers;
         self.write_document(write).await
+    }
+
+    /// Create or update one project, on exactly the terms of
+    /// [`write_task_rendered`](Self::write_task_rendered).
+    ///
+    /// # Errors
+    ///
+    /// As [`write_project`](Self::write_project).
+    async fn write_project_rendered(
+        &self,
+        write: &ItemWrite<Project>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = answers;
+        self.write_project(write).await
     }
 
     /// Replace one task's rendering — its content, byte for byte, its
@@ -822,6 +851,31 @@ pub trait TaskSource: Send + Sync {
         Err(SourceError::Refused {
             message: format!(
                 "the {} plugin cannot write a document's rendering on its own",
+                self.kind()
+            ),
+        })
+    }
+
+    /// Replace one project's rendering, on exactly the terms of
+    /// [`set_task_rendering`](Self::set_task_rendering): its content, its
+    /// [`MetadataKey::TEMPLATE_KEY`] entry and the answers kept beside it change, and its
+    /// title, status, labels, every other metadata entry, repositories and dependencies are
+    /// left exactly as they are.
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_rendering`](Self::set_task_rendering).
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(SourceError::Refused {
+            message: format!(
+                "the {} plugin cannot write a project's rendering on its own",
                 self.kind()
             ),
         })

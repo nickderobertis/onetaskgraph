@@ -200,7 +200,8 @@
 //! probe, and `write_relations` records why the pair this source sends is the oriented one.
 //!
 //! Caller metadata is canonical JSON in a trailing
-//! ``<!-- onetaskgraph.metadata `…` -->`` Markdown comment in the item's description, on one
+//! ``<!-- onetaskgraph.metadata `…` -->`` Markdown comment in the item's long form — an
+//! issue's `description`, a project's or a document's `content` — on one
 //! line with the JSON in a code span — the one spelling Linear keeps byte for byte, see the
 //! ruling above; the multi-line spelling this source wrote before is still read. The visible
 //! description is returned unchanged without that slot. Writes put the same canonical
@@ -408,17 +409,17 @@ pub mod graphql {
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
-    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name description url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
+    pub const PROJECT: &str = "query($id:String!){ project(id:$id){ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} } }";
     /// List issues.
     pub const ISSUES: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } }";
     /// List projects.
-    pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name description url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
+    pub const PROJECTS: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } }";
     /// List issue labels.
     pub const LABELS: &str = "query($first:Int,$after:String){ issueLabels(first:$first,after:$after){ nodes{id name color} pageInfo{hasNextPage endCursor} } }";
     /// Fetch issue dependency relations.
     pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
-    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Everything a status write resolves, in one request: the configured team's id, that
     /// team's workflow states, and the workspace's project statuses, each with its type.
     ///
@@ -2740,7 +2741,7 @@ impl TaskSource for LinearSource {
         let page = connection(&d, "projects", |v| map_project(v, &self.statuses))?;
         // A project's text is applied here, over the page Linear answered: `search_title` and
         // `search_content` are declared for every level, and `ProjectFilter` is not asked for
-        // a description match — so the rule decides, over every row of the page.
+        // a content match — so the rule decides, over every row of the page.
         Ok(Page {
             items: page
                 .items
@@ -2900,7 +2901,10 @@ impl TaskSource for LinearSource {
             &edges,
             WriteKind::Project,
         )?;
-        let input = json!({"name":write.item.title,"description":description,"statusId":status,"labelIds":labels});
+        // A project's long form is its `content`, not its `description`: Linear documents the
+        // second as "the short description of the project", and the first — the project's
+        // Markdown body — is the one with room for a description and a metadata slot.
+        let input = json!({"name":write.item.title,"content":description,"statusId":status,"labelIds":labels});
         let (query, variables, root) = match &write.target {
             // Its relations read back in the same request, as an issue's are.
             Some(id) => (
@@ -3386,7 +3390,7 @@ impl TaskSource for LinearSource {
             })
     }
     /// One metadata key of a project, on the terms of `set_task_metadata`: one read, and one
-    /// `projectUpdate` carrying the description alone.
+    /// `projectUpdate` carrying the content alone.
     async fn set_project_metadata(
         &self,
         id: &NativeId,
@@ -3402,7 +3406,7 @@ impl TaskSource for LinearSource {
         }
         slot.insert(key.as_str().to_owned(), value.clone());
         let rewritten = reslotted(description.as_deref(), &slot)?;
-        self.write_project_description(&project.id, rewritten.as_deref())
+        self.write_project_content(&project.id, rewritten.as_deref())
             .await?;
         self.get_project(&project.id)
             .await?
@@ -3487,6 +3491,27 @@ impl TaskSource for LinearSource {
         let rewritten = Self::described(Some(content), &slot)?;
         if rewritten != held {
             self.write_document_content(&document.id, rewritten.as_deref())
+                .await?;
+        }
+        Ok(Some(()))
+    }
+    /// One project's rendering, on the terms of `set_task_rendering`, through one
+    /// `projectUpdate` carrying the content alone.
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let Some((project, description)) = self.project_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut slot) = metadata_description(description.clone())?;
+        slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let rewritten = Self::described(Some(content), &slot)?;
+        if rewritten != description {
+            self.write_project_content(&project.id, rewritten.as_deref())
                 .await?;
         }
         Ok(Some(()))
@@ -3644,7 +3669,7 @@ impl LinearSource {
         .filter(|(task, _)| self.in_scope(task.project.as_ref())))
     }
 
-    /// One project and its raw `description`, on the terms of [`Self::issue_held`]: a source
+    /// One project and its raw `content`, on the terms of [`Self::issue_held`]: a source
     /// scoped to one project holds that one alone.
     async fn project_held(
         &self,
@@ -3654,7 +3679,7 @@ impl LinearSource {
         Ok(optional(&data, "project", |v| {
             Ok((
                 map_project(v, &self.statuses)?,
-                optional_string(v, "description")?,
+                optional_string(v, "content")?,
             ))
         })?
         .filter(|(project, _)| self.in_scope(Some(&project.id))))
@@ -3697,16 +3722,16 @@ impl LinearSource {
         written_is(issue, id)
     }
 
-    /// Send one project's new `description` alone.
-    async fn write_project_description(
+    /// Send one project's new `content` alone.
+    async fn write_project_content(
         &self,
         id: &NativeId,
-        description: Option<&str>,
+        content: Option<&str>,
     ) -> Result<(), SourceError> {
         let data = self
             .send(
                 graphql::PROJECT_UPDATE,
-                json!({"id":id.0,"input":{"description":description}}),
+                json!({"id":id.0,"input":{"content":content}}),
             )
             .await?;
         let project = mutation_payload(&data, MutationRoot::ProjectUpdate)?
@@ -4053,7 +4078,7 @@ fn recorded(
     let item = d.get(root.as_str()).ok_or_else(|| SourceError::Malformed {
         message: format!("missing {}", root.as_str()),
     })?;
-    let (_, metadata) = metadata_description(optional_string(item, "description")?)?;
+    let (_, metadata) = metadata_description(optional_string(item, root.long_form())?)?;
     // `relations` on an issue holds issues and on a project holds projects, both of this
     // workspace — so a same-kind far end in this same source is one Linear itself was
     // supposed to hold, and the key is refused rather than quietly read, whether the entry
@@ -4235,7 +4260,7 @@ fn strip_delivery_keys(metadata: &mut std::collections::BTreeMap<String, Value>)
     metadata.remove(TaskRef::DELIVERED_BY_KEY);
 }
 fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceError> {
-    let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
+    let (content, mut metadata) = metadata_description(optional_string(v, "content")?)?;
     strip_delivery_keys(&mut metadata);
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
@@ -4406,6 +4431,14 @@ impl DependencyRoot {
         match self {
             Self::Issue => "issue",
             Self::Project => "project",
+        }
+    }
+    /// The field holding the item's long form and its metadata slot: an issue's
+    /// `description`, a project's `content`.
+    const fn long_form(self) -> &'static str {
+        match self {
+            Self::Issue => "description",
+            Self::Project => "content",
         }
     }
 }

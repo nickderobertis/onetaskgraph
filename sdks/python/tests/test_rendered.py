@@ -1,4 +1,4 @@
-"""Tasks and documents created from templates, regenerated and read back, through the SDK.
+"""Tasks, projects and documents created from templates, regenerated and read back, through the SDK.
 
 Every call drives the real binary over a real folder of Markdown, which keeps the answers an
 item was rendered from in its own file. Prompting is turned on in the environment each client
@@ -19,8 +19,10 @@ import pytest
 
 from onetaskgraph_sdk import (
     Client,
+    NativeId,
     OnetaskgraphError,
     QueryResponseOfQualifiedDocument,
+    QueryResponseOfQualifiedProject,
     Regenerated,
     TaskDetail,
     TemplateAnswers,
@@ -143,6 +145,43 @@ def test_a_plain_body_and_a_document_through_the_sdk(binary: Path, tmp_path: Pat
     }
     regenerated = run(client.document_render("notes:design", var=["goal=Design again"]))
     assert regenerated.body == "Goal: Design again\n"
+
+
+def test_a_project_is_created_regenerated_and_its_answers_read(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A project's description renders, regenerates and keeps its answers as a document's does."""
+    client, template = plan(binary, tmp_path)
+    created = run(
+        client.project_create(
+            "notes",
+            NativeId("plan-1"),
+            "The plan",
+            template=str(template),
+            answers={"goal": "Plan it"},
+            status="in-progress",
+            metadata=["myapp.budget=10"],
+        )
+    )
+    assert isinstance(created, QueryResponseOfQualifiedProject)
+    project = created.items[0]
+    assert project.id.root == "notes:plan-1"
+    assert project.item.content == "Goal: Plan it\n"
+    metadata = project.item.metadata or {}
+    assert metadata["myapp.budget"] == 10
+    recorded = TemplateProvenance.model_validate(metadata["onetaskgraph.template"])
+    assert recorded.body_digest.root == sha256("Goal: Plan it\n")
+    assert recorded.answers_digest.root == sha256('{"goal":"Plan it","steps":[]}')
+    answers = run(client.project_answers("notes:plan-1"))
+    assert answers.model_dump() == {"goal": "Plan it", "steps": []}
+
+    regenerated = run(client.project_render("notes:plan-1", var=["steps=[budget]"]))
+    assert isinstance(regenerated, Regenerated)
+    assert regenerated.body == "Goal: Plan it\n- budget\n", "goal came from storage"
+    assert not run(client.project_render("notes:plan-1")).changed
+    shown = run(client.project_show("notes:plan-1")).items[0].item
+    assert shown.status.category.value == "in-progress"
+    assert (shown.metadata or {})["myapp.budget"] == 10
 
 
 def test_answers_out_of_step_refuse_a_partial_render_with_exit_two(

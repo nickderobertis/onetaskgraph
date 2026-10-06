@@ -875,6 +875,14 @@ them do; this is the inventory of what is owed, not a status board.
     and a board listing and a metadata search after it read a card moved and a value rewritten
     that the same two without it miss; a Linear status write after it sends no team, workflow-state or project-status read; and a
     folder of Markdown and an in-memory source answer across it as before.
+81. A project's description is created and regenerated from a template through `project
+    create`, `project render` and `project answers`, from a file and a loader document, with
+    the provenance a task's records; `project create --id` over a held project replaces its
+    rendering and keeps its status, labels, repositories, other metadata and dependencies; a
+    folder of Markdown keeps its answers block through a metadata write and a copy over it; and
+    a copy into another folder, a board or a Linear workspace carries the content, the caller's
+    keys and the entry, and no answers — with about ten kilobytes of JSON under one caller key
+    reading back whole on the board's body slot and in a Linear project's `content`.
 
 ## What a copied document's references are pointed at
 

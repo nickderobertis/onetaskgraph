@@ -59,6 +59,10 @@ RESPONSE_ROOTS = {
     "task_create": "TaskDetail",
     "task_render": "Regenerated",
     "task_answers": "TemplateAnswers",
+    # A created project as `project show` answers with it.
+    "project_create": "QueryResponseOfQualifiedProject",
+    "project_render": "Regenerated",
+    "project_answers": "TemplateAnswers",
     "document_create": "QueryResponseOfQualifiedDocument",
     "document_render": "Regenerated",
     "document_answers": "TemplateAnswers",
@@ -82,7 +86,8 @@ RESPONSE_ROOTS = {
 # `LinearConfig` is a `linear` source's configuration — its `status_mapping` and its `project` —
 # which a caller writing one models by name. `StatusMapping` is that `status_mapping`'s one
 # grammar, which a `github-projects` source's configuration reaches too, and which a caller
-# writing either models by name.
+# writing either models by name. `NativeId` is a source's own id for one item, which `project
+# create --id` takes by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -91,6 +96,7 @@ CONTRACT_ROOTS = {
     "StatusCategory",
     "Priority",
     "SourceName",
+    "NativeId",
     "Document",
     "DocumentQuery",
     "Location",
@@ -237,6 +243,12 @@ class OptionShape(NamedTuple):
 # takes several to filter by.
 COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "create"): {"status": OptionShape(type="choices", placeholder="CATEGORY")},
+    # `project create` names the id it writes under, which is required and is a project's own
+    # native id rather than a document's, and a status.
+    ("project", "create"): {
+        "id": OptionShape(type="NativeId | str", placeholder="NATIVE-ID"),
+        "status": OptionShape(type="choices", placeholder="CATEGORY"),
+    },
     # `task list` keeps the tasks holding a metadata string at a key and nested path, where every
     # write verb sets a key to a JSON value.
     ("task", "list"): {
@@ -672,9 +684,9 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("template", "variables" | "render"):
             return ("file",)
-        case ("task" | "document", "create"):
+        case ("task" | "project" | "document", "create"):
             return ("source",)
-        case ("task" | "document", "render" | "answers"):
+        case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
         case _:
             return ()
@@ -682,13 +694,15 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
 
 # Options a command cannot run without, which its generated method takes as required
 # parameters beside its operands rather than as optional keywords: `task content set` has
-# nothing to write without `--file`, and a create nothing to file without `--project` and
-# `--title`. Each is still passed to the binary as the flag it is, so
-# it is not an operand and is not in the table `operands` answers.
+# nothing to write without `--file`, a create nothing to file without `--project` and
+# `--title`, and a project create nothing to write under without `--id` and `--title`. Each
+# is still passed to the binary as the flag it is, so it is not an operand and is not in the
+# table `operands` answers.
 REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "content", "set"): ("file",),
     ("task", "create"): ("project", "title"),
     ("document", "create"): ("project", "title"),
+    ("project", "create"): ("id", "title"),
 }
 
 # The commands that read a body from standard input when `--body-file` is absent, which
@@ -698,6 +712,7 @@ BODY_COMMANDS = {
     ("task", "comment", "add"),
     ("task", "comment", "edit"),
     ("task", "create"),
+    ("project", "create"),
     ("document", "create"),
 }
 
@@ -710,6 +725,8 @@ ANSWERS_COMMANDS = {
     ("template", "render"),
     ("task", "create"),
     ("task", "render"),
+    ("project", "create"),
+    ("project", "render"),
     ("document", "create"),
     ("document", "render"),
 }
@@ -748,7 +765,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[
             f"    {root},"
             for root in sorted(
-                response_roots() | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
+                response_roots()
+                | {"GlobalId", "NativeId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
         ")",
@@ -924,7 +942,15 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             [
                 f"{positional}: {positional_types.get(positional, 'str')}"
                 + (" | None = None" if optional else "")
-                for positional in (*taken, *required)
+                for positional in taken
+            ]
+            # A required option is typed as the operand of its name is, unless its command
+            # shapes it otherwise: `project create --id` is a native id, not a qualified one.
+            + [
+                f"{option}: {option_type(command, option)}"
+                if option in COMMAND_OPTIONS.get(command, {})
+                else f"{option}: {positional_types.get(option, 'str')}"
+                for option in required
             ]
             + ["*"]
             + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]

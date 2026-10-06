@@ -708,6 +708,31 @@ impl TaskSource for InMemorySource {
             }))
     }
 
+    /// Replace one project's content and its provenance entry together, on the terms of
+    /// [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        Ok(held
+            .projects
+            .iter_mut()
+            .find(|project| &project.id == id)
+            .map(|project| {
+                project.content = Some(content.to_owned());
+                project
+                    .metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            }))
+    }
+
     async fn set_delivered_by(
         &self,
         id: &NativeId,
