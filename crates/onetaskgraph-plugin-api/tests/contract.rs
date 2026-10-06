@@ -2525,3 +2525,90 @@ fn a_metadata_match_naming_no_location_is_refused_wherever_it_is_built() {
     assert!(read.path().is_empty());
     assert_eq!(read.value(), "ada");
 }
+
+#[tokio::test]
+async fn a_source_that_says_nothing_about_assets_holds_none_and_refuses_every_asset_write() {
+    use onetaskgraph_plugin_api::{AssetName, AssetPayload, AssetWrite, assetless};
+    let source: Box<dyn TaskSource> = Box::new(Silent("silent"));
+    let id = NativeId::from("t-1");
+    let name = AssetName::new("a.png").expect("an asset name");
+    assert!(source.task_assets(&id).await.expect("answers").is_empty());
+    assert!(
+        source
+            .document_assets(&id)
+            .await
+            .expect("answers")
+            .is_empty()
+    );
+    assert!(
+        source
+            .task_asset(&id, &name)
+            .await
+            .expect("answers")
+            .is_none()
+    );
+    assert!(
+        source
+            .document_asset(&id, &name)
+            .await
+            .expect("answers")
+            .is_none()
+    );
+
+    let assets = AssetWrite {
+        assets: vec![AssetPayload::of(name, vec![1, 2, 3])],
+        recorded_assets: None,
+    };
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "id": "t-1", "title": "T", "content": "![a](./a.png)",
+        "status": {"category": "todo", "name": "Todo"}, "labels": [],
+    }))
+    .expect("a task");
+    let document: Document = serde_json::from_value(serde_json::json!({
+        "id": "d-1", "title": "D", "content": "![a](./a.png)", "labels": [],
+    }))
+    .expect("a document");
+    let refused = assetless("silent");
+    assert_eq!(
+        source
+            .write_task_with_assets(
+                &ItemWrite {
+                    target: None,
+                    item: task,
+                    depends_on: Vec::new(),
+                },
+                None,
+                &assets,
+            )
+            .await,
+        Err(refused.clone())
+    );
+    assert_eq!(
+        source
+            .write_document_with_assets(
+                &ItemWrite {
+                    target: None,
+                    item: document,
+                    depends_on: Vec::new(),
+                },
+                None,
+                &assets,
+            )
+            .await,
+        Err(refused.clone())
+    );
+    let answers = std::collections::BTreeMap::new();
+    let provenance = serde_json::json!({});
+    assert_eq!(
+        source
+            .set_task_rendering_with_assets(&id, "x", &provenance, &answers, &assets)
+            .await,
+        Err(refused.clone())
+    );
+    assert_eq!(
+        source
+            .set_document_rendering_with_assets(&id, "x", &provenance, &answers, &assets)
+            .await,
+        Err(refused)
+    );
+}
