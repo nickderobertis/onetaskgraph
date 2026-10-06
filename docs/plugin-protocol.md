@@ -1072,6 +1072,12 @@ task to write it on.
 A plugin that cannot write one of these on its own refuses with `{"kind": "refused"}`, naming
 the field.
 
+`TaskSource::set_task_status_reading` — a status write answered with the whole task as the
+source now reads it — is not a message of this protocol. For a hosted source the engine answers
+it the way the trait's default does, with one `get_task` and then, for a task found, one
+`set_task_status`, so a plugin written against this document implements nothing more for the
+engine to keep delivered tasks in step after a status write.
+
 #### A task's `delivers` and `delivered_by`
 
 A `Task` carries two optional lists of strings, each left out — never `null` — when empty:
