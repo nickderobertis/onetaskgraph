@@ -303,17 +303,14 @@ fn base64_out<S: Serializer>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S
     }
 }
 
+/// Present bytes are a base64 string; only an absent member — `#[serde(default)]` — is reuse,
+/// so an explicit `null` is refused rather than read as one.
 fn base64_in<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error> {
-    let encoded = Option::<String>::deserialize(deserializer)?;
-    encoded
-        .map(|encoded| {
-            base64::engine::general_purpose::STANDARD
-                .decode(encoded.as_bytes())
-                .map_err(|error| {
-                    serde::de::Error::custom(format!("asset bytes are not base64: {error}"))
-                })
-        })
-        .transpose()
+    let encoded = String::deserialize(deserializer)?;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map(Some)
+        .map_err(|error| serde::de::Error::custom(format!("asset bytes are not base64: {error}")))
 }
 
 /// What a hosted source uploaded for one asset of one record: the bytes' SHA-256 and the URL

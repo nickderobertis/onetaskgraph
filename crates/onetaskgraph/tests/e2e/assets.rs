@@ -1719,6 +1719,20 @@ fn the_reference_host_refuses_a_write_recording_uploads_it_carries_no_assets_for
             "{kind}: {answered}"
         );
     }
+    // An asset's bytes are base64 when present, and absent — never `null` — when reused.
+    let digest = format!("{:064x}", 0);
+    for (index, bytes) in [json!("not base64!"), Value::Null].into_iter().enumerate() {
+        let answered = exchange(
+            &mut host,
+            &mut reader,
+            &json!({"id": format!("b{index}"), "method": "write_task", "params": {
+                "write": {"target": null, "item": item("task"), "depends_on": []},
+                "assets": [{"name": "a.png", "sha256": digest, "content_type": "image/png",
+                            "bytes": bytes}],
+            }}),
+        );
+        assert_eq!(answered["error"]["kind"], json!("malformed"), "{answered}");
+    }
     drop(host.stdin.take());
     assert!(host.wait().expect("the host exits").success());
     assert!(Folders::files(&root).is_empty(), "nothing was written");
