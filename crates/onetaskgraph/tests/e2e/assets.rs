@@ -1,0 +1,1211 @@
+//! Image assets on tasks and documents, driven through the binary the way a person drives them.
+//!
+//! Every journey here runs against folders of Markdown, which keep a record's assets in a
+//! directory beside its file, and — where a journey is about a destination that serves its
+//! assets at a URL, or about one that has never heard of assets — `asset_store.py` beside this
+//! file: a peer over a real pipe that keeps its records in a JSON file, so one invocation's copy
+//! is read back by the next, and that logs exactly what each write delivered to it.
+//!
+//! Every PNG a journey here stores or copies comes from `common::images::png`, and every record
+//! a journey copies carries one of about 500 KB among its assets: the weight a real screenshot
+//! on a plan has. Digests are recomputed here from the bytes the journey wrote, never taken
+//! from the engine that stored them.
+
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
+
+use crate::common::images;
+use crate::common::{Sandbox, stderr, stdout};
+use crate::document_store::interpreter;
+use crate::fixtures::document;
+
+/// The size of the screenshot every copied record carries: within the generator's range, and
+/// about 500 KB.
+const SCREENSHOT: usize = 500_000;
+
+/// A template whose content references each picture its answers name.
+const PICTURES: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  shots:\n    \
+    description: The pictures it shows\n    \
+    type: list\n\
+---\n\
+# The change\n\
+{% for shot in shots %}\n\
+![{{ shot }}](./{{ shot }})\n\
+{% endfor %}\n";
+
+/// Two folders of Markdown — `notes` and `back` — and two asset stores over a real pipe:
+/// `served`, which declares assets native and serves each at a URL, and `plain`, which says
+/// nothing about assets.
+struct Folders {
+    sandbox: Sandbox,
+    notes: PathBuf,
+    back: PathBuf,
+    inputs: PathBuf,
+    served_log: PathBuf,
+    plain_log: PathBuf,
+}
+
+impl Folders {
+    fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let notes = sandbox.subdirectory("notes");
+        let back = sandbox.subdirectory("back");
+        let inputs = sandbox.subdirectory("inputs");
+        let stores = sandbox.subdirectory("stores");
+        let served_log = stores.join("served.log");
+        let plain_log = stores.join("plain.log");
+        std::fs::create_dir_all(notes.join("projects")).expect("a projects folder");
+        std::fs::write(
+            notes.join("projects/launch.md"),
+            "---\ntitle: Launch\nstatus: todo\n---\nThe launch.\n",
+        )
+        .expect("a project");
+        sandbox.project_document(&document(&json!({
+            "notes": {"plugin": "local-md", "config": {"root": notes}},
+            "back": {"plugin": "local-md", "config": {"root": back}},
+            "served": store(&stores.join("served.json"), &served_log, true),
+            "plain": store(&stores.join("plain.json"), &plain_log, false),
+        })));
+        Self {
+            sandbox,
+            notes,
+            back,
+            inputs,
+            served_log,
+            plain_log,
+        }
+    }
+
+    /// Write `bytes` as `name` under a directory of inputs of its own, and answer its path.
+    fn image(&self, directory: &str, name: &str, bytes: &[u8]) -> String {
+        let directory = self.inputs.join(directory);
+        std::fs::create_dir_all(&directory).expect("an input directory");
+        let path = directory.join(name);
+        std::fs::write(&path, bytes).expect("an input image");
+        spelled(&path)
+    }
+
+    /// Write `text` as a file of inputs, and answer its path.
+    fn text(&self, name: &str, text: &str) -> String {
+        let path = self.inputs.join(name);
+        std::fs::write(&path, text).expect("an input file");
+        spelled(&path)
+    }
+
+    fn run(&self, arguments: &[&str]) -> Output {
+        self.sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone()
+    }
+
+    fn exits(&self, arguments: &[&str], code: i32) -> Output {
+        let output = self.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "`onetaskgraph {}` exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            arguments.join(" "),
+            output.status.code(),
+            stdout(&output),
+            stderr(&output)
+        );
+        output
+    }
+
+    /// The qualified id a create printed.
+    fn created(&self, arguments: &[&str]) -> String {
+        stdout(&self.exits(arguments, 0)).trim().to_owned()
+    }
+
+    /// Standard error of a run refused with exit `1`.
+    fn refused(&self, arguments: &[&str]) -> String {
+        stderr(&self.exits(arguments, 1))
+    }
+
+    /// `<verb> show <id> --json`, whole.
+    fn show(&self, verb: &str, id: &str) -> Value {
+        serde_json::from_str(&stdout(&self.exits(&[verb, "show", id, "--json"], 0)))
+            .expect("show writes JSON")
+    }
+
+    /// What a copy reports, under `--json`.
+    fn copy(&self, arguments: &[&str]) -> Value {
+        let mut all = arguments.to_vec();
+        all.push("--json");
+        serde_json::from_str(&stdout(&self.exits(&all, 0))).expect("a copy reports JSON")
+    }
+
+    /// Every write `log` recorded, in order.
+    fn logged(log: &Path) -> Vec<Value> {
+        match std::fs::read_to_string(log) {
+            Ok(text) => text
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("a log line is JSON"))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Every file under `root`, relative to it, sorted.
+    fn files(root: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    found.push(
+                        path.strip_prefix(root)
+                            .expect("under the root")
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+}
+
+/// The asset store over a real pipe, keeping its records at `at` and logging every write to
+/// `log`; declaring assets native when `assets` is set, and nothing about them otherwise.
+fn store(at: &Path, log: &Path, assets: bool) -> Value {
+    let mut settings = json!({"store": at, "log": log});
+    if assets {
+        settings["assets"] = json!("native");
+    }
+    json!({
+        "plugin": "subprocess",
+        "config": {
+            "command": interpreter().to_string_lossy(),
+            "args": [Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/e2e/asset_store.py")
+                .to_string_lossy()],
+            "settings": settings,
+        },
+    })
+}
+
+fn spelled(path: &Path) -> String {
+    path.to_str().expect("a UTF-8 path").to_owned()
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn body_digest(content: &str) -> String {
+    format!("sha256:{}", sha256(content.as_bytes()))
+}
+
+/// The `assets` a show answered, as `(name, sha256, content_type)` in the order listed.
+fn listed(shown: &Value) -> Vec<(String, String, String)> {
+    shown["assets"]
+        .as_array()
+        .expect("a show lists assets")
+        .iter()
+        .map(|asset| {
+            (
+                asset["name"].as_str().expect("a name").to_owned(),
+                asset["sha256"].as_str().expect("a digest").to_owned(),
+                asset["content_type"].as_str().expect("a type").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The bytes at each listed asset's `path`, which must be an existing file.
+fn held_bytes(shown: &Value) -> Vec<Vec<u8>> {
+    shown["assets"]
+        .as_array()
+        .expect("a show lists assets")
+        .iter()
+        .map(|asset| {
+            let path = asset["path"].as_str().expect("a local path");
+            assert!(Path::new(path).is_absolute(), "{path} is absolute");
+            std::fs::read(path).unwrap_or_else(|error| panic!("{path} holds the bytes: {error}"))
+        })
+        .collect()
+}
+
+fn item(shown: &Value) -> &Value {
+    &shown["items"][0]["item"]
+}
+
+/// Content referencing assets, and around them every link that is not one.
+fn with_decoys(references: &str) -> String {
+    format!(
+        "# Settings\n\n{references}\n\n\
+         Not assets: ![remote](https://example.invalid/remote.png) ![nested](./img/nested.png) \
+         ![up](../up.png) ![bare](bare.png) [notes](./notes.txt) [plain](./plain.png)\n"
+    )
+}
+
+#[test]
+fn a_document_and_a_task_store_their_assets_and_show_lists_each_in_first_reference_order() {
+    let folders = Folders::new();
+    let shot = images::png(1, SCREENSHOT);
+    let wide = images::png(2, 60_000);
+    let photo = images::jpeg(3);
+    let scan = images::jpeg(4);
+    let anim = images::gif(5);
+    let pic = images::webp(6);
+    let content = with_decoys(
+        "![scan](./Scan.JpEg) ![shot](./shot.png) ![wide](./Wide.PNG) ![photo](./photo.jpg) \
+         ![anim](./anim.gif) ![pic](./pic.webp) ![shot again](./shot.png)",
+    );
+    let body = folders.text("design.md", &content);
+    // Given in an order of their own, which is not the order the content references them in.
+    let given = [
+        folders.image("a", "shot.png", &shot),
+        folders.image("a", "pic.webp", &pic),
+        folders.image("a", "anim.gif", &anim),
+        folders.image("a", "photo.jpg", &photo),
+        folders.image("a", "Wide.PNG", &wide),
+        folders.image("a", "Scan.JpEg", &scan),
+    ];
+    let mut arguments = vec![
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Design",
+        "--body-file",
+        &body,
+    ];
+    for path in &given {
+        arguments.extend_from_slice(&["--asset", path]);
+    }
+    let id = folders.created(&arguments);
+
+    let shown = folders.show("document", &id);
+    assert_eq!(
+        item(&shown)["content"],
+        json!(content),
+        "stored exactly as written"
+    );
+    assert_eq!(
+        listed(&shown),
+        vec![
+            (
+                "Scan.JpEg".to_owned(),
+                sha256(&scan),
+                "image/jpeg".to_owned()
+            ),
+            ("shot.png".to_owned(), sha256(&shot), "image/png".to_owned()),
+            ("Wide.PNG".to_owned(), sha256(&wide), "image/png".to_owned()),
+            (
+                "photo.jpg".to_owned(),
+                sha256(&photo),
+                "image/jpeg".to_owned()
+            ),
+            ("anim.gif".to_owned(), sha256(&anim), "image/gif".to_owned()),
+            ("pic.webp".to_owned(), sha256(&pic), "image/webp".to_owned()),
+        ]
+    );
+    assert_eq!(
+        held_bytes(&shown),
+        vec![scan, shot.clone(), wide, photo, anim, pic]
+    );
+
+    let before = images::png(7, 120_000);
+    let task_body = folders.text("task.md", "![before](./before.png)\n");
+    let before_path = folders.image("b", "before.png", &before);
+    let task = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Fix the page",
+        "--body-file",
+        &task_body,
+        "--asset",
+        &before_path,
+    ]);
+    let shown = folders.show("task", &task);
+    assert_eq!(
+        listed(&shown),
+        vec![(
+            "before.png".to_owned(),
+            sha256(&before),
+            "image/png".to_owned()
+        )]
+    );
+    assert_eq!(held_bytes(&shown), vec![before]);
+    // The human rendering names it after the body.
+    let text = stdout(&folders.exits(&["task", "show", &task], 0));
+    assert!(
+        text.contains("assets: 1") && text.contains("before.png"),
+        "{text}"
+    );
+
+    // A record holding none lists none — an empty list, not an absent one.
+    let plain_body = folders.text("plain.md", &with_decoys("no pictures of its own"));
+    for verb in ["task", "document"] {
+        let plain = folders.created(&[
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Plain",
+            "--body-file",
+            &plain_body,
+        ]);
+        let shown = folders.show(verb, &plain);
+        assert_eq!(shown["assets"], json!([]), "{verb}");
+        assert_eq!(
+            item(&shown)["content"],
+            json!(with_decoys("no pictures of its own"))
+        );
+    }
+}
+
+#[test]
+fn every_refusal_a_create_owes_names_the_file_or_reference_and_writes_nothing() {
+    let folders = Folders::new();
+    let png = images::png(10, 50_000);
+    let body = folders.text("one.md", "![a](./a.png)\n");
+    let a = folders.image("first", "a.png", &png);
+    let again = folders.image("second", "a.png", &images::png(11, 50_000));
+    let bitmap = folders.image("first", "a.bmp", b"BM not an accepted image");
+    let other = folders.image("first", "other.png", &png);
+    for (verb, create) in [
+        (
+            "task",
+            vec![
+                "task",
+                "create",
+                "notes",
+                "--project",
+                "launch",
+                "--title",
+                "T",
+            ],
+        ),
+        (
+            "document",
+            vec![
+                "document",
+                "create",
+                "notes",
+                "--project",
+                "launch",
+                "--title",
+                "D",
+            ],
+        ),
+    ] {
+        let with = |extra: &[&str]| {
+            let mut all = create.clone();
+            all.extend_from_slice(&["--body-file", &body]);
+            all.extend_from_slice(extra);
+            folders.refused(&all)
+        };
+        let said = with(&["--asset", &a, "--asset", &bitmap]);
+        assert!(
+            said.contains("a.bmp") && said.contains(".png"),
+            "{verb}: {said}"
+        );
+        let said = with(&["--asset", &a, "--asset", &again]);
+        assert!(said.contains(&a) && said.contains(&again), "{verb}: {said}");
+        let said = with(&[]);
+        assert!(
+            said.contains("./a.png") && said.contains("--asset"),
+            "{verb}: {said}"
+        );
+        let said = with(&["--asset", &a, "--asset", &other]);
+        assert!(
+            said.contains("other.png") && said.contains("does not reference"),
+            "{verb}: {said}"
+        );
+    }
+    assert_eq!(
+        Folders::files(&folders.notes),
+        vec!["projects/launch.md".to_owned()],
+        "nothing was written"
+    );
+}
+
+#[test]
+fn a_render_keeps_stored_assets_replaces_one_by_name_and_drops_one_no_longer_referenced() {
+    let folders = Folders::new();
+    let template = folders.text("pictures.md", PICTURES);
+    let three = folders.text("three.yaml", "shots: [keep.png, swap.png, drop.png]\n");
+    let two = folders.text("two.yaml", "shots: [keep.png, swap.png]\n");
+    let keep = images::png(20, 70_000);
+    let swap = images::png(21, 70_000);
+    let drop = images::gif(22);
+    let swapped = images::png(23, 80_000);
+    let (keep_path, swap_path, drop_path) = (
+        folders.image("old", "keep.png", &keep),
+        folders.image("old", "swap.png", &swap),
+        folders.image("old", "drop.png", &drop),
+    );
+    let swapped_path = folders.image("new", "swap.png", &swapped);
+    for verb in ["task", "document"] {
+        let id = folders.created(&[
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Pictures",
+            "--template",
+            &template,
+            "--answers",
+            &three,
+            "--no-interactive",
+            "--asset",
+            &keep_path,
+            "--asset",
+            &swap_path,
+            "--asset",
+            &drop_path,
+        ]);
+        let shown = folders.show(verb, &id);
+        let directory = Path::new(shown["assets"][0]["path"].as_str().expect("a path"))
+            .parent()
+            .expect("the asset directory")
+            .to_path_buf();
+        assert_eq!(listed(&shown).len(), 3, "{verb}");
+
+        folders.exits(
+            &[
+                verb,
+                "render",
+                &id,
+                "--answers",
+                &two,
+                "--no-interactive",
+                "--asset",
+                &swapped_path,
+            ],
+            0,
+        );
+        let shown = folders.show(verb, &id);
+        assert_eq!(
+            listed(&shown),
+            vec![
+                ("keep.png".to_owned(), sha256(&keep), "image/png".to_owned()),
+                (
+                    "swap.png".to_owned(),
+                    sha256(&swapped),
+                    "image/png".to_owned()
+                ),
+            ],
+            "{verb}"
+        );
+        assert_eq!(held_bytes(&shown), vec![keep.clone(), swapped.clone()]);
+        // The dropped asset left no file behind in the record's own directory.
+        let mut left: Vec<String> = std::fs::read_dir(&directory)
+            .expect("the asset directory")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        left.sort();
+        assert_eq!(left, ["keep.png", "swap.png"], "{verb}");
+        // The rendering still vouches for what the record holds.
+        let entry = &item(&shown)["metadata"]["onetaskgraph.template"];
+        assert_eq!(
+            entry["body_digest"],
+            json!(body_digest(
+                item(&shown)["content"].as_str().expect("content")
+            ))
+        );
+    }
+}
+
+#[test]
+fn two_records_keep_their_own_bytes_under_one_asset_name() {
+    let folders = Folders::new();
+    let body = folders.text("shot.md", "![shot](./shot.png)\n");
+    let first = images::png(30, 90_000);
+    let second = images::png(31, 90_000);
+    let one = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "One",
+        "--body-file",
+        &body,
+        "--asset",
+        &folders.image("one", "shot.png", &first),
+    ]);
+    let two = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Two",
+        "--body-file",
+        &body,
+        "--asset",
+        &folders.image("two", "shot.png", &second),
+    ]);
+    let (shown_one, shown_two) = (folders.show("task", &one), folders.show("task", &two));
+    assert_eq!(listed(&shown_one)[0].1, sha256(&first));
+    assert_eq!(listed(&shown_two)[0].1, sha256(&second));
+    assert_ne!(
+        shown_one["assets"][0]["path"],
+        shown_two["assets"][0]["path"]
+    );
+    assert_eq!(held_bytes(&shown_two), vec![second.clone()]);
+
+    // Replacing one record's asset leaves the other's byte for byte.
+    let template = folders.text("pictures.md", PICTURES);
+    let answers = folders.text("one.yaml", "shots: [shot.png]\n");
+    let third = images::png(32, 90_000);
+    let rendered = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Rendered",
+        "--template",
+        &template,
+        "--answers",
+        &answers,
+        "--no-interactive",
+        "--asset",
+        &folders.image("three", "shot.png", &first),
+    ]);
+    folders.exits(
+        &[
+            "document",
+            "render",
+            &rendered,
+            "--no-interactive",
+            "--asset",
+            &folders.image("four", "shot.png", &third),
+        ],
+        0,
+    );
+    assert_eq!(
+        held_bytes(&folders.show("document", &rendered)),
+        vec![third]
+    );
+    assert_eq!(held_bytes(&folders.show("task", &one)), vec![first.clone()]);
+    assert_eq!(held_bytes(&folders.show("task", &two)), vec![second]);
+}
+
+#[test]
+fn a_document_replaced_by_id_holds_exactly_the_replacing_calls_assets() {
+    let folders = Folders::new();
+    let both = folders.text("both.md", "![x](./x.png) ![y](./y.gif)\n");
+    let only = folders.text("only.md", "![x](./x.png)\n");
+    let none = folders.text("none.md", "no pictures\n");
+    let x = images::png(40, 75_000);
+    let new_x = images::png(41, 75_000);
+    let id = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Replaced",
+        "--id",
+        "replaced",
+        "--body-file",
+        &both,
+        "--asset",
+        &folders.image("old", "x.png", &x),
+        "--asset",
+        &folders.image("old", "y.gif", &images::gif(42)),
+    ]);
+    let directory = folders.notes.join("documents/replaced.assets");
+    assert!(directory.join("y.gif").is_file());
+
+    folders.exits(
+        &[
+            "document",
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Replaced",
+            "--id",
+            "replaced",
+            "--body-file",
+            &only,
+            "--asset",
+            &folders.image("new", "x.png", &new_x),
+        ],
+        0,
+    );
+    let shown = folders.show("document", &id);
+    assert_eq!(
+        listed(&shown),
+        vec![("x.png".to_owned(), sha256(&new_x), "image/png".to_owned())]
+    );
+    assert!(
+        !directory.join("y.gif").exists(),
+        "the dropped asset left no file"
+    );
+
+    folders.exits(
+        &[
+            "document",
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Replaced",
+            "--id",
+            "replaced",
+            "--body-file",
+            &none,
+        ],
+        0,
+    );
+    assert_eq!(folders.show("document", &id)["assets"], json!([]));
+    assert!(
+        !directory.exists(),
+        "no directory is left for a record with no assets"
+    );
+}
+
+/// A rendered task and a rendered document in `notes`, each holding a 500 KB screenshot and a
+/// second picture, filed under the project `launch`.
+fn rendered_pair(folders: &Folders, seed: u64) -> (String, String, Vec<u8>, Vec<u8>) {
+    let template = folders.text("pictures.md", PICTURES);
+    let answers = folders.text("pair.yaml", "shots: [screen.png, detail.webp]\n");
+    let screen = images::png(seed, SCREENSHOT);
+    let detail = images::webp(seed + 1);
+    let screen_path = folders.image(&format!("pair-{seed}"), "screen.png", &screen);
+    let detail_path = folders.image(&format!("pair-{seed}"), "detail.webp", &detail);
+    let task = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Show the change",
+        "--template",
+        &template,
+        "--answers",
+        &answers,
+        "--no-interactive",
+        "--asset",
+        &screen_path,
+        "--asset",
+        &detail_path,
+    ]);
+    let document = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "The change",
+        "--template",
+        &template,
+        "--answers",
+        &answers,
+        "--no-interactive",
+        "--asset",
+        &screen_path,
+        "--asset",
+        &detail_path,
+    ]);
+    (task, document, screen, detail)
+}
+
+/// The destination id a copy report gave its first item.
+fn landed(report: &Value) -> String {
+    report["items"][0]["destination"]
+        .as_str()
+        .expect("a destination id")
+        .to_owned()
+}
+
+/// Whether the copied record `copied` holds the same assets, byte for byte, and the same
+/// content as `original`, with provenance that still verifies.
+fn carried_whole(original: &Value, copied: &Value) {
+    assert_eq!(listed(copied), listed(original));
+    assert_eq!(held_bytes(copied), held_bytes(original));
+    assert_ne!(copied["assets"][0]["path"], original["assets"][0]["path"]);
+    assert_eq!(item(copied)["content"], item(original)["content"]);
+    let entry = &item(copied)["metadata"]["onetaskgraph.template"];
+    assert_eq!(
+        entry,
+        &item(original)["metadata"]["onetaskgraph.template"],
+        "the provenance is carried as it was"
+    );
+    assert_eq!(
+        entry["body_digest"],
+        json!(body_digest(
+            item(copied)["content"].as_str().expect("content")
+        ))
+    );
+}
+
+#[test]
+fn a_project_copy_carries_its_tasks_assets_and_its_document_follows_with_its_own() {
+    let folders = Folders::new();
+    let (task, document, ..) = rendered_pair(&folders, 50);
+    let report = folders.copy(&["project", "copy", "notes:launch", "--to", "back"]);
+    let copied_task = report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|outcome| outcome["source"] == json!(task))
+        .and_then(|outcome| outcome["destination"].as_str())
+        .expect("the task was copied with its project")
+        .to_owned();
+    carried_whole(
+        &folders.show("task", &task),
+        &folders.show("task", &copied_task),
+    );
+    // A project copy carries its tasks; its document follows by `document copy`, into the
+    // project the copy just made.
+    let report = folders.copy(&["document", "copy", &document, "--to", "back"]);
+    carried_whole(
+        &folders.show("document", &document),
+        &folders.show("document", &landed(&report)),
+    );
+}
+
+#[test]
+fn a_task_copy_and_a_document_copy_each_carry_their_assets_byte_for_byte() {
+    let folders = Folders::new();
+    let (task, document, ..) = rendered_pair(&folders, 60);
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let report = folders.copy(&[verb, "copy", id, "--to", "back"]);
+        carried_whole(
+            &folders.show(verb, id),
+            &folders.show(verb, &landed(&report)),
+        );
+        // A second copy of what has not changed changes nothing.
+        let again = folders.copy(&[verb, "copy", id, "--to", "back"]);
+        assert_eq!(again["items"][0]["action"], json!("unchanged"), "{verb}");
+    }
+}
+
+#[test]
+fn a_copy_into_a_source_that_stores_no_assets_is_refused_naming_it_and_writes_nothing() {
+    let folders = Folders::new();
+    let (task, document, ..) = rendered_pair(&folders, 70);
+    for (arguments, record) in [
+        (vec!["task", "copy", &task, "--to", "plain"], task.clone()),
+        (
+            vec!["document", "copy", &document, "--to", "plain"],
+            document.clone(),
+        ),
+        (
+            vec!["project", "copy", "notes:launch", "--to", "plain"],
+            task.clone(),
+        ),
+    ] {
+        let said = folders.refused(&arguments);
+        for named in ["plain", record.as_str(), "screen.png"] {
+            assert!(said.contains(named), "{arguments:?} names {named}: {said}");
+        }
+        assert!(
+            !Folders::logged(&folders.plain_log).iter().any(|write| {
+                write["method"] == json!("write_task") || write["method"] == json!("write_document")
+            }),
+            "{arguments:?}: nothing was written for the record"
+        );
+    }
+}
+
+#[test]
+fn a_copy_of_a_record_referencing_an_asset_it_does_not_hold_is_refused_naming_both() {
+    let folders = Folders::new();
+    std::fs::create_dir_all(folders.notes.join("tasks")).expect("a tasks folder");
+    std::fs::write(
+        folders.notes.join("tasks/ghost.md"),
+        "---\ntitle: Ghost\nstatus: todo\n---\n![missing](./ghost.png)\n",
+    )
+    .expect("a task referencing an asset it does not hold");
+    let said = folders.refused(&["task", "copy", "notes:ghost", "--to", "back"]);
+    assert!(
+        said.contains("notes:ghost") && said.contains("ghost.png"),
+        "{said}"
+    );
+    assert!(!folders.back.join("tasks").exists(), "nothing was written");
+}
+
+#[test]
+fn a_copy_of_a_record_with_no_asset_reference_sends_no_asset_member_to_any_plugin() {
+    let folders = Folders::new();
+    let body = folders.text("plain.md", &with_decoys("no pictures of its own"));
+    let task = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Plain",
+        "--body-file",
+        &body,
+    ]);
+    let document = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Plain",
+        "--body-file",
+        &body,
+    ]);
+    for to in ["plain", "served"] {
+        for (verb, id) in [("task", &task), ("document", &document)] {
+            let report = folders.copy(&[verb, "copy", id, "--to", to]);
+            let shown = folders.show(verb, &landed(&report));
+            assert_eq!(
+                item(&shown)["content"],
+                json!(with_decoys("no pictures of its own"))
+            );
+        }
+    }
+    for log in [&folders.plain_log, &folders.served_log] {
+        let writes = Folders::logged(log);
+        assert_eq!(writes.len(), 2);
+        for write in writes {
+            assert_eq!(write["members"], json!(["write"]), "{write}");
+        }
+    }
+}
+
+/// The destination's `onetaskgraph.assets`, by name, as `(sha256, url)`.
+fn recorded(shown: &Value) -> Vec<(String, String, String)> {
+    let mut recorded: Vec<(String, String, String)> =
+        item(shown)["metadata"]["onetaskgraph.assets"]
+            .as_object()
+            .expect("the destination records what it uploaded")
+            .iter()
+            .map(|(name, upload)| {
+                (
+                    name.clone(),
+                    upload["sha256"].as_str().expect("a digest").to_owned(),
+                    upload["url"].as_str().expect("a url").to_owned(),
+                )
+            })
+            .collect();
+    recorded.sort();
+    recorded
+}
+
+#[test]
+fn a_copy_into_a_plugin_serving_assets_rewrites_references_and_reuploads_only_changed_bytes() {
+    let folders = Folders::new();
+    let (task, document, screen, detail) = rendered_pair(&folders, 80);
+    let changed = images::png(90, SCREENSHOT);
+    let changed_path = folders.image("changed", "screen.png", &changed);
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let source = folders.show(verb, id);
+        let writes_before = Folders::logged(&folders.served_log).len();
+
+        // The first copy creates, and delivers every asset whole.
+        let report = folders.copy(&[verb, "copy", id, "--to", "served"]);
+        let copied = landed(&report);
+        let writes = Folders::logged(&folders.served_log);
+        let create = &writes[writes_before];
+        assert_eq!(create["method"], json!(format!("write_{verb}")));
+        assert_eq!(create["target"], Value::Null);
+        assert_eq!(create["recorded_assets"], Value::Null);
+        assert_eq!(
+            create["received"],
+            json!([
+                {"name": "screen.png", "content_type": "image/png",
+                 "decoded_sha256": sha256(&screen)},
+                {"name": "detail.webp", "content_type": "image/webp",
+                 "decoded_sha256": sha256(&detail)},
+            ])
+        );
+        let shown = folders.show(verb, &copied);
+        let first = recorded(&shown);
+        assert_eq!(
+            first
+                .iter()
+                .map(|(name, sha, _)| (name.as_str(), sha.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("detail.webp", sha256(&detail)),
+                ("screen.png", sha256(&screen))
+            ]
+        );
+        let content = item(&shown)["content"]
+            .as_str()
+            .expect("content")
+            .to_owned();
+        assert!(!content.contains("./screen.png") && !content.contains("./detail.webp"));
+        for (_, _, url) in &first {
+            assert!(content.contains(url.as_str()), "{content} references {url}");
+        }
+        assert_eq!(
+            content, create["answered"]["content"],
+            "what the plugin answered"
+        );
+        assert_eq!(
+            json!(copied.split_once(':').expect("qualified").1),
+            create["answered"]["id"]
+        );
+        // The rendering vouches for the rewritten content, and nothing else of it moved.
+        let entry = &item(&shown)["metadata"]["onetaskgraph.template"];
+        let original = &item(&source)["metadata"]["onetaskgraph.template"];
+        assert_eq!(entry["body_digest"], json!(body_digest(&content)));
+        for kept in ["template", "digest", "answers_digest"] {
+            assert_eq!(entry[kept], original[kept], "{kept}");
+        }
+
+        // A re-copy of unchanged bytes passes the plugin no bytes and keeps every URL.
+        let again = folders.copy(&[verb, "copy", id, "--to", "served"]);
+        assert_eq!(landed(&again), copied);
+        assert_eq!(again["items"][0]["action"], json!("unchanged"), "{verb}");
+        let writes = Folders::logged(&folders.served_log);
+        assert!(
+            writes[writes_before + 1..]
+                .iter()
+                .flat_map(|write| write["received"].as_array().cloned().unwrap_or_default())
+                .all(|asset| asset["decoded_sha256"].is_null()),
+            "no asset bytes reached the plugin"
+        );
+        assert_eq!(recorded(&folders.show(verb, &copied)), first);
+
+        // One asset's bytes change at the source, and the re-copy updates the record it made.
+        folders.exits(
+            &[
+                verb,
+                "render",
+                id,
+                "--no-interactive",
+                "--asset",
+                &changed_path,
+            ],
+            0,
+        );
+        let writes_before = Folders::logged(&folders.served_log).len();
+        folders.copy(&[verb, "copy", id, "--to", "served"]);
+        let writes = Folders::logged(&folders.served_log);
+        let update = &writes[writes_before];
+        assert_eq!(
+            update["target"],
+            json!(copied.split_once(':').expect("qualified").1)
+        );
+        assert_eq!(
+            update["received"],
+            json!([
+                {"name": "screen.png", "content_type": "image/png",
+                 "decoded_sha256": sha256(&changed)},
+                {"name": "detail.webp", "content_type": "image/webp", "decoded_sha256": null},
+            ])
+        );
+        assert_ne!(sha256(&changed), sha256(&screen));
+        assert_eq!(
+            update["recorded_assets"],
+            item(&shown)["metadata"]["onetaskgraph.assets"],
+            "the update was handed the record the first copy made"
+        );
+        let after = folders.show(verb, &copied);
+        let now = recorded(&after);
+        assert_eq!(
+            now[0], first[0],
+            "the unchanged asset keeps its sha256 and url"
+        );
+        assert_eq!(now[1].1, sha256(&changed));
+        assert_ne!(
+            now[1].2, first[1].2,
+            "the changed asset has the plugin's new url"
+        );
+        let content = item(&after)["content"].as_str().expect("content");
+        assert!(content.contains(now[1].2.as_str()) && !content.contains(first[1].2.as_str()));
+        assert_eq!(json!(content), update["answered"]["content"]);
+    }
+}
+
+#[test]
+fn the_png_generator_holds_its_range_and_its_tolerance() {
+    for (seed, size) in [(1, 50_000), (2, 123_456), (3, 500_000)] {
+        let png = images::png(seed, size);
+        assert!(
+            png.len().abs_diff(size) <= size * images::PNG_SIZE_TOLERANCE_PERCENT / 100,
+            "{} bytes for {size}",
+            png.len()
+        );
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+    assert!((450_000..=500_000).contains(&images::png(4, SCREENSHOT).len()));
+    assert_ne!(images::png(5, 50_000), images::png(6, 50_000));
+    assert_eq!(images::png(5, 50_000), images::png(5, 50_000));
+    for outside in [
+        *images::PNG_SIZE_RANGE.start() - 1,
+        *images::PNG_SIZE_RANGE.end() + 1,
+    ] {
+        let refused = std::panic::catch_unwind(|| images::png(7, outside))
+            .expect_err("a size outside the range fails the test");
+        let said = refused
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(said.contains(&outside.to_string()), "{said}");
+    }
+}
+
+/// The first-column names of the table headed `header` inside `section`.
+fn table(section: &str, header: &str) -> Vec<String> {
+    let mut lines = section.lines().skip_while(|line| *line != header);
+    assert!(
+        lines.next().is_some(),
+        "the protocol has a table headed {header}"
+    );
+    lines
+        .skip(1)
+        .take_while(|line| line.starts_with('|'))
+        .map(|line| {
+            line.split('|')
+                .nth(1)
+                .expect("a first cell")
+                .trim()
+                .trim_matches('`')
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The property names the emitted schema's root `root` declares, sorted.
+fn properties(bundle: &Value, root: &str) -> Vec<String> {
+    let mut names: Vec<String> = bundle["roots"][root]["properties"]
+        .as_object()
+        .unwrap_or_else(|| panic!("the bundle declares {root}"))
+        .keys()
+        .cloned()
+        .collect();
+    names.sort();
+    names
+}
+
+fn sorted(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names
+}
+
+#[test]
+fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
+    let bundle: Value =
+        serde_json::from_str(&stdout(&Folders::new().exits(&["schema"], 0))).expect("a bundle");
+    let protocol = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/plugin-protocol.md"),
+    )
+    .expect("the protocol document");
+    let section: String = protocol
+        .lines()
+        .skip_while(|line| !line.starts_with("### 4.9a "))
+        .take_while(|line| !line.starts_with("### 4.10 "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!section.is_empty(), "§4.9a states the asset members");
+
+    assert_eq!(
+        sorted(table(&section, "| Member | Type | Meaning |")),
+        properties(&bundle, "AssetWrite")
+    );
+    assert_eq!(
+        sorted(table(&section, "| Asset member | Type | Meaning |")),
+        properties(&bundle, "AssetPayload")
+    );
+    assert_eq!(
+        sorted(table(&section, "| Result member | Type | Meaning |")),
+        properties(&bundle, "AssetsWritten")
+    );
+
+    // The content types the document spells are the ones the schema allows.
+    let row = section
+        .lines()
+        .find(|line| line.starts_with("| `content_type` |"))
+        .expect("a content_type row");
+    let mut stated: Vec<String> = row
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect();
+    stated.sort();
+    let mut allowed: Vec<String> = bundle["roots"]["AssetContentType"]["oneOf"]
+        .as_array()
+        .map(|variants| {
+            variants
+                .iter()
+                .filter_map(|variant| variant["const"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .or_else(|| {
+            bundle["roots"]["AssetContentType"]["enum"]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_owned))
+                        .collect()
+                })
+        })
+        .expect("the content types are an enumeration");
+    allowed.sort();
+    assert_eq!(stated, allowed);
+
+    // `onetaskgraph.assets` is stated as an object keyed by asset name whose every value is
+    // the shape `AssetUpload` is.
+    let record = section
+        .split("keyed by asset name, each value")
+        .nth(1)
+        .expect("the document states the onetaskgraph.assets value");
+    let shape = &record[record.find("`{").expect("a stated shape") + 1..];
+    let shape = &shape[..shape.find("}`").expect("the shape closes") + 1];
+    let mut keys: Vec<String> = shape
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, properties(&bundle, "AssetUpload"));
+
+    // And the capability is the one `Capabilities` emits.
+    assert!(bundle["roots"]["Capabilities"]["properties"]["assets"].is_object());
+}

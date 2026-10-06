@@ -3754,27 +3754,30 @@ fn changes(
 }
 
 /// Whether `held` already holds exactly the assets `item` carries, by name and digest — and,
-/// when it does, `outgoing` made what the destination would store of it: a destination that
-/// serves its assets at a URL rewrites the references to the URLs its record already holds.
+/// when it does, `outgoing` made what the destination would store of it.
+///
+/// A destination that serves its assets at a URL says what it holds in its own record,
+/// `onetaskgraph.assets`, and would rewrite the references to the URLs recorded there; one
+/// that keeps them beside the record says so in the assets it lists, and stores the references
+/// as written.
 fn lands_as_held(item: &Planned, held: &Prior, outgoing: &mut Item) -> bool {
-    let holds: Vec<onetaskgraph_plugin_api::Asset> = held
-        .assets
-        .iter()
-        .flatten()
-        .map(|payload| onetaskgraph_plugin_api::Asset {
-            name: payload.name.clone(),
-            sha256: payload.sha256.clone(),
-            content_type: payload.content_type,
-            path: None,
-        })
-        .collect();
-    if !assets::same_set(&holds, &item.assets) {
+    let Some(recorded) = AssetUploads::read(described(&held.item).1).ok().flatten() else {
+        let holds: Vec<onetaskgraph_plugin_api::Asset> = held
+            .assets
+            .iter()
+            .flatten()
+            .map(|payload| onetaskgraph_plugin_api::Asset {
+                name: payload.name.clone(),
+                sha256: payload.sha256.clone(),
+                content_type: payload.content_type,
+                path: None,
+            })
+            .collect();
+        return assets::same_set(&holds, &item.assets);
+    };
+    if recorded.0.len() != item.assets.len() {
         return false;
     }
-    let Some(recorded) = AssetUploads::read(described(&held.item).1).ok().flatten() else {
-        // Kept beside the record rather than served: its references are stored as written.
-        return true;
-    };
     let mut served = AssetUploads::default();
     for payload in &item.assets {
         let Some(url) = recorded.reusable(&payload.name, &payload.sha256) else {

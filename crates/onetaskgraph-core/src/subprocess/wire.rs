@@ -747,3 +747,101 @@ pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.
     pub(crate) id: NativeId,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten, Document,
+        ItemWrite, NativeId,
+    };
+    use serde_json::{Value, json};
+
+    use super::{DocumentAssetWriteParams, TaskAssetWriteParams};
+
+    /// The member names of one object.
+    fn members(value: &Value) -> BTreeSet<String> {
+        value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// The property names a root of the emitted schema declares.
+    fn declared(root: &str) -> BTreeSet<String> {
+        members(&crate::schema_bundle()["roots"][root]["properties"])
+    }
+
+    /// The trait's own argument, every member present.
+    fn whole() -> AssetWrite {
+        let name = AssetName::new("before.png").expect("a name");
+        AssetWrite {
+            assets: vec![AssetPayload::of(name.clone(), vec![1, 2, 3])],
+            recorded_assets: Some(AssetUploads(BTreeMap::from([(
+                name,
+                AssetUpload {
+                    sha256: "00".to_owned(),
+                    url: "https://example.invalid/before.png".to_owned(),
+                },
+            )]))),
+        }
+    }
+
+    #[test]
+    fn a_writes_asset_members_are_the_trait_arguments_and_the_emitted_schemas() {
+        let document: Document = serde_json::from_value(json!({
+            "id": "D-1", "title": "Design", "content": "![b](./before.png)", "labels": []
+        }))
+        .expect("a document");
+        let wire = serde_json::to_value(DocumentAssetWriteParams {
+            write: ItemWrite {
+                target: Some(NativeId::from("D-1")),
+                item: document,
+                depends_on: Vec::new(),
+            },
+            assets: whole(),
+        })
+        .expect("serializes");
+        let mut beside_the_write = members(&wire);
+        assert!(beside_the_write.remove("write"));
+        // What crosses beside a write is exactly the in-process argument's members, and those
+        // are exactly what the emitted `AssetWrite` root declares.
+        assert_eq!(
+            beside_the_write,
+            members(&serde_json::to_value(whole()).unwrap())
+        );
+        assert_eq!(beside_the_write, declared("AssetWrite"));
+        assert_eq!(members(&wire["assets"][0]), declared("AssetPayload"));
+        assert_eq!(
+            members(&wire["recorded_assets"]["before.png"]),
+            declared("AssetUpload")
+        );
+        let answered = serde_json::to_value(AssetsWritten {
+            id: NativeId::from("D-1"),
+            content: Some("![b](https://example.invalid/before.png)".to_owned()),
+        })
+        .unwrap();
+        assert_eq!(members(&answered), declared("AssetsWritten"));
+
+        // A task's asset write carries the same members beside its own `write`.
+        let task = serde_json::to_value(TaskAssetWriteParams {
+            write: ItemWrite {
+                target: None,
+                item: serde_json::from_value(json!({
+                    "id": "T-1", "title": "Alpha", "content": null,
+                    "status": {"category": "todo", "name": "Todo"}, "labels": []
+                }))
+                .expect("a task"),
+                depends_on: Vec::new(),
+            },
+            assets: whole(),
+        })
+        .unwrap();
+        let mut task_members = members(&task);
+        assert!(task_members.remove("write"));
+        assert_eq!(task_members, beside_the_write);
+    }
+}
