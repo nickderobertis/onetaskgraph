@@ -1155,3 +1155,42 @@ fn a_project_scoped_source_reports_and_creates_project_names_and_writes_its_own_
     }
     assert_eq!(workspace.status_of("LP-2").as_deref(), Some("Planned"));
 }
+
+#[test]
+fn a_malformed_status_mapping_is_refused_when_the_configuration_loads_naming_the_part() {
+    for plugin in ["linear", "github-projects"] {
+        for (mapping, said) in [
+            (
+                json!({"done": {}}),
+                "status_mapping.done is an empty object, which maps no kind; to disable done \
+                 for every kind, write null",
+            ),
+            (
+                json!({"done": {"task": "Done", "epic": "Done"}}),
+                "status_mapping.done names \"epic\", which is not an item kind",
+            ),
+            (
+                json!({"done": {"task": null}}),
+                "status_mapping.done.task is null",
+            ),
+            (
+                json!({"done": {"project": " "}}),
+                "status_mapping.done.project is blank",
+            ),
+            (
+                json!({"doing": "Doing"}),
+                "status_mapping names \"doing\", which is not a status category",
+            ),
+        ] {
+            let sandbox = Sandbox::new();
+            sandbox.project_document(&document(&json!({
+                "work": {"plugin": plugin, "config": {"status_mapping": mapping}},
+            })));
+            let refused = failed(&sandbox, &["task", "list", "--source", "work"]);
+            assert!(
+                refused.contains("sources.work.config.status_mapping") && refused.contains(said),
+                "{plugin} {mapping}: {refused}"
+            );
+        }
+    }
+}

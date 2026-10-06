@@ -13,7 +13,9 @@
 use std::fmt;
 
 use jsonschema::error::ValidationErrorKind;
-use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName, SourcePlugin, TaskSource};
+use onetaskgraph_plugin_api::{
+    SecretResolver, SourceError, SourceName, SourcePlugin, StatusMapping, TaskSource,
+};
 use serde_json::Value;
 
 use crate::PluginKind;
@@ -292,11 +294,29 @@ fn check_block(
         ));
     }
 
+    // A `status_mapping` is one grammar every plugin that names its statuses shares, and a
+    // validator can only say a value matched none of its forms — `{}` is "not valid under any
+    // of the schemas listed in the 'anyOf' keyword". The grammar's own reading says which part
+    // is wrong and what to write instead, so a refusal inside one is put in its words.
+    let pointer = problem.instance_path().to_string();
+    if (pointer == "/status_mapping" || pointer.starts_with("/status_mapping/"))
+        && let Some(mapping) = block.get("status_mapping")
+        && let Err(error) = serde_json::from_value::<StatusMapping>(mapping.clone())
+    {
+        return Err(ConfigError::setting(
+            format!("sources.{name}.config.status_mapping"),
+            error.to_string(),
+            "write each category as a name, as null, or as an object naming a `task`, a \
+             `project` or both — `onetaskgraph schema` prints the grammar under \
+             `roots.StatusMapping`.",
+        ));
+    }
+
     // A validator reports an unexpected field against the *object* that holds it, so
     // the path alone would name the block and leave the user to find the field inside
     // the message. The field is the whole of what they have to go and fix, so it is
     // lifted into the key.
-    let pointer = problem.instance_path().to_string().replace('/', ".");
+    let pointer = pointer.replace('/', ".");
     let unexpected = match problem.kind() {
         ValidationErrorKind::AdditionalProperties { unexpected } => unexpected.first(),
         _ => None,
