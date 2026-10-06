@@ -40,8 +40,9 @@ variables:\n  \
 {% endfor %}\n";
 
 /// Two folders of Markdown — `notes` and `back` — and two asset stores over a real pipe:
-/// `served`, which declares assets native and serves each at a URL, and `plain`, which says
-/// nothing about assets.
+/// `served`, which declares assets native and serves each at a URL, `plain`, which says
+/// nothing about assets, and `flaky`, which serves them as `served` does and refuses an update
+/// of an item titled `Second` after applying it.
 struct Folders {
     sandbox: Sandbox,
     notes: PathBuf,
@@ -49,6 +50,7 @@ struct Folders {
     inputs: PathBuf,
     served_log: PathBuf,
     plain_log: PathBuf,
+    flaky_log: PathBuf,
 }
 
 impl Folders {
@@ -60,6 +62,7 @@ impl Folders {
         let stores = sandbox.subdirectory("stores");
         let served_log = stores.join("served.log");
         let plain_log = stores.join("plain.log");
+        let flaky_log = stores.join("flaky.log");
         std::fs::create_dir_all(notes.join("projects")).expect("a projects folder");
         std::fs::write(
             notes.join("projects/launch.md"),
@@ -69,8 +72,13 @@ impl Folders {
         sandbox.project_document(&document(&json!({
             "notes": {"plugin": "local-md", "config": {"root": notes}},
             "back": {"plugin": "local-md", "config": {"root": back}},
-            "served": store(&stores.join("served.json"), &served_log, true),
-            "plain": store(&stores.join("plain.json"), &plain_log, false),
+            "served": store(&stores.join("served.json"), &served_log, json!({"assets": "native"})),
+            "plain": store(&stores.join("plain.json"), &plain_log, json!({})),
+            "flaky": store(
+                &stores.join("flaky.json"),
+                &flaky_log,
+                json!({"assets": "native", "half_written": ["Second"]}),
+            ),
         })));
         Self {
             sandbox,
@@ -79,6 +87,7 @@ impl Folders {
             inputs,
             served_log,
             plain_log,
+            flaky_log,
         }
     }
 
@@ -194,12 +203,12 @@ impl Folders {
     }
 }
 
-/// The asset store over a real pipe, keeping its records at `at` and logging every write to
-/// `log`; declaring assets native when `assets` is set, and nothing about them otherwise.
-fn store(at: &Path, log: &Path, assets: bool) -> Value {
+/// The asset store over a real pipe, keeping its records at `at`, logging every write to
+/// `log`, and taking `more` of its settings besides.
+fn store(at: &Path, log: &Path, more: Value) -> Value {
     let mut settings = json!({"store": at, "log": log});
-    if assets {
-        settings["assets"] = json!("native");
+    for (key, value) in more.as_object().expect("settings") {
+        settings[key] = value.clone();
     }
     json!({
         "plugin": "subprocess",
@@ -1190,7 +1199,110 @@ fn a_copy_into_a_plugin_serving_assets_rewrites_references_and_reuploads_only_ch
         let content = item(&after)["content"].as_str().expect("content");
         assert!(content.contains(now[1].2.as_str()) && !content.contains(first[1].2.as_str()));
         assert_eq!(json!(content), update["answered"]["content"]);
+
+        // The source stops showing pictures: the re-copy takes every upload away with them.
+        let none = folders.text("none.yaml", "shots: []\n");
+        folders.exits(
+            &[verb, "render", id, "--no-interactive", "--answers", &none],
+            0,
+        );
+        let writes_before = Folders::logged(&folders.served_log).len();
+        folders.copy(&[verb, "copy", id, "--to", "served"]);
+        let removal = &Folders::logged(&folders.served_log)[writes_before];
+        assert_eq!(
+            removal["received"],
+            json!([]),
+            "{verb}: a write of no assets at all"
+        );
+        let after = folders.show(verb, &copied);
+        assert!(
+            item(&after)["metadata"]
+                .get("onetaskgraph.assets")
+                .is_none()
+        );
+        assert!(
+            !item(&after)["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("https://")
+        );
     }
+}
+
+#[test]
+fn an_undone_copy_through_the_protocol_puts_back_the_uploads_it_replaced() {
+    let folders = Folders::new();
+    let template = folders.text("pictures.md", PICTURES);
+    let answers = folders.text("one.yaml", "shots: [screen.png]\n");
+    let mut tasks = Vec::new();
+    for (title, seed) in [("First", 160), ("Second", 161)] {
+        tasks.push(folders.created(&[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            title,
+            "--template",
+            &template,
+            "--answers",
+            &answers,
+            "--no-interactive",
+            "--asset",
+            &folders.image(title, "screen.png", &images::png(seed, SCREENSHOT)),
+        ]));
+    }
+    let report = folders.copy(&["project", "copy", "notes:launch", "--to", "flaky"]);
+    let first = report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|outcome| outcome["source"] == json!(tasks[0]))
+        .and_then(|outcome| outcome["destination"].as_str())
+        .expect("the first task landed")
+        .to_owned();
+    let before = folders.show("task", &first);
+
+    // Both pictures change; the second task's update is applied and refused, and the copy is
+    // undone — the first task put back over the protocol with the uploads it held.
+    for (index, title) in ["First", "Second"].into_iter().enumerate() {
+        let changed = folders.image(
+            &format!("{title}-changed"),
+            "screen.png",
+            &images::png(170 + index as u64, SCREENSHOT),
+        );
+        folders.exits(
+            &[
+                "task",
+                "render",
+                &tasks[index],
+                "--no-interactive",
+                "--asset",
+                &changed,
+            ],
+            0,
+        );
+    }
+    let writes_before = Folders::logged(&folders.flaky_log).len();
+    let said = folders.refused(&["project", "copy", "notes:launch", "--to", "flaky"]);
+    assert!(said.contains("applied and then refused"), "{said}");
+    assert_eq!(item(&folders.show("task", &first)), item(&before));
+    let restored = Folders::logged(&folders.flaky_log)[writes_before..]
+        .iter()
+        .rev()
+        .find(|write| write["target"] == json!(first.split_once(':').expect("qualified").1))
+        .cloned()
+        .expect("the first task was written back");
+    assert_eq!(
+        restored["received"],
+        json!([{"name": "screen.png", "content_type": "image/png", "decoded_sha256": null}]),
+        "put back by reusing the upload it held, sending no bytes"
+    );
+    assert_eq!(
+        restored["recorded_assets"],
+        item(&before)["metadata"]["onetaskgraph.assets"]
+    );
 }
 
 #[test]

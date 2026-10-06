@@ -9,10 +9,12 @@ engine's own half of the protocol, so the journeys that drive it test the claim 
 can be written from the protocol document alone.
 
 Its settings, handed over in the `initialize` request (§3), are
-`{"store": <path>, "log": <path>, "assets": "native"}`. With `assets` absent the handshake says
+`{"store": <path>, "log": <path>, "assets": "native", "half_written": [<title>]}`. With `assets` absent the handshake says
 nothing about assets, which is a plugin written before there were any. `log` receives one JSON
 line per write this source is sent — what arrived and what it answered — which is how a
 journey proves which bytes reached the plugin, and that a refused copy sent it nothing.
+`half_written` names titles whose update is applied and then refused, so a journey can make a
+copy fail after another item of it landed and watch it put that item back.
 """
 
 # llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
@@ -265,6 +267,11 @@ def write(settings, kind, params):
         item["id"] = target
         items[at[0]] = item
     write_store(store, held)
+    # An update of an item whose title the settings name is applied and then refused: the
+    # one way a journey can make a copy fail after another item of it has landed.
+    if target is not None and item.get("title") in settings.get("half_written", []):
+        log(settings, dict(entry, refused=True))
+        raise refused("the update of %s was applied and then refused" % item.get("title"))
     answer = {"id": item["id"]}
     if carrying:
         answer["content"] = item.get("content")
@@ -357,12 +364,14 @@ def initialize(params):
         or not isinstance(settings.get("store"), str)
         or not isinstance(settings.get("log", ""), str)
         or settings.get("assets", "native") != "native"
+        or not isinstance(settings.get("half_written", []), list)
+        or not all(isinstance(title, str) for title in settings.get("half_written", []))
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings are {"store": <path>, "log": <path>, '
-                '"assets": "native"}, the last two optional',
+                '"assets": "native", "half_written": [<title>]}, all but the first optional',
             }
         )
     return settings, {

@@ -1150,6 +1150,7 @@ impl InMemorySource {
                     .recorded_assets
                     .as_ref()
                     .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
+                    .filter(|url| !url.is_empty())
                     .filter(|_| {
                         self.held()
                             .is_ok_and(|held| held.blobs.contains_key(&payload.sha256))

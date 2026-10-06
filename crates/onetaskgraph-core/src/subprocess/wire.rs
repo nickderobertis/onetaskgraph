@@ -483,10 +483,21 @@ pub(crate) struct ServedWriteParams<T> {
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub(crate) struct RawServedWrite<T> {
     write: ItemWrite<T>,
-    #[serde(default)]
+    /// Absent is a plain write; `null` is not a shape §4.9a has, and is refused.
+    #[serde(default, deserialize_with = "not_null")]
     assets: Option<Vec<onetaskgraph_plugin_api::AssetPayload>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "not_null")]
     recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
+}
+
+/// An optional member that, when present, is its value: absent reads as `None` through
+/// `#[serde(default)]`, and an explicit `null` is refused as the shape it is not.
+fn not_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl<T> TryFrom<RawServedWrite<T>> for ServedWriteParams<T> {
@@ -899,6 +910,14 @@ mod tests {
         }))
         .expect("the host reads a plain write");
         assert!(plain.assets.is_none());
+        for null in ["assets", "recorded_assets"] {
+            let mut sent = json!({"write": {"target": null, "item": {}, "depends_on": []}});
+            sent[null] = Value::Null;
+            assert!(
+                serde_json::from_value::<super::ServedWriteParams<Value>>(sent).is_err(),
+                "{null}: null is refused rather than read as absent"
+            );
+        }
         let orphaned = serde_json::from_value::<super::ServedWriteParams<Value>>(json!({
             "write": {"target": null, "item": {}, "depends_on": []},
             "recorded_assets": {}

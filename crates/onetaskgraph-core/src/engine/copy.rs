@@ -3871,7 +3871,23 @@ async fn held_assets(
     }
     .map_err(|error| refused(destination, error))?;
     if listed.is_empty() {
-        return Ok(None);
+        // A destination that lists none may still serve some — one reached over the stdio
+        // protocol lists nothing — and its own record of what it uploaded is then what it holds,
+        // every one of them reusable by its digest without reading a byte back.
+        return Ok(recorded
+            .filter(|recorded| !recorded.0.is_empty())
+            .map(|recorded| {
+                recorded
+                    .0
+                    .iter()
+                    .map(|(name, upload)| AssetPayload {
+                        name: name.clone(),
+                        sha256: upload.sha256.clone(),
+                        content_type: name.content_type(),
+                        bytes: None,
+                    })
+                    .collect()
+            }));
     }
     let mut held = Vec::with_capacity(listed.len());
     for asset in listed {
