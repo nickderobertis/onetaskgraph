@@ -174,6 +174,79 @@ fn apply_adds_only_the_missing_option_with_every_existing_id_and_assignment_pres
     assert_eq!(stdout(&applied), "board: added and verified: Queued\n");
 }
 
+#[test]
+fn both_kinds_names_are_planned_and_added_once_each() {
+    // Both kinds' names are options of the one `Status` field, so a project-only name is as
+    // missing as a task-only one, and a name both kinds give — here in two spellings — is one
+    // option, planned and added once.
+    let sandbox = Sandbox::new();
+    let (mut config, board) = github_projects_with_board(&sandbox);
+    config["status_mapping"] = json!({
+        "todo": "Todo",
+        "in-progress": "Doing",
+        "done": {"task": "Done", "project": "Completed"},
+        "unknown": {"task": "In Review", "project": "in review"},
+    });
+    sandbox.project_document(&document(&json!({"board": {
+        "plugin": "github-projects", "config": config
+    }})));
+    let existing = board.status_options();
+
+    let plan = sandbox
+        .command()
+        .args(["--json", "sources", "status-options", "board"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: Value = serde_json::from_str(&stdout(&plan)).expect("a JSON plan");
+    assert_eq!(report["outcome"], "planned");
+    let mut missing: Vec<String> = serde_json::from_value(report["missing"].clone()).unwrap();
+    missing.sort();
+    assert_eq!(missing, ["Completed", "In Review"], "{report}");
+    assert_eq!(board.status_options(), existing, "a plan writes nothing");
+
+    let applied = sandbox
+        .command()
+        .args(["sources", "status-options", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        stdout(&applied).starts_with("board: added and verified: "),
+        "{}",
+        stdout(&applied)
+    );
+    let after = board.status_options();
+    for option in &existing {
+        assert!(after.contains(option), "{option} kept with its id: {after:?}");
+    }
+    for name in ["Completed", "In Review"] {
+        assert_eq!(
+            after
+                .iter()
+                .filter(|option| option["name"].as_str().unwrap().eq_ignore_ascii_case(name))
+                .count(),
+            1,
+            "{name} added once: {after:?}"
+        );
+    }
+    assert_eq!(after.len(), existing.len() + 2, "{after:?}");
+
+    let again = sandbox
+        .command()
+        .args(["sources", "status-options", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&again),
+        "board: missing configured Status options: none\n"
+    );
+}
+
 // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This must drive the compiled CLI's `sources status-options` and `task status set` verbs in sequence, which the application crate owns; the plugin crate's own suite separately proves that a terminal option counts as configured over loopback HTTP.
 #[test]
 fn a_missing_terminal_option_is_planned_added_and_then_written_with_its_close_reason() {
