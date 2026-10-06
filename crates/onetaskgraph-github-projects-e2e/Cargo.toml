@@ -1,0 +1,21 @@
+[package]
+name = "onetaskgraph-github-projects-e2e"
+description = "The GitHub Projects plugin's journeys, driven through the compiled onetaskgraph binary."
+# Test-only and never published: it holds nothing but `tests/`, which spawn the binary
+# `onetaskgraph:build` made.
+# llmlint: ignore[crates_stay_in_one_cargo_workspace] A literal rather than `version.workspace = true` because that is what every crate manifest of this workspace spells, and because the release tooling reads a number here: `scripts/set-version.sh` writes this line through `scripts/product_versions.py`, and `--check` reads it back and refuses any value but the workspace's — a command of `distribution-check`, which is part of the required `check`. So the two cannot drift, and a crate spelling it the other way would be the one manifest that tooling has to learn an exception for.
+version = "0.3.1"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Every dependency is a dev-dependency: the package has no library or binary of its own.
+[dev-dependencies]
+onetaskgraph-e2e-support.workspace = true
+# The documents and the request accounting the loopback board is asserted against, read from
+# the plugin's own constants rather than from a copy a journey could drift from.
+onetaskgraph-github-projects.workspace = true
+serde_json.workspace = true

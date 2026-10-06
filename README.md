@@ -396,7 +396,7 @@ $ onetaskgraph task copy notes:T-1 --to work
 ```
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys
-     in `crates/onetaskgraph/tests/e2e/copy_link.rs`: one fails unless the link example below is
+     in `crates/onetaskgraph-e2e/tests/e2e/copy_link.rs`: one fails unless the link example below is
      the link a copy of `T-1` into `notes` really records, and another fails unless the rule for
      a link naming nothing names the failure kind the binary really reports. -->
 The copy back **updates** rather than duplicating because the copied file carries the id
@@ -474,7 +474,7 @@ project having to be re-run, and the re-run is the burst of writes that trips a 
 destination's rate limiter. When the destination will not take one of them back, the
 refusal says so and names what is still there rather than leaving you to find it.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
 `--json` gives one entry per item for a script to read:
 
 ```json
@@ -489,7 +489,7 @@ what the journeys validate this output against.
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
      `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
-     `crates/onetaskgraph/tests/e2e/surface.rs` reads this paragraph and fails unless the words
+     `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this paragraph and fails unless the words
      it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
 `via` is one field with five words, on every `created`, `updated` and `unchanged` item. On
 `updated` and `unchanged` it names the rule above that found the counterpart: `link`,
@@ -593,7 +593,7 @@ four strings, whatever the template's reference — nothing caps its length but 
 destination caps a whole item at.
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys
-     `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph/tests/e2e/rendered.rs`, which assert each case below through the binary. -->
+     `a_rendering_whose_references_a_copy_rewrites_records_the_digest_of_what_it_was_given`, `a_copy_carries_provenance_it_cannot_vouch_for_verbatim` and `a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_unchanged` in `crates/onetaskgraph-e2e/tests/e2e/rendered.rs`, which assert each case below through the binary. -->
 A copy carries the entry like any other metadata, with one exception. A document copy
 points the references in a document's content at the destination's own records, and when it rewrote at least one of them in a rendering that
 still hashes to its recorded `body_digest`, the copy records as `body_digest` the digest of

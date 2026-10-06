@@ -434,7 +434,7 @@ as this file's — requests, and each GraphQL request's worst-case node count un
 variables it really sent — **and no figure in it is points either.**
 
 It is taken by `a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says`
-in `crates/onetaskgraph/tests/e2e/copy_cost.rs`, which drives the compiled binary against
+in `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs`, which drives the compiled binary against
 the loopback fixture board the copy journeys use, with pacing off. It lives in the binary's
 crate rather than beside its record because a copy is the engine's and no plugin crate may
 depend on the engine; every request the board served is named and counted through this
@@ -672,7 +672,7 @@ node count, **not points**:
 - **(h)** the same `task copy` with every link removed, which is how every re-copy of a task
   on its own was found before a copy recorded one.
 
-<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
 | **requests**       |                      6 |                     4 |

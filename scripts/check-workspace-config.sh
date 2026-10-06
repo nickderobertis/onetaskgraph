@@ -99,12 +99,12 @@ for path in project_files:
             "silently dropped from that root command."
         )
 
-# target/debug/onetaskgraph is spawned by the Rust integration tests, both SDKs and the
+# target/debug/onetaskgraph is spawned by the Rust e2e suites, both SDKs and the
 # distribution journey, out of the one target directory .cargo/config.toml declares, and
 # cargo replaces it whenever an invocation links a different unit of the package — which
 # `cargo build` and `cargo test` of it are, dev-dependencies widening the features the
 # dependencies are built with. A build from a concurrent target therefore lands between a
-# test resolving CARGO_BIN_EXE_onetaskgraph and spawning it (observed on macOS). Held here:
+# test resolving the file and spawning it (observed on macOS). Held here:
 #   1. onetaskgraph:build alone produces the file, as the test command with --no-run;
 #   2. every target that spawns it depends on that build, directly or through a chain;
 #   3. no other target invokes cargo on the package or names a target directory of its
@@ -326,9 +326,75 @@ for spawner, spawner_targets in sorted(SPAWNERS.items()):
             )
 if not reaches_build(BINARY_PROJECT, "test"):
     problems.append(
-        f"{binary_project_display}: test spawns {BINARY_FILE} as CARGO_BIN_EXE_onetaskgraph "
-        "but does not depend on build"
+        f"{binary_project_display}: test links the very unit build makes but does not depend "
+        "on build, so the two can run at once and relink the file a spawner is running"
     )
+
+# The Rust e2e suites are spawners too, and they are found by what they are rather than
+# listed: a crate whose project is tagged `layer:e2e` drives the binary, through the runner in
+# onetaskgraph-e2e-support, which finds the file beside its own test executable. Reconciled
+# both ways — a crate linking that runner is a suite, and a suite links it — then each suite's
+# test is held to the build and its coverage to the instrumented build onetaskgraph:coverage
+# makes in cargo-llvm-cov's directory, which is where its runner looks under instrumentation.
+# Neither builds the package itself: the general rule below refuses that for every target.
+E2E_TAG = "layer:e2e"
+E2E_RUNNER = "onetaskgraph-e2e-support"
+BINARY_COVERAGE = (BINARY_PROJECT, "coverage")
+RUNNER_LINE = re.compile(rf"^{re.escape(E2E_RUNNER)}\s*(\.workspace\s*=|=)", re.M)
+
+
+def reaches(project: str, target: str, goal: tuple[str, str]) -> bool:
+    seen = set()
+    frontier = [(project, target)]
+    while frontier:
+        pair = frontier.pop()
+        if pair in seen:
+            continue
+        seen.add(pair)
+        if pair == goal:
+            return True
+        frontier.extend(dependencies_of(*pair))
+    return False
+
+
+for path, project in sorted(projects_by_path.items()):
+    if path.parent.parent != Path("crates"):
+        continue
+    display = path.as_posix()
+    tags = project.get("tags", [])
+    suite = isinstance(tags, list) and E2E_TAG in tags
+    manifest = path.parent / "Cargo.toml"
+    try:
+        links_runner = bool(RUNNER_LINE.search(manifest.read_text(encoding="utf-8")))
+    except OSError:
+        links_runner = False
+    name = project.get("name")
+    if links_runner and not suite:
+        problems.append(
+            f"{display}: links {E2E_RUNNER}, which spawns {BINARY_FILE}, but is not tagged "
+            f"{E2E_TAG!r}; tag it so its targets are held to onetaskgraph:build, or take the "
+            "dependency out"
+        )
+    if suite and not links_runner:
+        problems.append(
+            f"{display}: is tagged {E2E_TAG!r} but does not link {E2E_RUNNER}, the one runner "
+            "that finds the binary onetaskgraph:build made; drive the binary through it"
+        )
+    if not suite or not isinstance(name, str):
+        continue
+    if "test" in targets_by_path.get(path, {}) and not reaches_build(name, "test"):
+        problems.append(
+            f"{display}: test spawns {BINARY_FILE} (through {E2E_RUNNER}) but does not depend "
+            "on onetaskgraph:build; add that dependency so the binary is built once before it "
+            "starts and is not being written while it runs"
+        )
+    if "coverage" in targets_by_path.get(path, {}) and not reaches(name, "coverage", BINARY_COVERAGE):
+        problems.append(
+            f"{display}: coverage spawns the instrumented binary in target/llvm-cov-target, "
+            "which onetaskgraph:coverage builds, but does not depend on it; add that "
+            "dependency, or its runner finds no binary there and none of its lines are "
+            "attributed"
+        )
 
 for path, targets in sorted(targets_by_path.items()):
     project = projects_by_path[path].get("name")

@@ -450,7 +450,7 @@ fn a_failed_write_to_stdout_exits_one_and_names_the_problem_on_stderr() {
 
     let sandbox = Sandbox::new();
     let output = sandbox
-        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .subprocess(onetaskgraph_e2e_support::binary())
         .arg("schema")
         .stdout(Stdio::from(full))
         .stderr(Stdio::piped())
@@ -527,7 +527,7 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
 
     let sandbox = Sandbox::new();
     let mut child = sandbox
-        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .subprocess(onetaskgraph_e2e_support::binary())
         .arg("schema")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -598,7 +598,7 @@ fn help_names_the_product_however_the_executable_on_disk_is_named() {
         "onetaskgraph-under-another-name{}",
         std::env::consts::EXE_SUFFIX
     ));
-    std::fs::copy(env!("CARGO_BIN_EXE_onetaskgraph"), &renamed).expect("the binary copies");
+    std::fs::copy(onetaskgraph_e2e_support::binary(), &renamed).expect("the binary copies");
     runnable(&renamed);
 
     Command::new(&renamed)

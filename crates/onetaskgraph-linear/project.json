@@ -89,7 +89,7 @@
         "^default",
         "{workspaceRoot}/scripts/check-linear-budgets.sh",
         "{workspaceRoot}/scripts/linear-budget.sh",
-        "{workspaceRoot}/crates/onetaskgraph/tests/e2e/linear_budget.rs"
+        "{workspaceRoot}/crates/onetaskgraph-linear-e2e/tests/e2e/linear_budget.rs"
       ],
       "cache": false,
       "//": "Separate from test so the hosted Linear journey does not depend on unrelated plugins in the full binary build. Both check and just test run this affected-only target, including the pre-push gate. Uncached: each budget reports requests served by a fresh loopback fixture."

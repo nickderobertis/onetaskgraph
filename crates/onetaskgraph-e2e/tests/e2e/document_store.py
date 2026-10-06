@@ -34,6 +34,12 @@ refusal happened *before* anything was read.
 # that a plugin can be written from the protocol document alone, sharing no type with the
 # engine's own half.
 
+# llmlint: ignore-file[structural_pattern_matching] `match`/`case` is a syntax error before
+# Python 3.10, and this peer is spawned by whichever `python3` or `python` the host has on
+# PATH, so every branch on a value here stays an `if` chain. The `dispatch` block below says
+# what a syntax error would cost; this extends that reason to the smaller branches the rule
+# also reads, rather than marking each of them in turn.
+
 import json
 import os
 import sys

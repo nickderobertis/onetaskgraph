@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Watch the two guards over the shared target directory refuse what they are meant to.
+# Watch the guards over the project files refuse what they are meant to.
 #
 # scripts/check-workspace-config.sh holds the structure that keeps target/debug/onetaskgraph
-# from being replaced while a test spawns it, and scripts/check-coverage-enforced.sh holds
-# the wiring that enforces the line floor over every crate's run. Both are text over
-# project files, so each would keep passing after it stopped matching what it describes.
+# from being replaced while a test spawns it, scripts/check-coverage-enforced.sh holds
+# the wiring that enforces the line floor over every crate's run, and
+# scripts/check-nx-graph.sh holds an e2e suite's edges and inputs to what it exercises. All
+# three are text over project files, so each would keep passing after it stopped matching
+# what it describes.
 # Every shape they refuse is planted here, one at a time, in a scratch copy of the WORKING
 # tree, and the refusal and its diagnostic are asserted; so is the refusal each spawner
 # gives when the binary it depends on is not there.
@@ -118,7 +120,7 @@ restore() {
 
 # The guards accept the working tree before anything is planted, or the cases below prove
 # nothing about the mutation.
-for guard in check-workspace-config.sh check-coverage-enforced.sh; do
+for guard in check-workspace-config.sh check-coverage-enforced.sh check-nx-graph.sh; do
   # llmlint: ignore[work_goes_through_command_surface] The baseline is the guard over the scratch copy every case below mutates, not the working tree the recipes address.
   if ! output="$(cd "$scratch" && bash "scripts/$guard" 2>&1)"; then
     printf '%s\n' "$output" >&2
@@ -132,6 +134,7 @@ PYTHON_PROJECT=sdks/python/project.json
 TYPESCRIPT_PROJECT=sdks/typescript/project.json
 CORE_PROJECT=crates/onetaskgraph-core/project.json
 WORKSPACE_PROJECT=workspace/project.json
+LINEAR_E2E_PROJECT=crates/onetaskgraph-linear-e2e/project.json
 COVERAGE_SCRIPT=scripts/rust-coverage.sh
 CONFTEST=sdks/python/tests/conftest.py
 
@@ -155,6 +158,24 @@ mutate "$PYTHON_PROJECT" 'del document["targets"]["test"]["dependsOn"]'
 expect check-workspace-config.sh "an SDK test target that spawns the binary without depending on its build" \
   "sdks/python/project.json: test spawns target/debug/onetaskgraph (through sdks/python/tests/conftest.py) but does not depend on onetaskgraph:build"
 restore "$PYTHON_PROJECT"
+
+# The Rust e2e suites are spawners by their tag, not by a registry entry, so each half of
+# that is watched refusing: a suite's test losing the build, its coverage losing the
+# instrumented build, and a crate linking the runner without the tag.
+mutate "$LINEAR_E2E_PROJECT" 'del document["targets"]["test"]["dependsOn"]'
+expect check-workspace-config.sh "an e2e suite whose test spawns the binary without depending on its build" \
+  "crates/onetaskgraph-linear-e2e/project.json: test spawns target/debug/onetaskgraph (through onetaskgraph-e2e-support) but does not depend on onetaskgraph:build"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"]["dependsOn"].remove("onetaskgraph:coverage")'
+expect check-workspace-config.sh "an e2e suite whose coverage does not depend on the instrumented build" \
+  "crates/onetaskgraph-linear-e2e/project.json: coverage spawns the instrumented binary"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["tags"].remove("layer:e2e")'
+expect check-workspace-config.sh "a crate linking the e2e runner without being tagged an e2e suite" \
+  "crates/onetaskgraph-linear-e2e/project.json: links onetaskgraph-e2e-support"
+restore "$LINEAR_E2E_PROJECT"
 
 # test, coverage and pack reach the build only through generate-check, so its edge going
 # is every one of them reported.
@@ -235,6 +256,30 @@ printf '{\n' > "$scratch/$CORE_PROJECT"
 expect check-coverage-enforced.sh "a project file that is not JSON" \
   "crates/onetaskgraph-core/project.json: could not be read as JSON"
 restore "$CORE_PROJECT"
+
+# --- check-nx-graph.sh: an e2e suite's edges and inputs follow what it exercises. Each of
+# the four refusals the e2e rule owns is planted in the Linear suite, whose edge is the
+# Linear plugin and whose inputs name the binary, the engine and the harness.
+
+mutate "$LINEAR_E2E_PROJECT" 'document["namedInputs"]["default"].append("{workspaceRoot}/crates/onetaskgraph-nonexistent/**/*")'
+expect check-nx-graph.sh "an e2e suite naming a crate that does not exist in its default input" \
+  "onetaskgraph-linear-e2e names crates/onetaskgraph-nonexistent in its default input, which is no crate of this workspace"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["namedInputs"]["default"].remove("{workspaceRoot}/crates/onetaskgraph/**/*")'
+expect check-nx-graph.sh "an e2e suite that does not name the binary it spawns" \
+  "onetaskgraph-linear-e2e -> onetaskgraph: an e2e suite that does not name the binary it spawns"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["implicitDependencies"].remove("onetaskgraph-linear")'
+expect check-nx-graph.sh "an e2e suite's Cargo dependency that is neither an edge nor an input" \
+  "onetaskgraph-linear-e2e -> onetaskgraph-linear: a Cargo dependency of an e2e suite that is neither an Nx edge nor a default input"
+restore "$LINEAR_E2E_PROJECT"
+
+mutate "$LINEAR_E2E_PROJECT" 'document["implicitDependencies"].append("onetaskgraph-live")'
+expect check-nx-graph.sh "an e2e suite's edge to a crate it neither depends on nor reaches through the binary" \
+  "onetaskgraph-linear-e2e -> onetaskgraph-live: an Nx edge of an e2e suite to a crate it neither depends on nor reaches through the binary"
+restore "$LINEAR_E2E_PROJECT"
 
 # --- Every spawner refuses, naming the build target, when the binary is not there. The
 # scratch tree has no target directory, so each resolves a path nothing built.

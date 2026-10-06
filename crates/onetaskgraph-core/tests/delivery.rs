@@ -4,7 +4,7 @@
 //! what they are written for as long as the engine holding them lives — so a rule that writes
 //! one task and reads another is observable here within one engine. The journeys that drive
 //! the same verbs through the binary, over sources that outlive a process, are in
-//! `crates/onetaskgraph/tests/e2e/delivery.rs`.
+//! `crates/onetaskgraph-e2e/tests/e2e/delivery.rs`.
 
 use std::num::NonZeroU32;
 

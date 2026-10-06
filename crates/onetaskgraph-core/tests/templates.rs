@@ -3,7 +3,7 @@
 //! What only a library caller can reach is proven here: templates registered in-process as
 //! `(name, source)` pairs, `Answers` built and overlaid in code, and the typed
 //! `TemplateError` a Rust caller branches on. Everything a command line can reach is proven
-//! again through the binary, in `crates/onetaskgraph/tests/e2e/templates.rs`.
+//! again through the binary, in `crates/onetaskgraph-e2e/tests/e2e/templates.rs`.
 
 use std::path::Path;
 

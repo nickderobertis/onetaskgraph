@@ -46,21 +46,6 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
-[dev-dependencies]
-assert_cmd.workspace = true
-graphql-parser.workspace = true
-jsonschema.workspace = true
-# The hosted plugin whose journeys drive a fixture built from the plugin's own constants —
-# the title prefix a GitHub Projects board spells a document with — rather than from a copy of
-# them a fixture could drift from. Linear's GraphQL documents come from its [dependencies] entry.
-onetaskgraph-github-projects.workspace = true
-predicates.workspace = true
-serde_json.workspace = true
-# The rendering journeys hash a created item's content and answers themselves, rather than
-# asking the engine that wrote the hashes to check its own work.
-sha2.workspace = true
-tempfile.workspace = true
-
-# A pseudo-terminal for the template prompting journeys, which only a Unix host can open.
-[target.'cfg(unix)'.dev-dependencies]
-rustix = { workspace = true, features = ["pty", "fs", "termios"] }
+# No dev-dependencies: the journeys that drive this binary are the test-only e2e members
+# (crates/onetaskgraph-e2e and one per plugin crate they exercise), which spawn the build
+# `onetaskgraph:build` makes. What stays in tests/ here reads the public registries alone.

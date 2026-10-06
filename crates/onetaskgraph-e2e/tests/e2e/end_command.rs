@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::common::Sandbox;
 use crate::fixtures::{GitHubBoardFields, github_projects_with_board, linear_workspace_with};
-use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES, hellopatient_mapping};
+use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES, example_mapping};
 
 /// The fixtures' credentials and nothing of the host's.
 fn secrets() -> Secrets {
@@ -55,7 +55,7 @@ fn engine(kind: &str, config: &Value) -> Engine {
 /// protocol, against the board `block` configures.
 fn hosted_github(block: &Value) -> Value {
     json!({
-        "command": env!("CARGO_BIN_EXE_onetaskgraph"),
+        "command": onetaskgraph_e2e_support::binary(),
         "args": ["plugin-serve", "github-projects"],
         "secrets": ["GITHUB_PROJECTS_FIXTURE_TOKEN"],
         "settings": block,
@@ -331,9 +331,9 @@ fn a_github_metadata_search_after_the_call_reads_a_value_a_person_rewrote() {
     a_metadata_search_reads_an_edited_slot_only_after_the_call("subprocess", hosted_github);
 }
 
-/// Hello Patient's workspace over three issues in `Todo`, and the source configuration that
+/// The example team's workspace over three issues in `Todo`, and the source configuration that
 /// reaches it.
-fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
+fn example_workspace(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
     let tasks = ["L-1", "L-2", "L-3"]
         .iter()
         .map(|id| {
@@ -348,14 +348,14 @@ fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) 
                       "task_dependencies": [], "project_dependencies": []});
     let (mut config, workspace) =
         linear_workspace_with(sandbox, held, TEAM_STATES, PROJECT_STATUSES);
-    config["status_mapping"] = hellopatient_mapping();
+    config["status_mapping"] = example_mapping();
     (config, workspace)
 }
 
 #[test]
 fn a_linear_source_keeps_its_resolution_vocabulary_across_the_call() {
     let sandbox = Sandbox::new();
-    let (config, workspace) = hellopatient(&sandbox);
+    let (config, workspace) = example_workspace(&sandbox);
     let engine = engine("linear", &config);
     let mut sent = Vec::new();
     runtime().block_on(async {

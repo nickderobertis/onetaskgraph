@@ -459,7 +459,9 @@ fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
             .args([
                 "-c",
                 r#"ulimit -f 16 && trap '' XFSZ && exec "$0" "$@""#,
-                env!("CARGO_BIN_EXE_onetaskgraph"),
+                onetaskgraph_e2e_support::binary()
+                    .to_str()
+                    .expect("the binary's path is UTF-8"),
                 kind,
                 "metadata",
                 "set",

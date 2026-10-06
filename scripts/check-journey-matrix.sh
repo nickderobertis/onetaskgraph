@@ -16,7 +16,7 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 REGISTRY="$ROOT/crates/onetaskgraph-core/src/registry.rs" \
-TABLE="$ROOT/crates/onetaskgraph/tests/e2e/fixtures.rs" \
+TABLE="$ROOT/crates/onetaskgraph-e2e-support/src/fixtures.rs" \
 python3 <<'PY'
 import os
 import re
