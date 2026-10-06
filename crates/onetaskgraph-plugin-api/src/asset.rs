@@ -346,6 +346,7 @@ pub struct AssetsWritten {
     /// The content as stored — each `./<name>` reference pointed at where the destination
     /// serves that asset, for a source that serves them at a URL; unchanged for one that keeps
     /// them beside the record.
+    #[serde(default)]
     pub content: Option<String>,
 }
 
@@ -433,7 +434,8 @@ pub fn rewrite_asset_references(content: &str, served: &BTreeMap<AssetName, Stri
 /// finishes the record it is about to write.
 ///
 /// `content` is rewritten by [`rewrite_asset_references`] over `uploads`, and `metadata` gains
-/// `uploads` under [`MetadataKey::ASSETS_KEY`]. When `metadata` records a template rendering
+/// `uploads` under [`MetadataKey::ASSETS_KEY`] — or loses that key, when `uploads` is empty,
+/// so a record that holds no asset records nothing about assets. When `metadata` records a template rendering
 /// under [`MetadataKey::TEMPLATE_KEY`] whose `body_digest` is still the digest of `content`,
 /// that entry's `body_digest` is re-recorded as the digest of the rewritten content and its
 /// `template`, `digest` and `answers_digest` are carried as they were — the rule a copy that
@@ -460,7 +462,11 @@ pub fn serve_asset_references(
             Value::String(body_digest(&rewritten)),
         );
     }
-    metadata.insert(MetadataKey::ASSETS_KEY.to_owned(), uploads.to_value());
+    if uploads.0.is_empty() {
+        metadata.remove(MetadataKey::ASSETS_KEY);
+    } else {
+        metadata.insert(MetadataKey::ASSETS_KEY.to_owned(), uploads.to_value());
+    }
     rewritten
 }
 

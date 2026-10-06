@@ -19,8 +19,8 @@ use onetaskgraph_core::{
     TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project, Support,
-    Task, TaskRef,
+    Asset, Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project,
+    Support, Task, TaskRef,
 };
 use onetaskgraph_status_options::{FieldOutcome, FieldsReport, StatusOptionsReport};
 use serde::Serialize;
@@ -629,8 +629,13 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
 ///
 /// `None` is a source whose tasks have no comments, and says nothing about them: a line
 /// reading "no comments" there would claim the source holds comments and this task has none.
-pub fn task_with_comments(task: &Qualified<Task>, comments: Option<&[Comment]>) -> String {
+pub fn task_with_comments(
+    task: &Qualified<Task>,
+    comments: Option<&[Comment]>,
+    assets: Option<&[Asset]>,
+) -> String {
     let mut rendered = task_detail(task);
+    rendered.push_str(&assets_held(assets));
     let Some(comments) = comments else {
         return rendered;
     };
@@ -653,7 +658,9 @@ pub fn task_details(ids: &[GlobalId], details: &TaskDetails) -> String {
     let mut rendered = Vec::new();
     for (id, detail) in ids.iter().zip(&details.details) {
         let mut shown = match detail.response.items.first() {
-            Some(task) => task_with_comments(task, detail.comments.as_deref()),
+            Some(task) => {
+                task_with_comments(task, detail.comments.as_deref(), detail.assets.as_deref())
+            }
             None => format!("{id}\n"),
         };
         for failure in &detail.response.errors {
@@ -740,6 +747,37 @@ pub fn document_detail(document: &Qualified<Document>) -> String {
         item.location.as_ref(),
     );
     body(&fields, item.content.as_deref())
+}
+
+/// One document in full, body last, and then the image assets it holds.
+pub fn document_with_assets(document: &Qualified<Document>, assets: Option<&[Asset]>) -> String {
+    let mut rendered = document_detail(document);
+    rendered.push_str(&assets_held(assets));
+    rendered
+}
+
+/// The image assets a task or a document holds, each on a line of its own — name, content
+/// type, SHA-256 and where its bytes are — after a blank line; nothing at all for an item
+/// holding none, whose rendering is then exactly what it was before there were assets.
+fn assets_held(assets: Option<&[Asset]>) -> String {
+    let Some(assets) = assets.filter(|assets| !assets.is_empty()) else {
+        return String::new();
+    };
+    let mut rendered = format!("\nassets: {}\n", assets.len());
+    rendered.push_str(&columns(
+        &assets
+            .iter()
+            .map(|asset| {
+                vec![
+                    format!("  {}", asset.name),
+                    asset.content_type.as_str().to_owned(),
+                    asset.sha256.clone(),
+                    asset.path.clone().unwrap_or_else(|| "(hosted)".to_owned()),
+                ]
+            })
+            .collect::<Vec<_>>(),
+    ));
+    rendered
 }
 
 /// One project in full, body last.

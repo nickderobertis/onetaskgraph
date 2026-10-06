@@ -828,6 +828,7 @@ async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_
                 (key("onepipeline.steps"), steps()),
                 (key("onepipeline.kind"), json!("implement")),
             ]),
+            assets: Vec::new(),
         })
         .await
         .expect("the task is created")

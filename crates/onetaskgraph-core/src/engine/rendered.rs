@@ -18,14 +18,15 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Document, ItemKind, ItemWrite, Label,
-    MetadataKey, MetadataRecord, NativeId, Priority, Project, Repository, SourceName, Status,
-    StatusCategory, Task, TaskRef,
+    Asset, AssetPayload, AssetUploads, DependencyEdge, DependencyEndpoint, DependencyKind,
+    Document, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, NativeId, Priority, Project,
+    Repository, SourceName, Status, StatusCategory, Task, TaskRef,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::assets;
 use super::copy::{Level, forward_edges};
 use super::delivery::{qualified_task, source_failed, targets};
 use super::{Delivered, Engine, EngineError, Qualified};
@@ -153,6 +154,9 @@ pub struct TaskCreate {
     /// The caller's own metadata keys — never one this product reserves, which a
     /// [`MetadataKey`] cannot name.
     pub metadata: BTreeMap<MetadataKey, Value>,
+    /// The image assets it holds, each referenced by its content as `./<name>`; none for a
+    /// task whose content references none.
+    pub assets: Vec<AssetPayload>,
 }
 
 /// One project document to create, or replace, in one source.
@@ -176,6 +180,9 @@ pub struct DocumentCreate {
     pub repositories: Vec<Repository>,
     /// The caller's own metadata keys.
     pub metadata: BTreeMap<MetadataKey, Value>,
+    /// The image assets it holds, each referenced by its content as `./<name>` — exactly
+    /// these, so a document it replaces keeps none this does not name.
+    pub assets: Vec<AssetPayload>,
 }
 
 /// One project to create, or replace, in one source.
@@ -289,6 +296,10 @@ pub struct RenderRequest {
     pub answers: Answers,
     /// Read and render everything, and write nothing.
     pub dry_run: bool,
+    /// Image assets to store with a task or a document, each replacing a stored one of the
+    /// same name. The item keeps every stored asset its regenerated content still references,
+    /// and drops every one it no longer does. A project holds no assets.
+    pub assets: Vec<AssetPayload>,
 }
 
 /// What `task render`, `project render` and `document render` answer with.
@@ -390,6 +401,12 @@ pub struct Regeneration {
     keeps_answers: bool,
     content: String,
     provenance: Option<TemplateProvenance>,
+    /// The image assets the item holds before the regenerate, and what its source records it
+    /// serves them at.
+    held_assets: Vec<Asset>,
+    recorded_assets: Option<AssetUploads>,
+    /// The image assets the regenerate was given.
+    given_assets: Vec<AssetPayload>,
 }
 
 /// The answers stored beside an item, and whether a render starts from them — one or the
@@ -518,11 +535,21 @@ impl Engine {
     /// cannot be reached, [`EngineError::NotCreatable`] for one with no write side — neither is
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
+        let record = format!("task {:?}", request.title);
+        let carried = assets::settled(
+            &record,
+            &request.body.parts(&request.metadata).content,
+            &request.assets,
+            &[],
+        )?;
         // A task goes where its repositories route it from the source named. Routed away, it
         // is filed under the named project's member project in the source it lands in.
         let placement = self.place(&request.source, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
+        if let Some(first) = carried.first() {
+            assets::stores(source, &record, &first.name)?;
+        }
         let filed = if near == &request.source {
             None
         } else {
@@ -585,9 +612,14 @@ impl Engine {
             },
             depends_on,
         };
-        let written = match match answers {
-            Some(answers) => source.source().write_task_rendered(&write, answers).await,
-            None => source.source().write_task(&write).await,
+        let written = match match (answers, carried.is_empty()) {
+            (answers, false) => source
+                .source()
+                .write_task_with_assets(&write, answers, &assets::write_of(carried, None))
+                .await
+                .map(|written| written.id),
+            (Some(answers), true) => source.source().write_task_rendered(&write, answers).await,
+            (None, true) => source.source().write_task(&write).await,
         } {
             Ok(written) => written,
             Err(error) => {
@@ -626,17 +658,40 @@ impl Engine {
         &self,
         request: &DocumentCreate,
     ) -> Result<Qualified<Document>, EngineError> {
+        let record = format!("document {:?}", request.title);
+        let carried = assets::settled(
+            &record,
+            &request.body.parts(&request.metadata).content,
+            &request.assets,
+            &[],
+        )?;
         let source = self.creatable(&request.source, MetadataRecord::Document)?;
         documentary(source)?;
-        let target = match &request.id {
+        if let Some(first) = carried.first() {
+            assets::stores(source, &record, &first.name)?;
+        }
+        let held = match &request.id {
             Some(id) => source
                 .source()
                 .get_document(id)
                 .await
-                .map_err(|error| source_failed(source, error))?
-                .map(|held| held.id),
+                .map_err(|error| source_failed(source, error))?,
             None => None,
         };
+        let target = held.as_ref().map(|held| held.id.clone());
+        // A document replaced holds exactly the assets this names: one it held and this does
+        // not name is removed with the write, rather than left behind unreferenced.
+        let held_assets = match &target {
+            Some(target) => source
+                .source()
+                .document_assets(target)
+                .await
+                .map_err(|error| source_failed(source, error))?,
+            None => Vec::new(),
+        };
+        let recorded = held
+            .as_ref()
+            .and_then(|held| AssetUploads::read(&held.metadata).ok().flatten());
         let Parts {
             content,
             metadata,
@@ -662,14 +717,19 @@ impl Engine {
             },
             depends_on: Vec::new(),
         };
-        let written = match answers {
-            Some(answers) => {
+        let written = match (answers, carried.is_empty() && held_assets.is_empty()) {
+            (answers, false) => source
+                .source()
+                .write_document_with_assets(&write, answers, &assets::write_of(carried, recorded))
+                .await
+                .map(|written| written.id),
+            (Some(answers), true) => {
                 source
                     .source()
                     .write_document_rendered(&write, answers)
                     .await
             }
-            None => source.source().write_document(&write).await,
+            (None, true) => source.source().write_document(&write).await,
         }
         .map_err(|error| source_failed(source, error))?;
         let id = GlobalId::new(request.source.clone(), written);
@@ -837,6 +897,13 @@ impl Engine {
         }
         let (content, metadata) = self.read_item(source, record, id).await?;
         let read = TemplateProvenance::read(&metadata);
+        let held_assets = match record {
+            RenderedRecord::Task => source.source().task_assets(&id.native).await,
+            RenderedRecord::Document => source.source().document_assets(&id.native).await,
+            RenderedRecord::Project => Ok(Vec::new()),
+        }
+        .map_err(|error| source_failed(source, error))?;
+        let recorded_assets = AssetUploads::read(&metadata).ok().flatten();
         let template = match (&request.template, &read) {
             (RenderTemplate::Given(given), _) => given.clone(),
             // An entry this product did not write names nothing it can trust: with no template
@@ -912,6 +979,9 @@ impl Engine {
             keeps_answers: source.source().keeps_template_answers(),
             content,
             provenance: read.ok().flatten(),
+            held_assets,
+            recorded_assets,
+            given_assets: request.assets.clone(),
         })
     }
 
@@ -933,7 +1003,10 @@ impl Engine {
         let rendered = regeneration.render(answers)?;
         let provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
             .map_err(|error| EngineError::Template { error })?;
+        let carried = self.carried_assets(regeneration, &rendered.body).await?;
+        let with_assets = !carried.is_empty() || !regeneration.held_assets.is_empty();
         let changed = regeneration.content != rendered.body
+            || !assets::same_set(&regeneration.held_assets, &carried)
             || regeneration.provenance.as_ref() != Some(&provenance)
             // Answers a source keeps and this item does not hold — a block deleted by hand —
             // are a difference the write repairs; a source keeping none holds none by nature.
@@ -954,14 +1027,36 @@ impl Engine {
                 });
             }
             let value = provenance.to_value();
-            match regeneration.record {
-                RenderedRecord::Task => {
+            match (regeneration.record, with_assets) {
+                (RenderedRecord::Task, true) => source
+                    .source()
+                    .set_task_rendering_with_assets(
+                        &id.native,
+                        &rendered.body,
+                        &value,
+                        &rendered.answers,
+                        &assets::write_of(carried, regeneration.recorded_assets.clone()),
+                    )
+                    .await
+                    .map(|written| written.map(|_| ())),
+                (RenderedRecord::Document, true) => source
+                    .source()
+                    .set_document_rendering_with_assets(
+                        &id.native,
+                        &rendered.body,
+                        &value,
+                        &rendered.answers,
+                        &assets::write_of(carried, regeneration.recorded_assets.clone()),
+                    )
+                    .await
+                    .map(|written| written.map(|_| ())),
+                (RenderedRecord::Task, false) => {
                     source
                         .source()
                         .set_task_rendering(&id.native, &rendered.body, &value, &rendered.answers)
                         .await
                 }
-                RenderedRecord::Document => {
+                (RenderedRecord::Document, false) => {
                     source
                         .source()
                         .set_document_rendering(
@@ -972,7 +1067,7 @@ impl Engine {
                         )
                         .await
                 }
-                RenderedRecord::Project => {
+                (RenderedRecord::Project, _) => {
                     source
                         .source()
                         .set_project_rendering(
@@ -1046,6 +1141,54 @@ impl Engine {
             .await?;
         self.regenerate(&regeneration, &request.answers, request.dry_run)
             .await
+    }
+
+    /// The image assets a regenerate of `regeneration` to `content` carries: the ones it was
+    /// given, and each stored one `content` still references, with its bytes.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`assets::settled`] owes, before anything is written; the refusal of a
+    /// source that stores no assets; and [`EngineError::SourceFailed`] when a stored asset's
+    /// bytes cannot be read.
+    async fn carried_assets(
+        &self,
+        regeneration: &Regeneration,
+        content: &str,
+    ) -> Result<Vec<AssetPayload>, EngineError> {
+        if regeneration.record == RenderedRecord::Project {
+            return Ok(Vec::new());
+        }
+        let id = &regeneration.id;
+        let record = format!("{} {id}", regeneration.record);
+        let source = self.built(&id.source)?;
+        let mut kept = Vec::new();
+        for held in &regeneration.held_assets {
+            let still = onetaskgraph_plugin_api::asset_references(content).contains(&held.name);
+            let given = regeneration
+                .given_assets
+                .iter()
+                .any(|payload| payload.name == held.name);
+            if !still || given {
+                continue;
+            }
+            let bytes = match regeneration.record {
+                RenderedRecord::Task => source.source().task_asset(&id.native, &held.name).await,
+                _ => source.source().document_asset(&id.native, &held.name).await,
+            }
+            .map_err(|error| source_failed(source, error))?;
+            kept.push(AssetPayload {
+                name: held.name.clone(),
+                sha256: held.sha256.clone(),
+                content_type: held.content_type,
+                bytes,
+            });
+        }
+        let carried = assets::settled(&record, content, &regeneration.given_assets, &kept)?;
+        if let Some(first) = carried.first() {
+            assets::stores(source, &record, &first.name)?;
+        }
+        Ok(carried)
     }
 
     /// The built source called `name`, when it can be written through.

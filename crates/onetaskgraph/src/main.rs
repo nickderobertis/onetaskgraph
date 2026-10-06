@@ -317,13 +317,10 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         } => {
             let id = qualified(&args.item.id)?;
             let detail = if args.no_comments {
-                onetaskgraph_core::TaskDetail {
-                    response: engine(loaded)
-                        .task(&id)
-                        .await
-                        .map_err(|error| Failure::from(&error))?,
-                    comments: None,
-                }
+                engine(loaded)
+                    .task_without_comments(&id)
+                    .await
+                    .map_err(|error| Failure::from(&error))?
             } else {
                 engine(loaded)
                     .task_detail(&id)
@@ -333,12 +330,13 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             // The comments ride beside the task in the machine rendering, and after its body
             // in the human one — and not at all for a source whose tasks have none.
             let comments = detail.comments.as_deref();
+            let assets = detail.assets.as_deref();
             show_rendered(
                 out,
                 loaded,
                 &detail.response,
                 &detail,
-                |task| render::task_with_comments(task, comments),
+                |task| render::task_with_comments(task, comments, assets),
                 &args.item,
                 "task",
             )
@@ -439,7 +437,16 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         } => rendered::create_task(out, loaded, args).await,
         Command::Task {
             command: TaskCommand::Render(args),
-        } => rendered::regenerate(out, loaded, RenderedRecord::Task, args).await,
+        } => {
+            rendered::regenerate(
+                out,
+                loaded,
+                RenderedRecord::Task,
+                &args.render,
+                &args.assets.asset,
+            )
+            .await
+        }
         Command::Task {
             command: TaskCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Task, args).await,
@@ -448,7 +455,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         } => rendered::create_project(out, loaded, args).await,
         Command::Project {
             command: ProjectCommand::Render(args),
-        } => rendered::regenerate(out, loaded, RenderedRecord::Project, args).await,
+        } => rendered::regenerate(out, loaded, RenderedRecord::Project, args, &[]).await,
         Command::Project {
             command: ProjectCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Project, args).await,
@@ -457,7 +464,16 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         } => rendered::create_document(out, loaded, args).await,
         Command::Document {
             command: DocumentCommand::Render(args),
-        } => rendered::regenerate(out, loaded, RenderedRecord::Document, args).await,
+        } => {
+            rendered::regenerate(
+                out,
+                loaded,
+                RenderedRecord::Document,
+                &args.render,
+                &args.assets.asset,
+            )
+            .await
+        }
         Command::Document {
             command: DocumentCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Document, args).await,
@@ -601,15 +617,19 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Document {
             command: DocumentCommand::Show(args),
         } => {
-            let response = engine(loaded)
-                .document(&qualified(&args.id)?)
+            let detail = engine(loaded)
+                .document_detail(&qualified(&args.id)?)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            show(
+            // The assets ride beside the document in the machine rendering, and after its body
+            // in the human one.
+            let assets = detail.assets.as_deref();
+            show_rendered(
                 out,
                 loaded,
-                response,
-                render::document_detail,
+                &detail.response,
+                &detail,
+                |document| render::document_with_assets(document, assets),
                 args,
                 "document",
             )

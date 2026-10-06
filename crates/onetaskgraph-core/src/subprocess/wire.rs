@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
-    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    WriteSupport,
+    AssetWrite, Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite,
+    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -439,6 +439,39 @@ pub(crate) struct TaskWriteParams {
 }
 
 /// `write_project` parameters (§4.9).
+/// The params of a `write_task` that carries a record's image assets: the write, and beside
+/// it the two members of [`AssetWrite`] — `assets` and `recorded_assets` — which are the
+/// in-process trait's own argument, flattened, so the two cannot spell a field differently.
+///
+/// A plain write never carries the `assets` member at all, which is what lets a plugin written
+/// before assets keep reading every write it is sent; one that carries it, even empty, is a
+/// write of the record's whole asset set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskAssetWriteParams {
+    pub(crate) write: ItemWrite<Task>,
+    #[serde(flatten)]
+    pub(crate) assets: AssetWrite,
+}
+
+/// [`TaskAssetWriteParams`] for a document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DocumentAssetWriteParams {
+    pub(crate) write: ItemWrite<Document>,
+    #[serde(flatten)]
+    pub(crate) assets: AssetWrite,
+}
+
+/// A `write_task` or `write_document` as the reference host reads it: a plain write, or —
+/// when `assets` is present — one carrying the record's whole asset set.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ServedWriteParams<T> {
+    pub(crate) write: ItemWrite<T>,
+    #[serde(default)]
+    pub(crate) assets: Option<Vec<onetaskgraph_plugin_api::AssetPayload>>,
+    #[serde(default)]
+    pub(crate) recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProjectWriteParams {
     /// The item to create or update, and what to write into it.

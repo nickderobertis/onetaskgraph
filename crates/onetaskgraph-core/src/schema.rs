@@ -7,11 +7,12 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, Health, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
-    StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields,
-    UpdatedField,
+    Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
+    AssetsWritten, Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind,
+    Direction, Document, DocumentQuery, Health, ItemKind, Label, Location, NativeId, NewComment,
+    Page, PageRequest, Priority, Project, ProjectQuery, Repository, SourceError, SourceName,
+    Status, StatusCategory, StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
+    TextFields, UpdatedField,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -25,10 +26,10 @@ use crate::template::{
 };
 use crate::{
     CommentList, CopyAction, CopyLink, CopyOutcome, CopyReport, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, Failure, FailureClass, FailureDocument, GlobalId, MetadataSet, PageToken,
-    Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated,
-    SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail,
-    TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
+    DeliveryOutcome, DocumentDetail, Failure, FailureClass, FailureDocument, GlobalId, MetadataSet,
+    PageToken, Predicate, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse,
+    Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, TaskContentSet,
+    TaskDetail, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -44,7 +45,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 31;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 32;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -157,6 +158,22 @@ pub fn schema_bundle() -> Value {
     roots.insert("TaskDetail", schema_for!(TaskDetail));
     // What `task show-many` answers with: one `TaskDetail` per id, in request order.
     roots.insert("TaskDetails", schema_for!(TaskDetails));
+
+    // What `document show` answers with: the document and the image assets it holds.
+    roots.insert("DocumentDetail", schema_for!(DocumentDetail));
+    // The image assets a task or a document holds, as `task show` and `document show` list
+    // them, and what crosses the stdio plugin protocol beside a write that carries them:
+    // `AssetWrite` is the `assets` and `recorded_assets` members of a `write_task` or a
+    // `write_document`, `AssetsWritten` what a plugin answers it with, and `AssetUploads` the
+    // `onetaskgraph.assets` record a hosted plugin keeps of what it uploaded.
+    roots.insert("Asset", schema_for!(Asset));
+    roots.insert("AssetName", schema_for!(AssetName));
+    roots.insert("AssetContentType", schema_for!(AssetContentType));
+    roots.insert("AssetPayload", schema_for!(AssetPayload));
+    roots.insert("AssetUpload", schema_for!(AssetUpload));
+    roots.insert("AssetUploads", schema_for!(AssetUploads));
+    roots.insert("AssetWrite", schema_for!(AssetWrite));
+    roots.insert("AssetsWritten", schema_for!(AssetsWritten));
 
     // What `task status set` answers with, and the per-task entries it and a copy report for
     // the delivered tasks they kept in step — plus the entry type both of a task's lists hold.

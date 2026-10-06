@@ -52,11 +52,11 @@ pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
     Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup,
     CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError,
-    Filters, LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, Paging, ProjectRequest,
-    ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
-    SearchRequest, SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskDetails,
-    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, settled,
+    DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine,
+    EngineError, Filters, LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, Paging,
+    ProjectRequest, ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit,
+    SearchKind, SearchRequest, SourceListing, SourceState, Spent, TaskContentSet, TaskDetail,
+    TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
