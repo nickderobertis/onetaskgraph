@@ -871,8 +871,9 @@ them do; this is the inventory of what is owed, not a status board.
 80. `Engine::end_command`, called between two units of work on one engine, makes every source
     drop what a person can change: a GitHub board settlement after it keeps a body a person
     edited and moves a card from where they left it — in process and over the stdio plugin
-    protocol — where the same two settlements without it overwrite the edit and leave the card;
-    a Linear status write after it sends no team, workflow-state or project-status read; and a
+    protocol — where the same two settlements without it overwrite the edit and leave the card,
+    and a board listing and a metadata search after it read a card moved and a value rewritten
+    that the same two without it miss; a Linear status write after it sends no team, workflow-state or project-status read; and a
     folder of Markdown and an in-memory source answer across it as before.
 
 ## What a copied document's references are pointed at
