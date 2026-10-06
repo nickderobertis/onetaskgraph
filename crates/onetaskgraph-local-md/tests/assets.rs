@@ -535,7 +535,9 @@ async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_stagin
     );
 }
 
-/// A task `native` in `source`, holding each of `assets`.
+/// A task `native` in `source`, holding each of `assets`. Only the tests that link and lock
+/// files, which are Unix's alone, need one.
+#[cfg(unix)]
 async fn holding(source: &dyn TaskSource, native: &str, assets: &[(&str, &[u8])]) {
     let content: String = assets
         .iter()
