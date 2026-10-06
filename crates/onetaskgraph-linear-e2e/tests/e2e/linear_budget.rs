@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
-use crate::telemetry;
+use crate::telemetry::record;
 
 /// The `status_mapping` every workspace here is configured with: a name per kind for each
 /// category, the task's and the project's different, so a write resolving the wrong kind's
@@ -90,16 +90,6 @@ const TASK_WRITE: [&str; 7] = [
     onetaskgraph_linear::graphql::ISSUE_RELATION_CREATE,
     onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE,
 ];
-
-/// Record `value` as `budget`'s telemetry, for `budgets.yaml`'s runner to hand to
-/// `onebudgetspec check`: the figure and how it was reached, and no judgement of it.
-fn record(budget: &str, value: usize, detail: &str) {
-    let path = telemetry::file(budget);
-    std::fs::create_dir_all(path.parent().expect("a telemetry directory"))
-        .expect("the telemetry directory is writable");
-    std::fs::write(&path, json!({"value": value, "detail": detail}).to_string())
-        .expect("the telemetry file is writable");
-}
 
 /// The fixture's credential, and nothing of the host's: the variable the Linear source names,
 /// in an environment of its own.

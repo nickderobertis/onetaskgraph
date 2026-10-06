@@ -17,5 +17,4 @@ mod budget_runner;
 mod linear;
 mod linear_budget;
 mod linear_status;
-#[path = "../telemetry/mod.rs"]
 mod telemetry;

@@ -61,6 +61,8 @@ github-graphql-node-count = "0.0.1"
 # because it is the release of the `onebudgetspec` package.json pins to judge it; that crate's
 # tests/e2e/budget_commands.rs fails when the two pins part.
 onebudgetspec-core = "=0.1.3"
+# The Linear budgets' runner checks a budget id against onebudgetspec's own exported pattern.
+regex = "1.13.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 # A template's digest: `sha256:` over every file of its chain.

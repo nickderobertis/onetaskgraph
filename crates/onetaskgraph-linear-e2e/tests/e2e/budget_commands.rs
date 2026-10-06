@@ -3,8 +3,8 @@
 //! Windows reads no `#!` line and has no POSIX shell to hand a command to, so a budget that
 //! names a script or leans on shell syntax would run on two runners and fail on the third. These
 //! hold `budgets.yaml`'s commands and this project's `budgets` target to programs every runner
-//! starts directly, the runner they name to the failures it owes, and the reporter it links to
-//! the release of the onebudgetspec that judges it.
+//! starts directly, the telemetry they read to where `test` writes it, and the reporter it
+//! links to the release of the onebudgetspec that judges it.
 
 use std::path::Path;
 
@@ -118,28 +118,6 @@ fn the_budgets_target_runs_onebudgetspec_alone_and_is_cached_on_no_credential() 
     assert!(check.contains(&Value::from("budgets")), "{check:?}");
 }
 
-#[test]
-fn a_budget_whose_journey_recorded_nothing_is_refused_naming_the_target_that_records_it() {
-    let refused = telemetry::recorded("linear-requests-never-recorded")
-        .expect_err("nothing recorded this budget");
-    assert!(
-        refused.starts_with("linear-requests-never-recorded: no telemetry at "),
-        "{refused}"
-    );
-    assert!(
-        refused.contains("scripts/nx.sh run onetaskgraph-linear-e2e:test"),
-        "{refused}"
-    );
-}
-
-#[test]
-fn a_budget_id_that_is_not_one_names_no_file() {
-    for id in ["../escape", "/abs", "Upper", "", "a/b"] {
-        let refused = telemetry::recorded(id).expect_err("not an id");
-        assert!(refused.contains("is not a budget id"), "{id:?}: {refused}");
-    }
-}
-
 /// The version `text` pins after `prefix`. Both manifests spell a pin as one `name = value`
 /// line, so reading that line is enough and needs no parser of either format.
 fn pinned<'a>(text: &'a str, prefix: &str) -> &'a str {
@@ -186,12 +164,11 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
     );
     // And the journeys write there: the build's own directory, unless a test names another.
     if std::env::var_os(telemetry::DIRECTORY).is_none() {
-        let written = telemetry::file("linear-requests-anything");
-        let directory = written.parent().expect("a directory");
+        let directory = telemetry::directory();
         assert!(
             directory.ends_with(telemetry::BELOW_BUILD),
             "{}",
-            written.display()
+            directory.display()
         );
     }
 }

@@ -22,6 +22,8 @@ onetaskgraph-linear.workspace = true
 onetaskgraph-plugin-api.workspace = true
 # The budgets runner hands each figure the journeys recorded to `onebudgetspec check`.
 onebudgetspec-core.workspace = true
+# Compiles onebudgetspec's own id pattern, which the runner holds its budget id to.
+regex.workspace = true
 serde_json.workspace = true
 # Reads budgets.yaml in the test holding its commands to what every runner can start.
 serde_norway.workspace = true
