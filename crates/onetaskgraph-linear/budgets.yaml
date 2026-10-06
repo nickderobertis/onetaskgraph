@@ -3,13 +3,13 @@
 # Each budget's command is one journey of crates/onetaskgraph/tests/e2e/linear_budget.rs,
 # run through scripts/linear-budget.sh against the loopback workspace — Hello Patient's
 # vocabulary, configured with the per-kind `hellopatient` mapping — with no credential and
-# no network. `bash scripts/check-linear-budgets.sh`, a step of this crate's `test` target,
+# no network. `bash scripts/check-linear-budgets.sh`, this crate's `budget-check` target,
 # checks them all.
 #
 # The base each figure replaces is commit c9e75a8, measured through the same binary and
 # engine calls on a configuration it completes (the shared workspace's team with no
-# `status_mapping`, its projects at the dataset's own status names), and recorded beside
-# each budget as `base:`.
+# `status_mapping`, its projects at the dataset's own status names), and recorded in each
+# budget's description, in the sentence beginning `Base (c9e75a8):`.
 schema_version: 1
 budgets:
   - id: linear-requests-per-status-write-cold
