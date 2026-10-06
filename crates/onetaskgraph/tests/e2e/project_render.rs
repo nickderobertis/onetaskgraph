@@ -780,9 +780,17 @@ fn a_hand_edited_project_is_regenerated_or_refused_as_a_hand_edited_document_is(
         json!(sha256(hand["content"].as_str().unwrap())),
         "a hand edit is visible from the provenance"
     );
+    assert!(
+        plan.notes_file(&id).contains("goal: First"),
+        "the answers still hash to answers_digest"
+    );
     let restored = plan.rendered(&id, &[]);
     assert_eq!(restored["changed"], true);
     assert_eq!(plan.project(&id)["content"], rendered);
+    assert_eq!(
+        plan.project(&id)["metadata"]["onetaskgraph.template"]["body_digest"],
+        json!(sha256(rendered.as_str().unwrap()))
+    );
 
     // Its answers edited by hand: they are no longer trusted, and the render is refused until
     // every required answer is given.
@@ -794,6 +802,8 @@ fn a_hand_edited_project_is_regenerated_or_refused_as_a_hand_edited_document_is(
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
     assert!(
         stderr(&refused).contains("supply every required answer")
+            && stderr(&refused).contains(": goal unanswered")
+            && stderr(&refused).contains("answers_digest")
             && stderr(&refused).contains("changed after it was rendered"),
         "{}",
         stderr(&refused)
@@ -801,6 +811,12 @@ fn a_hand_edited_project_is_regenerated_or_refused_as_a_hand_edited_document_is(
     assert_eq!(plan.notes_file(&id), tampered, "nothing written");
     let given = plan.rendered(&id, &["--var", "goal=Given again"]);
     assert_eq!(given["changed"], true);
+    assert!(
+        given["body"]
+            .as_str()
+            .unwrap()
+            .contains("Goal: Given again")
+    );
 
     // A provenance entry this product did not write names nothing until a template is given.
     std::fs::create_dir_all(plan.notes.join("projects")).unwrap();
@@ -809,13 +825,46 @@ fn a_hand_edited_project_is_regenerated_or_refused_as_a_hand_edited_document_is(
     let refused = plan.render("notes:forged", &[]);
     assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
     assert!(
-        stderr(&refused).contains("records a template entry this product did not write"),
+        stderr(&refused).contains("records a template entry this product did not write")
+            && stderr(&refused).contains("--template-loader"),
         "{}",
         stderr(&refused)
     );
     assert_eq!(
         std::fs::read_to_string(plan.notes.join("projects/forged.md")).unwrap(),
-        forged
+        forged,
+        "nothing written"
+    );
+
+    // Without every required answer, the refusal says why no stored answers were used.
+    let partial = plan.render("notes:forged", &["--template", &plan.template()]);
+    assert_eq!(partial.status.code(), Some(2), "{}", stderr(&partial));
+    assert!(
+        stderr(&partial).contains("supply every required answer")
+            && stderr(&partial).contains("nothing trusted says which stored answers are its"),
+        "{}",
+        stderr(&partial)
+    );
+    assert_eq!(
+        std::fs::read_to_string(plan.notes.join("projects/forged.md")).unwrap(),
+        forged,
+        "nothing written"
+    );
+
+    // Given a template and every required answer, it renders and records a fresh entry.
+    let reclaimed = plan.rendered(
+        "notes:forged",
+        &["--template", &plan.template(), "--var", "goal=Reclaimed"],
+    );
+    assert!(
+        reclaimed["body"]
+            .as_str()
+            .unwrap()
+            .contains("Goal: Reclaimed")
+    );
+    assert_eq!(
+        plan.project("notes:forged")["metadata"]["onetaskgraph.template"]["body_digest"],
+        reclaimed["body_digest"]
     );
 }
 
