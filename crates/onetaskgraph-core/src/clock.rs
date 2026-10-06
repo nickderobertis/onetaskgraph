@@ -166,6 +166,8 @@ struct Pending {
     wakes: BTreeMap<u64, oneshot::Sender<()>>,
     /// Set once the connection is gone: nothing waits on it any more.
     closed: bool,
+    /// The latest time the coordinator answered, which no later answer may precede.
+    latest: Duration,
 }
 
 impl Shared {
@@ -213,10 +215,21 @@ impl Shared {
                     let Ok(nanos) = nanos.parse::<u64>() else {
                         break;
                     };
-                    if let Some(waiter) = pending.nows.remove(&seq) {
-                        let _ = waiter.send(Duration::from_nanos(nanos));
+                    // So does a time nobody asked for — the caller who did ask would wait on —
+                    // and one earlier than a time already answered, which a monotonic clock
+                    // cannot report.
+                    let now = Duration::from_nanos(nanos);
+                    let Some(waiter) = pending.nows.remove(&seq) else {
+                        break;
+                    };
+                    if now < pending.latest {
+                        break;
                     }
+                    pending.latest = now;
+                    let _ = waiter.send(now);
                 }
+                // A wake for a wait already dropped is the coordinator answering a sleep before
+                // it read the cancellation, so it is passed over rather than refused.
                 (Some("wake"), Some(seq), None, None) => {
                     if let Some(waiter) = pending.wakes.remove(&seq) {
                         let _ = waiter.send(());

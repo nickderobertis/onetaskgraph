@@ -130,7 +130,10 @@ def served_at(digest, name):
 
 def reference(name):
     """An asset reference to `name`: a Markdown image whose target is `./<name>`."""
-    return re.compile(r"(!\[[^\]\n]*\]\()\./" + re.escape(name) + r"(?=[\s)])")
+    # The target ends at `)` or at a space before a title, and the image closes on its own line.
+    return re.compile(
+        r"(!\[[^\]\n]*\]\()\./" + re.escape(name) + r"(?=\)|[^\S\n][^\n]*\))"
+    )
 
 
 def store_assets(item, payloads, recorded):

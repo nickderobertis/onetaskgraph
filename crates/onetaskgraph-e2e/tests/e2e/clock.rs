@@ -426,7 +426,8 @@ fn the_binary_refuses_a_simulated_clock_it_cannot_read_or_reach_naming_the_varia
 }
 
 /// A coordinator that answers the attach with `greeting` and then answers every line with
-/// `reply`, or closes the connection when `reply` is `None`.
+/// `reply` — `{seq}` in it the line's own sequence, `{down}` a time that falls with each answer —
+/// or closes the connection when `reply` is `None`.
 fn misbehaving(greeting: &'static str, reply: Option<&'static str>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
     let address = listener.local_addr().expect("its address").to_string();
@@ -437,16 +438,19 @@ fn misbehaving(greeting: &'static str, reply: Option<&'static str>) -> String {
             let mut lines = std::io::BufRead::lines(std::io::BufReader::new(stream));
             let _ = lines.next();
             let _ = writeln!(writer, "{greeting}");
-            for line in lines {
-                if line.is_err() {
-                    break;
-                }
-                match reply {
-                    Some(reply) => {
-                        let _ = writeln!(writer, "{reply}");
-                    }
-                    None => break,
-                }
+            for (answered, line) in (0_u64..).zip(lines) {
+                let Ok(line) = line else { break };
+                let Some(reply) = reply else { break };
+                let seq = line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let down = 1_000_000_u64.saturating_sub(answered * 1_000);
+                let reply = reply
+                    .replace("{seq}", &seq)
+                    .replace("{down}", &down.to_string());
+                let _ = writeln!(writer, "{reply}");
             }
         }
     });
@@ -500,8 +504,14 @@ fn the_binary_refuses_a_coordinator_that_does_not_acknowledge_it() {
 #[test]
 fn a_client_whose_coordinator_goes_away_or_answers_no_time_stops_saying_so() {
     let (variable, _) = SimulatedClock::start(1).client_env(0).remove(0);
-    for (reply, scenario) in [(None, "sleep:5"), (Some("now 0 not-a-time"), "compute:1")] {
-        let output = Command::new(std::env::current_exe().expect("this test binary"))
+    for (reply, scenario) in [
+        (None, "sleep:5"),
+        (Some("now {seq} not-a-time"), "compute:1"),
+        // A time nobody asked for, and one earlier than a time already answered.
+        (Some("now 99 5"), "compute:1"),
+        (Some("now {seq} {down}"), "compute:1,compute:1"),
+    ] {
+        let mut child = Command::new(std::env::current_exe().expect("this test binary"))
             .args([
                 "--exact",
                 "clock::clock_client_process_entry",
@@ -510,8 +520,21 @@ fn a_client_whose_coordinator_goes_away_or_answers_no_time_stops_saying_so() {
             ])
             .env(SCENARIO, scenario)
             .env(&variable, format!("{}/0", misbehaving("attached", reply)))
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .expect("the client runs");
+        // A client left waiting on an answer that will never come would hang the suite rather
+        // than fail it, so it gets a real-time bound — far beyond what stopping takes.
+        let started = Instant::now();
+        while child.try_wait().expect("the client's state").is_none() {
+            if started.elapsed() > Duration::from_secs(30) {
+                child.kill().expect("the client this test started");
+                panic!("{scenario}: the client was left waiting instead of stopping");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let output = child.wait_with_output().expect("the client's output");
         assert!(!output.status.success(), "{scenario}");
         let said = format!("{}{}", stdout(&output), stderr(&output));
         assert!(

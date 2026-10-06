@@ -1980,6 +1980,8 @@ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
         "![nested](./img/a.png) ![up](../a.png) ![bare](a.png) [plain](./a.png)",
         "![remote](https://example.invalid/a.png) ![x](./x.jpg)\n![y](./y.gif)",
         "![multi\nline](./a.png) ![unclosed](./a.png",
+        "![spaced](./a.png \n![title](./a.png \"t\")\n![dangling](./a.png ",
+        "![newline](./a.png\n)",
     ];
     let peer = peer_reading(&names, &contents);
     let accepted: Vec<bool> = names
