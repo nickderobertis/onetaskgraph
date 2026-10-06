@@ -9115,15 +9115,50 @@ impl TaskSource for GitHubProjectsSource {
         .await
     }
 
-    /// The mapping's half of what a write refuses a status with, which reads nothing: whether
-    /// the board's `Status` field has the option is answered by the write, from the board read
-    /// it makes anyway.
+    /// Refused exactly as the write refuses it, from what the write reads: the mapping first,
+    /// which reads nothing; then the board's `Status` option. Over an existing item that is
+    /// read off the item, as the write reads it, and the item is held among this command's
+    /// resolved records so the write that follows reuses that read rather than repeating it;
+    /// an item that does not carry the field takes the board's fields, which are held once
+    /// read. A create is checked against the board's fields only when this command already
+    /// holds them, because a create reads them together with its repository, in one request,
+    /// and refuses a missing option before it writes anything.
     async fn check_status_write(
         &self,
         kind: ItemKind,
         category: StatusCategory,
+        target: Option<&NativeId>,
     ) -> Result<(), SourceError> {
-        self.resolved_target(kind, category).map(|_| ())
+        let status = self.resolved_target(kind, category)?;
+        if status.option().is_none() {
+            return Ok(());
+        }
+        let fields = match target {
+            Some(target) => {
+                // A target this board does not hold is the write's own refusal to make.
+                let Some(item) = self.bound_item(target).await? else {
+                    return Ok(());
+                };
+                self.resolved_cache()?.insert(target.clone(), item.clone());
+                self.fields_for(Some(&item), true, false).await?.fields
+            }
+            None => {
+                let held = self
+                    .board_cache()?
+                    .as_ref()
+                    .map(|board| board.fields.clone());
+                match held.or_else(|| {
+                    self.fields_cache()
+                        .ok()
+                        .and_then(|cache| cache.as_ref().map(|board| board.fields.clone()))
+                }) {
+                    Some(fields) => fields,
+                    None => return Ok(()),
+                }
+            }
+        };
+        self.column_for(&fields, kind, category, &status)
+            .map(|_| ())
     }
 
     /// Set one task's status alone.

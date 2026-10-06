@@ -224,15 +224,16 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable(self.kind()))
     }
 
-    /// Whether a write of an item of `kind` at `category` would have a status to write, asked
-    /// before the write and changing nothing.
+    /// Whether a write of an item of `kind` at `category` — over the item `target` names, or
+    /// creating one when it is `None` — would have a status to write, asked before the write
+    /// and changing nothing.
     ///
     /// A caller that has to put an item back when a later write of it fails — a copy, whose
     /// journal records what an item held before overwriting it — asks this first, so a status
     /// this source has no name for is refused while nothing has been recorded or written, and
     /// nothing has to be put back. It answers what the write itself would refuse a status
     /// with, in the same words, and sends no request a write of that status would not have
-    /// sent anyway.
+    /// sent anyway: what it reads to answer, it holds for the write that follows.
     ///
     /// Defaulted to `Ok(())`: a source that does not answer it in advance still refuses the
     /// status in its write, exactly as before.
@@ -246,8 +247,9 @@ pub trait TaskSource: Send + Sync {
         &self,
         kind: ItemKind,
         category: StatusCategory,
+        target: Option<&NativeId>,
     ) -> Result<(), SourceError> {
-        let _ = (kind, category);
+        let _ = (kind, category, target);
         Ok(())
     }
 

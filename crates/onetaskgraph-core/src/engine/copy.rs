@@ -755,7 +755,11 @@ impl Undo {
 
 /// Refuse a write of `item` whose status `destination` has no name for, before the write: a
 /// document carries no status, so it asks nothing.
-async fn check_status(destination: &ResolvedSource, item: &Item) -> Result<(), EngineError> {
+async fn check_status(
+    destination: &ResolvedSource,
+    item: &Item,
+    target: Option<&NativeId>,
+) -> Result<(), EngineError> {
     let (kind, category) = match item {
         Item::Task(task) => (ItemKind::Task, task.status.category),
         Item::Project(project) => (ItemKind::Project, project.status.category),
@@ -763,7 +767,7 @@ async fn check_status(destination: &ResolvedSource, item: &Item) -> Result<(), E
     };
     destination
         .source()
-        .check_status_write(kind, category)
+        .check_status_write(kind, category, target)
         .await
         .map_err(|error| refused(destination, error))
 }
@@ -3315,7 +3319,11 @@ impl Engine {
             );
             let edges = prior.edges.clone();
             at.source()
-                .check_status_write(ItemKind::Project, project.status.category)
+                .check_status_write(
+                    ItemKind::Project,
+                    project.status.category,
+                    Some(&home.id.native),
+                )
                 .await
                 .map_err(|error| refused(at, error))?;
             journal.record(Undo::Updated {
@@ -3447,7 +3455,7 @@ impl Engine {
         // status the destination has no name for refuses this write while there is nothing to
         // put back, where refused inside the write it would leave the journal restoring an
         // item the write never touched.
-        check_status(destination, &landing).await?;
+        check_status(destination, &landing, target.as_ref()).await?;
         // Recorded *before* the write rather than after it. A destination's own write is
         // several calls — `docs/plugin-protocol.md` §4.9 — and one of them failing leaves
         // the ones before it applied. No source can put those back, because only this

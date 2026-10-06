@@ -3168,6 +3168,7 @@ impl TaskSource for LinearSource {
         &self,
         kind: ItemKind,
         category: StatusCategory,
+        _target: Option<&NativeId>,
     ) -> Result<(), SourceError> {
         self.status_id(category, kind).await.map(|_| ())
     }

@@ -232,6 +232,127 @@ fn a_status_its_kind_has_no_option_for_is_refused_on_every_verb_before_any_mutat
 }
 
 #[test]
+fn a_project_copy_over_an_item_at_an_option_the_board_lacks_sends_no_mutation_or_restore() {
+    // `todo` is the board's `Todo` for both kinds; `in-progress` is `Active` for a project,
+    // which the board's `Status` field does not have.
+    let setup = Setup::new(json!({
+        "todo": "Todo",
+        "in-progress": {"task": "Doing", "project": "Active"},
+    }));
+    let project = setup.root.join("projects/P.md");
+    std::fs::write(
+        &project,
+        "---\ntitle: A plan\nstatus: Todo\n---\nthe plan\n",
+    )
+    .expect("the project at todo");
+    let copied = setup.json(&[
+        "--json",
+        "project",
+        "copy",
+        "plans:P",
+        "--to",
+        "board",
+        "--no-tasks",
+    ]);
+    let landed = copied["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a destination: {copied:#}"))
+        .to_owned();
+
+    // The same project, now in progress: the copy finds the item it landed, and refuses.
+    let held = std::fs::read_to_string(&project).expect("the project as the copy left it");
+    std::fs::write(&project, held.replace("status: Todo", "status: Doing"))
+        .expect("the project in progress");
+    let from = setup.mutations().len();
+    let output = setup.run(&["project", "copy", "plans:P", "--to", "board", "--no-tasks"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = stderr(&output);
+    for part in [
+        "board",
+        "project status",
+        "in-progress",
+        "status_mapping.in-progress.project",
+        "\"Active\"",
+    ] {
+        assert!(
+            said.contains(part),
+            "refused without naming {part:?}:\n{said}"
+        );
+    }
+    assert_eq!(
+        setup.mutations()[from..].to_vec(),
+        Vec::<(String, Value)>::new(),
+        "an update refused before any write sends no write and no restore"
+    );
+    let shown = setup.json(&["--json", "project", "show", &landed]);
+    assert_eq!(
+        shown["items"][0]["item"]["status"]["name"], "Todo",
+        "{shown:#}"
+    );
+}
+
+#[test]
+fn a_copy_refused_after_it_overwrote_a_board_project_puts_that_project_back() {
+    // A task's `todo` is `Ready`, which the board lacks; a project's is the board's `Todo`.
+    let setup = Setup::new(json!({
+        "todo": {"task": "Ready", "project": "Todo"},
+        "in-progress": "Doing",
+    }));
+    let project = setup.root.join("projects/P.md");
+    std::fs::write(
+        &project,
+        "---\ntitle: A plan\nstatus: Todo\n---\nthe plan\n",
+    )
+    .expect("the project at todo");
+    let copied = setup.json(&[
+        "--json",
+        "project",
+        "copy",
+        "plans:P",
+        "--to",
+        "board",
+        "--no-tasks",
+    ]);
+    let landed = copied["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a destination: {copied:#}"))
+        .to_owned();
+
+    // Retitled, and now carrying its task: the project's update lands and changes the issue,
+    // then the task's status is refused, and the copy's undo writes the issue back.
+    let held = std::fs::read_to_string(&project).expect("the project as the copy left it");
+    std::fs::write(
+        &project,
+        held.replace("title: A plan", "title: A renamed plan"),
+    )
+    .expect("the project retitled");
+    std::fs::write(
+        setup.root.join("tasks/A.md"),
+        "---\ntitle: A step\nstatus: Todo\nproject: P\n---\nthe step\n",
+    )
+    .expect("the task under the project");
+    let from = setup.mutations().len();
+    let output = setup.run(&["project", "copy", "plans:P", "--to", "board"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains("status_mapping.todo.task") && said.contains("\"Ready\""),
+        "{said}"
+    );
+    let titles = setup.mutations()[from..]
+        .iter()
+        .filter_map(|(_, variables)| variables["input"]["title"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        titles,
+        ["A renamed plan", "A plan"],
+        "the project's write, then its restore — and no write of the refused task"
+    );
+    let shown = setup.json(&["--json", "project", "show", &landed]);
+    assert_eq!(shown["items"][0]["item"]["title"], "A plan", "{shown:#}");
+}
+
+#[test]
 fn each_kind_is_written_read_and_narrowed_through_its_own_half_of_the_mapping() {
     // The board's `Todo` is a task's `todo` and a project's `queued`, and its `Doing` is a
     // project's `in-progress` and no task status at all.
