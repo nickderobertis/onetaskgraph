@@ -760,28 +760,42 @@ struct Held {
     /// source must not refuse (`duplicate` among them).
     // llmlint: ignore[invalid_states_unrepresentable] Linear's own open `String!` vocabulary, held verbatim for a report; an enum here would refuse a type Linear adds.
     kind: String,
-    /// A project status's place in the workspace's project flow; zero for a workflow state,
-    /// which nothing here places.
-    position: f64,
 }
 
 impl Held {
-    /// One workflow state, or — `positioned` — one project status, as Linear answered it.
-    fn read(node: &Value, positioned: bool) -> Result<Self, SourceError> {
+    /// One workflow state or project status, as Linear answered it.
+    fn read(node: &Value) -> Result<Self, SourceError> {
         Ok(Self {
             id: NativeId(backend_id(node, "id")?.into()),
             name: held_name(node)?,
             kind: str_at(node, "type")?.to_owned(),
-            position: if positioned {
-                node.get("position")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "missing number field position".into(),
-                    })?
-            } else {
-                0.0
-            },
         })
+    }
+}
+
+/// A project status's place in the workspace's project flow, as Linear answered it.
+fn position_of(node: &Value) -> Result<f64, SourceError> {
+    node.get("position")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| SourceError::Malformed {
+            message: "missing number field position".into(),
+        })
+}
+
+/// One name `sources fields --apply` created, as Linear answered its create.
+#[derive(Debug, Clone)]
+enum Created {
+    /// A workflow state of the team.
+    State(Held),
+    /// A project status of the workspace, at its place in the workspace's project flow.
+    Status { held: Held, position: f64 },
+}
+
+impl Created {
+    fn held(&self) -> &Held {
+        match self {
+            Self::State(held) | Self::Status { held, .. } => held,
+        }
     }
 }
 
@@ -807,6 +821,10 @@ struct Vocabulary {
     team: NativeId,
     states: Vec<Held>,
     statuses: Vec<Held>,
+    /// Where the workspace's project flow ends: the greatest `position` among its project
+    /// statuses, zero when it holds none. A project status `sources fields --apply` creates is
+    /// placed after it.
+    last_position: f64,
 }
 
 impl Vocabulary {
@@ -870,17 +888,30 @@ impl Vocabulary {
                 });
             }
         }
+        let statuses = nodes("/projectStatuses/nodes")?;
         Ok(Self {
             team,
             states: nodes("/teams/nodes/0/states/nodes")?
                 .iter()
-                .map(|node| Held::read(node, false))
+                .map(Held::read)
                 .collect::<Result<_, _>>()?,
-            statuses: nodes("/projectStatuses/nodes")?
+            statuses: statuses.iter().map(Held::read).collect::<Result<_, _>>()?,
+            last_position: statuses
                 .iter()
-                .map(|node| Held::read(node, true))
-                .collect::<Result<_, _>>()?,
+                .map(position_of)
+                .try_fold(0.0_f64, |last, position| Ok(last.max(position?)))?,
         })
+    }
+
+    /// Hold one name `sources fields --apply` created beside the ones read.
+    fn add(&mut self, created: Created) {
+        match created {
+            Created::State(held) => self.states.push(held),
+            Created::Status { held, position } => {
+                self.statuses.push(held);
+                self.last_position = self.last_position.max(position);
+            }
+        }
     }
 
     fn of(&self, kind: ItemKind) -> &[Held] {
@@ -1865,17 +1896,13 @@ impl LinearSource {
 
     /// Hold one name `sources fields --apply` created beside the ones read, so the writes after
     /// it resolve it without another read.
-    fn remember(&self, kind: ItemKind, held: Held) {
+    fn remember(&self, created: &Created) {
         let mut guard = self
             .vocabulary
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(vocabulary) = guard.as_mut() {
-            let vocabulary = std::sync::Arc::make_mut(vocabulary);
-            match kind {
-                ItemKind::Task => vocabulary.states.push(held),
-                ItemKind::Project => vocabulary.statuses.push(held),
-            }
+            std::sync::Arc::make_mut(vocabulary).add(created.clone());
         }
     }
 
@@ -3664,13 +3691,6 @@ impl LinearSource {
         let (mut vocabulary, _) = self.vocabulary(false).await?;
         let mut names = Vec::new();
         let mut refused = None;
-        // After the workspace's last project status, in creation order, because a project
-        // status create requires a place in the workspace's project flow.
-        let mut position = vocabulary
-            .statuses
-            .iter()
-            .map(|held| held.position)
-            .fold(0.0_f64, f64::max);
         for kind in [ItemKind::Task, ItemKind::Project] {
             for (category, name) in self.statuses.names(kind) {
                 let found = vocabulary
@@ -3683,27 +3703,16 @@ impl LinearSource {
                     found: found.map_or(Found::Missing, Found::Present),
                 };
                 if apply && refused.is_none() && mapped.found == Found::Missing {
-                    if kind == ItemKind::Project {
-                        position += 1.0;
-                    }
                     match self
-                        .create_status_name(
-                            kind,
-                            category,
-                            name.as_str(),
-                            &vocabulary.team,
-                            position,
-                        )
+                        .create_status_name(kind, category, name.as_str(), &vocabulary)
                         .await
                     {
-                        Ok(held) => {
-                            // Linear places it where it says it did, and the next goes after.
-                            position = position.max(held.position);
-                            mapped.found = Found::Created(held.kind.clone());
-                            self.remember(kind, held);
-                            if let Some(held) = self.held_vocabulary() {
-                                vocabulary = held;
-                            }
+                        Ok(created) => {
+                            mapped.found = Found::Created(created.held().kind.clone());
+                            self.remember(&created);
+                            // Here too, so the next project status goes after this one even
+                            // when nothing is held.
+                            std::sync::Arc::make_mut(&mut vocabulary).add(created);
                         }
                         Err(error) => {
                             refused = Some(RefusedCreate {
@@ -3725,28 +3734,29 @@ impl LinearSource {
         })
     }
 
-    /// Create one name of `kind` — a workflow state on the team, or a project status of the
-    /// workspace — of the type its category derives, in the fixed colour every created name
-    /// takes.
+    /// Create one name of `kind` — a workflow state on the vocabulary's team, or a project
+    /// status of the workspace placed after its last — of the type its category derives, in
+    /// the fixed colour every created name takes.
     async fn create_status_name(
         &self,
         kind: ItemKind,
         category: StatusCategory,
         name: &str,
-        team: &NativeId,
-        position: f64,
-    ) -> Result<Held, SourceError> {
+        vocabulary: &Vocabulary,
+    ) -> Result<Created, SourceError> {
         let kind_of = created_type(category, kind);
         let (query, input, root, payload) = match kind {
             ItemKind::Task => (
                 graphql::WORKFLOW_STATE_CREATE,
-                json!({"teamId": team.0, "name": name, "type": kind_of, "color": CREATED_COLOR}),
+                json!({"teamId": vocabulary.team.0, "name": name, "type": kind_of,
+                       "color": CREATED_COLOR}),
                 MutationRoot::WorkflowStateCreate,
                 "workflowState",
             ),
             ItemKind::Project => (
                 graphql::PROJECT_STATUS_CREATE,
-                json!({"name": name, "type": kind_of, "color": CREATED_COLOR, "position": position}),
+                json!({"name": name, "type": kind_of, "color": CREATED_COLOR,
+                       "position": vocabulary.last_position + 1.0}),
                 MutationRoot::ProjectStatusCreate,
                 "status",
             ),
@@ -3758,7 +3768,7 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.{payload}", root.as_str()),
             })?;
-        let held = Held::read(created, kind == ItemKind::Project)?;
+        let held = Held::read(created)?;
         // Held only as what was asked for: an answer naming another name or type would be
         // remembered as this mapping's name, and reported created, when it is not.
         if held.name.as_str() != name || held.kind != kind_of {
@@ -3772,7 +3782,14 @@ impl LinearSource {
                 ),
             });
         }
-        Ok(held)
+        Ok(match kind {
+            ItemKind::Task => Created::State(held),
+            // Placed where Linear says it put it, so the next one goes after.
+            ItemKind::Project => Created::Status {
+                position: position_of(created)?,
+                held,
+            },
+        })
     }
 }
 
