@@ -2541,6 +2541,29 @@ fn the_reference_host_declares_end_command_and_answers_it() {
     assert_eq!(answers[1], json!({"id": "1", "result": {}}));
 }
 
+#[test]
+fn the_reference_host_takes_end_command_params_only_as_an_object() {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id": "1", "method": "end_command", "params": null}),
+        json!({"id": "2", "method": "end_command", "params": []}),
+        json!({"id": "3", "method": "end_command", "params": "now"}),
+        json!({"id": "4", "method": "end_command", "params": {"from": "a newer engine"}}),
+    ]);
+    for refused in &answers[1..4] {
+        assert_eq!(refusal(refused), "malformed", "{refused:#}");
+        assert!(
+            because(refused).contains("the parameters of end_command"),
+            "{refused:#}"
+        );
+    }
+    assert_eq!(
+        answers[4],
+        json!({"id": "4", "result": {}}),
+        "a member it does not know is ignored"
+    );
+}
+
 #[tokio::test]
 async fn end_command_crosses_the_wire_and_the_hosted_source_still_answers() {
     let there = a_process_away(hosted_settings()).expect("the handshake succeeds");

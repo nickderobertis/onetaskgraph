@@ -578,6 +578,9 @@ async fn dispatch(
         }
         "metering" => encode(json!({ "metering": source.metering().await? })),
         "end_command" => {
+            // It takes no parameters, but §1 still makes them an object: anything else is
+            // refused before the source drops anything, and members in one are ignored (§2.1).
+            let _: serde_json::Map<String, Value> = decode(method, params)?;
             source.end_command().await?;
             encode(json!({}))
         }
