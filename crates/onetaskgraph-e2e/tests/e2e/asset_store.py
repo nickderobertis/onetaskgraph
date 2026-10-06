@@ -130,9 +130,12 @@ def served_at(digest, name):
 
 def reference(name):
     """An asset reference to `name`: a Markdown image whose target is `./<name>`."""
-    # The target ends at `)` or at a space before a title, and the image closes on its own line.
+    # The target ends at `)`, or at blanks before an optional title in "…", '…' or (…) and then
+    # `)`, all on the target's own line; anything else after the target is no image.
     return re.compile(
-        r"(!\[[^\]\n]*\]\()\./" + re.escape(name) + r"(?=\)|[^\S\n][^\n]*\))"
+        r"(!\[[^\]\n]*\]\()\./"
+        + re.escape(name)
+        + r"(?=\)|[ \t]+(?:\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^()\\\n])*\))?[ \t]*\))"
     )
 
 

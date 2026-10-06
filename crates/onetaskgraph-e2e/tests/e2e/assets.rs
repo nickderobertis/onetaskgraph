@@ -276,7 +276,8 @@ fn with_decoys(references: &str) -> String {
     format!(
         "# Settings\n\n{references}\n\n\
          Not assets: ![remote](https://example.invalid/remote.png) ![nested](./img/nested.png) \
-         ![up](../up.png) ![bare](bare.png) [notes](./notes.txt) [plain](./plain.png)\n"
+         ![up](../up.png) ![bare](bare.png) [notes](./notes.txt) [plain](./plain.png) \
+         ![trailing](./trailing.png more words) ![open](./open.png \"unterminated)\n"
     )
 }
 
@@ -2321,6 +2322,10 @@ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
         "![multi\nline](./a.png) ![unclosed](./a.png",
         "![spaced](./a.png \n![title](./a.png \"t\")\n![dangling](./a.png ",
         "![newline](./a.png\n)",
+        // Only a title may sit between the target and `)`.
+        "![t](./a.png \"t\") ![u](./x.jpg 'u' ) ![v](./y.gif (v)) ![e](./z.webp \"a \\\" b\")",
+        "![junk](./a.png arbitrary text) ![open](./x.jpg \"unterminated)\n![more](./y.gif \"t\" more)",
+        "![nested](./a.png (a(b))) ![tab](./x.jpg\t'open)\n![spaced](./y.gif   )",
         // Only an image outside code is a reference: each of these is text.
         "\\![escaped](./a.png) \\\\![after](./x.jpg) `![span](./a.png)` ``![x](./y.gif)``",
         "```\n![fenced](./a.png)\n```\n![real](./x.jpg)\n~~~~md\n![tilde](./y.gif)\n~~~\n~~~~",

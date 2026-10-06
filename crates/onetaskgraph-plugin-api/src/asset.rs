@@ -468,6 +468,39 @@ fn escaped(content: &str, at: usize) -> bool {
         == 1
 }
 
+/// Whether `rest`, what follows an image's target, closes the image on its own line as
+/// CommonMark does: blanks, then an optional title in `"…"`, `'…'` or `(…)`, then blanks and
+/// `)`. Anything else after the target makes the syntax no image at all.
+fn closes_image(rest: &str) -> bool {
+    let blank = |character: char| character == ' ' || character == '\t';
+    let after = rest.trim_start_matches(blank);
+    let after = match after.chars().next() {
+        Some(')') => return true,
+        Some(open @ ('"' | '\'' | '(')) if after.len() < rest.len() => {
+            let close = if open == '(' { ')' } else { open };
+            let title = &after[1..];
+            let mut end = None;
+            let mut previous_escape = false;
+            for (at, character) in title.char_indices() {
+                if character == '\n' || (open == '(' && character == '(' && !previous_escape) {
+                    return false;
+                }
+                if character == close && !previous_escape {
+                    end = Some(at);
+                    break;
+                }
+                previous_escape = character == '\\' && !previous_escape;
+            }
+            let Some(end) = end else {
+                return false;
+            };
+            &title[end + close.len_utf8()..]
+        }
+        _ => return false,
+    };
+    after.trim_start_matches(blank).starts_with(')')
+}
+
 /// Every asset reference in `content`, in order, duplicates included.
 ///
 /// An image whose `!` is escaped, or whose `!` or target sits inside code, is not one.
@@ -503,9 +536,7 @@ fn references(content: &str) -> Vec<Reference> {
         if target_end >= content.len() {
             continue;
         }
-        let closes = content[target_end..]
-            .split_once(')')
-            .is_some_and(|(between, _)| !between.contains('\n'));
+        let closes = closes_image(&content[target_end..]);
         let target = &content[target_start..target_end];
         if in_code(target_start) {
             continue;
@@ -629,6 +660,24 @@ mod tests {
         assert_eq!(
             asset_references(content),
             vec![name("one.png"), name("six.JpEg")]
+        );
+    }
+
+    #[test]
+    fn only_a_title_may_sit_between_the_target_and_the_closing_parenthesis() {
+        let content = "![a](./a.png  ) ![b](./b.png \"t\") ![c](./c.png 't' ) \
+                       ![d](./d.png (t)) ![e](./e.png \"t \\\" t\")\n\
+                       ![x](./x.png arbitrary text) ![y](./y.png \"unterminated)\n\
+                       ![z](./z.png \"t\" more) ![w](./w.png (a(b))) ![v](./v.png\t'open)";
+        assert_eq!(
+            asset_references(content),
+            vec![
+                name("a.png"),
+                name("b.png"),
+                name("c.png"),
+                name("d.png"),
+                name("e.png")
+            ]
         );
     }
 
