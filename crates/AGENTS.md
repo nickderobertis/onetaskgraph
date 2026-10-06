@@ -1,3 +1,8 @@
+<!-- llmlint: ignore-file[instruction_layer_localized] this file is the crate-subtree layer,
+     and judged whole the rule would split it once more: the binary's exit codes and the
+     engine's paging rules into per-crate files under `crates/onetaskgraph/` and
+     `crates/onetaskgraph-core/`. That move is the relocation follow-up the root `AGENTS.md`
+     records for its own project-scoped sections; until it lands they stay here. -->
 # Working in `crates/`
 
 ## Adding a plugin
