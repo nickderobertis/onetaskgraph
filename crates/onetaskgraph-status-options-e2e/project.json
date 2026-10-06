@@ -2,14 +2,9 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-status-options-e2e",
   "projectType": "application",
-  "tags": [
-    "lang:rust",
-    "layer:e2e"
-  ],
+  "tags": ["lang:rust", "layer:e2e"],
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
-  "implicitDependencies": [
-    "onetaskgraph-status-options"
-  ],
+  "implicitDependencies": ["onetaskgraph-status-options"],
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
@@ -62,23 +57,16 @@
       "options": {
         "command": "cargo test --quiet -p onetaskgraph-status-options-e2e --all-features --locked"
       },
-      "dependsOn": [
-        "onetaskgraph:build"
-      ],
+      "dependsOn": ["onetaskgraph:build"],
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement."
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": [
-        "workspace:coverage-clear",
-        "onetaskgraph:coverage"
-      ],
+      "dependsOn": ["workspace:coverage-clear", "onetaskgraph:coverage"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-status-options-e2e"
       },
-      "outputs": [
-        "{workspaceRoot}/target/llvm-cov-target/*.profraw"
-      ],
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
     }

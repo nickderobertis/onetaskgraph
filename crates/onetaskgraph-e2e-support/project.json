@@ -2,10 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-e2e-support",
   "projectType": "library",
-  "tags": [
-    "lang:rust",
-    "layer:testing"
-  ],
+  "tags": ["lang:rust", "layer:testing"],
   "//": "The harness every e2e suite shares; implicitDependencies mirror its Cargo dependencies, as every crate's do. It is never a graph dependency of a plugin suite, which names it in its `default` input instead, because its edges reach both hosted plugins.",
   "implicitDependencies": [
     "onetaskgraph-github-projects",
@@ -57,15 +54,11 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": [
-        "workspace:coverage-clear"
-      ],
+      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-e2e-support"
       },
-      "outputs": [
-        "{workspaceRoot}/target/llvm-cov-target/*.profraw"
-      ],
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
     }
