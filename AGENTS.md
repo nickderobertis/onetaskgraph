@@ -868,6 +868,12 @@ them do; this is the inventory of what is owed, not a status board.
     reads them once more on a miss, and holds nothing a failed call answered; a status write is
     one mutation and no read once they are held, a settlement-shaped update one read and one
     mutation, and `crates/onetaskgraph-linear/budgets.yaml` holds each of those figures.
+80. `Engine::end_command`, called between two units of work on one engine, makes every source
+    drop what a person can change: a GitHub board settlement after it keeps a body a person
+    edited and moves a card from where they left it — in process and over the stdio plugin
+    protocol — where the same two settlements without it overwrite the edit and leave the card;
+    a Linear status write after it sends no team, workflow-state or project-status read; and a
+    folder of Markdown and an in-memory source answer across it as before.
 
 ## What a copied document's references are pointed at
 
