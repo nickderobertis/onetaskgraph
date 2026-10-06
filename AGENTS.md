@@ -4,16 +4,6 @@
      repository's own acceptance criteria require it to record the enforcement mechanisms,
      the three affected selections and the journey inventory here. Tightening the wording
      is tracked as follow-up; removing the content is not available. -->
-<!-- llmlint: ignore-file[instruction_layer_localized] the nested-`AGENTS.md` half of this
-     rule is met — `crates/AGENTS.md` carries the crate-subtree rules and this file keeps
-     the repo-wide ones — but its `CODEOWNERS` half asks for something this repository has
-     decided against. "Commits, releases, and merging" below records zero required
-     approvals *because nobody reviews these pull requests*, and GitHub does not request
-     review from a pull request's own author, so a `CODEOWNERS` naming this repository's
-     one owner would route nothing to nobody. Adding one would also fork the merge-path
-     arrangement away from its stated source of truth, the create-repo skill's
-     `setup_github_governance.py`. If review ever becomes something that happens here,
-     delete this directive and add the file. -->
 # AGENTS.md
 
 Durable constraints for humans and agents working here. Terse on purpose — this is
@@ -26,18 +16,32 @@ One interface over the ticketing systems the user's work lives in (Linear, GitHu
 Projects, local Markdown), shipped three ways from one engine: a Rust CLI, a Python SDK,
 and a TypeScript SDK.
 
+## Two standing goals on every task
+
+The user's request is the priority, but carry these two into every task: fold either in
+when it is the lowest-error path to what was asked, and record the rest as follow-ups.
+
+1. **Engineer the context for next time.** Leave the next agent seeing more for less:
+   realistic end-to-end journeys for what a user actually sees, scripts that automate a
+   repeated step and print only signal, and terse notes here for what the code does not
+   make obvious.
+2. **Keep the codebase and environment clean and reproducible.** `just bootstrap` from a
+   clean clone, one pinned toolchain, and the same checks locally as in CI.
+
 ## Stack and composition
 
 - **Product shape:** `cli`.
 - **Language(s):** Rust (the engine, the plugins and the binary), Python (the SDK and the
   maturin-wrapped CLI distribution), TypeScript (the SDK and the npm launcher).
-- **References composed (11):** `base.md`, `shapes/cli.md`, `languages/rust.md`,
-  `languages/python.md`, `languages/typescript.md`, `intersections/rust-cli.md`,
-  `intersections/python-cli.md`, `ci.md`, `llmlint.md`, `releasing.md`, `monorepo.md`.
+- **References composed (11):** `base.md`, `project-graph.md`, `shapes/cli.md`,
+  `languages/rust.md`, `languages/python.md`, `languages/typescript.md`,
+  `intersections/rust-cli.md`, `intersections/python-cli.md`, `ci.md`, `llmlint.md`,
+  `releasing.md`.
 - **Excluded, and why:** web-app / React / Next.js (no web surface), asdf-plugin
   (distribution is crates.io, PyPI and npm), skills-repo (this is a product, not a skills
   collection). Nothing non-negotiable is excluded.
-- **Nx is a deliberate inclusion**, and the reason is the user's own: *affected selection
+- **Nx is a deliberate inclusion**, and the create-repo baseline now requires a project
+  graph of every repository too; the reason it is here is the user's own: *affected selection
   is the gate, so a change touching one plugin does not run the other plugins' tests.*
   With seven crates and two SDK packages over three toolchains that is the difference
   between a usable pull-request cycle and an unusable one. Putting Node on the critical
