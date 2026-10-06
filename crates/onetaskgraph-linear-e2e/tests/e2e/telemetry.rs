@@ -83,12 +83,13 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
     })?;
     let recorded: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("{budget}: {} is not JSON ({error})", path.display()))?;
-    let value = recorded["value"].as_f64().ok_or_else(|| {
+    // A count of requests, so a negative or fractional figure cannot pass a maximum.
+    let value = recorded["value"].as_u64().ok_or_else(|| {
         format!(
-            "{budget}: {} records no numeric `value`: {text}",
+            "{budget}: {} records no `value` that is a whole number of requests: {text}",
             path.display()
         )
-    })?;
+    })? as f64;
     let detail = match &recorded["detail"] {
         serde_json::Value::Null => None,
         serde_json::Value::String(detail) => Some(detail.clone()),
