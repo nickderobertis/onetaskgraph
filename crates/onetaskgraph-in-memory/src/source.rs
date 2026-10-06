@@ -10,8 +10,8 @@ use onetaskgraph_plugin_api::{
     Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId, NewComment,
     Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
     SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, assetless,
-    commentless, documentless, serve_asset_references, unwritable, unwritable_field,
+    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, asset_sha256,
+    assetless, commentless, documentless, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -75,9 +75,15 @@ struct Held {
     project_dependencies: Vec<DependencyEdge>,
     /// Every record's image assets, each beside the record it belongs to.
     assets: Vec<HeldAsset>,
+    /// Every asset's bytes this source was ever sent, by SHA-256: what it serves at each URL.
+    ///
+    /// Addressed by content, as a hosted destination's uploads are, so a write that reuses an
+    /// upload by its digest — a copy undone, putting back what a record held before — finds
+    /// the bytes it names even after the record itself was given others.
+    blobs: BTreeMap<String, Vec<u8>>,
 }
 
-/// One image asset of one record, and the URL this source serves it at.
+/// One image asset of one record: its name, and the digest of the bytes it is.
 #[derive(Debug)]
 struct HeldAsset {
     /// Whether the record is a document rather than a task.
@@ -85,12 +91,8 @@ struct HeldAsset {
     /// The record it belongs to.
     record: NativeId,
     name: AssetName,
-    bytes: Vec<u8>,
     sha256: String,
 }
-
-/// One asset a write sent bytes for: its name, its bytes and their digest.
-type Sent = (AssetName, Vec<u8>, String);
 
 /// The URL this source serves the asset `name` with digest `sha256` at.
 ///
@@ -133,6 +135,7 @@ impl InMemorySource {
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
                 assets: Vec::new(),
+                blobs: BTreeMap::new(),
             }),
         })
     }
@@ -658,7 +661,7 @@ impl TaskSource for InMemorySource {
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
         let _ = answers;
-        let (uploads, bytes) = self.uploads(assets)?;
+        let uploads = self.uploads(assets)?;
         let mut item = write.item.clone();
         let content = item.content.take().unwrap_or_default();
         item.content = Some(serve_asset_references(
@@ -673,7 +676,7 @@ impl TaskSource for InMemorySource {
                 depends_on: write.depends_on.clone(),
             })
             .await?;
-        self.keep_assets(false, &id, assets, bytes)?;
+        self.keep_assets(false, &id, assets)?;
         Ok(AssetsWritten {
             id,
             content: item.content,
@@ -689,7 +692,7 @@ impl TaskSource for InMemorySource {
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
         let _ = answers;
-        let (uploads, bytes) = self.uploads(assets)?;
+        let uploads = self.uploads(assets)?;
         let mut item = write.item.clone();
         let content = item.content.take().unwrap_or_default();
         item.content = Some(serve_asset_references(
@@ -704,7 +707,7 @@ impl TaskSource for InMemorySource {
                 depends_on: Vec::new(),
             })
             .await?;
-        self.keep_assets(true, &id, assets, bytes)?;
+        self.keep_assets(true, &id, assets)?;
         Ok(AssetsWritten {
             id,
             content: item.content,
@@ -1108,25 +1111,28 @@ impl TaskSource for InMemorySource {
 }
 
 impl InMemorySource {
-    /// Refuse every document call when this source's configuration says it has none.
-    ///
-    /// In the same words every document-free source uses, because the refusal is the
-    /// contract's own [`documentless`] rather than this plugin's wording: a caller that
-    /// reached one of these methods anyway must not be able to tell which plugin was
-    /// behind it apart from the kind the message names.
-    /// What a write of `assets` serves each asset at, and the bytes this source keeps for each
-    /// — a payload carrying bytes served at a new URL, one without them at the URL its record
-    /// already records.
-    fn uploads(&self, assets: &AssetWrite) -> Result<(AssetUploads, Vec<Sent>), SourceError> {
+    /// What a write of `assets` serves each asset at: a payload carrying bytes at the URL its
+    /// digest addresses, those bytes kept to serve there, and one without them at the URL its
+    /// record already records.
+    fn uploads(&self, assets: &AssetWrite) -> Result<AssetUploads, SourceError> {
         if !self.declared().assets.is_native() {
             return Err(assetless(KIND));
         }
         let mut uploads = AssetUploads::default();
-        let mut kept = Vec::new();
         for payload in &assets.assets {
             let url = match &payload.bytes {
                 Some(bytes) => {
-                    kept.push((payload.name.clone(), bytes.clone(), payload.sha256.clone()));
+                    if asset_sha256(bytes) != payload.sha256 {
+                        return Err(SourceError::Refused {
+                            message: format!(
+                                "the asset {}'s bytes do not hash to the sha256 {} it carries",
+                                payload.name, payload.sha256
+                            ),
+                        });
+                    }
+                    self.held()?
+                        .blobs
+                        .insert(payload.sha256.clone(), bytes.clone());
                     served_at(&payload.sha256, &payload.name)
                 }
                 None => assets
@@ -1136,7 +1142,8 @@ impl InMemorySource {
                     .map(str::to_owned)
                     .ok_or_else(|| SourceError::Refused {
                         message: format!(
-                            "the asset {} carries no bytes and nothing records an upload of it                              with sha256 {}; next: send its bytes",
+                            "the asset {} carries no bytes and nothing records an upload of it \
+                             with sha256 {}; next: send its bytes",
                             payload.name, payload.sha256
                         ),
                     })?,
@@ -1149,34 +1156,25 @@ impl InMemorySource {
                 },
             );
         }
-        Ok((uploads, kept))
+        Ok(uploads)
     }
 
-    /// Make the record `id` hold exactly the assets `write` named: those it sent bytes for
-    /// now, and those it reused as they were.
+    /// Make the record `id` hold exactly the assets `write` names.
     fn keep_assets(
         &self,
         document: bool,
         id: &NativeId,
         write: &AssetWrite,
-        sent: Vec<Sent>,
     ) -> Result<(), SourceError> {
         let mut held = self.held()?;
-        held.assets.retain(|asset| {
-            asset.document != document
-                || &asset.record != id
-                || write
-                    .assets
-                    .iter()
-                    .any(|payload| payload.name == asset.name && payload.bytes.is_none())
-        });
-        for (name, bytes, sha256) in sent {
+        held.assets
+            .retain(|asset| asset.document != document || &asset.record != id);
+        for payload in &write.assets {
             held.assets.push(HeldAsset {
                 document,
                 record: id.clone(),
-                name,
-                bytes,
-                sha256,
+                name: payload.name.clone(),
+                sha256: payload.sha256.clone(),
             });
         }
         Ok(())
@@ -1203,14 +1201,21 @@ impl InMemorySource {
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
-        Ok(self
-            .held()?
+        let held = self.held()?;
+        Ok(held
             .assets
             .iter()
             .find(|asset| asset.document == document && &asset.record == id && &asset.name == name)
-            .map(|asset| asset.bytes.clone()))
+            .and_then(|asset| held.blobs.get(&asset.sha256))
+            .cloned())
     }
 
+    /// Refuse every document call when this source's configuration says it has none.
+    ///
+    /// In the same words every document-free source uses, because the refusal is the
+    /// contract's own [`documentless`] rather than this plugin's wording: a caller that
+    /// reached one of these methods anyway must not be able to tell which plugin was
+    /// behind it apart from the kind the message names.
     fn documentary(&self) -> Result<(), SourceError> {
         if self.declared().documents.is_native() {
             return Ok(());
