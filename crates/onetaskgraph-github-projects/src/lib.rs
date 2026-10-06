@@ -2403,8 +2403,8 @@ pub struct GitHubProjectsSource {
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
     client: Client,
-    /// Every item this source has created since it was built, in the order it created
-    /// them.
+    /// Every item this source has created in this command, in the order it created them —
+    /// dropped by [`TaskSource::end_command`].
     ///
     /// GitHub's `projectV2.items` is eventually consistent: an issue added to a board with
     /// `addProjectV2ItemById` is routinely absent from the very next read of that board, so
@@ -2417,8 +2417,8 @@ pub struct GitHubProjectsSource {
     /// itself just write, it lives and dies with the process, and it is never consulted for
     /// an item this source did not create.
     created: Mutex<Vec<Resolved>>,
-    /// Every item that already existed and that this source has written since it was built,
-    /// as it wrote it.
+    /// Every item that already existed and that this source has written in this command, as
+    /// it wrote it — dropped by [`TaskSource::end_command`].
     ///
     /// The other half of [`Self::created`], held on the same terms and for the reason a
     /// narrowed read needs it: an answer from GitHub's search or from the board's own field
@@ -2434,7 +2434,8 @@ pub struct GitHubProjectsSource {
     /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
     /// what it is measured from.
     last_mutation: Mutex<Option<Instant>>,
-    /// The board as this process last read it, for the length of one command.
+    /// The board as this process last read it, for the length of one command — dropped by
+    /// [`TaskSource::end_command`].
     ///
     /// A copy of a project used to re-read the whole board, paged, before writing each of
     /// its items, which is by far the largest part of a copy's request count and none of
@@ -2449,7 +2450,8 @@ pub struct GitHubProjectsSource {
     /// board updates the entry here too, so what this holds is the last read plus this
     /// process's own writes rather than a snapshot taken before them.
     board_cache: Mutex<Option<Board>>,
-    /// Every issue this board's own search reported, for the length of one command.
+    /// Every issue this board's own search reported, for the length of one command — dropped
+    /// by [`TaskSource::end_command`].
     ///
     /// The second half of a board read, and cached for the same reason and on the same
     /// terms as the first: it lives and dies with the process, nothing is written down, and
@@ -2458,7 +2460,7 @@ pub struct GitHubProjectsSource {
     /// that lists this board's projects and its tasks pays for one search rather than two.
     search_cache: Mutex<Option<Vec<Resolved>>>,
     /// What each narrowed question GitHub was asked answered, keyed by that question, for
-    /// the length of one command.
+    /// the length of one command — dropped by [`TaskSource::end_command`].
     ///
     /// The narrowed counterpart of [`Self::search_cache`], held on the same terms: it lives
     /// and dies with the process, nothing is written down, a write this process makes
@@ -2468,11 +2470,13 @@ pub struct GitHubProjectsSource {
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
     search_next: Mutex<BTreeMap<String, Option<String>>>,
-    /// Records already resolved in this source instance, reused by writes and
-    /// for comment identity. Explicit item reads still reach GitHub. Nothing is persisted.
+    /// Records already resolved in this command, reused by writes and for comment identity.
+    /// Explicit item reads still reach GitHub. Nothing is persisted, and
+    /// [`TaskSource::end_command`] drops every record, so a write in the next command reads
+    /// its item as a person has since left it.
     resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// The board's own id and field definitions as this process last read them on their
-    /// own, for the length of one command.
+    /// own, for the length of one command — dropped by [`TaskSource::end_command`].
     ///
     /// What a write needs of the board and its item does not say, read once per command
     /// rather than once per item written, on the terms [`Self::board_cache`] is held on: it
@@ -9465,6 +9469,39 @@ impl TaskSource for GitHubProjectsSource {
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(Some(self.ledger.snapshot().metering()))
     }
+
+    /// Drop every item, search answer and board read this source holds, so the next command
+    /// reads the board as a person has since left it.
+    ///
+    /// Every one of those is held on the assumption that nothing but this source writes the
+    /// board while a command runs, which stops being true the moment the command is over: a
+    /// body a person edited would be overwritten from the record held here, and a card they
+    /// moved would be read as still where this source left it. The board's own field
+    /// definitions go too, because a person can add or delete a `Status` option and a write
+    /// resolved against the held list would not re-read on a miss. What stays is what stays
+    /// valid in normal use: each repository's node id, which a miss re-reads, the pacing of
+    /// mutations, which is about GitHub's limiter rather than anybody's work, and the running
+    /// accounting [`metering`](TaskSource::metering) answers from.
+    ///
+    /// Infallible in practice: a lock an earlier failure poisoned is cleared rather than
+    /// refused, because clearing it is what puts it right.
+    async fn end_command(&self) -> Result<(), SourceError> {
+        fn clear<T: Default>(held: &Mutex<T>) {
+            *held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = T::default();
+            held.clear_poison();
+        }
+        clear(&self.created);
+        clear(&self.updated);
+        clear(&self.board_cache);
+        clear(&self.search_cache);
+        clear(&self.narrowed_cache);
+        clear(&self.search_next);
+        clear(&self.resolved_cache);
+        clear(&self.fields_cache);
+        Ok(())
+    }
 }
 
 /// One issue comment as the contract carries it.
@@ -10243,5 +10280,162 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
     Page {
         items: selected,
         next,
+    }
+}
+
+/// What [`TaskSource::end_command`] leaves of this source's held state, asserted on the state
+/// itself, for the two things no journey can observe.
+///
+/// The journeys in `crates/onetaskgraph/tests/e2e/end_command.rs` prove through the engine,
+/// with and without the call, that a settlement, a board listing and a metadata search each
+/// read afresh after it — the resolved records, the written-item overlay, the board and its
+/// search, and the narrowed searches. What they cannot reach is the held field definitions,
+/// because a status write naming an option a person deleted is refused the same whether or
+/// not the list is held, and a poisoned lock, because nothing outside the source can panic
+/// while one of its locks is held. So these assert those directly, and every other holder
+/// beside them so a holder added later without a clear in the call fails here.
+#[cfg(test)]
+mod end_command_tests {
+    use super::*;
+
+    struct Token;
+
+    impl SecretResolver for Token {
+        fn get(&self, var: &str) -> Option<SecretString> {
+            (var == "GH_PROJECTS_TOKEN").then(|| "test-token".into())
+        }
+    }
+
+    fn source() -> GitHubProjectsSource {
+        let config = serde_json::from_value(json!({
+            "owner": "octo-org", "project_number": 7, "repository": "acme/work",
+            // Nothing here is sent: the source is only built and its state inspected.
+            "endpoint": "http://127.0.0.1:9/graphql",
+        }))
+        .expect("a usable configuration");
+        GitHubProjectsSource::new(&SourceName::new("work").unwrap(), config, &Token)
+            .expect("the source builds")
+    }
+
+    /// One issue as a board read answers it.
+    fn resolved(source: &GitHubProjectsSource) -> Resolved {
+        source
+            .resolve(&json!({
+                "id": "ITEM-1",
+                "content": {"__typename": "Issue", "id": "I_1", "title": "Held",
+                            "body": "what a person may since have edited", "state": "OPEN",
+                            "stateReason": null, "url": null, "number": 1,
+                            "subIssuesSummary": {"total": 0},
+                            "labels": {"nodes": [], "pageInfo": {"hasNextPage": false}}},
+                "fieldValues": {"nodes": [], "pageInfo": {"hasNextPage": false}},
+            }))
+            .expect("the item reads")
+            .expect("an issue")
+    }
+
+    /// Hold something in every holder the call clears, and the repository id it keeps.
+    fn fill(source: &GitHubProjectsSource) {
+        let item = resolved(source);
+        source.created.lock().unwrap().push(item.clone());
+        source.updated.lock().unwrap().push(item.clone());
+        *source.board_cache.lock().unwrap() = Some(Board {
+            id: "PVT-board".into(),
+            fields: json!({"nodes": []}),
+            items: vec![item.clone()],
+        });
+        *source.search_cache.lock().unwrap() = Some(vec![item.clone()]);
+        source
+            .narrowed_cache
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), vec![item.clone()]);
+        source
+            .search_next
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), Some("cursor".into()));
+        source
+            .resolved_cache
+            .lock()
+            .unwrap()
+            .insert(item.id.clone(), item);
+        *source.fields_cache.lock().unwrap() = Some(BoardFields {
+            id: BoardId::parse("PVT-board").unwrap(),
+            fields: json!({"nodes": []}),
+        });
+        source
+            .repository_cache
+            .lock()
+            .unwrap()
+            .insert(RepositoryTarget::parse("acme/work").unwrap(), "R_1".into());
+    }
+
+    fn assert_dropped(source: &GitHubProjectsSource) {
+        assert!(source.created().unwrap().is_empty(), "created");
+        assert!(source.updated().unwrap().is_empty(), "updated");
+        assert!(source.board_cache().unwrap().is_none(), "board");
+        assert!(source.search_cache.lock().unwrap().is_none(), "search");
+        assert!(source.narrowed_cache.lock().unwrap().is_empty(), "narrowed");
+        assert!(
+            source.search_next.lock().unwrap().is_empty(),
+            "search paging"
+        );
+        assert!(
+            source.resolved_cache().unwrap().is_empty(),
+            "resolved records"
+        );
+        assert!(source.fields_cache().unwrap().is_none(), "board fields");
+        assert_eq!(
+            source.repository_cache().unwrap().len(),
+            1,
+            "a repository's node id stays valid and is kept"
+        );
+    }
+
+    fn end(source: &GitHubProjectsSource) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(source.end_command())
+            .expect("the command ends");
+    }
+
+    #[test]
+    fn the_call_drops_every_item_search_and_board_read_and_keeps_repository_ids() {
+        let source = source();
+        fill(&source);
+        end(&source);
+        assert_dropped(&source);
+    }
+
+    #[test]
+    fn the_call_clears_a_lock_an_earlier_failure_poisoned() {
+        fn poison<T: Send>(held: &Mutex<T>) {
+            std::thread::scope(|scope| {
+                let _ = scope
+                    .spawn(|| {
+                        let _guard = held.lock().unwrap();
+                        panic!("a failure while the lock is held");
+                    })
+                    .join();
+            });
+            assert!(held.is_poisoned());
+        }
+        let source = source();
+        fill(&source);
+        poison(&source.created);
+        poison(&source.updated);
+        poison(&source.board_cache);
+        poison(&source.search_cache);
+        poison(&source.narrowed_cache);
+        poison(&source.search_next);
+        poison(&source.resolved_cache);
+        poison(&source.fields_cache);
+        assert!(
+            source.resolved_cache().is_err(),
+            "a poisoned lock is refused before the call"
+        );
+        end(&source);
+        assert_dropped(&source);
     }
 }

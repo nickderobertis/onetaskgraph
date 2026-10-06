@@ -151,6 +151,7 @@ METHOD_SECTIONS = {
     "set_task_priority": "### 4.19 `set_task_priority`",
     "set_task_content": "### 4.20 `set_task_content`",
     "update_task": "### 4.21 `update_task`",
+    "end_command": "### 4.22 `end_command`",
 }
 
 ENUM_SECTIONS = {

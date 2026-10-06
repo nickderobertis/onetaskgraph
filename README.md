@@ -775,6 +775,35 @@ Unlike the Python and TypeScript SDKs, which spawn the compiled binary, a Rust c
 links `onetaskgraph-core` and calls `Engine` in process. The engine and its copy semantics
 remain the single implementation in either case.
 
+A caller that holds one `Engine` for many units of work — a worker writing one settlement
+back after another over a run that lasts hours — must call `engine.end_command().await`
+between every two of them, after a unit fails as well as after one lands. Within a command a
+source may reuse what it read: a GitHub Projects source holds the board, its search answers
+and the item records it resolved, on the grounds that nothing but itself writes the board
+while one command runs. Across units that stops being true, and without the call a person's
+edit to an issue's body, or a card they moved, between two units would be overwritten or
+mis-moved by the next write. After the call no source answers a read or bases a write on
+item content, statuses, board contents or search results it held before; each keeps only
+identifiers and vocabulary that stay valid — Linear keeps its team's workflow states and its
+workspace's project statuses, so a warm status write is still one request. The caller names no
+plugin: every source decides what it may keep under the one rule. A one-shot use — the binary,
+or an engine built for a single unit and dropped — needs no call, because dropping the engine
+drops everything it held.
+
+```rust
+use onetaskgraph_core::{Engine, EngineError};
+
+async fn work_through(engine: &Engine, units: &[&str]) -> Result<(), EngineError> {
+    for unit in units {
+        // One unit of work: its reads and writes through `engine`.
+        println!("settling {unit}");
+        // Then, before the next unit, whether this one landed or not:
+        engine.end_command().await?;
+    }
+    Ok(())
+}
+```
+
 A failure reaches a linking caller as a typed value rather than as a document to parse: a
 write that landed while a task it delivers could not be kept in step reports that entry as
 `DeliveryOutcome::Failed`, whose `Failure` reads each member of the failure document —

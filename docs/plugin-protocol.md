@@ -205,6 +205,7 @@ the source can do natively, and what configuration it is being built with.
 | `metadata_updates` | boolean | Whether this plugin answers the three narrow metadata writes. Optional; see §3.7. |
 | `content_updates` | boolean | Whether this plugin answers the narrow content write. Optional; see §3.9. |
 | `targeted_updates` | boolean | Whether this plugin answers the targeted update of one task. Optional; see §3.10. |
+| `ends_commands` | boolean | Whether this plugin answers `end_command`. Optional; see §3.11. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -363,6 +364,16 @@ carry the edges through a rewrite, and one `write_task` with its `target` set, s
 something differs — which is the trait's own default. A plugin written before the method is
 therefore correct and merely not minimal, and it was added without a protocol version bump.
 
+### 3.11 `ends_commands`
+
+A boolean: `true` when this plugin answers `end_command` (§4.22), and `false` when it does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method, and the engine reads its silence as a promise: **a plugin that holds anything between
+requests that §4.22 forbids it to keep must answer `true`.** One that reads its backend afresh
+for every request has nothing to drop and may leave the member out, which is what every plugin
+written before the method did.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -401,6 +412,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `set_project_metadata` | `TaskSource::set_project_metadata` |
 | `set_document_metadata` | `TaskSource::set_document_metadata` |
 | `update_task` | `TaskSource::update_task` |
+| `end_command` | `TaskSource::end_command` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -1269,6 +1281,38 @@ a plugin without `task_updates` (§3.6). An update naming one key in both `metad
 `metadata_remove` is refused before it is sent, with `{"kind": "refused"}`, and a plugin
 handed one refuses it the same way.
 
+### 4.22 `end_command`
+
+Sent only to a plugin that answered `ends_commands: true` at the handshake (§3.11), and never
+to one that did not.
+
+```json
+{ "id": "24", "method": "end_command", "params": {} }
+{ "id": "24", "result": {} }
+```
+
+A **command** is one unit of work. For the binary it is one invocation, which is one
+connection, so the binary never sends this: the connection ends with the command. A caller
+holding one engine — and so one connection — for many units of work, such as a worker that
+writes one settlement back after another over hours, sends it between them through
+`Engine::end_command`, which asks every source it holds and names none of them.
+
+Within a command a plugin may hold what it read and reuse it. **Once it has answered this, it
+answers no read and bases no write on item content, statuses, board contents or search results
+it held before the call.** It may keep only identifiers and vocabulary that stay valid in
+normal use — a repository's node id, a team's id, its workflow states, a workspace's project
+statuses — and only where a lookup that misses one reads afresh rather than refusing. Running
+totals it answers `metering` (§4.14) from are not work and are kept; §4.14 forbids resetting
+them. The reason is a person: between two commands they may edit an item's body or move it to
+another status, and a write based on what was held before would overwrite the edit or move the
+item from where it no longer is.
+
+`result` is an empty object — the trait method carries `()`, so there is nothing for it to say
+beyond having done it — and members in it are ignored (§2.1). An error envelope means the
+plugin could not be sure it dropped what it held, and the engine reports it against the source
+as `Engine::end_command`'s failure; the caller should not go on to the next command on that
+source.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -1399,6 +1443,13 @@ is refused by name before anything is sent.
 that answered `metadata_updates: true`, and one written when §4.18 let a plugin refuse every
 key in that namespace as malformed may go on doing so — the engine reads either refusal of
 that one key as the plugin not holding the link, and the copy completes without it.
+
+`end_command` (§4.22) and the `ends_commands` member of §3.11 were added **without** a bump,
+for the reason `metering` was: the engine sends the method only to a plugin that answered
+`ends_commands: true`, and a plugin written before it omits the member and is never sent it.
+Reading that silence as holding nothing is sound for every plugin of this build that existed
+then — a hosted plugin of this build is served by its own host, which answers `true` and
+forwards the call — and §3.11 makes declaring it the obligation of any plugin that holds more.
 
 A version is bumped when a change is **not** safe under §2.1 — a member removed, a
 type narrowed, a meaning changed, a method removed or renamed. Adding an optional
@@ -1547,6 +1598,9 @@ records. A mutation invalidates its target's binding before sending, and a
 successful write replaces it; a retry after a partial failure therefore resolves
 the target again. Comment mutations preserve the binding because they change no
 item fields. These records stay inside the plugin and are never persisted.
+`end_command` (§4.22) drops every one of them, with the board, search and field
+reads beside them, so the first write of the next command resolves its target
+afresh; only repository node ids are kept.
 
 A copy combines changed board fields in one GraphQL mutation request using
 aliases, including a priority clear. Unchanged origin and status fields need no

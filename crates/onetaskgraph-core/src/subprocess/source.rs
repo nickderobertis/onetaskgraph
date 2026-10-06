@@ -117,6 +117,11 @@ pub struct SubprocessSource {
     /// Whether the plugin said it answers the targeted update (§3.10), read at the same
     /// handshake.
     targeted_updates: bool,
+    /// Whether the plugin said it answers `end_command` (§3.11), read at the same handshake.
+    ///
+    /// A plugin that said nothing holds nothing between requests a person can change, which
+    /// is what §3.11 makes an absent member mean, and is never sent the method.
+    ends_commands: bool,
     /// The live process.
     connection: Connection,
 }
@@ -354,6 +359,7 @@ impl SubprocessSource {
             metadata_updates,
             content_updates,
             targeted_updates,
+            ends_commands,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -385,6 +391,7 @@ impl SubprocessSource {
             metadata_updates,
             content_updates,
             targeted_updates,
+            ends_commands,
             connection: Connection::adopt(peer),
         })
     }
@@ -1105,6 +1112,17 @@ impl TaskSource for SubprocessSource {
         }
         let result: MeteringResult = self.ask("metering", json!({})).await?;
         Ok(result.metering)
+    }
+
+    async fn end_command(&self) -> Result<(), SourceError> {
+        // Never sent to a plugin that did not declare it (§3.11): one that holds nothing a
+        // person can change has nothing to drop, and one written before the method existed
+        // is not asked for a method it has never heard of.
+        if !self.ends_commands {
+            return Ok(());
+        }
+        let _: IgnoredResult = self.ask("end_command", json!({})).await?;
+        Ok(())
     }
 }
 

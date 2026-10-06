@@ -1070,6 +1070,40 @@ impl Engine {
         self.sources.iter().any(|source| source.name() == name)
     }
 
+    /// End one command on every source this engine holds, so the next command reads afresh.
+    ///
+    /// A caller holding one engine for many units of work — a worker writing settlement after
+    /// settlement back over hours — calls this between them. A source may reuse what it read
+    /// within one command, so without this call a person's edit made between two units can be
+    /// overwritten by the next write. After it, no source answers a read or bases a write on
+    /// item content, statuses, board contents or search results it held before. What a source
+    /// keeps is its own decision, made under [`TaskSource::end_command`]'s rule; nothing here
+    /// names a plugin.
+    ///
+    /// The binary never calls it: one command line is one process, which drops everything at
+    /// exit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::SourceFailed`] for the first source that could not end its
+    /// command. Every source is asked whether or not one before it failed.
+    ///
+    /// [`TaskSource::end_command`]: onetaskgraph_plugin_api::TaskSource::end_command
+    pub async fn end_command(&self) -> Result<(), EngineError> {
+        let mut first = None;
+        for source in self.ready() {
+            if let Err(error) = source.source().end_command().await
+                && first.is_none()
+            {
+                first = Some(EngineError::SourceFailed {
+                    name: source.name().to_string(),
+                    error,
+                });
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+
     /// One page of tasks.
     ///
     /// # Errors

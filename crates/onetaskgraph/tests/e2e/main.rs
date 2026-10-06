@@ -50,6 +50,13 @@ mod copy_cost;
 // requires a journey to drive the compiled binary rather than the engine in process.
 mod delivery;
 mod document_store;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the engine the binary links against the
+// loopback GitHub board and Linear workspace, a folder of Markdown and the stdio host, with no
+// credential and no network, in about a second. `Engine::end_command` is the engine's, so it
+// cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at
+// any depth; the protocol's half is proven in `onetaskgraph-core`'s own `tests/subprocess.rs`.
+mod end_command;
 mod failures;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This offline module drives
 // the required real CLI boundary against a loopback board and completes in about a second,

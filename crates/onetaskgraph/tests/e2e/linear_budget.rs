@@ -428,7 +428,7 @@ fn measure_linear_requests_per_status_write_warm() {
     let created = writes[1..].iter().copied().max().unwrap_or_default();
 
     // In one Engine, as a long-lived caller holds one source: five status-only updates, and
-    // five rewrites of a project a copy keeps in step.
+    // five rewrites of a project a copy keeps in step, each ended with `Engine::end_command`.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -474,6 +474,8 @@ fn measure_linear_requests_per_status_write_warm() {
                 .await
                 .expect("the status lands");
             updates.push(workspace.served().len() - from);
+            // Each update is one unit of work, ended as the worker ends one.
+            engine.end_command().await.expect("the command ends");
         }
         // The first copy creates the project; every one after it rewrites it.
         for category in [
@@ -503,6 +505,7 @@ fn measure_linear_requests_per_status_write_warm() {
                 .await
                 .expect("the copy lands");
             rewrites.push(project_write(&workspace.served()[from..]));
+            engine.end_command().await.expect("the command ends");
         }
     });
     assert_eq!(
@@ -546,6 +549,7 @@ fn measure_linear_requests_per_status_write_warm() {
                 .await
                 .expect("the status lands wherever the issue is filed");
             scoped.push(workspace.served().len() - from);
+            scoped_engine.end_command().await.expect("the command ends");
             assert_eq!(workspace.state_of(&id).as_deref(), Some("Done"), "{id}");
         }
     });
@@ -601,8 +605,9 @@ fn global(id: &str) -> GlobalId {
 /// byte for byte.
 const PERSONS_TEXT: &str = "A person's own words, edited by hand.";
 
-/// Five settlement-shaped updates in one Engine — a status and one `onepipeline.*` key each —
-/// and what each cost, every one checked to have kept the person's text and the unrelated key.
+/// Five settlement-shaped updates in one Engine — a status and one `onepipeline.*` key each,
+/// with `Engine::end_command` after each as the write-back worker calls it — and what each
+/// cost, every one checked to have kept the person's text and the unrelated key.
 fn settlements() -> Vec<usize> {
     let sandbox = Sandbox::new();
     let tasks = (0..5)
@@ -648,6 +653,8 @@ fn settlements() -> Vec<usize> {
                 .await
                 .expect("the settlement lands");
             spent.push(workspace.served().len() - from);
+            // Each settlement is one unit of work, ended as the write-back worker ends one.
+            engine.end_command().await.expect("the command ends");
             let after = workspace.long_form("tasks", &id).expect("a description");
             let (text, slot) = split_slot(&after);
             let (text_before, slot_before) = split_slot(before);

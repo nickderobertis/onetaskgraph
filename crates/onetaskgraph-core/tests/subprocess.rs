@@ -2525,3 +2525,165 @@ fn a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links() {
     ]);
     assert_eq!(refusal(&other[1]), "malformed", "{:#}", other[1]);
 }
+
+#[test]
+fn the_reference_host_declares_end_command_and_answers_it() {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id": "1", "method": "end_command", "params": {}}),
+    ]);
+    assert_eq!(
+        answers[0]["result"]["ends_commands"],
+        json!(true),
+        "{:#}",
+        answers[0]
+    );
+    assert_eq!(answers[1], json!({"id": "1", "result": {}}));
+}
+
+#[test]
+fn the_reference_host_takes_end_command_params_only_as_an_object() {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id": "1", "method": "end_command", "params": null}),
+        json!({"id": "2", "method": "end_command", "params": []}),
+        json!({"id": "3", "method": "end_command", "params": "now"}),
+        json!({"id": "4", "method": "end_command", "params": {"from": "a newer engine"}}),
+    ]);
+    for refused in &answers[1..4] {
+        assert_eq!(refusal(refused), "malformed", "{refused:#}");
+        assert!(
+            because(refused).contains("the parameters of end_command"),
+            "{refused:#}"
+        );
+    }
+    assert_eq!(
+        answers[4],
+        json!({"id": "4", "result": {}}),
+        "a member it does not know is ignored"
+    );
+}
+
+#[tokio::test]
+async fn end_command_crosses_the_wire_and_the_hosted_source_still_answers() {
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    there.end_command().await.expect("the command ends");
+    let task = there
+        .get_task(&NativeId("T-1".into()))
+        .await
+        .expect("a read after the call")
+        .expect("T-1 is held");
+    assert_eq!(task.title, "Alpha");
+}
+
+#[tokio::test]
+async fn a_plugin_that_does_not_declare_end_command_is_never_sent_it() {
+    // The peer answers the handshake and then hangs up: a request sent to it would fail.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    source
+        .end_command()
+        .await
+        .expect("nothing is sent to a plugin that holds nothing to drop");
+}
+
+/// A peer that shakes hands declaring `end_command`, then answers every request with an empty
+/// result and records each request it was sent.
+fn recording_end_commands() -> (SubprocessSource, Arc<Mutex<Vec<Value>>>) {
+    let (to_engine, mut from_peer) = pipe().expect("a pipe");
+    let (to_peer, from_engine) = pipe().expect("a pipe");
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&asked);
+    std::thread::spawn(move || {
+        let mut lines = BufReader::new(to_peer);
+        loop {
+            let mut line = String::new();
+            match lines.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let request: Value = serde_json::from_str(&line).expect("a request");
+            let result = if request["method"] == "initialize" {
+                json!({"protocol_version": 2, "kind": "made-up",
+                       "capabilities": capabilities(), "ends_commands": true})
+            } else {
+                json!({})
+            };
+            recorded.lock().unwrap().push(request.clone());
+            let answer = json!({"id": request["id"], "result": result});
+            if writeln!(from_peer, "{answer}").is_err() || from_peer.flush().is_err() {
+                return;
+            }
+        }
+    });
+    let source =
+        SubprocessSource::over(from_engine, to_engine, &name(), &json!({}), BTreeMap::new())
+            .expect("the handshake succeeds");
+    (source, asked)
+}
+
+/// A peer declaring `end_command` that refuses it with `message`.
+fn refusing_end_command(message: &str) -> SubprocessSource {
+    scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "ends_commands": true}})
+        .to_string(),
+        json!({"id": "1", "error": {"kind": "unavailable", "message": message}}).to_string(),
+    ])
+    .expect("the handshake succeeds")
+}
+
+fn ready(name: &str, source: impl TaskSource + 'static) -> onetaskgraph_core::ConfiguredSource {
+    onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
+        SourceName::new(name).unwrap(),
+        Box::new(source),
+    ))
+}
+
+#[tokio::test]
+async fn the_engine_asks_every_source_past_a_failure_and_names_the_first_that_failed() {
+    let (recorded, asked) = recording_end_commands();
+    let engine = onetaskgraph_core::Engine::new(
+        vec![
+            ready(
+                "first",
+                refusing_end_command("the first source's board stayed held"),
+            ),
+            ready("between", recorded),
+            ready(
+                "last",
+                refusing_end_command("the last source's board stayed held"),
+            ),
+        ],
+        vec![name()],
+    );
+    let refused = engine
+        .end_command()
+        .await
+        .expect_err("two sources could not drop what they held");
+    let onetaskgraph_core::EngineError::SourceFailed { name, error } = &refused else {
+        panic!("named as the source that failed: {refused:?}");
+    };
+    assert_eq!(name, "first", "the first failure is the one reported");
+    assert!(
+        error
+            .to_string()
+            .contains("the first source's board stayed held"),
+        "{error}"
+    );
+    let methods = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request["method"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        [json!("initialize"), json!("end_command")],
+        "the source after the failure was still asked"
+    );
+}
