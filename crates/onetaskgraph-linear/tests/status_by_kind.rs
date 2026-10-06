@@ -41,6 +41,24 @@ struct Held {
     refuse_next_mutation: bool,
     /// Close the next connection without answering, as a network failure does.
     drop_next: bool,
+    /// Answer the next resolution without its team's states, as a malformed answer would.
+    malformed_next_resolution: bool,
+    /// How an `issueUpdate` naming no issue is refused.
+    missing: Missing,
+}
+
+/// The spellings of Linear's refusal of a mutation naming nothing, each recognised on its own.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Missing {
+    /// `Entity not found: Issue`, with its user-presentable sentence, on an HTTP 200.
+    #[default]
+    Both,
+    /// The message alone.
+    MessageOnly,
+    /// A category message, and the user-presentable sentence alone.
+    SentenceOnly,
+    /// Both, on an HTTP 400.
+    Http400,
 }
 
 #[derive(Clone)]
@@ -173,10 +191,18 @@ impl Workspace {
                     drop(stream);
                     continue;
                 }
-                let body = workspace.answer(&request).to_string();
+                let answer = workspace.answer(&request);
+                let status = if answer.get("errors").is_some()
+                    && workspace.held().missing == Missing::Http400
+                {
+                    "400 Bad Request"
+                } else {
+                    "200 OK"
+                };
+                let body = answer.to_string();
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
             }
@@ -197,6 +223,10 @@ impl Workspace {
         let id = variables["id"].as_str().unwrap_or_default().to_owned();
         let input = &variables["input"];
         let data = match query.as_str() {
+            graphql::RESOLUTION if std::mem::take(&mut held.malformed_next_resolution) => {
+                json!({"teams":{"nodes":[{"id":format!("TEAM-{}", held.team)}]},
+                       "projectStatuses":{"nodes":held.statuses}})
+            }
             graphql::RESOLUTION => {
                 let teams = if variables["key"] == json!(held.team) {
                     json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states}}])
@@ -228,10 +258,17 @@ impl Workspace {
                     },
                     None => None,
                 };
+                let missing = held.missing;
                 let Some(issue) = held.issues.iter_mut().find(|issue| issue["id"] == id) else {
-                    return json!({"errors":[{"message":"Entity not found: Issue",
-                        "extensions":{"code":"INVALID_INPUT",
-                            "userPresentableMessage":"Could not find referenced Issue."}}]});
+                    return json!({"errors":[match missing {
+                        Missing::MessageOnly => json!({"message":"Entity not found: Issue"}),
+                        Missing::SentenceOnly => json!({"message":"Argument Validation Error",
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":"Could not find referenced Issue."}}),
+                        Missing::Both | Missing::Http400 => json!({"message":"Entity not found: Issue",
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":"Could not find referenced Issue."}}),
+                    }]});
                 };
                 if let Some(state) = state {
                     issue["state"] = state;
@@ -912,4 +949,72 @@ async fn a_project_write_its_mapping_names_no_status_for_sends_no_mutation() {
         }
     }
     assert_eq!(workspace.status_of("P-1").as_deref(), Some("Planned"));
+}
+
+#[tokio::test]
+async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_other_is_a_refusal() {
+    for missing in [
+        Missing::Both,
+        Missing::MessageOnly,
+        Missing::SentenceOnly,
+        Missing::Http400,
+    ] {
+        let workspace = hello_patient("A");
+        workspace.issue("I-1", "Todo", None);
+        workspace.held().missing = missing;
+        let source = source(&workspace, hellopatient());
+        assert_eq!(
+            source
+                .set_task_status(&"I-NOPE".into(), StatusCategory::Done)
+                .await
+                .unwrap(),
+            None,
+            "a missing issue is no such task, however Linear spelled it"
+        );
+    }
+    // Any other refusal of the same mutation is a refusal, never no such task.
+    let workspace = hello_patient("A");
+    workspace.issue("I-1", "Todo", None);
+    let source = source(&workspace, hellopatient());
+    source
+        .set_task_status(&"I-1".into(), StatusCategory::Todo)
+        .await
+        .unwrap();
+    workspace.held().refuse_next_mutation = true;
+    let refused = source
+        .set_task_status(&"I-1".into(), StatusCategory::Done)
+        .await
+        .expect_err("a refusal that names no missing entity");
+    assert!(
+        matches!(&refused, SourceError::Refused { message } if message.contains("could not complete")),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_resolution_is_not_held_and_the_next_write_reads_it_again() {
+    let workspace = hello_patient("A");
+    workspace.issue("I-1", "Todo", None);
+    let source = source(&workspace, hellopatient());
+    workspace.held().malformed_next_resolution = true;
+    let failed = source
+        .set_task_status(&"I-1".into(), StatusCategory::Queued)
+        .await
+        .expect_err("a resolution without the team's states");
+    assert!(
+        matches!(failed, SourceError::Malformed { .. }),
+        "{failed:?}"
+    );
+    assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+    let from = workspace.count();
+    source
+        .set_task_status(&"I-1".into(), StatusCategory::Queued)
+        .await
+        .unwrap();
+    assert_eq!(
+        workspace.names_since(from),
+        ["RESOLUTION", "ISSUE_UPDATE_READ"],
+        "nothing of the malformed answer was held"
+    );
+    assert_eq!(workspace.state_of("I-1").as_deref(), Some("Queued"));
 }

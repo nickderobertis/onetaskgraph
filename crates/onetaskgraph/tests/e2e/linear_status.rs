@@ -463,7 +463,7 @@ fn every_category_is_written_and_read_back_for_both_kinds_under_its_mapped_name(
 }
 
 #[test]
-fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_any_mutation() {
+fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_its_own_mutation() {
     let sandbox = Sandbox::new();
     // `draft` is not mentioned, `cancelled` is disabled, `queued` names a task alone and
     // `backlog` a project alone, and `done` names a state and a status Linear does not have.

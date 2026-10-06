@@ -699,7 +699,7 @@ const CREATED_COLOR: &str = "#95a2b3";
 #[derive(Debug, Clone)]
 struct Held {
     id: NativeId,
-    name: String,
+    name: StatusName,
     /// Its `WorkflowState.type` or `ProjectStatusType`, verbatim: Linear adds types this
     /// source must not refuse (`duplicate` among them).
     // llmlint: ignore[invalid_states_unrepresentable] Linear's own open `String!` vocabulary, held verbatim for a report; an enum here would refuse a type Linear adds.
@@ -707,6 +707,16 @@ struct Held {
     /// A project status's place in the workspace's project flow; zero for a workflow state,
     /// which nothing here places.
     position: f64,
+}
+
+/// The name of one workflow state or project status Linear answered with, which no name in
+/// Linear is blank.
+fn held_name(node: &Value) -> Result<StatusName, SourceError> {
+    StatusName::try_from(str_at(node, "name")?.to_owned()).map_err(|refused| {
+        SourceError::Malformed {
+            message: format!("Linear answered a status name this source cannot hold: {refused}"),
+        }
+    })
 }
 
 /// What a status write resolves: the configured team's id, its workflow states and the
@@ -747,7 +757,7 @@ impl Vocabulary {
         let held = |node: &Value, positioned: bool| -> Result<Held, SourceError> {
             Ok(Held {
                 id: NativeId(backend_id(node, "id")?.into()),
-                name: str_at(node, "name")?.to_owned(),
+                name: held_name(node)?,
                 kind: str_at(node, "type")?.to_owned(),
                 position: if positioned {
                     node.get("position")
@@ -801,7 +811,7 @@ impl Vocabulary {
         let matched = self
             .of(kind)
             .iter()
-            .filter(|held| held.name.eq_ignore_ascii_case(name))
+            .filter(|held| held.name.matches(name))
             .collect::<Vec<_>>();
         match matched.as_slice() {
             [] => Ok(None),
@@ -895,10 +905,10 @@ pub struct MappedStatusName {
     category: StatusCategory,
     name: StatusName,
     found: Found,
-    created: bool,
 }
 
-/// Whether a kind's vocabulary has a name of the one the mapping gives.
+/// Whether a kind's vocabulary has a name of the one the mapping gives, and whether this run
+/// put it there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
     /// It has it, of this type — a `WorkflowState.type` (`backlog`, `unstarted`, `started`,
@@ -909,6 +919,9 @@ pub enum Found {
     Present(String),
     /// It has no name of that spelling.
     Missing,
+    /// It had none, and `sources fields --apply` created it, of this type.
+    // llmlint: ignore[invalid_states_unrepresentable] As `Present`: Linear's own open `String!` vocabulary, reported verbatim as Linear answered the create.
+    Created(String),
 }
 
 impl MappedStatusName {
@@ -939,7 +952,7 @@ impl MappedStatusName {
     /// Whether this run created it.
     #[must_use]
     pub fn created(&self) -> bool {
-        self.created
+        matches!(self.found, Found::Created(_))
     }
 
     /// The type a name of this category is created as — what a present name of another type
@@ -983,7 +996,7 @@ struct MappedStatusNameWire<'a> {
 impl<'a> From<&'a MappedStatusName> for MappedStatusNameWire<'a> {
     fn from(mapped: &'a MappedStatusName) -> Self {
         let found_type = match &mapped.found {
-            Found::Present(kind) => Some(kind.as_str()),
+            Found::Present(kind) | Found::Created(kind) => Some(kind.as_str()),
             Found::Missing => None,
         };
         Self {
@@ -993,7 +1006,7 @@ impl<'a> From<&'a MappedStatusName> for MappedStatusNameWire<'a> {
             present: found_type.is_some(),
             found_type,
             expected_type: mapped.expected_type(),
-            created: mapped.created,
+            created: mapped.created(),
         }
     }
 }
@@ -1790,12 +1803,12 @@ impl LinearSource {
             .map_err(|why| why.refusal(&self.name, category, kind))?;
         let (vocabulary, fresh) = self.vocabulary(false).await?;
         if let Some(held) = vocabulary.find(kind, name.as_str(), &self.name)? {
-            return Ok((held.id.clone(), held.name.clone()));
+            return Ok((held.id.clone(), held.name.as_str().to_owned()));
         }
         if !fresh {
             let (vocabulary, _) = self.vocabulary(true).await?;
             if let Some(held) = vocabulary.find(kind, name.as_str(), &self.name)? {
-                return Ok((held.id.clone(), held.name.clone()));
+                return Ok((held.id.clone(), held.name.as_str().to_owned()));
             }
         }
         let category_key = category_word(category);
@@ -3574,7 +3587,6 @@ impl LinearSource {
                     category,
                     name: name.clone(),
                     found: found.map_or(Found::Missing, Found::Present),
-                    created: false,
                 };
                 if apply && refused.is_none() && mapped.found == Found::Missing {
                     position += 1.0;
@@ -3589,8 +3601,7 @@ impl LinearSource {
                         .await
                     {
                         Ok(held) => {
-                            mapped.found = Found::Present(held.kind.clone());
-                            mapped.created = true;
+                            mapped.found = Found::Created(held.kind.clone());
                             self.remember(kind, held);
                             if let Some(held) = self.held_vocabulary() {
                                 vocabulary = held;
@@ -3651,7 +3662,7 @@ impl LinearSource {
             })?;
         Ok(Held {
             id: NativeId(backend_id(created, "id")?.into()),
-            name: str_at(created, "name")?.to_owned(),
+            name: held_name(created)?,
             kind: str_at(created, "type")?.to_owned(),
             position,
         })

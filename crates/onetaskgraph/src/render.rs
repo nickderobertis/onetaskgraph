@@ -116,20 +116,18 @@ pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
                 "project status of this workspace".to_owned()
             }
         };
-        let found = match (mapped.found(), mapped.created()) {
-            (onetaskgraph_linear::Found::Present(found), true) => {
+        let found = match mapped.found() {
+            onetaskgraph_linear::Found::Created(found) => {
                 format!("created as a {held_by} ({found})")
             }
-            (onetaskgraph_linear::Found::Present(found), false)
-                if found == mapped.expected_type() =>
-            {
+            onetaskgraph_linear::Found::Present(found) if found == mapped.expected_type() => {
                 format!("present as a {held_by} ({found})")
             }
-            (onetaskgraph_linear::Found::Present(found), false) => format!(
+            onetaskgraph_linear::Found::Present(found) => format!(
                 "present as a {held_by} ({found}; {category} is created as {}, and this one is left as it is)",
                 mapped.expected_type()
             ),
-            (onetaskgraph_linear::Found::Missing, _) => {
+            onetaskgraph_linear::Found::Missing => {
                 format!("missing: no {held_by} has that name")
             }
         };

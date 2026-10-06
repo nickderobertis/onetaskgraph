@@ -37,10 +37,12 @@ journey="linear_budget::measure_$(printf '%s' "$budget" | tr '-' '_')"
 if ! output="$(cargo test --quiet -p onetaskgraph --all-features --locked --test e2e -- "$journey" --exact 2>&1)"; then
   printf '%s\n' "$output" >&2
   echo "linear-budget: $journey failed — see above" >&2
+  echo "linear-budget: next: run 'cargo test -p onetaskgraph --all-features --test e2e -- $journey --exact' and fix what it reports: an assertion over the budget names the request a status write now sends that it did not" >&2
   exit 1
 fi
 if [ ! -s "$ONEBUDGETSPEC_RESULT" ]; then
   printf '%s\n' "$output" >&2
   echo "linear-budget: $journey ran and reported nothing; it is no longer the measurement of $budget" >&2
+  echo "linear-budget: next: restore that journey's call to report(\"$budget\", …) in crates/onetaskgraph/tests/e2e/linear_budget.rs, which writes the figure to ONEBUDGETSPEC_RESULT" >&2
   exit 1
 fi

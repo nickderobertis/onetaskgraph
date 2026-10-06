@@ -618,6 +618,22 @@ mod tests {
         }
     }
 
+    /// The keys this grammar reads and writes, and the kinds its refusals name, are the
+    /// contract's own serialization of `StatusCategory` and `ItemKind`: a variant renamed on the
+    /// wire there and not here fails this rather than a configuration.
+    #[test]
+    fn every_key_is_the_contracts_own_spelling_of_its_category_and_kind() {
+        for category in CATEGORIES {
+            assert_eq!(
+                serde_json::to_value(category).unwrap(),
+                json!(category_key(category))
+            );
+        }
+        for kind in [ItemKind::Task, ItemKind::Project] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(kind_key(kind)));
+        }
+    }
+
     #[test]
     fn two_categories_on_one_name_of_one_kind_are_refused_ignoring_case() {
         let source = SourceName::new("work").unwrap();
