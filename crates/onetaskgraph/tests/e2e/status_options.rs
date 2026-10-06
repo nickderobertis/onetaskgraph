@@ -220,7 +220,10 @@ fn both_kinds_names_are_planned_and_added_once_each() {
     );
     let after = board.status_options();
     for option in &existing {
-        assert!(after.contains(option), "{option} kept with its id: {after:?}");
+        assert!(
+            after.contains(option),
+            "{option} kept with its id: {after:?}"
+        );
     }
     for name in ["Completed", "In Review"] {
         assert_eq!(
