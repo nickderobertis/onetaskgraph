@@ -15,7 +15,9 @@
 //! A write reaches the same index before any listing does. The plugin resolves a label a write
 //! names through Linear's label filter, and a run had its first task write refused as unable to
 //! resolve uniquely a label it had created a moment before — so a label the journey creates is
-//! waited for too, through that very lookup.
+//! waited for too, through that very lookup. One answer is not enough: a later run's wait saw
+//! the label once, and the plugin's own lookup a moment after it was answered with none, so
+//! the wait holds out for [`LABEL_STEADY`] answers in a row.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -245,12 +247,21 @@ pub const LABEL_CONNECTION: &str = "issueLabels";
 /// The one variable `graphql::ISSUE_LABEL` takes: the label's name.
 pub const LABEL_VARIABLE: &str = "name";
 
-/// The lookup a write resolves the label `name` through, until exactly one label answers it.
+/// How many lookups in a row must answer a label with exactly one match before a write may
+/// name it.
+///
+/// Linear's label filter has answered a just-created label on one read and with no match on
+/// the very next — the plugin's own, a moment after this wait had passed — so one answer says
+/// only that some replica holds it. A run of answers is the evidence that the index does.
+pub const LABEL_STEADY: u32 = 3;
+
+/// The lookup a write resolves the label `name` through, until exactly one label answers it on
+/// [`LABEL_STEADY`] reads in a row.
 ///
 /// The lookup is the plugin's own `graphql::ISSUE_LABEL`, sent by `send`, which answers with the
-/// request's `data`. No match is the index-lag answer this wait can settle. Multiple matches are
-/// duplicate data, so they are refused immediately with the ids the plugin would report rather
-/// than pointlessly waiting out the bound.
+/// request's `data`. No match is the index-lag answer this wait can settle, and it starts the
+/// run of answers over. Multiple matches are duplicate data, so they are refused immediately
+/// with the ids the plugin would report rather than pointlessly waiting out the bound.
 pub async fn settled_label<F, Fut>(bound: Bound, name: &str, send: F) -> Result<(), String>
 where
     F: Fn(&'static str, Value) -> Fut,
@@ -259,7 +270,7 @@ where
     let what = format!("the label named {name:?} by the lookup a write resolves it through");
     let (what, send) = (what.as_str(), &send);
     let started = Instant::now();
-    let mut reads = 0;
+    let (mut reads, mut steady) = (0, 0);
     loop {
         let data = send(
             onetaskgraph_linear::graphql::ISSUE_LABEL,
@@ -284,18 +295,30 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
         match nodes.len() {
-            1 => return Ok(()),
-            0 if reads < bound.reads => tokio::time::sleep(bound.interval).await,
-            0 => {
-                return Err(format!(
-                    "{what} found 0 matches, still after {reads} reads over {:?}",
-                    started.elapsed()
-                ));
-            }
+            0 => steady = 0,
+            1 => steady += 1,
             found => {
                 return Err(format!("{what} found {} matches with ids {ids:?}", found));
             }
         }
+        if steady == LABEL_STEADY {
+            return Ok(());
+        }
+        if reads == bound.reads {
+            return Err(if steady == 0 {
+                format!(
+                    "{what} found 0 matches, still after {reads} reads over {:?}",
+                    started.elapsed()
+                )
+            } else {
+                format!(
+                    "{what} found one match on only the last {steady} of {reads} reads over \
+                     {:?}, short of the {LABEL_STEADY} in a row a write waits for",
+                    started.elapsed()
+                )
+            });
+        }
+        tokio::time::sleep(bound.interval).await;
     }
 }
 

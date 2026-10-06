@@ -234,7 +234,8 @@ async fn drive_every_declared_capability(
     create_label(&run.key, team_id, &run_label).await?;
     create_label(&run.key, team_id, &only_label).await?;
     // The first task write names both, and the source resolves a label by name through
-    // Linear's label filter, which holds a label only some while after it was created.
+    // Linear's label filter, which holds a label only some while after it was created — and
+    // for a while after that may answer it on one read and not the next.
     for name in [&run_label, &only_label] {
         settled_label(LINEAR_INDEX, name, |query, variables| {
             linear(&run.key, query, variables, "live label lookup")
