@@ -1,0 +1,46 @@
+# The requests a Linear status write sends, counted at the loopback Linear's endpoint by the
+# journeys of tests/e2e/linear_budget.rs while this project's `test` target runs. Each budget's
+# command is tests/budgets/main.rs, which reports what that run recorded.
+schema_version: 1
+budgets:
+  - id: linear-requests-per-status-write-cold
+    description: >-
+      The requests one status write sends on a fresh source instance, as one command line is.
+      It protects headroom on the production Linear key every manager of a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    unit: requests
+    direction: max
+    threshold: 2
+  - id: linear-requests-per-status-write-warm
+    description: >-
+      The requests each status write after the first sends on one long-lived source instance.
+      It protects headroom on the production Linear key every manager of a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    unit: requests
+    direction: max
+    threshold: 1
+  - id: linear-requests-per-settlement-update-cold
+    description: >-
+      The requests the first update of a status and one metadata key sends on a fresh source
+      instance. It protects headroom on the production Linear key every manager of a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    unit: requests
+    direction: max
+    threshold: 3
+  - id: linear-requests-per-settlement-update-warm
+    description: >-
+      The requests each later update of a status and one metadata key sends on one long-lived
+      source instance. It protects headroom on the production Linear key every manager of a host
+      shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    unit: requests
+    direction: max
+    threshold: 2

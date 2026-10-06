@@ -251,6 +251,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 
 - **Never mock the layer under test.** Every journey drives the compiled binary as a
   subprocess and asserts on exit code, stdout and stderr.
+- **A request budget lives in its domain's own Nx project, and onebudgetspec is its only
+  judge.** The Linear budgets are `crates/onetaskgraph-linear-e2e/budgets.yaml`: the suite's
+  ordinary `test` target records each figure as telemetry, its declared output, and the cached
+  `budgets` target, which `check` depends on and `just test` runs affected, analyses that
+  through the one runner every budget names. No measuring code reads a threshold, and no
+  command names a shell or a script, because the Windows lane runs them too.
 - **The copy verb is proven twice, deliberately.** The journeys drive the binary the way a
   user does, and `crates/onetaskgraph-core/tests/copy.rs` drives the engine's own
   `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
@@ -892,7 +898,7 @@ them do; this is the inventory of what is owed, not a status board.
 79. A Linear source reads its team, workflow states and project statuses once per instance,
     reads them once more on a miss, and holds nothing a failed call answered; a status write is
     one mutation and no read once they are held, a settlement-shaped update one read and one
-    mutation, and `crates/onetaskgraph-linear/budgets.yaml` holds each of those figures.
+    mutation, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds each of those figures.
 80. `Engine::end_command`, called between two units of work on one engine, makes every source
     drop what a person can change: a GitHub board settlement after it keeps a body a person
     edited and moves a card from where they left it — in process and over the stdio plugin

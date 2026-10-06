@@ -57,8 +57,7 @@
           "bash scripts/check-selection-line-endings.sh",
           "bash scripts/check-selection-code-page.sh",
           "bash scripts/check-scoped-release-plz.sh",
-          "bash scripts/check-macos-lane-selection.sh",
-          "bash scripts/check-linear-budget-wrappers.sh"
+          "bash scripts/check-macos-lane-selection.sh"
         ],
         "parallel": false
       },

@@ -1,17 +1,13 @@
 //! What a Linear status write costs, counted at the loopback Linear's endpoint.
 //!
-//! Each `measure_*` journey here is the command of one budget in
-//! `crates/onetaskgraph-linear/budgets.yaml`: it measures, asserts the figure is within its
-//! threshold, and — when `onebudgetspec check` runs it, which sets `ONEBUDGETSPEC_RESULT` —
-//! writes the figure there. The cold figures go through the real binary, one invocation being
-//! one fresh source instance; the warm ones through `onetaskgraph-core`'s own `Engine`, which
-//! is what a long-lived caller — onepipeline's write-back worker — links, and where one source
-//! instance makes write after write. Every workspace is the example team's vocabulary, configured
-//! with its per-kind mapping.
-//!
-//! The figures are an inner measure of headroom on a production Linear key shared by every
-//! manager of a host, which no check may reach; the base's own counts, measured at commit
-//! c9e75a8 on a configuration that commit completes, are recorded beside each budget.
+//! Each `measure_*` journey here drives one write path and records what it counted as the
+//! telemetry of one budget in `crates/onetaskgraph-linear-e2e/budgets.yaml`, while this suite's
+//! ordinary `test` target runs; that file's runner, `tests/budgets/main.rs`, hands the figure to
+//! `onebudgetspec check`, which alone compares it with the threshold. The cold figures go
+//! through the real binary, one invocation being one fresh source instance; the warm ones
+//! through `onetaskgraph-core`'s own `Engine`, which is what a long-lived caller links, and
+//! where one source instance makes write after write. Every workspace holds the generic
+//! vocabulary below, whose task and project names differ.
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +21,51 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
-use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES, example_mapping};
+use crate::telemetry;
+
+/// The `status_mapping` every workspace here is configured with: a name per kind for each
+/// category, the task's and the project's different, so a write resolving the wrong kind's
+/// vocabulary fails rather than landing.
+fn mapping() -> Value {
+    json!({
+        "backlog":     {"task": "Icebox",  "project": "Someday"},
+        "draft":       {"task": "Sketch",  "project": "Concept"},
+        "todo":        {"task": "Ready",   "project": "Scheduled"},
+        "queued":      {"task": "Up Next", "project": "Committed"},
+        "in-progress": {"task": "Working", "project": "Underway"},
+        "unknown":     {"task": "Stuck",   "project": "On Hold"},
+        "done":        {"task": "Finished", "project": "Shipped"},
+        "cancelled":   {"task": "Dropped", "project": "Abandoned"},
+    })
+}
+
+/// The team's workflow states, the task names [`mapping`] gives, each of the type its category
+/// derives.
+const TEAM_STATES: &[(&str, &str, &str)] = &[
+    ("S-icebox", "Icebox", "backlog"),
+    ("S-sketch", "Sketch", "backlog"),
+    ("S-ready", "Ready", "unstarted"),
+    ("S-up-next", "Up Next", "unstarted"),
+    ("S-working", "Working", "started"),
+    ("S-stuck", "Stuck", "started"),
+    ("S-finished", "Finished", "completed"),
+    ("S-dropped", "Dropped", "canceled"),
+];
+
+/// The workspace's project statuses, the project names [`mapping`] gives, on the same terms.
+const PROJECT_STATUSES: &[(&str, &str)] = &[
+    ("Someday", "backlog"),
+    ("Concept", "backlog"),
+    ("Scheduled", "planned"),
+    ("Committed", "planned"),
+    ("Underway", "started"),
+    ("On Hold", "started"),
+    ("Shipped", "completed"),
+    ("Abandoned", "canceled"),
+];
+
+/// The source every configuration here names the Linear workspace by.
+const LINEAR: &str = "linear";
 
 /// The documents a whole project write sends of its own: the resolution when it is the first
 /// write, the label lookups, the create or the rewrite, and the relation reads and writes. A
@@ -51,34 +91,14 @@ const TASK_WRITE: [&str; 7] = [
     onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE,
 ];
 
-/// The threshold `crates/onetaskgraph-linear/budgets.yaml` registers for `budget`, read out of
-/// that file — so a journey and the budget it measures hold one allowance, not two.
-fn threshold(budget: &str) -> usize {
-    let file = include_str!("../../../onetaskgraph-linear/budgets.yaml");
-    let entry = file
-        .lines()
-        .skip_while(|line| line.trim() != format!("- id: {budget}"))
-        .skip(1)
-        .take_while(|line| !line.trim_start().starts_with("- id:"));
-    entry
-        .filter_map(|line| line.trim().strip_prefix("threshold:"))
-        .map(|value| value.trim().parse().expect("a whole number of requests"))
-        .next()
-        .unwrap_or_else(|| panic!("budgets.yaml registers no threshold for {budget}"))
-}
-
-/// Hand `value` to `onebudgetspec check` when it is the one running this, and hold it to the
-/// budget's own threshold either way.
-fn report(budget: &str, value: usize, detail: &str) {
-    let threshold = threshold(budget);
-    if let Some(path) = std::env::var_os("ONEBUDGETSPEC_RESULT") {
-        std::fs::write(path, json!({"value": value, "detail": detail}).to_string())
-            .expect("the budget result is writable");
-    }
-    assert!(
-        value <= threshold,
-        "{budget}: {value} requests, over the budget of {threshold} — {detail}"
-    );
+/// Record `value` as `budget`'s telemetry, for `budgets.yaml`'s runner to hand to
+/// `onebudgetspec check`: the figure and how it was reached, and no judgement of it.
+fn record(budget: &str, value: usize, detail: &str) {
+    let path = telemetry::file(budget);
+    std::fs::create_dir_all(path.parent().expect("a telemetry directory"))
+        .expect("the telemetry directory is writable");
+    std::fs::write(&path, json!({"value": value, "detail": detail}).to_string())
+        .expect("the telemetry file is writable");
 }
 
 /// The fixture's credential, and nothing of the host's: the variable the Linear source names,
@@ -114,23 +134,23 @@ fn held(tasks: Vec<Value>) -> Value {
            "task_dependencies": [], "project_dependencies": []})
 }
 
-/// The example team's workspace over `tasks`, and the source configuration that reaches it.
+/// The workspace over `tasks`, and the source configuration that reaches it.
 fn example_workspace(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
     let (mut config, workspace) =
         linear_workspace_with(sandbox, held(tasks), TEAM_STATES, PROJECT_STATUSES);
-    config["status_mapping"] = example_mapping();
+    config["status_mapping"] = mapping();
     (config, workspace)
 }
 
-/// The example team's workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
+/// The workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
 /// and `tasks`; and the configuration of a source scoped to `LP-SCOPE` that reaches it.
 fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
     let projects = ["LP-SCOPE", "LP-ELSEWHERE"]
         .iter()
         .map(|id| {
             json!({"id": id, "title": format!("Project {id}"), "content": format!("About {id}."),
-                   "status": {"name": "Planned", "category": "unknown",
-                              "_linear_status": {"name": "Planned", "type": "planned"}},
+                   "status": {"name": "Scheduled", "category": "unknown",
+                              "_linear_status": {"name": "Scheduled", "type": "planned"}},
                    "labels": []})
         })
         .collect::<Vec<_>>();
@@ -138,7 +158,7 @@ fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, Lin
     dataset["projects"] = json!(projects);
     let (mut config, workspace) =
         linear_workspace_with(sandbox, dataset, TEAM_STATES, PROJECT_STATUSES);
-    config["status_mapping"] = example_mapping();
+    config["status_mapping"] = mapping();
     config["project"] = json!("LP-SCOPE");
     (config, workspace)
 }
@@ -151,8 +171,8 @@ fn scoped_cold() -> Vec<usize> {
     let (config, workspace) = example_workspace_scoped(
         &sandbox,
         vec![
-            issue("L-IN", "Todo", json!({"project": "LP-SCOPE"})),
-            issue("L-OUT", "Todo", json!({"project": "LP-ELSEWHERE"})),
+            issue("L-IN", "Ready", json!({"project": "LP-SCOPE"})),
+            issue("L-OUT", "Ready", json!({"project": "LP-ELSEWHERE"})),
         ],
     );
     sandbox.project_document(&document(&json!({
@@ -169,7 +189,7 @@ fn scoped_cold() -> Vec<usize> {
             )
             .len(),
         );
-        assert_eq!(workspace.state_of(id).as_deref(), Some("Queued"), "{id}");
+        assert_eq!(workspace.state_of(id).as_deref(), Some("Up Next"), "{id}");
         spent.push(
             counted(
                 &sandbox,
@@ -178,11 +198,7 @@ fn scoped_cold() -> Vec<usize> {
             )
             .len(),
         );
-        assert_eq!(
-            workspace.state_of(id).as_deref(),
-            Some("In Progress"),
-            "{id}"
-        );
+        assert_eq!(workspace.state_of(id).as_deref(), Some("Working"), "{id}");
     }
     spent
 }
@@ -270,8 +286,8 @@ fn measure_linear_requests_per_status_write_cold() {
     let (config, workspace) = example_workspace(
         &sandbox,
         vec![
-            issue("L-SET", "Todo", json!({})),
-            issue("L-UPDATE", "Todo", json!({})),
+            issue("L-SET", "Ready", json!({})),
+            issue("L-UPDATE", "Ready", json!({})),
         ],
     );
     let plan = folder(
@@ -291,18 +307,18 @@ fn measure_linear_requests_per_status_write_cold() {
                  repositories: [github.com/nickderobertis/lib]\n---\nStays.\n",
             ),
             (
-                "tasks/pets.md",
-                "---\ntitle: Pets\nstatus: todo\nproject: goal\n\
+                "tasks/routed.md",
+                "---\ntitle: Routed\nstatus: todo\nproject: goal\n\
                  repositories: [github.com/widgetco/api]\n---\nRoutes.\n",
             ),
         ],
     );
     let notes = sandbox.subdirectory("notes");
     sandbox.project_document(&document(&json!({
-        "patients": {"plugin": "linear", "config": config},
+        LINEAR: {"plugin": "linear", "config": config},
         "plan": markdown(&plan),
         "notes": {"plugin": "local-md", "config": {"root": notes},
-                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": "patients"}]},
+                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}]},
     })));
 
     // A task, from a mapped state of one category to a mapped state of another, each by a
@@ -310,7 +326,7 @@ fn measure_linear_requests_per_status_write_cold() {
     let set = counted(
         &sandbox,
         &workspace,
-        &["task", "status", "set", "patients:L-SET", "in-progress"],
+        &["task", "status", "set", "linear:L-SET", "in-progress"],
     )
     .len();
     let update = counted(
@@ -319,17 +335,14 @@ fn measure_linear_requests_per_status_write_cold() {
         &[
             "task",
             "update",
-            "patients:L-UPDATE",
+            "linear:L-UPDATE",
             "--status",
             "in-progress",
         ],
     )
     .len();
-    assert_eq!(workspace.state_of("L-SET").as_deref(), Some("In Progress"));
-    assert_eq!(
-        workspace.state_of("L-UPDATE").as_deref(),
-        Some("In Progress")
-    );
+    assert_eq!(workspace.state_of("L-SET").as_deref(), Some("Working"));
+    assert_eq!(workspace.state_of("L-UPDATE").as_deref(), Some("Working"));
 
     // A project with no tasks, labels or edges, created by a copy — the requests
     // `write_project` sends of its own, beside the copy's discovery reads.
@@ -341,7 +354,7 @@ fn measure_linear_requests_per_status_write_cold() {
             "copy",
             "plan:alone",
             "--to",
-            "patients",
+            LINEAR,
             "--no-tasks",
         ],
     );
@@ -371,7 +384,7 @@ fn measure_linear_requests_per_status_write_cold() {
         .max(project)
         .max(member[0])
         .max(scoped.iter().copied().max().unwrap_or_default());
-    report(
+    record(
         "linear-requests-per-status-write-cold",
         highest,
         &format!(
@@ -408,13 +421,13 @@ fn measure_linear_requests_per_status_write_warm() {
         .collect::<Vec<_>>();
     let plan = folder(&sandbox, &files);
     sandbox.project_document(&document(&json!({
-        "patients": {"plugin": "linear", "config": config.clone()},
+        LINEAR: {"plugin": "linear", "config": config.clone()},
         "plan": markdown(&plan),
     })));
     let copied = counted(
         &sandbox,
         &workspace,
-        &["project", "copy", "plan:big", "--to", "patients"],
+        &["project", "copy", "plan:big", "--to", LINEAR],
     );
     let writes = per_write(
         &copied,
@@ -435,7 +448,7 @@ fn measure_linear_requests_per_status_write_warm() {
         .expect("a runtime");
     let sandbox = Sandbox::new();
     let tasks = (0..5)
-        .map(|at| issue(&format!("L-{at}"), "Todo", json!({})))
+        .map(|at| issue(&format!("L-{at}"), "Ready", json!({})))
         .collect();
     let (config, workspace) = example_workspace(&sandbox, tasks);
     let plan = folder(
@@ -462,7 +475,7 @@ fn measure_linear_requests_per_status_write_warm() {
             let from = workspace.served().len();
             engine
                 .update_task(
-                    &global(&format!("patients:L-{at}")),
+                    &global(&format!("linear:L-{at}")),
                     &TaskUpdate {
                         status: Some(Status {
                             category,
@@ -496,7 +509,7 @@ fn measure_linear_requests_per_status_write_warm() {
                 .copy(&CopyRequest {
                     items: CopyItems::new(vec![global("plan:kept")]).expect("one item"),
                     scope: CopyScope::Projects { tasks: false },
-                    destination: SourceName::new("patients").unwrap(),
+                    destination: SourceName::new(LINEAR).unwrap(),
                     match_by: None,
                     recreate: false,
                     create: false,
@@ -525,7 +538,7 @@ fn measure_linear_requests_per_status_write_warm() {
             } else {
                 "LP-SCOPE"
             };
-            issue(&format!("L-{at}"), "Todo", json!({"project": project}))
+            issue(&format!("L-{at}"), "Ready", json!({"project": project}))
         })
         .collect();
     let (config, workspace) = example_workspace_scoped(&sandbox, tasks);
@@ -537,7 +550,7 @@ fn measure_linear_requests_per_status_write_warm() {
             let from = workspace.served().len();
             scoped_engine
                 .update_task(
-                    &global(&format!("patients:{id}")),
+                    &global(&format!("linear:{id}")),
                     &TaskUpdate {
                         status: Some(Status {
                             category: StatusCategory::Done,
@@ -550,12 +563,12 @@ fn measure_linear_requests_per_status_write_warm() {
                 .expect("the status lands wherever the issue is filed");
             scoped.push(workspace.served().len() - from);
             scoped_engine.end_command().await.expect("the command ends");
-            assert_eq!(workspace.state_of(&id).as_deref(), Some("Done"), "{id}");
+            assert_eq!(workspace.state_of(&id).as_deref(), Some("Finished"), "{id}");
         }
     });
     let scoped_updated = scoped[1..].iter().copied().max().unwrap_or_default();
     let highest = created.max(updated).max(rewritten).max(scoped_updated);
-    report(
+    record(
         "linear-requests-per-status-write-warm",
         highest,
         &format!(
@@ -573,7 +586,7 @@ fn measure_linear_requests_per_status_write_warm() {
 /// An Engine over the Linear source `config` configures — and the folder of Markdown at
 /// `plan`, when there is one, as the source a copy reads from.
 fn engine(config: &Value, plan: Option<&Path>) -> Engine {
-    let name = SourceName::new("patients").unwrap();
+    let name = SourceName::new(LINEAR).unwrap();
     let linear = onetaskgraph_linear::Plugin
         .build(&name, config, &secrets())
         .expect("the Linear source builds");
@@ -614,7 +627,7 @@ fn settlements() -> Vec<usize> {
         .map(|at| {
             issue(
                 &format!("S-{at}"),
-                "Todo",
+                "Ready",
                 json!({"content": PERSONS_TEXT, "metadata": {"caller.unrelated": "kept"}}),
             )
         })
@@ -649,7 +662,7 @@ fn settlements() -> Vec<usize> {
             );
             let from = workspace.served().len();
             engine
-                .update_task(&global(&format!("patients:{id}")), &update)
+                .update_task(&global(&format!("linear:{id}")), &update)
                 .await
                 .expect("the settlement lands");
             spent.push(workspace.served().len() - from);
@@ -667,7 +680,7 @@ fn settlements() -> Vec<usize> {
                 json!({"outcome": "landed", "turn": at}),
                 "{id}: {after}"
             );
-            assert_eq!(workspace.state_of(&id).as_deref(), Some("Done"), "{id}");
+            assert_eq!(workspace.state_of(&id).as_deref(), Some("Finished"), "{id}");
         }
     });
     spent
@@ -693,20 +706,15 @@ fn split_slot(field: &str) -> (String, Value) {
 }
 
 #[test]
-fn measure_linear_requests_per_settlement_update_cold() {
+fn measure_linear_requests_per_settlement_update() {
     let spent = settlements();
-    report(
+    record(
         "linear-requests-per-settlement-update-cold",
         spent[0],
         &format!("the first of {spent:?}: the issue read, the resolution and the mutation"),
     );
-}
-
-#[test]
-fn measure_linear_requests_per_settlement_update_warm() {
-    let spent = settlements();
     let warm = spent[1..].iter().copied().max().unwrap_or_default();
-    report(
+    record(
         "linear-requests-per-settlement-update-warm",
         warm,
         &format!("every one after the first of {spent:?}: the issue read and the mutation"),
@@ -725,12 +733,13 @@ fn discovery(served: &[(String, Value)]) -> usize {
     first + served[first..].len() - of(&served[first..], &writes)
 }
 
-/// The base this change is measured against, and what each operation cost there.
+/// The base the reads, listings and copy discovery of a mapped source are held to, and what each
+/// cost there. This is a regression check of its own, not a budget.
 ///
 /// Measured at commit c9e75a8 — `chore: release v0.2.58` — through the same binary and
 /// engine calls against the same loopback workspace, on a configuration that commit completes:
 /// the shared workspace's team with no `status_mapping`, which that commit wrote by type and
-/// read by type, and its projects at the dataset's own status names. (The example team's
+/// read by type, and its projects at the dataset's own status names. (A per-kind
 /// mapping is one it could not load, and a project status it resolved by the item's own name
 /// is one it could not find.)
 const BASE: &str = "c9e75a8";
@@ -747,7 +756,7 @@ const BASE_RECOPY_PROJECT: usize = 3; // PROJECTS, PROJECT, PROJECT_RELATIONS
 fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_on_the_base() {
     let sandbox = Sandbox::new();
     let (config, workspace) =
-        example_workspace(&sandbox, vec![issue("L-READ", "In Progress", json!({}))]);
+        example_workspace(&sandbox, vec![issue("L-READ", "Working", json!({}))]);
     let plan = folder(
         &sandbox,
         &[
@@ -765,18 +774,18 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
                  repositories: [github.com/nickderobertis/lib]\n---\nStays.\n",
             ),
             (
-                "tasks/pets.md",
-                "---\ntitle: Pets\nstatus: todo\nproject: goal\n\
+                "tasks/routed.md",
+                "---\ntitle: Routed\nstatus: todo\nproject: goal\n\
                  repositories: [github.com/widgetco/api]\n---\nRoutes.\n",
             ),
         ],
     );
     let notes = sandbox.subdirectory("notes");
     sandbox.project_document(&document(&json!({
-        "patients": {"plugin": "linear", "config": config},
+        LINEAR: {"plugin": "linear", "config": config},
         "plan": markdown(&plan),
         "notes": {"plugin": "local-md", "config": {"root": notes},
-                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": "patients"}]},
+                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}]},
     })));
     let alone = counted(
         &sandbox,
@@ -786,7 +795,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             "copy",
             "plan:alone",
             "--to",
-            "patients",
+            LINEAR,
             "--no-tasks",
         ],
     );
@@ -800,11 +809,11 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         &["project", "copy", "plan:goal", "--to", "notes"],
     );
 
-    let shown = counted(&sandbox, &workspace, &["task", "show", "patients:L-READ"]).len();
+    let shown = counted(&sandbox, &workspace, &["task", "show", "linear:L-READ"]).len();
     let project_id = {
         let listed = sandbox
             .command()
-            .args(["--json", "project", "list", "--source", "patients"])
+            .args(["--json", "project", "list", "--source", LINEAR])
             .assert()
             .get_output()
             .clone();
@@ -822,7 +831,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             "task",
             "list",
             "--source",
-            "patients",
+            LINEAR,
             "--status",
             "in-progress",
         ],
@@ -831,9 +840,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
     let projects_listed = counted(
         &sandbox,
         &workspace,
-        &[
-            "project", "list", "--source", "patients", "--status", "todo",
-        ],
+        &["project", "list", "--source", LINEAR, "--status", "todo"],
     )
     .len();
 
@@ -887,13 +894,13 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         .collect::<Vec<_>>();
     let plan = folder(&sandbox, &files);
     sandbox.project_document(&document(&json!({
-        "patients": {"plugin": "linear", "config": config.clone()},
+        LINEAR: {"plugin": "linear", "config": config.clone()},
         "plan": markdown(&plan),
     })));
     let big = counted(
         &sandbox,
         &workspace,
-        &["project", "copy", "plan:big", "--to", "patients"],
+        &["project", "copy", "plan:big", "--to", LINEAR],
     );
     assert!(
         discovery(&big) <= BASE_COPY_PROJECT_AND_TASKS,
@@ -918,7 +925,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
                 .copy(&CopyRequest {
                     items: CopyItems::new(vec![global("plan:kept")]).expect("one item"),
                     scope: CopyScope::Projects { tasks: false },
-                    destination: SourceName::new("patients").unwrap(),
+                    destination: SourceName::new(LINEAR).unwrap(),
                     match_by: None,
                     recreate: false,
                     create: false,

@@ -15,7 +15,7 @@
     },
     "check": {
       "executor": "nx:noop",
-      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage", "budget-check"]
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -77,22 +77,6 @@
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
-    },
-    "budget-check": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["onetaskgraph:build"],
-      "options": {
-        "command": "bash scripts/check-linear-budgets.sh"
-      },
-      "inputs": [
-        "default",
-        "^default",
-        "{workspaceRoot}/scripts/check-linear-budgets.sh",
-        "{workspaceRoot}/scripts/linear-budget.sh",
-        "{workspaceRoot}/crates/onetaskgraph-linear-e2e/tests/e2e/linear_budget.rs"
-      ],
-      "cache": false,
-      "//": "Separate from test so the hosted Linear journey does not depend on unrelated plugins in the full binary build. Both check and just test run this affected-only target, including the pre-push gate. Uncached: each budget reports requests served by a fresh loopback fixture."
     }
   }
 }
