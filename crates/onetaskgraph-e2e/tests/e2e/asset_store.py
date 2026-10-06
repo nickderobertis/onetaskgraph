@@ -243,6 +243,11 @@ def write(settings, kind, params):
         raise malformed("write_%s's target must be a native id or null" % kind)
     item = dict(checked_item(written["item"], "write_%s's item" % kind))
     carrying = "assets" in params
+    if not carrying and "recorded_assets" in params:
+        raise malformed(
+            "write_%s carries `recorded_assets` without `assets`; a write carrying assets "
+            "names them in `assets` (docs/plugin-protocol.md §4.9a)" % kind
+        )
     entry = {
         "method": "write_" + kind,
         "target": target,

@@ -470,6 +470,31 @@ fn the_binary_refuses_a_coordinator_that_does_not_acknowledge_it() {
         said.contains(&variable) && said.contains("\"nope"),
         "{said}"
     );
+
+    // A real coordinator refuses a client number it was not started for, and a second attach
+    // as a client already attached, rather than counting either as one it waits for.
+    let clock = SimulatedClock::start(1);
+    let (_, value) = clock.client_env(0).remove(0);
+    let address = value.rsplit_once('/').expect("an address").0.to_owned();
+    let held = TcpStream::connect(&address).expect("the coordinator accepts");
+    let mut attaching = held.try_clone().expect("a writer");
+    writeln!(attaching, "attach 0").expect("an attach");
+    let mut acknowledged = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(&held), &mut acknowledged)
+        .expect("an answer");
+    assert_eq!(acknowledged.trim_end(), "attached");
+    for client in [0, 1] {
+        let output = sandbox
+            .command()
+            .envs(clock.client_env(client))
+            .args(["sources", "list"])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(1), "client {client}");
+        let said = stderr(&output);
+        assert!(said.contains("\"refused"), "client {client}: {said}");
+    }
+    assert_eq!(clock.attached(), vec![0]);
 }
 
 #[test]

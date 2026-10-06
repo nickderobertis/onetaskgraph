@@ -247,6 +247,13 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
             sleeps: BTreeMap::new(),
             delayed: 0,
         };
+        // A client number this coordinator was not started for, or one already attached, would
+        // count toward the clients it waits for without being one of them: refused, and the
+        // binary that sent it stops naming the answer.
+        if client >= state.expected || state.clients.contains_key(&client) {
+            attached.send("refused");
+            return;
+        }
         attached.send("attached");
         state.attached.insert(client);
         state.clients.insert(client, attached);
@@ -261,7 +268,11 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
             break;
         };
         match words.as_slice() {
-            ["now", seq] => held.send(&format!("now {seq} {}", now.as_nanos())),
+            ["now", seq] => {
+                if let Ok(seq) = seq.parse::<u64>() {
+                    held.send(&format!("now {seq} {}", now.as_nanos()));
+                }
+            }
             ["sleep", seq, nanos] => {
                 if let (Ok(seq), Ok(nanos)) = (seq.parse(), nanos.parse::<u64>()) {
                     held.sleeps.insert(seq, now + Duration::from_nanos(nanos));

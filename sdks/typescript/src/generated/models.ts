@@ -62,7 +62,7 @@ export interface AssetPayload {
 /**
  * Its bytes, or absent when the destination already records them by `sha256`.
  */
-bytes?: (string | null)
+bytes?: string
 /**
  * The content type its extension gives it.
  */
@@ -145,10 +145,7 @@ export interface AssetWrite {
  * destination holds and this does not name is removed.
  */
 assets: AssetPayload[]
-/**
- * The destination record's existing [`MetadataKey::ASSETS_KEY`], when it has one.
- */
-recorded_assets?: (AssetUploads | null)
+recorded_assets?: AssetUploads
 [k: string]: any
 }
 /**
@@ -162,7 +159,7 @@ export interface AssetPayload {
 /**
  * Its bytes, or absent when the destination already records them by `sha256`.
  */
-bytes?: (string | null)
+bytes?: string
 /**
  * The content type its extension gives it.
  */
@@ -178,12 +175,7 @@ sha256: string
 [k: string]: any
 }
 /**
- * The value of [`MetadataKey::ASSETS_KEY`] on a destination record: what its hosted source
- * uploaded, by asset name.
- *
- * Written by the hosted plugin in the same write that lands the record, and read back by the
- * next copy onto it: an asset whose SHA-256 equals the one recorded here reuses the recorded
- * URL and is not uploaded again.
+ * The destination record's existing [`MetadataKey::ASSETS_KEY`], when it has one.
  */
 export interface AssetUploads {
 [k: string]: AssetUpload

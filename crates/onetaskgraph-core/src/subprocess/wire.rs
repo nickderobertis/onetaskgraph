@@ -918,6 +918,19 @@ mod tests {
                 "{null}: null is refused rather than read as absent"
             );
         }
+        // The emitted schema and the decoders agree about `null`: neither member admits it.
+        let bundle = crate::schema_bundle();
+        let bytes = &bundle["roots"]["AssetPayload"]["properties"]["bytes"];
+        assert_eq!(bytes["type"], json!("string"), "{bytes}");
+        let recorded = bundle["roots"]["AssetWrite"]["properties"]["recorded_assets"].to_string();
+        assert!(!recorded.contains("null"), "{recorded}");
+        let mut payload = serde_json::to_value(&whole().assets[0]).unwrap();
+        payload["bytes"] = Value::Null;
+        assert!(serde_json::from_value::<AssetPayload>(payload).is_err());
+        assert!(
+            serde_json::from_value::<AssetWrite>(json!({"assets": [], "recorded_assets": null}))
+                .is_err()
+        );
         let orphaned = serde_json::from_value::<super::ServedWriteParams<Value>>(json!({
             "write": {"target": null, "item": {}, "depends_on": []},
             "recorded_assets": {}

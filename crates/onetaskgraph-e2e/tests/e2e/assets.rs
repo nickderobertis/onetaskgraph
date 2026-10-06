@@ -1739,6 +1739,42 @@ fn the_reference_host_refuses_a_write_recording_uploads_it_carries_no_assets_for
 }
 
 #[test]
+fn the_python_peer_refuses_a_write_recording_uploads_it_carries_no_assets_for() {
+    let folders = Folders::new();
+    let store = folders.inputs.join("peer.json");
+    let mut peer = std::process::Command::new(interpreter())
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/asset_store.py"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("the peer starts");
+    let mut reader = std::io::BufReader::new(peer.stdout.take().expect("its output"));
+    let initialized = exchange(
+        &mut peer,
+        &mut reader,
+        &json!({"id": "0", "method": "initialize", "params": {
+            "protocol_version": 2, "config": {"store": store, "assets": "native"},
+        }}),
+    );
+    assert_eq!(
+        initialized["result"]["capabilities"]["assets"],
+        json!("native")
+    );
+    let answered = exchange(
+        &mut peer,
+        &mut reader,
+        &json!({"id": "1", "method": "write_document", "params": {
+            "write": {"target": null, "item": {"id": "d", "title": "D", "content": "x"}},
+            "recorded_assets": {},
+        }}),
+    );
+    assert_eq!(answered["error"]["kind"], json!("malformed"), "{answered}");
+    drop(peer.stdin.take());
+    assert!(peer.wait().expect("the peer exits").success());
+    assert!(!store.exists(), "nothing was written");
+}
+
+#[test]
 fn a_source_over_the_protocol_refuses_a_regenerate_storing_assets_before_sending_anything() {
     use onetaskgraph_plugin_api::{
         AssetName, AssetPayload, AssetWrite, NativeId, SourceName, SourcePlugin,

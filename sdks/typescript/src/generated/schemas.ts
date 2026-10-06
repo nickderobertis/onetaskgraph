@@ -135,10 +135,7 @@ export const runtimeSchemas = {
       "bytes": {
         "contentEncoding": "base64",
         "description": "Its bytes, or absent when the destination already records them by `sha256`.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": "string"
       },
       "content_type": {
         "$ref": "#/$defs/AssetContentType",
@@ -247,10 +244,7 @@ export const runtimeSchemas = {
           "bytes": {
             "contentEncoding": "base64",
             "description": "Its bytes, or absent when the destination already records them by `sha256`.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "content_type": {
             "$ref": "#/$defs/AssetContentType",
@@ -309,14 +303,7 @@ export const runtimeSchemas = {
         "type": "array"
       },
       "recorded_assets": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/AssetUploads"
-          },
-          {
-            "type": "null"
-          }
-        ],
+        "$ref": "#/$defs/AssetUploads",
         "description": "The destination record's existing [`MetadataKey::ASSETS_KEY`], when it has one."
       }
     },

@@ -232,7 +232,8 @@ pub struct AssetPayload {
         serialize_with = "base64_out",
         deserialize_with = "base64_in"
     )]
-    #[schemars(with = "Option<String>", extend("contentEncoding" = "base64"))]
+    // Described as the string it is when present: absent is the reuse, and `null` is refused.
+    #[schemars(with = "String", extend("contentEncoding" = "base64"))]
     pub bytes: Option<Vec<u8>>,
 }
 
@@ -398,8 +399,22 @@ pub struct AssetWrite {
     /// destination holds and this does not name is removed.
     pub assets: Vec<AssetPayload>,
     /// The destination record's existing [`MetadataKey::ASSETS_KEY`], when it has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Described as the object it is when present: absent is no record, and `null` is refused.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_object"
+    )]
+    #[schemars(with = "AssetUploads")]
     pub recorded_assets: Option<AssetUploads>,
+}
+
+/// A record that, when present, is one: absent reads as `None` through `#[serde(default)]`, and
+/// an explicit `null` is refused as the shape the contract does not have.
+fn present_object<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AssetUploads>, D::Error> {
+    AssetUploads::deserialize(deserializer).map(Some)
 }
 
 /// What an asset-carrying write answers with: where the record now is, and the content the
