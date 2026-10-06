@@ -1220,3 +1220,63 @@ fn a_malformed_status_mapping_is_refused_when_the_configuration_loads_naming_the
         }
     }
 }
+
+#[test]
+fn an_apply_linear_refuses_a_project_status_for_names_it_and_a_rerun_creates_it() {
+    // A workspace whose key may create workflow states and not this project status.
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace_with(
+        &sandbox,
+        held(Vec::new(), Vec::new()),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": {
+            "done": {"task": "Wrapped Up", "project": "Closing"},
+        }})),
+    })));
+    workspace.refuse_create("Closing");
+    let refused = run(
+        &sandbox,
+        &["--json", "sources", "fields", "linear", "--apply"],
+    );
+    assert!(!refused.status.success(), "{}", stdout(&refused));
+    let said = stderr(&refused);
+    assert!(
+        said.contains("Linear refused to create the project status \"Closing\""),
+        "{said}"
+    );
+    let printed = stdout(&refused);
+    let report: Value = serde_json::Deserializer::from_str(&printed)
+        .into_iter::<Value>()
+        .next()
+        .expect("the report is printed")
+        .expect("the report is JSON");
+    assert_eq!(report["refused"]["kind"], "project", "{report:#}");
+    assert_eq!(
+        report["names"][0]["created"], true,
+        "the state was created first"
+    );
+    assert!(report["names"][1].get("created").is_none(), "{report:#}");
+    assert!(
+        !workspace
+            .project_statuses()
+            .iter()
+            .any(|(name, _)| name == "Closing")
+    );
+
+    workspace.allow_create();
+    let from = workspace.served().len();
+    let again = answered(
+        &sandbox,
+        &["--json", "sources", "fields", "linear", "--apply"],
+    );
+    assert_eq!(mutations_since(&workspace, from), ["projectStatusCreate"]);
+    assert_eq!(again["names"][1]["created"], true, "{again:#}");
+    assert!(
+        workspace
+            .project_statuses()
+            .contains(&("Closing".to_owned(), "completed".to_owned()))
+    );
+}

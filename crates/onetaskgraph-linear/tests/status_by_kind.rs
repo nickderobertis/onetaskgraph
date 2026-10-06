@@ -116,6 +116,18 @@ impl Workspace {
         }
     }
 
+    /// Put one held issue in the trash, as Linear's `issueDelete` does.
+    fn trash(&self, id: &str) {
+        if let Some(issue) = self
+            .held()
+            .issues
+            .iter_mut()
+            .find(|issue| issue["id"] == id)
+        {
+            issue["archivedAt"] = json!("2026-10-05T00:00:00Z");
+        }
+    }
+
     /// Hold one project at the status `status` names.
     fn project(&self, id: &str, status: &str) {
         let mut held = self.held();
@@ -866,7 +878,8 @@ async fn a_status_write_reads_nothing_before_its_mutation() {
 }
 
 #[tokio::test]
-async fn a_targeted_update_reads_the_issue_only_when_it_merges_the_description() {
+async fn a_status_only_update_reads_nothing_and_a_settlement_reads_the_issue_once_to_merge_its_slot()
+ {
     let workspace = hello_patient("A");
     let held =
         "A person's own words.\n\n<!-- onetaskgraph.metadata `{\"caller.unrelated\":\"kept\"}` -->";
@@ -1071,4 +1084,32 @@ async fn a_scoped_source_reads_an_issue_before_its_status_write_and_never_writes
     );
     assert_eq!(workspace.names_since(from), ["ISSUE"]);
     assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Todo"));
+}
+
+#[tokio::test]
+async fn a_status_write_to_a_trashed_issue_answers_no_such_task() {
+    let workspace = hello_patient("A");
+    workspace.issue("I-GONE", "Todo", None);
+    workspace.trash("I-GONE");
+    let source = source(&workspace, hellopatient());
+    // No read before it, so the mutation reaches the trashed issue — Linear takes it — and what
+    // its answer reports is an issue this source does not hold.
+    assert_eq!(
+        source
+            .set_task_status(&"I-GONE".into(), StatusCategory::Done)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        workspace.names_since(0),
+        ["RESOLUTION", "ISSUE_UPDATE_READ"]
+    );
+    assert_eq!(
+        source
+            .set_task_status_reading(&"I-GONE".into(), StatusCategory::Done)
+            .await
+            .unwrap(),
+        None
+    );
 }

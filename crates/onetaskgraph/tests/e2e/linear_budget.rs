@@ -51,9 +51,26 @@ const TASK_WRITE: [&str; 7] = [
     onetaskgraph_linear::graphql::ISSUE_RELATION_DELETE,
 ];
 
-/// Hand `value` to `onebudgetspec check` when it is the one running this, and hold it to
-/// `threshold` either way.
-fn report(budget: &str, value: usize, threshold: usize, detail: &str) {
+/// The threshold `crates/onetaskgraph-linear/budgets.yaml` registers for `budget`, read out of
+/// that file — so a journey and the budget it measures hold one allowance, not two.
+fn threshold(budget: &str) -> usize {
+    let file = include_str!("../../../onetaskgraph-linear/budgets.yaml");
+    let entry = file
+        .lines()
+        .skip_while(|line| line.trim() != format!("- id: {budget}"))
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with("- id:"));
+    entry
+        .filter_map(|line| line.trim().strip_prefix("threshold:"))
+        .map(|value| value.trim().parse().expect("a whole number of requests"))
+        .next()
+        .unwrap_or_else(|| panic!("budgets.yaml registers no threshold for {budget}"))
+}
+
+/// Hand `value` to `onebudgetspec check` when it is the one running this, and hold it to the
+/// budget's own threshold either way.
+fn report(budget: &str, value: usize, detail: &str) {
+    let threshold = threshold(budget);
     if let Some(path) = std::env::var_os("ONEBUDGETSPEC_RESULT") {
         std::fs::write(path, json!({"value": value, "detail": detail}).to_string())
             .expect("the budget result is writable");
@@ -285,7 +302,6 @@ fn measure_linear_requests_per_status_write_cold() {
     report(
         "linear-requests-per-status-write-cold",
         highest,
-        2,
         &format!(
             "task status set {set}, task update --status {update}, write_project of a project \
              copy {project}, write_project of a routed member {}",
@@ -426,7 +442,6 @@ fn measure_linear_requests_per_status_write_warm() {
     report(
         "linear-requests-per-status-write-warm",
         highest,
-        1,
         &format!(
             "a copy's task creates after the first {:?}, status-only updates after the first \
              {:?}, project rewrites after the first create {:?}",
@@ -562,7 +577,6 @@ fn measure_linear_requests_per_settlement_update_cold() {
     report(
         "linear-requests-per-settlement-update-cold",
         spent[0],
-        3,
         &format!("the first of {spent:?}: the issue read, the resolution and the mutation"),
     );
 }
@@ -574,7 +588,6 @@ fn measure_linear_requests_per_settlement_update_warm() {
     report(
         "linear-requests-per-settlement-update-warm",
         warm,
-        2,
         &format!("every one after the first of {spent:?}: the issue read and the mutation"),
     );
 }

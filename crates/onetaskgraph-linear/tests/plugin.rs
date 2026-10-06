@@ -6414,3 +6414,62 @@ async fn a_malformed_code_span_slot_is_refused_rather_than_read_past() {
         );
     }
 }
+
+/// A status write's answer is the task its mutation's own selection reports, so that answer is
+/// held to the issue asked for: an unsuccessful payload is a refusal, and a missing, partial or
+/// foreign issue is a response this source cannot read — never a status reported as written.
+/// An issue addressed by its identifier is the issue whose `identifier` that is.
+#[tokio::test]
+async fn a_status_write_is_answered_only_by_the_issue_it_addressed() {
+    let issue = |id: &str| held_issue(id)["issue"].clone();
+    let mut partial = issue("I-1");
+    partial.as_object_mut().unwrap().remove("state");
+    for (payload, said) in [
+        (
+            serde_json::json!({"issueUpdate":{"success":false,"issue":null}}),
+            "issueUpdate",
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":null}}),
+            "missing issueUpdate.issue",
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":issue("I-2")}}),
+            "answered with the issue I-2",
+        ),
+        (
+            serde_json::json!({"issueUpdate":{"success":true,"issue":partial}}),
+            "missing state",
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![writable_resolution(), payload.clone()]);
+        let refused = writable_source(&endpoint)
+            .set_task_status(&"I-1".into(), StatusCategory::Todo)
+            .await
+            .expect_err("not this write landing");
+        assert!(refused.to_string().contains(said), "{payload}: {refused}");
+    }
+    // Addressed by its identifier, answered by the issue that identifier names.
+    let (endpoint, wire) = response_server(vec![
+        writable_resolution(),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":issue("I-1")}}),
+    ]);
+    assert_eq!(
+        writable_source(&endpoint)
+            .set_task_status(&identifier("I-1").as_str().into(), StatusCategory::Todo)
+            .await
+            .unwrap(),
+        Some(Status {
+            category: StatusCategory::Todo,
+            name: "Todo".into()
+        })
+    );
+    let sent = wire
+        .iter()
+        .map(|request| sent(&request))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sent[1]["variables"],
+        serde_json::json!({"id": identifier("I-1"), "input": {"stateId": "STATE"}})
+    );
+}
