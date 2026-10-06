@@ -811,6 +811,77 @@ impl TaskSource for InMemorySource {
             }))
     }
 
+    /// The task's rendering replaced as [`set_task_rendering`](TaskSource::set_task_rendering)
+    /// replaces it, its references pointed at where this source serves each asset, what it
+    /// served recorded, and its asset set replaced by exactly `assets`.
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let uploads = self.uploads(assets)?;
+        let served = {
+            let mut held = self.held()?;
+            let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
+                return Ok(None);
+            };
+            task.metadata
+                .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            let served = serve_asset_references(content, &mut task.metadata, &uploads);
+            task.content = Some(served.clone());
+            served
+        };
+        self.keep_assets(Owner::Task, id, assets)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: Some(served),
+        }))
+    }
+
+    /// The document's rendering and its asset set, on the terms of
+    /// [`set_task_rendering_with_assets`](TaskSource::set_task_rendering_with_assets).
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        self.documentary()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let uploads = self.uploads(assets)?;
+        let served = {
+            let mut held = self.held()?;
+            let Some(document) = held
+                .documents
+                .iter_mut()
+                .find(|document| &document.id == id)
+            else {
+                return Ok(None);
+            };
+            document
+                .metadata
+                .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            let served = serve_asset_references(content, &mut document.metadata, &uploads);
+            document.content = Some(served.clone());
+            served
+        };
+        self.keep_assets(Owner::Document, id, assets)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: Some(served),
+        }))
+    }
+
     /// Replace one document's content and its provenance entry together, on the terms of
     /// [`set_task_rendering`](TaskSource::set_task_rendering).
     async fn set_document_rendering(

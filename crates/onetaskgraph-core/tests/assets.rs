@@ -597,3 +597,70 @@ async fn a_record_holding_a_malformed_upload_record_is_refused_and_left_as_it_wa
     );
     assert_eq!(std::fs::read_to_string(&file).expect("the document"), text);
 }
+
+#[tokio::test]
+async fn a_regenerate_on_a_serving_source_stores_its_assets_and_points_its_references_at_them() {
+    let root = tempfile::tempdir().expect("a folder");
+    let template = root.path().join("pictured.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables:\n  caption:\n    description: What it shows\n\
+         ---\n![{{ caption }}](./shot.png)\n",
+    )
+    .expect("a template");
+    let engine = engine(
+        root.path(),
+        json!({
+            "capabilities": {"assets": "native", "documents": "native"},
+            "tasks": [{"id": "T-1", "title": "Pictured", "content": "old",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "documents": [{"id": "D-1", "title": "Pictured", "content": "old", "labels": []}],
+        }),
+    );
+    let mut answers = onetaskgraph_core::Answers::new();
+    answers.set("caption".to_owned(), json!("after"));
+    let request = onetaskgraph_core::RenderRequest {
+        template: onetaskgraph_core::RenderTemplate::Given(
+            onetaskgraph_core::TemplateInput::File {
+                path: template,
+                search_path: Vec::new(),
+            },
+        ),
+        answers,
+        dry_run: false,
+        assets: vec![AssetPayload::of(name("shot.png"), vec![4; 16])],
+    };
+    let task: GlobalId = "into:T-1".parse().expect("an id");
+    let document: GlobalId = "into:D-1".parse().expect("an id");
+    assert!(
+        engine
+            .render_task(&task, &request)
+            .await
+            .expect("renders")
+            .changed
+    );
+    assert!(
+        engine
+            .render_document(&document, &request)
+            .await
+            .expect("renders")
+            .changed
+    );
+
+    let (content, uploads) = landed(&engine, &task).await;
+    let upload = &uploads.0[&name("shot.png")];
+    assert_eq!(upload.sha256, asset_sha256(&[4; 16]));
+    assert_eq!(content, format!("![after]({})\n", upload.url));
+    let detail = engine.document_detail(&document).await.expect("read");
+    let held = &detail.response.items[0].item;
+    assert_eq!(held.content.as_deref(), Some(content.as_str()));
+    assert_eq!(
+        detail.assets.expect("listed")[0].sha256,
+        asset_sha256(&[4; 16])
+    );
+    // The rendering vouches for the content as it landed, its references served.
+    assert_eq!(
+        held.metadata["onetaskgraph.template"]["body_digest"],
+        json!(onetaskgraph_plugin_api::body_digest(&content))
+    );
+}
