@@ -884,6 +884,32 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
             .collect::<Vec<_>>()
     );
     assert_eq!(workspace.states()[..states_before.len()], states_before[..]);
+    // Each in Linear's neutral grey, and each project status after the workspace's last, in
+    // the order it was created.
+    let creates = workspace
+        .served()
+        .into_iter()
+        .filter(|(query, _)| {
+            query == onetaskgraph_linear::graphql::WORKFLOW_STATE_CREATE
+                || query == onetaskgraph_linear::graphql::PROJECT_STATUS_CREATE
+        })
+        .map(|(_, variables)| variables["input"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(creates.len(), 16, "{creates:#?}");
+    assert!(
+        creates.iter().all(|input| input["color"] == "#95a2b3"),
+        "{creates:#?}"
+    );
+    let positions = creates
+        .iter()
+        .filter_map(|input| input.get("position").and_then(Value::as_f64))
+        .collect::<Vec<_>>();
+    let last = PROJECT_STATUSES.len() as f64;
+    assert_eq!(
+        positions,
+        (1..=8).map(|at| last + f64::from(at)).collect::<Vec<_>>(),
+        "after the workspace's last, at {last}"
+    );
     assert_eq!(
         workspace.project_statuses()[..statuses_before.len()],
         statuses_before[..]

@@ -3589,7 +3589,9 @@ impl LinearSource {
                     found: found.map_or(Found::Missing, Found::Present),
                 };
                 if apply && refused.is_none() && mapped.found == Found::Missing {
-                    position += 1.0;
+                    if kind == ItemKind::Project {
+                        position += 1.0;
+                    }
                     match self
                         .create_status_name(
                             kind,

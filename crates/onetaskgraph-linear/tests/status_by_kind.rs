@@ -103,6 +103,19 @@ impl Workspace {
             "state":state,"priority":0,"labels":{"nodes":[]},"project":null}));
     }
 
+    /// Hold one issue at the state `state` names, filed under the project `project`.
+    fn issue_in(&self, id: &str, state: &str, project: &str) {
+        self.issue(id, state, None);
+        if let Some(issue) = self
+            .held()
+            .issues
+            .iter_mut()
+            .find(|issue| issue["id"] == id)
+        {
+            issue["project"] = json!({"id": project});
+        }
+    }
+
     /// Hold one project at the status `status` names.
     fn project(&self, id: &str, status: &str) {
         let mut held = self.held();
@@ -1017,4 +1030,45 @@ async fn a_malformed_resolution_is_not_held_and_the_next_write_reads_it_again() 
         "nothing of the malformed answer was held"
     );
     assert_eq!(workspace.state_of("I-1").as_deref(), Some("Queued"));
+}
+
+#[tokio::test]
+async fn a_scoped_source_reads_an_issue_before_its_status_write_and_never_writes_one_elsewhere() {
+    let workspace = hello_patient("A");
+    workspace.issue_in("I-IN", "Todo", "P-SCOPE");
+    workspace.issue_in("I-OUT", "Todo", "P-OTHER");
+    let source = build(
+        &workspace.serve(),
+        json!({"project": "P-SCOPE", "status_mapping": hellopatient()}),
+    )
+    .unwrap();
+    // Its own project's issue: read, because Linear has no update conditional on where an
+    // issue is filed, then written.
+    let answered = source
+        .set_task_status(&"I-IN".into(), StatusCategory::InProgress)
+        .await
+        .unwrap();
+    assert_eq!(
+        answered,
+        Some(Status {
+            category: StatusCategory::InProgress,
+            name: "In Progress".into()
+        })
+    );
+    assert_eq!(
+        workspace.names_since(0),
+        ["RESOLUTION", "ISSUE", "ISSUE_UPDATE_READ"]
+    );
+    assert_eq!(workspace.state_of("I-IN").as_deref(), Some("In Progress"));
+    // Another project's issue is no task of this source: read, and never written.
+    let from = workspace.count();
+    assert_eq!(
+        source
+            .set_task_status(&"I-OUT".into(), StatusCategory::InProgress)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(workspace.names_since(from), ["ISSUE"]);
+    assert_eq!(workspace.state_of("I-OUT").as_deref(), Some("Todo"));
 }

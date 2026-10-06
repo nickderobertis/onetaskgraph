@@ -34,6 +34,7 @@ if [ -z "${ONEBUDGETSPEC_RESULT:-}" ]; then
 fi
 
 journey="linear_budget::measure_$(printf '%s' "$budget" | tr '-' '_')"
+# llmlint: ignore[work_goes_through_command_surface] This IS the command surface's step: onebudgetspec runs it as a budget's measurement from the Linear crate's own Nx `test` target, which depends on onetaskgraph:build; it runs one named journey of the very unit that build made, with that build's exact flags, which no recipe exposes and which a recipe here would only wrap.
 if ! output="$(cargo test --quiet -p onetaskgraph --all-features --locked --test e2e -- "$journey" --exact 2>&1)"; then
   printf '%s\n' "$output" >&2
   echo "linear-budget: $journey failed — see above" >&2

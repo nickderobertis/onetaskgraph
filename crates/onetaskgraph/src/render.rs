@@ -97,8 +97,8 @@ pub fn fields(report: &FieldsReport) -> String {
 
 /// What `sources fields` reports for a `linear` source: one line per name its `status_mapping`
 /// gives a kind — a task's against the team's workflow states, a project's against the
-/// workspace's project statuses — present with its type, created by this run, or missing; and
-/// a last line naming a create Linear refused.
+/// workspace's project statuses — present with its type, created by this run, or missing. A
+/// create Linear refused is the command's failure, which it reports on stderr.
 pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
     let word = |value: serde_json::Value| value.as_str().map(str::to_owned).unwrap_or_default();
     if report.names.is_empty() {
@@ -135,15 +135,6 @@ pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
             "{}: {kind} {category} -> {}: {found}\n",
             report.source,
             mapped.name()
-        ));
-    }
-    if let Some(refused) = &report.refused {
-        let kind = word(serde_json::to_value(refused.kind).unwrap_or_default());
-        rendered.push_str(&format!(
-            "{}: Linear refused to create the {kind} status {:?}: {}\n",
-            report.source,
-            refused.name.as_str(),
-            refused.message
         ));
     }
     rendered
