@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
     PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
     Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
     commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
@@ -222,6 +222,33 @@ pub trait TaskSource: Send + Sync {
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         let _ = write;
         Err(unwritable(self.kind()))
+    }
+
+    /// Whether a write of an item of `kind` at `category` would have a status to write, asked
+    /// before the write and changing nothing.
+    ///
+    /// A caller that has to put an item back when a later write of it fails — a copy, whose
+    /// journal records what an item held before overwriting it — asks this first, so a status
+    /// this source has no name for is refused while nothing has been recorded or written, and
+    /// nothing has to be put back. It answers what the write itself would refuse a status
+    /// with, in the same words, and sends no request a write of that status would not have
+    /// sent anyway.
+    ///
+    /// Defaulted to `Ok(())`: a source that does not answer it in advance still refuses the
+    /// status in its write, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] naming the kind, the category and what is missing
+    /// when this source has no name for that status; and whatever else kept it from finding
+    /// out.
+    async fn check_status_write(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+    ) -> Result<(), SourceError> {
+        let _ = (kind, category);
+        Ok(())
     }
 
     /// Set the status of one task this source holds, and change nothing else about it,

@@ -3162,6 +3162,15 @@ impl TaskSource for LinearSource {
         mutation_payload(&data, MutationRoot::CommentDelete)?;
         Ok(Some(comment.clone()))
     }
+    /// Resolved exactly as the write resolves it, through the instance's held vocabulary, so
+    /// the write that follows sends no read this did not.
+    async fn check_status_write(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+    ) -> Result<(), SourceError> {
+        self.status_id(category, kind).await.map(|_| ())
+    }
     async fn set_task_status(
         &self,
         id: &NativeId,

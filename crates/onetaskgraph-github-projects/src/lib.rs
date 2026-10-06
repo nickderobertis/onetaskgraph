@@ -9115,6 +9115,17 @@ impl TaskSource for GitHubProjectsSource {
         .await
     }
 
+    /// The mapping's half of what a write refuses a status with, which reads nothing: whether
+    /// the board's `Status` field has the option is answered by the write, from the board read
+    /// it makes anyway.
+    async fn check_status_write(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+    ) -> Result<(), SourceError> {
+        self.resolved_target(kind, category).map(|_| ())
+    }
+
     /// Set one task's status alone.
     ///
     /// An open target reopens a closed issue with an `updateIssue` carrying only its

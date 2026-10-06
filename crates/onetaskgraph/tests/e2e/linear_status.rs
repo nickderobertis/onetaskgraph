@@ -463,7 +463,7 @@ fn every_category_is_written_and_read_back_for_both_kinds_under_its_mapped_name(
 }
 
 #[test]
-fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_its_own_mutation() {
+fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_any_mutation() {
     let sandbox = Sandbox::new();
     // `draft` is not mentioned, `cancelled` is disabled, `queued` names a task alone and
     // `backlog` a project alone, and `done` names a state and a status Linear does not have.
@@ -602,10 +602,8 @@ fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_its_own_
             Vec::<String>::new(),
             "{category}"
         );
-        // Updated: the write is refused before it sends anything, and the one mutation is the
-        // copy's own undo putting `LP-1` back exactly as it held it — the journal records an
-        // overwrite before the write, because a write of several calls can stop part way (see
-        // `Engine::copy`). The refused status is never sent.
+        // Updated: refused before the copy records an overwrite or sends anything, so there is
+        // nothing for its undo to put back and no mutation at all.
         let from = workspace.served().len();
         let said = failed(
             &sandbox,
@@ -619,15 +617,10 @@ fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_its_own_
             ],
         );
         check(&said, "project", category, names, "project update");
-        let restores = workspace.served()[from..]
-            .iter()
-            .filter(|(query, _)| query.trim_start().starts_with("mutation"))
-            .map(|(_, variables)| variables["input"]["statusId"].clone())
-            .collect::<Vec<_>>();
         assert_eq!(
-            restores,
-            [json!("Planned")],
-            "{category}: only the restore of what was held"
+            mutations_since(&workspace, from),
+            Vec::<String>::new(),
+            "{category}: no write and no restore"
         );
     }
     assert_eq!(workspace.state_of("L-1").as_deref(), Some("Todo"));
@@ -660,6 +653,70 @@ fn every_status_write_a_linear_source_has_no_name_for_is_refused_before_its_own_
         "{said}"
     );
     assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
+}
+
+#[test]
+fn a_copy_refused_after_it_overwrote_a_project_puts_that_project_back() {
+    // The project lands first and really changes `LP-1`; its task's status has no name, so
+    // the copy stops there, and its undo writes `LP-1` back as it held it.
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace_with(
+        &sandbox,
+        held(
+            Vec::new(),
+            vec![project(
+                "LP-1",
+                "Planned",
+                PROJECT_STATUSES,
+                json!({"metadata": {"onetaskgraph.origin": "plan:existing"}}),
+            )],
+        ),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    let plan = folder(
+        &sandbox,
+        "plan",
+        &[
+            (
+                "projects/existing.md".to_owned(),
+                "---\ntitle: Renamed\nstatus: done\n---\nbody\n".to_owned(),
+            ),
+            (
+                "tasks/stuck.md".to_owned(),
+                "---\ntitle: Stuck\nstatus: draft\nproject: existing\n---\nbody\n".to_owned(),
+            ),
+        ],
+    );
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": {
+            "todo": {"task": "Todo", "project": "Planned"},
+            "done": {"task": "Done", "project": "Completed"},
+        }})),
+        "plan": markdown(&plan),
+    })));
+    let from = workspace.served().len();
+    let said = failed(
+        &sandbox,
+        &["project", "copy", "plan:existing", "--to", "linear"],
+    );
+    assert!(
+        said.contains("source linear")
+            && said.contains("task status")
+            && said.contains("status_mapping.draft.task"),
+        "{said}"
+    );
+    let statuses = workspace.served()[from..]
+        .iter()
+        .filter(|(query, _)| query.trim_start().starts_with("mutation"))
+        .map(|(_, variables)| variables["input"]["statusId"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        [json!("Completed"), json!("Planned")],
+        "the project's write, then its restore — and no write of the refused task"
+    );
+    assert_eq!(workspace.status_of("LP-1").as_deref(), Some("Planned"));
 }
 
 /// Unmapped names of every `WorkflowState.type` and every `ProjectStatusType`.
