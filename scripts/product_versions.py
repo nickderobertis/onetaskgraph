@@ -31,6 +31,8 @@ class JsonVersionFile:
 
 
 VersionFile = Union[RegexVersionFile, JsonVersionFile]
+# A crate manifest whose `[package]` version is the workspace's, by inheritance.
+INHERITED_VERSION_RE = re.compile(r"(?m)^version\.workspace\s*=\s*true\s*$")
 RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
     RegexVersionFile(
         Path("Cargo.toml"),
@@ -51,18 +53,13 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
         for crate in (
             "onetaskgraph",
             "onetaskgraph-core",
-            "onetaskgraph-e2e",
-            "onetaskgraph-e2e-support",
             "onetaskgraph-github-projects",
-            "onetaskgraph-github-projects-e2e",
             "onetaskgraph-in-memory",
             "onetaskgraph-linear",
-            "onetaskgraph-linear-e2e",
             "onetaskgraph-live",
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
             "onetaskgraph-status-options",
-            "onetaskgraph-status-options-e2e",
         )
     ),
     RegexVersionFile(
@@ -159,7 +156,13 @@ def discover_product_version_files() -> Tuple[Path, ...]:
     """Discover release-owned manifests and public product-version constants."""
     discovered = []
     for path in Path(".").glob("**/Cargo.toml"):
-        if path == Path("Cargo.toml") or path.parent.parent == Path("crates"):
+        if path == Path("Cargo.toml"):
+            discovered.append(path)
+        elif path.parent.parent == Path("crates") and not INHERITED_VERSION_RE.search(
+            path.read_text()
+        ):
+            # A crate that inherits `[workspace.package] version` holds no number of its own
+            # to drift: the root manifest, registered above, is the one it reads.
             discovered.append(path)
     for path in Path(".").glob("**/pyproject.toml"):
         text = path.read_text()

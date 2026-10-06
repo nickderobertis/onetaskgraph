@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "assert_cmd",
  "jsonschema",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e-support"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects-e2e"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "onetaskgraph-e2e-support",
  "onetaskgraph-github-projects",
@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear-e2e"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "onebudgetspec-core",
  "onetaskgraph-core",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options-e2e"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "onetaskgraph-e2e-support",
  "serde_json",
