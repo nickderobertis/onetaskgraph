@@ -10,7 +10,10 @@ use predicates::str::contains;
 use crate::common::Sandbox;
 
 fn onetaskgraph() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let sandbox = Sandbox::new();
+    let mut command = sandbox.command();
+    command.current_dir(env!("CARGO_MANIFEST_DIR"));
+    command
 }
 
 /// Every verb and flag the command surface owes, as `--help` must name them.
@@ -435,14 +438,16 @@ fn help_documents_the_exit_codes_a_caller_scripts_against() {
 #[test]
 fn a_failed_write_to_stdout_exits_one_and_names_the_problem_on_stderr() {
     use std::fs::OpenOptions;
-    use std::process::{Command as StdCommand, Stdio};
+    use std::process::Stdio;
 
     let full = OpenOptions::new()
         .write(true)
         .open("/dev/full")
         .expect("/dev/full exists on Linux");
 
-    let output = StdCommand::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
         .arg("schema")
         .stdout(Stdio::from(full))
         .stderr(Stdio::piped())
@@ -515,9 +520,11 @@ fn a_closed_stdout_never_panics_however_the_race_lands() {
     // early. The binary must report it, not panic and not exit zero having
     // written a truncated bundle.
     use std::io::Read as _;
-    use std::process::{Command as StdCommand, Stdio};
+    use std::process::Stdio;
 
-    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let sandbox = Sandbox::new();
+    let mut child = sandbox
+        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
         .arg("schema")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

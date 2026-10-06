@@ -454,7 +454,8 @@ fn a_write_that_fails_after_staging_leaves_the_record_and_no_staging_file() {
                 .and_then(|name| name.strip_suffix(".md"))
                 .expect("a record name")
         );
-        let output = std::process::Command::new("sh")
+        let output = sandbox
+            .subprocess("sh")
             .args([
                 "-c",
                 r#"ulimit -f 16 && trap '' XFSZ && exec "$0" "$@""#,

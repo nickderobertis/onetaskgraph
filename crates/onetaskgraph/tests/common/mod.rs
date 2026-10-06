@@ -154,7 +154,14 @@ impl Sandbox {
     /// clearing it would silently stop attributing this binary's lines to its crate.
     /// [`AMBIENT_CREDENTIALS`] goes with them, for the reason recorded there.
     pub fn command_in(&self, directory: &Path) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        let mut command = Command::from_std(self.subprocess(env!("CARGO_BIN_EXE_onetaskgraph")));
+        command.current_dir(directory);
+        command
+    }
+
+    /// A raw subprocess for pipe and shell journeys, with the same isolation as `command`.
+    pub fn subprocess(&self, executable: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+        let mut command = std::process::Command::new(executable);
         for (name, _) in std::env::vars() {
             if name.starts_with("ONETASKGRAPH_") {
                 command.env_remove(name);
@@ -164,7 +171,7 @@ impl Sandbox {
             command.env_remove(name);
         }
         command
-            .current_dir(directory)
+            .current_dir(self.project())
             .env("XDG_CONFIG_HOME", self.config_home())
             .env_remove("HOME");
         command

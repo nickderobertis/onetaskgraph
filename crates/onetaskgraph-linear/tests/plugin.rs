@@ -252,6 +252,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         type_name: &str,
         selection: &query::SelectionSet<'a, String>,
         value: Option<&serde_json::Value>,
+        variables: &[query::VariableDefinition<'a, String>],
     ) {
         let object = objects
             .get(type_name)
@@ -265,13 +266,30 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                 .iter()
                 .find(|field| field.name == selected.name)
                 .unwrap_or_else(|| panic!("{type_name} lacks field {}", selected.name));
-            for (argument, _) in &selected.arguments {
+            for (argument, supplied) in &selected.arguments {
                 assert!(
                     field.arguments.iter().any(|input| input.name == *argument),
                     "{}.{} lacks argument {argument}",
                     type_name,
                     field.name
                 );
+                if let query::Value::Variable(name) = supplied {
+                    let variable = variables
+                        .iter()
+                        .find(|variable| variable.name == *name)
+                        .expect("used variable is declared");
+                    let input = field
+                        .arguments
+                        .iter()
+                        .find(|input| input.name == *argument)
+                        .expect("argument exists");
+                    assert_eq!(
+                        format!("{:?}", variable.var_type),
+                        format!("{:?}", input.value_type),
+                        "variable {name} type drifted at {type_name}.{}.{argument}",
+                        field.name,
+                    );
+                }
             }
             let response = value.and_then(|value| value.get(&selected.name));
             if value.is_some() {
@@ -292,6 +310,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                     named_type(&field.field_type),
                     &selected.selection_set,
                     response,
+                    variables,
                 );
             }
         }
@@ -333,42 +352,12 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         else {
             panic!("expected query")
         };
-        let query::Selection::Field(root) = &operation.selection_set.items[0] else {
-            panic!("expected root field")
-        };
-        let schema_root = objects["Query"]
-            .fields
-            .iter()
-            .find(|field| field.name == root.name)
-            .unwrap();
-        for variable in &operation.variable_definitions {
-            let argument = schema_root
-                .arguments
-                .iter()
-                .find(|argument| argument.name == variable.name)
-                .or_else(|| {
-                    objects.values().find_map(|object| {
-                        object.fields.iter().find_map(|field| {
-                            field
-                                .arguments
-                                .iter()
-                                .find(|argument| argument.name == variable.name)
-                        })
-                    })
-                })
-                .unwrap_or_else(|| panic!("schema lacks variable {}", variable.name));
-            assert_eq!(
-                format!("{:?}", variable.var_type),
-                format!("{:?}", argument.value_type),
-                "variable {} type drifted",
-                variable.name
-            );
-        }
         validate(
             &objects,
             "Query",
             &operation.selection_set,
             fixture.as_ref().map(|fixture| &fixture["data"]),
+            &operation.variable_definitions,
         );
     }
 }
