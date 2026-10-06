@@ -1081,6 +1081,146 @@ async fn a_malformed_resolution_is_not_held_and_the_next_write_reads_it_again() 
 }
 
 #[tokio::test]
+async fn a_failed_refresh_of_a_warm_vocabulary_is_retried_on_the_same_source() {
+    for malformed in [false, true] {
+        let workspace = Workspace::new("ENG", &[("S-todo", "Todo", "unstarted")], &[]);
+        workspace.issue("I-1", "Todo", None);
+        let source = source(&workspace, json!({"todo": "Todo", "queued": "Queued"}));
+        source
+            .set_task_status(&"I-1".into(), StatusCategory::Todo)
+            .await
+            .unwrap();
+        workspace.add_state("S-queued", "Queued", "unstarted");
+        if malformed {
+            workspace.held().malformed_next_resolution = true;
+        } else {
+            workspace.held().drop_next = true;
+        }
+        let failed = source
+            .set_task_status(&"I-1".into(), StatusCategory::Queued)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                (&failed, malformed),
+                (SourceError::Malformed { .. }, true) | (SourceError::Unavailable { .. }, false)
+            ),
+            "{failed:?}"
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+        let from = workspace.count();
+        source
+            .set_task_status(&"I-1".into(), StatusCategory::Queued)
+            .await
+            .unwrap();
+        assert_eq!(
+            workspace.names_since(from),
+            ["RESOLUTION", "ISSUE_UPDATE_READ"]
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Queued"));
+    }
+}
+
+#[tokio::test]
+async fn refused_settlement_task_and_project_writes_resolve_again_before_their_retry() {
+    for operation in ["settlement", "task", "project"] {
+        let workspace = hello_patient("A");
+        let description = "A person's own words.\n\n<!-- onetaskgraph.metadata `{\"caller.unrelated\":\"kept\"}` -->";
+        workspace.issue("I-1", "Todo", Some(description));
+        workspace.project("P-1", "Planned");
+        let source = source(&workspace, hellopatient());
+        source
+            .set_task_status(&"I-1".into(), StatusCategory::Todo)
+            .await
+            .unwrap();
+        let mut task = source.get_task(&"I-1".into()).await.unwrap().unwrap();
+        task.status = Status {
+            category: StatusCategory::Done,
+            name: "ignored".into(),
+        };
+        let task_write = ItemWrite {
+            target: Some("I-1".into()),
+            item: task,
+            depends_on: Vec::new(),
+        };
+        let mut settlement = TaskUpdate {
+            status: Some(task_write.item.status.clone()),
+            ..TaskUpdate::default()
+        };
+        settlement.metadata_set.insert(
+            MetadataKey::new("onepipeline.settlement").unwrap(),
+            json!("landed"),
+        );
+        workspace.held().refuse_next_mutation = true;
+        for retry in [false, true] {
+            let from = workspace.count();
+            let result = match operation {
+                "settlement" => source
+                    .update_task(&"I-1".into(), &settlement)
+                    .await
+                    .map(|_| ()),
+                "task" => source.write_task(&task_write).await.map(|_| ()),
+                "project" => source
+                    .write_project(&project_write(StatusCategory::Done, Some("P-1")))
+                    .await
+                    .map(|_| ()),
+                _ => unreachable!(),
+            };
+            if retry {
+                result.unwrap();
+                let requests = workspace.names_since(from);
+                assert_eq!(
+                    requests
+                        .iter()
+                        .filter(|name| **name == "RESOLUTION")
+                        .count(),
+                    1,
+                    "{operation}: {requests:?}"
+                );
+                assert_eq!(
+                    workspace.state_of("I-1").as_deref(),
+                    Some(if operation == "project" {
+                        "Todo"
+                    } else {
+                        "Done"
+                    })
+                );
+                assert_eq!(
+                    workspace.status_of("P-1").as_deref(),
+                    Some(if operation == "project" {
+                        "Completed"
+                    } else {
+                        "Planned"
+                    })
+                );
+                if operation == "settlement" {
+                    let answered = source.get_task(&"I-1".into()).await.unwrap().unwrap();
+                    assert_eq!(answered.metadata["caller.unrelated"], "kept");
+                    assert_eq!(answered.metadata["onepipeline.settlement"], "landed");
+                    assert!(
+                        workspace
+                            .description_of("I-1")
+                            .unwrap()
+                            .starts_with("A person's own words.\n\n")
+                    );
+                }
+            } else {
+                assert!(
+                    matches!(result, Err(SourceError::Refused { .. })),
+                    "{operation}: {result:?}"
+                );
+                assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+                assert_eq!(workspace.status_of("P-1").as_deref(), Some("Planned"));
+                assert_eq!(
+                    workspace.description_of("I-1").as_deref(),
+                    Some(description)
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_scoped_source_writes_a_status_to_the_issue_it_names_wherever_it_is_filed() {
     let workspace = hello_patient("A");
     workspace.issue_in("I-IN", "Todo", "P-SCOPE");
