@@ -59,3 +59,26 @@ scratch_clone() {
     return 1
   fi
 }
+
+# extract_tar_stream <destination>
+#
+# Unpacks the tar stream on standard input into <destination>, then reads what is left of
+# the stream to its end. bsdtar — macOS's tar — stops at the end-of-archive marker and exits
+# with the record padding after it still unread, so the producer's last write can land on a
+# closed pipe; where SIGPIPE is ignored, as on a hosted runner, it fails `tar: Write error`
+# and fails the copy under pipefail, by timing alone. Draining is what makes that write whole.
+# scripts/check-tar-drained.sh refuses an extraction from a pipe anywhere else.
+extract_tar_stream() {
+  tar -xf - -C "$1" && cat >/dev/null
+}
+
+# copy_tracked_files <source-repo> <destination> [<pathspec>...]
+#
+# Copies the files <source-repo> tracks, as they stand in its WORKING tree, into
+# <destination> — which is how a guard puts what is under test right now over a clone of
+# what was last committed. With pathspecs, only the tracked files they match.
+copy_tracked_files() {
+  local source="$1" dest="$2"
+  shift 2
+  (cd "$source" && git ls-files -z -- "$@" | tar --null -T - -cf -) | extract_tar_stream "$dest"
+}

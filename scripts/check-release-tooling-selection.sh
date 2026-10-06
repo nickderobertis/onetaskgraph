@@ -41,7 +41,7 @@ trap 'rm -rf "$scratch"' EXIT
 
 repo="$scratch/repo"
 mkdir -p "$repo" || fatal "could not create $repo" "check free space and rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fatal \
+copy_tracked_files "$ROOT" "$repo" || fatal \
   "could not copy the tracked tree" "confirm git ls-files works and check free space"
 # Blank and comment entries are supported inventory syntax. Put both in the committed
 # baseline so every selector journey below proves they are ignored during real matching.

@@ -170,7 +170,7 @@ git -C "$repo" config core.hooksPath "$hooks" || fail \
 # Exercise the working tree under review. It is this fixture's released baseline: every
 # crate is at the version the boundary tags below name, so no crate has anything waiting to
 # be released and release-plz has no package bump to select.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
+copy_tracked_files "$ROOT" "$repo" || fail \
   "could not copy the tracked working tree into the checkout" "check git, tar and free space, then rerun"
 released_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fail \
   "could not read the fixture's released version" "restore the binary manifest and rerun"
@@ -210,7 +210,7 @@ done
 registry_snapshot="$scratch/registry"
 mkdir -p "$registry_snapshot" || fail \
   "could not create the fixture's released-version snapshot" "check scratch-directory permissions"
-git -C "$repo" archive "$baseline" | tar -xf - -C "$registry_snapshot" || fail \
+git -C "$repo" archive "$baseline" | extract_tar_stream "$registry_snapshot" || fail \
   "could not export the released version release-plz compares against" \
   "check git, tar and free space, then rerun"
 [ -f "$registry_snapshot/Cargo.toml" ] || fail \
@@ -502,7 +502,7 @@ git -C "$repo" checkout --quiet -- . || fail \
   "could not restore the fixture after the package-bump case" "check the scratch repository and rerun"
 
 git -C "$repo" switch --quiet "$fixture_base" || fail "could not restore $fixture_base before the partial-publish case" "check the scratch repository and rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fail \
+copy_tracked_files "$ROOT" "$repo" || fail \
   "could not restore the tracked working tree for the partial-publish case" "check git, tar and free space, then rerun"
 perl -pi -e 's/^semver_check = true$/semver_check = false/' "$repo/release-plz.toml" || fail \
   "could not disable the partial-publish fixture's semver pass" "check Perl and rerun"

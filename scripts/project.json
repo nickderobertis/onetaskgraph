@@ -30,9 +30,13 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/check-bash4-array-builtins.sh"
+        "commands": [
+          "bash scripts/check-bash4-array-builtins.sh",
+          "bash scripts/check-tar-drained.sh"
+        ],
+        "parallel": false
       },
-      "//": "The bash 3.2 scan, which reads only this project's own files — so `default` describes it exactly and a cache hit is sound. It is the cheap half of the pair: the checks that watch it refuse are tests, and live in the target below."
+      "//": "The bash 3.2 scan and the undrained-tar scan, which read only this project's own files — so `default` describes them exactly and a cache hit is sound. They are the cheap half of each pair: the checks that watch them refuse are tests, and live in the target below."
     },
     "typecheck": {
       "executor": "nx:noop",
@@ -44,6 +48,7 @@
       "options": {
         "commands": [
           "bash scripts/check-bash4-array-builtins-enforced.sh",
+          "bash scripts/check-tar-drained-enforced.sh",
           "bash scripts/check-copy-pagination-guards-enforced.sh",
           "bash scripts/check-workspace-config-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",

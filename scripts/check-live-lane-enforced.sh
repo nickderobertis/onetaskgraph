@@ -63,7 +63,7 @@ scratch_clone "$ROOT" "$scratch/repo" || fatal \
 # restores to THEM between cases. What is under test has to be the guard as it is right now:
 # against a clone of HEAD alone, an author repairing the guard would watch this check keep
 # failing against the version they had just replaced.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo" || fatal \
+copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
   "could not overlay this working tree's files onto $scratch/repo" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 git -C "$scratch/repo" add -A || fatal \

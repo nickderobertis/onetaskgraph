@@ -63,7 +63,7 @@ EOF
 # And the WORKING tree's tracked files over the top, exactly as the subjects themselves do
 # with the clones they take: what is under test is the two checks as they are right now,
 # not as they were last committed.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$DETACHED" || fatal \
+copy_tracked_files "$ROOT" "$DETACHED" || fatal \
   "could not copy $ROOT's tracked files over the copy at $DETACHED" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

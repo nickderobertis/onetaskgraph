@@ -43,6 +43,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
   "run the check from a checkout of this repository, as 'just check' does"
 readonly ROOT
+# The path is built from $ROOT at run time, so ShellCheck cannot follow it; the directive
+# names the file it resolves to. Tested before it is sourced rather than guarded after:
+# bash 3.2 ends the shell where `source` cannot find its file, so the handler after `||`
+# never runs there and the reader is told nothing about what to restore.
+# shellcheck source=scripts/scratch-clone.sh
+if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-clone.sh"; then
+  fatal "could not load $ROOT/scripts/scratch-clone.sh, which copies the tracked files below" \
+    "restore it with 'git checkout -- scripts/scratch-clone.sh' and rerun"
+fi
 readonly RESOLVER="scripts/scoped-release-plz.sh"
 readonly MARKER="onevcs: host-prerequisite:"
 
@@ -170,7 +179,7 @@ installer_calls() { [ -f "$INSTALL_LOG" ] && wc -l < "$INSTALL_LOG" | tr -d ' ' 
 # A second checkout of the same tree, for the fresh-worktree cases.
 readonly OTHER="$scratch/other-checkout"
 mkdir -p "$OTHER" || fatal "could not create $OTHER" "check the permissions of \$TMPDIR, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$OTHER" || fatal \
+copy_tracked_files "$ROOT" "$OTHER" || fatal \
   "could not copy $ROOT's tracked files into $OTHER" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

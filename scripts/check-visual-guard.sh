@@ -59,7 +59,7 @@ scratch_clone "$ROOT" "$CLONE" || fatal \
 # a checkout restores every tracked file from the commit, which puts the committed guard
 # back over the one under test, and the cases after it would then be about the wrong script.
 overlay_working_tree() {
-  (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$CLONE"
+  copy_tracked_files "$ROOT" "$CLONE"
 }
 overlay_working_tree || fatal \
   "could not copy $ROOT's tracked files over the clone at $CLONE" \
@@ -345,7 +345,7 @@ readonly HOOK_CLONE="$scratch/hook-repo"
 scratch_clone "$ROOT" "$HOOK_CLONE" || fatal \
   "could not clone this repository into $HOOK_CLONE" \
   "check 'git status' here and the free space on \$TMPDIR, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$HOOK_CLONE" || fatal \
+copy_tracked_files "$ROOT" "$HOOK_CLONE" || fatal \
   "could not copy $ROOT's tracked files over the clone at $HOOK_CLONE" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

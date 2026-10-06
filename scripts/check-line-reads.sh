@@ -167,7 +167,7 @@ mkdir -p "$contract" || fatal \
   "could not create the scratch tree at $contract" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 # The WORKING tree's tracked files: what is under test is the read as it is right now.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$contract" || fatal \
+copy_tracked_files "$ROOT" "$contract" || fatal \
   "could not copy $ROOT's tracked files into $contract (see the tar or git output above)" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
@@ -321,7 +321,7 @@ else
   scratch_clone "$ROOT" "$selection" || fatal \
     "could not clone $ROOT into $selection" \
     "see the scratch-clone diagnostic above, then rerun"
-  (cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$selection" || fatal \
+  copy_tracked_files "$ROOT" "$selection" || fatal \
     "could not copy $ROOT's tracked files over the clone at $selection" \
     "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

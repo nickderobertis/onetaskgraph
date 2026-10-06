@@ -1167,6 +1167,15 @@ bar is what it was, plus one refusal that names the gallery to review. The captu
   that watch it refuse are `scripts:test`. `just script-check` runs both by hand — it is
   the entry point their diagnostics name — and is not a phase of `check`, because the
   phases already cover it.
+- **A tar stream piped into an extraction is drained, because macOS's tar does not.**
+  bsdtar exits at the end-of-archive marker with the padding after it unread, so the
+  producer's last write can land on a closed pipe and, with SIGPIPE ignored on the hosted
+  runner, fails `tar: Write error` by timing alone — which refused one branch twice, on two
+  guards that had never failed. Copy a tree with `copy_tracked_files` and extract with
+  `extract_tar_stream`, both in `scripts/scratch-clone.sh`. `scripts/check-tar-drained.sh`
+  in `scripts:lint` refuses any other extraction from a pipe, and
+  `scripts/check-tar-drained-enforced.sh` in `scripts:test` watches it refuse and the drain
+  leave no byte unread.
 - **A value captured from python has to survive that python's line endings.** Python opens
   stdout in text mode, so on the Windows runner every `\n` it prints leaves as `\r\n`, and
   a command substitution strips the newline and keeps the carriage return. It then reads
