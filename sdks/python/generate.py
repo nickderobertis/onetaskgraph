@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import json
 import keyword
+import os
 import re
 import subprocess
 import sys
@@ -294,12 +295,22 @@ def run_workspace_binary(*args: str) -> str:
             "workspace root, which is what every Nx target that spawns it depends on"
         )
     command = [str(BINARY), *args]
+    # Every verb validates the configuration it is handed, `schema` and `help` included, so a
+    # caller's own `ONETASKGRAPH_` settings would decide whether the contract can be emitted
+    # at all: a host exporting half a source makes the binary refuse. What is generated is the
+    # build's contract and nothing of any configuration, so none of it reaches the binary.
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.upper().startswith("ONETASKGRAPH_")
+    }
     # The binary writes UTF-8 whatever the platform, and its schema descriptions carry
     # characters outside ASCII: decoding in the platform's code page, which `text=True` alone
     # does on the Windows runner, would hand every later step a mangled description.
     result = subprocess.run(
         command,
         cwd=ROOT.parent.parent,
+        env=environment,
         check=False,
         text=True,
         encoding="utf-8",
