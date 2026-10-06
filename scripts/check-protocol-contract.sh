@@ -100,10 +100,13 @@ NOT_METHODS = {
     "keeps_template_answers": NOT_CARRIED_REASON,
     "task_template_answers": NOT_CARRIED_REASON,
     "document_template_answers": NOT_CARRIED_REASON,
+    "project_template_answers": NOT_CARRIED_REASON,
     "write_task_rendered": NOT_CARRIED_REASON,
     "write_document_rendered": NOT_CARRIED_REASON,
+    "write_project_rendered": NOT_CARRIED_REASON,
     "set_task_rendering": NOT_CARRIED_REASON,
     "set_document_rendering": NOT_CARRIED_REASON,
+    "set_project_rendering": NOT_CARRIED_REASON,
 }
 
 # The one protocol method with no trait method behind it: it stands for building the

@@ -54,8 +54,8 @@ pub use engine::{
     TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, settled,
 };
 pub use engine::{
-    DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
-    TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
+    DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
+    RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};

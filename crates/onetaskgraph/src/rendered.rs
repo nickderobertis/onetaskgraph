@@ -1,6 +1,6 @@
-//! `task create`, `document create`, `task render`, `document render`, `task answers` and
-//! `document answers`: items created from a body or a template, regenerated in place, and the
-//! answers stored beside them.
+//! `task create`, `project create`, `document create`, `task render`, `project render`,
+//! `document render`, `task answers`, `project answers` and `document answers`: items created
+//! from a body or a template, regenerated in place, and the answers stored beside them.
 //!
 //! What lives here is what only a command line has — the flags, the files and standard input
 //! they are read from, and the prompts. Creating, regenerating and reading answers are the
@@ -13,14 +13,15 @@ use std::path::Path;
 use std::str::FromStr as _;
 
 use onetaskgraph_core::{
-    Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, RenderRequest,
-    RenderTemplate, RenderedRecord, TaskCreate,
+    Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, ProjectCreate,
+    RenderRequest, RenderTemplate, RenderedRecord, TaskCreate,
 };
 use onetaskgraph_plugin_api::{MetadataKey, NativeId, Repository, SourceName};
 use serde_json::Value;
 
 use crate::cli::{
-    AnswersArgs, CreateBodyArgs, CreateItemArgs, DocumentCreateArgs, RenderArgs, TaskCreateArgs,
+    AnswersArgs, CreateBodyArgs, CreateItemArgs, DocumentCreateArgs, ProjectCreateArgs, RenderArgs,
+    TaskCreateArgs,
 };
 use crate::template::{Refusal, answers_given, ask, input, refused};
 use crate::{EXIT_OK, delivery_exit, emit, engine, json, qualified, render};
@@ -108,7 +109,37 @@ pub(crate) async fn create_document(
     Ok(EXIT_OK)
 }
 
-/// `task render` and `document render`: regenerate the item in place, asking — when
+/// `project create`: create or replace the project, then write its qualified id — or, under
+/// `--json`, the project exactly as `project show --json` writes it.
+pub(crate) async fn create_project(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    args: &ProjectCreateArgs,
+) -> Result<u8, Failure> {
+    let request = match project(args, loaded) {
+        Ok(request) => request,
+        Err(Refusal::Answers(message)) => return Ok(refused(&message)),
+        Err(Refusal::Failed(failure)) => return Err(failure),
+    };
+    let engine = engine(loaded);
+    let created = engine
+        .create_project(&request)
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    match loaded.config.output() {
+        OutputFormat::Text => emit(out, &created.id.to_string(), "the project's id")?,
+        OutputFormat::Json => {
+            let response = engine
+                .project(&created.id)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            emit(out, &json(&response, "the project")?, "the project")?;
+        }
+    }
+    Ok(EXIT_OK)
+}
+
+/// `task render`, `project render` and `document render`: regenerate the item in place, asking — when
 /// interactive — for what its base and the given answers leave unanswered.
 ///
 /// A refusal of the answers — required variables left unanswered, an answer to no declared
@@ -205,7 +236,7 @@ async fn regenerated(
     Ok(())
 }
 
-/// `task answers` and `document answers`: the answers stored beside the item, as YAML — or,
+/// `task answers`, `project answers` and `document answers`: the answers stored beside the item, as YAML — or,
 /// under `--json`, as one JSON object.
 pub(crate) async fn stored(
     out: &mut impl Write,
@@ -251,16 +282,7 @@ struct Item {
 /// Read a create's item: its source, project, repositories and metadata checked, and its
 /// body rendered — asking, when interactive, for what the answers leave unanswered.
 fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
-    let source = SourceName::new(args.source.clone()).map_err(|error| {
-        Refusal::Failed(Failure::decided(
-            "invalid-source-name",
-            format!(
-                "{}: {error}\n\
-                 next: name a configured source — `onetaskgraph sources list` reports them.",
-                args.source
-            ),
-        ))
-    })?;
+    let source = source_name(&args.source)?;
     // Qualified with the source it is created in, a project is that source's own; qualified
     // with any other configured source it names a project the item cannot be filed under, and is
     // refused rather than read as a native id full of colons. A prefix naming no configured
@@ -280,8 +302,54 @@ fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
         }
         Ok(_) | Err(_) => NativeId::from(args.project.as_str()),
     };
-    let repositories = args
-        .repository
+    let repositories = repositories(&args.repository)?;
+    let metadata = metadata(&args.metadata)?;
+    let body = body(&args.body, loaded)?;
+    Ok(Item {
+        source,
+        project,
+        body,
+        repositories,
+        metadata,
+    })
+}
+
+/// Read a project create: its source, repositories and metadata checked, and its body
+/// rendered — asking, when interactive, for what the answers leave unanswered. A label or a
+/// repository given replaces what a project being replaced holds, and none given keeps it.
+fn project(args: &ProjectCreateArgs, loaded: &Loaded) -> Result<ProjectCreate, Refusal> {
+    let source = source_name(&args.source)?;
+    let repositories = repositories(&args.repository)?;
+    let metadata = metadata(&args.metadata)?;
+    let body = body(&args.body, loaded)?;
+    Ok(ProjectCreate {
+        source,
+        id: args.id.clone(),
+        title: args.title.clone(),
+        body,
+        status: args.status.map(|status| status.category()),
+        labels: (!args.label.is_empty()).then(|| args.label.clone()),
+        repositories: (!repositories.is_empty()).then_some(repositories),
+        metadata,
+    })
+}
+
+/// The configured source a create names, refused naming the problem.
+fn source_name(name: &str) -> Result<SourceName, Refusal> {
+    SourceName::new(name.to_owned()).map_err(|error| {
+        Refusal::Failed(Failure::decided(
+            "invalid-source-name",
+            format!(
+                "{name}: {error}\n\
+                 next: name a configured source — `onetaskgraph sources list` reports them."
+            ),
+        ))
+    })
+}
+
+/// Every `--repository`, each refused unless it is a normalized origin.
+fn repositories(given: &[String]) -> Result<Vec<Repository>, Refusal> {
+    given
         .iter()
         .map(|origin| {
             Repository::try_from(origin.clone()).map_err(|error| {
@@ -295,20 +363,15 @@ fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
                 ))
             })
         })
-        .collect::<Result<_, _>>()?;
-    let metadata = args
-        .metadata
+        .collect()
+}
+
+/// Every `--metadata KEY=JSON`, each refused naming the problem.
+fn metadata(given: &[String]) -> Result<BTreeMap<MetadataKey, Value>, Refusal> {
+    given
         .iter()
         .map(|entry| metadata_entry(entry).map_err(Refusal::Failed))
-        .collect::<Result<_, _>>()?;
-    let body = body(&args.body, loaded)?;
-    Ok(Item {
-        source,
-        project,
-        body,
-        repositories,
-        metadata,
-    })
+        .collect()
 }
 
 /// One `--metadata KEY=JSON`: a caller's own key, and exactly one JSON value.

@@ -63,8 +63,8 @@ pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{TaskContentSet, TaskPrioritySet};
 pub use rendered::{
-    Body, DocumentCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate, RenderedRecord,
-    TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
+    Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
+    RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
 pub use update::TaskUpdated;
 
@@ -495,7 +495,8 @@ pub enum EngineError {
         record: MetadataRecord,
     },
 
-    /// `task render` or `document render` named a source whose plugin has no write side.
+    /// `task render`, `project render` or `document render` named a source whose plugin has no
+    /// write side.
     #[error(
         "source {name} cannot write a {record}'s rendering: its plugin is {kind}, which has no \
          write side\n\
@@ -507,7 +508,7 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
-        /// A task or a document.
+        /// A task, a project or a document.
         record: RenderedRecord,
     },
 
@@ -544,7 +545,7 @@ pub enum EngineError {
          --var NAME=VALUE`), or read its provenance with `onetaskgraph {record} show {id}`."
     )]
     NoStoredAnswers {
-        /// A task or a document.
+        /// A task, a project or a document.
         record: RenderedRecord,
         /// The item.
         id: String,
@@ -558,7 +559,7 @@ pub enum EngineError {
          next: name one with --template FILE or --template-loader FILE."
     )]
     NoTemplate {
-        /// A task or a document.
+        /// A task, a project or a document.
         record: RenderedRecord,
         /// The item.
         id: String,
@@ -572,7 +573,7 @@ pub enum EngineError {
          answer, which records a fresh entry."
     )]
     MalformedProvenance {
-        /// A task or a document.
+        /// A task, a project or a document.
         record: RenderedRecord,
         /// The item.
         id: String,
@@ -588,7 +589,7 @@ pub enum EngineError {
          to render), or name a template file with --template FILE."
     )]
     TemplateNotAFile {
-        /// A task or a document.
+        /// A task, a project or a document.
         record: RenderedRecord,
         /// The item.
         id: String,

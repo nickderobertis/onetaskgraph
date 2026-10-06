@@ -271,7 +271,24 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 30
+    assert emitted_bundle["version"] == 31
+    # Version 31 published projects among the items rendered from a template: what `project
+    # create`, `project render` and `project answers` answer with, and the provenance a
+    # rendered project records, described as the task and document ones are.
+    for verb, root in (
+        ("project_create", "QueryResponseOfQualifiedProject"),
+        ("project_render", "Regenerated"),
+        ("project_answers", "TemplateAnswers"),
+    ):
+        assert generate.RESPONSE_ROOTS[verb] == root, verb
+        assert root in bundle["roots"], root
+    assert "project" in json.dumps(emitted_bundle["roots"]["TemplateProvenance"])
+    # And a source's own id for one item, which `project create --id` takes, by name.
+    assert "NativeId" in bundle["roots"]
+    assert "NativeId" in generate.CONTRACT_ROOTS
+    from onetaskgraph_sdk import NativeId
+
+    assert NativeId.model_validate("plan:with:colons").root == "plan:with:colons"
     # Version 30 published the one `status_mapping` grammar as a root of its own, and the
     # generated package models it: a name for every kind, `null`, or a name per kind.
     assert "StatusMapping" in bundle["roots"]

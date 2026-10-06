@@ -11,6 +11,7 @@ import type {
   EffectiveConfig,
   FieldsReport,
   MetadataSet,
+  NativeId,
   Priority,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
@@ -104,6 +105,10 @@ export type TaskCreateOptions = CreateOptions & {
   delivers?: string[];
 };
 export type DocumentCreateOptions = CreateOptions & { id?: string };
+// A project is filed under no project, so it names none; its `id` is required instead, and a
+// project the source holds under it is replaced — its status, labels, repositories and every
+// metadata key not named here kept.
+export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // A targeted update: every field named is written, and nothing else. `bodyFile` is read by the
 // binary byte for byte and replaces the content; `statusName` is the status's own word, for a
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
@@ -189,6 +194,10 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project deps": "QueryResponseOfQualifiedEdge",
   "project copy": "CopyReport",
   "project metadata set": "MetadataSet",
+  // A created project as `project show` answers with it.
+  "project create": "QueryResponseOfQualifiedProject",
+  "project render": "Regenerated",
+  "project answers": "TemplateAnswers",
   "document list": "QueryResponseOfQualifiedDocument",
   "document show": "QueryResponseOfQualifiedDocument",
   "document copy": "CopyReport",
@@ -240,6 +249,7 @@ const partialResponseCommands = new Set(
       !command.startsWith("template ") &&
       !command.endsWith(" render") &&
       !command.endsWith(" answers") &&
+      command !== "project create" &&
       command !== "document create",
   ),
 );
@@ -515,15 +525,15 @@ function templateSourceArguments(
   return { args, input: options.body };
 }
 
-// Every flag a create shares, and what goes to standard input.
+// Every flag a create shares, and what goes to standard input. `named` is what files the item:
+// a task's or a document's project and title, or a project's own id and title.
 function createArguments(
   method: string,
-  project: string,
-  title: string,
+  named: readonly string[],
   options: CreateOptions,
 ): { args: string[]; input: string | undefined } {
   const { args, input } = templateSourceArguments(method, options);
-  args.push("--project", project, "--title", title);
+  args.push(...named);
   if (options.bodyFile !== undefined) {
     args.push("--body-file", pathOption(method, "bodyFile", options.bodyFile));
   }
@@ -671,7 +681,7 @@ function loaderFlags(method: string, options: { templateLoader?: string }): stri
     : ["--template-loader", pathOption(method, "templateLoader", options.templateLoader)];
 }
 
-// Answered as exactly the three arguments `run` takes, so both regenerate methods pass them
+// Answered as exactly the three arguments `run` takes, so every regenerate method passes them
 // through unchanged and cannot assemble the same invocation two ways.
 function renderInvocation(
   command: string,
@@ -969,7 +979,11 @@ export class OnetaskgraphClient {
     title: string,
     options: TaskCreateOptions = {},
   ): Promise<TaskDetail> {
-    const { args, input } = createArguments("taskCreate", project, title, options);
+    const { args, input } = createArguments(
+      "taskCreate",
+      ["--project", project, "--title", title],
+      options,
+    );
     if (options.status !== undefined) args.push("--status", options.status);
     for (const id of stringList("taskCreate", "dependsOn", options.dependsOn)) {
       args.push("--depends-on", id);
@@ -986,6 +1000,29 @@ export class OnetaskgraphClient {
   taskAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("task answers", [id]);
   }
+  // Create — or, with `id` naming one the source holds, replace — a project, its description
+  // rendered from a template or given as it is; it answers as `projectShow` does.
+  async projectCreate(
+    source: string,
+    id: NativeId,
+    title: string,
+    options: ProjectCreateOptions = {},
+  ): Promise<QueryResponseOfQualifiedProject> {
+    const { args, input } = createArguments(
+      "projectCreate",
+      ["--id", id, "--title", title],
+      options,
+    );
+    if (options.status !== undefined) args.push("--status", options.status);
+    return this.run("project create", [source, ...args], input);
+  }
+  // Regenerate one project's description in place from its template, over its stored answers.
+  async projectRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
+    return this.run(...renderInvocation("project render", "projectRender", id, options));
+  }
+  projectAnswers(id: string): Promise<TemplateAnswers> {
+    return this.run("project answers", [id]);
+  }
   // Create — or, with `id` naming one the source holds, replace — a project document.
   async documentCreate(
     source: string,
@@ -993,7 +1030,11 @@ export class OnetaskgraphClient {
     title: string,
     options: DocumentCreateOptions = {},
   ): Promise<QueryResponseOfQualifiedDocument> {
-    const { args, input } = createArguments("documentCreate", project, title, options);
+    const { args, input } = createArguments(
+      "documentCreate",
+      ["--project", project, "--title", title],
+      options,
+    );
     if (options.id !== undefined) args.push("--id", options.id);
     return this.run("document create", [source, ...args], input);
   }

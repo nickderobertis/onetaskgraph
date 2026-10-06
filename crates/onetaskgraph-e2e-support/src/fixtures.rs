@@ -3141,6 +3141,14 @@ fn linear_server_over(
     )
 }
 
+/// The largest request this Linear workspace reads before refusing it as too large.
+///
+/// The stand-in's own bound, not Linear's: it is there so a runaway client cannot make the
+/// fixture buffer without end. It is well above what a real write sends — a project carrying
+/// a plan's budget answers is about ten kilobytes of JSON in one metadata key — so a journey
+/// proving such a write lands is not refused by the stand-in in Linear's place.
+const LINEAR_FIXTURE_REQUEST_LIMIT: usize = 256 * 1024;
+
 fn linear_serve(
     sandbox: &Sandbox,
     state: Arc<Mutex<Value>>,
@@ -3166,7 +3174,7 @@ fn linear_serve(
                     break;
                 }
                 bytes.extend_from_slice(&chunk[..n]);
-                if bytes.len() > 8_192 {
+                if bytes.len() > LINEAR_FIXTURE_REQUEST_LIMIT {
                     break;
                 }
                 if let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -3180,7 +3188,7 @@ fn linear_serve(
                     }
                 }
             }
-            if bytes.len() > 8_192 {
+            if bytes.len() > LINEAR_FIXTURE_REQUEST_LIMIT {
                 let text = r#"{"errors":[{"message":"fixture request too large"}]}"#;
                 let _ = write!(
                     stream,
@@ -3529,7 +3537,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["teamIds", "name", "statusId", "labelIds"],
-                    &["description"],
+                    &["content"],
                 )
         }
         graphql::ISSUE_RELATION_CREATE => {
@@ -3579,30 +3587,19 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     })
         }
         // The narrow long-form writes of a project and a document: the one field the metadata
-        // slot lives in, and nothing beside it.
+        // slot lives in — `content`, for both — and nothing beside it.
         graphql::PROJECT_UPDATE | graphql::DOCUMENT_UPDATE
             if variables
                 .pointer("/input")
                 .and_then(Value::as_object)
-                .is_some_and(|input| {
-                    input.len() == 1
-                        && input.contains_key(if operation == graphql::PROJECT_UPDATE {
-                            "description"
-                        } else {
-                            "content"
-                        })
-                }) =>
+                .is_some_and(|input| input.len() == 1 && input.contains_key("content")) =>
         {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
                     .get("id")
                     .and_then(Value::as_str)
                     .is_some_and(|id| !id.is_empty())
-                && valid_linear_write_input(
-                    variables.get("input"),
-                    &[],
-                    &["description", "content"],
-                )
+                && valid_linear_write_input(variables.get("input"), &[], &["content"])
         }
         graphql::DOCUMENT_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])
@@ -3644,7 +3641,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     if operation == graphql::ISSUE_UPDATE {
                         &["description", "projectId"]
                     } else {
-                        &["description"]
+                        &["content"]
                     },
                 )
         }
@@ -3859,7 +3856,7 @@ fn linear_response(
     if matches!(operation, graphql::ISSUE_CREATE | graphql::ISSUE_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::ISSUE_CREATE, false);
     }
-    // A project's description alone, or a document's content alone: the long-form field moves
+    // A project's content alone, or a document's content alone: the long-form field moves
     // and nothing else about the item does.
     if matches!(
         operation,
@@ -3867,10 +3864,10 @@ fn linear_response(
     ) && vars["input"]
         .as_object()
         .is_some_and(|input| input.len() == 1)
-        && (vars["input"].get("description").is_some() || vars["input"].get("content").is_some())
+        && vars["input"].get("content").is_some()
     {
         let (collection, field, root, payload) = if operation == graphql::PROJECT_UPDATE {
-            ("projects", "description", "projectUpdate", "project")
+            ("projects", "content", "projectUpdate", "project")
         } else {
             ("documents", "content", "documentUpdate", "document")
         };
@@ -4082,7 +4079,11 @@ fn linear_write_item(
         "content": "",
         "status": status,
         "labels": labels,
-        "_linear_description": input.get("description").cloned().unwrap_or(Value::Null),
+        // An issue's long form is its `description`, a project's its `content`.
+        "_linear_description": input
+            .get(if project { "content" } else { "description" })
+            .cloned()
+            .unwrap_or(Value::Null),
     });
     if let Some(state) = state {
         linear_put_state(&mut row, state);
@@ -4507,7 +4508,7 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
 
     let mut stream = std::net::TcpStream::connect(address).unwrap();
-    let oversized = "x".repeat(8_193);
+    let oversized = "x".repeat(LINEAR_FIXTURE_REQUEST_LIMIT + 1);
     let _ = write!(
         stream,
         "POST /graphql HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n{oversized}",
@@ -4824,7 +4825,7 @@ fn linear_task(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"description":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
 }
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
@@ -5143,7 +5144,12 @@ fn linear_relations(
         )),
         None => item.map(|item| linear_description(item, key, data)),
     };
-    json!({"description":description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
+    let long_form = if suffix == "Issue" {
+        "description"
+    } else {
+        "content"
+    };
+    json!({(long_form):description,"relations":{"nodes":forward,"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":inverse,"pageInfo":{"hasNextPage":false,"endCursor":null}}})
 }
 
 /// The Markdown row's own configuration, for a journey that configures it itself.

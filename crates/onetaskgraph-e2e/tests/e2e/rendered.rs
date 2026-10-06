@@ -1,5 +1,7 @@
 //! `task create`, `document create`, `task render`, `document render`, `task answers` and
-//! `document answers`, driven through the binary the way a person or a script drives them.
+//! `document answers`, driven through the binary the way a person or a script drives them —
+//! and, where a journey is about every template operation, their `project` equivalents, whose
+//! own journeys are in `project_render.rs`.
 //!
 //! Every journey runs against a folder of Markdown, which keeps the answers an item was
 //! rendered from in its own file, and — where the criterion is about a hosted board — the
@@ -2021,6 +2023,25 @@ fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name()
             operation,
         );
     }
+    refused(
+        &[
+            "project",
+            "create",
+            "hosted",
+            "--id",
+            "hosted-plan",
+            "--title",
+            "Hosted",
+            "--template",
+            &template,
+            "--search-path",
+            &search_path,
+            "--var",
+            "goal=Hosted",
+            "--no-interactive",
+        ],
+        "a project create from a template",
+    );
     assert!(
         snapshot(&plan.notes).is_empty(),
         "a refused create wrote {:?}",
@@ -2067,6 +2088,28 @@ fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name()
         "Memo."
     );
 
+    let launch = stdout(&plan.exits(
+        &[
+            "project",
+            "create",
+            "hosted",
+            "--id",
+            "launch",
+            "--title",
+            "Launch",
+            "--body-file",
+            &plan.file("launch.md", "Launch."),
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    assert_eq!(launch, "hosted:launch");
+    assert_eq!(
+        plan.json(&["project", "show", "notes:launch"])["items"][0]["item"]["content"],
+        "Launch."
+    );
+
     // An item rendered in-process, with its provenance and its answers in its file, is refused
     // every read of its answers and every regenerate through the host, a dry run included.
     let task = plan.create("notes", "Rendered", &["--var", "goal=First"]);
@@ -2091,8 +2134,32 @@ fn a_source_behind_the_stdio_protocol_refuses_every_template_operation_by_name()
         "hosted:{}",
         native(document["items"][0]["id"].as_str().expect("a document id"))
     );
+    let project = plan.json(&[
+        "project",
+        "create",
+        "notes",
+        "--id",
+        "rendered-plan",
+        "--title",
+        "Plan",
+        "--template",
+        &template,
+        "--search-path",
+        &search_path,
+        "--var",
+        "goal=First",
+        "--no-interactive",
+    ]);
+    let project = format!(
+        "hosted:{}",
+        native(project["items"][0]["id"].as_str().expect("a project id"))
+    );
     let before = snapshot(&plan.notes);
-    for (kind, id) in [("task", &task), ("document", &document)] {
+    for (kind, id) in [
+        ("task", &task),
+        ("document", &document),
+        ("project", &project),
+    ] {
         let answers = format!("a {kind}'s stored template answers");
         refused(&[kind, "answers", id], &answers);
         refused(&[kind, "answers", id, "--json"], &answers);

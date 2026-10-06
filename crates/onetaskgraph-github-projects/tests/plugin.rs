@@ -4460,6 +4460,69 @@ async fn unbounded_caller_metadata_and_long_prose_round_trip_through_the_body_sl
 }
 
 #[tokio::test]
+async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_body_slot_and_reads_back_equal()
+ {
+    // About ten kilobytes of JSON under one caller key — a plan's budget answers — beside a
+    // rendering's provenance, with every character the slot has to carry. GitHub caps an issue
+    // body at 65,536 characters, so this fits whole, and it must come back whole.
+    let budgets = (0..60)
+        .map(|index| {
+            json!({
+                "issue": format!("plan:T-{index}"),
+                "tokens": 120_000 + index,
+                "note": format!(
+                    "Budget {index}: \"quoted\", back\\slash, <tag> & `tick` --> naïve café — {}",
+                    "x".repeat(40)
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    let answers = json!({"version": 3, "budgets": budgets});
+    let encoded = serde_json::to_string(&answers).unwrap();
+    assert!(
+        (9_500..20_000).contains(&encoded.len()),
+        "about ten kilobytes of JSON: {}",
+        encoded.len()
+    );
+    let fixture = board(vec![]);
+    let source = source(&fixture);
+    let mut item = project("P-source", "The plan", status(StatusCategory::Todo, "Todo"));
+    item.content = Some("The plan's description.".to_owned());
+    item.metadata = BTreeMap::from([
+        ("onepipeline.budgets".to_owned(), answers.clone()),
+        (
+            "onetaskgraph.template".to_owned(),
+            json!({"template": "plan-description", "digest": format!("sha256:{}", "a".repeat(64)),
+                   "body_digest": format!("sha256:{}", "b".repeat(64)),
+                   "answers_digest": format!("sha256:{}", "c".repeat(64))}),
+        ),
+    ]);
+    let written = source
+        .write_project(&write(item.clone()))
+        .await
+        .expect("a project carrying this much metadata copies");
+    let body = fixture.item(&written.0).body.unwrap();
+    assert!(body.len() > encoded.len(), "the whole value is in the body");
+    let read = source
+        .get_project(&written)
+        .await
+        .unwrap()
+        .expect("the created project reads back");
+    assert_eq!(read.content.as_deref(), Some("The plan's description."));
+    assert_eq!(read.metadata, item.metadata);
+
+    // A second key of the same size, set later through the narrow write, keeps the first.
+    let key = MetadataKey::new("onepipeline.budgets_previous").unwrap();
+    let after = source
+        .set_project_metadata(&written, &key, &answers)
+        .await
+        .unwrap()
+        .expect("the project is held");
+    assert_eq!(after.metadata.get(key.as_str()), Some(&answers));
+    assert_eq!(after.metadata.get("onepipeline.budgets"), Some(&answers));
+}
+
+#[tokio::test]
 async fn a_comment_that_is_not_at_the_end_is_the_authors_own_content() {
     let fixture = board(vec![Item::issue("I_1", "a task").body(
         "<!-- onetaskgraph.metadata\n{\"caller.x\":1}\n-->\n\nand then more prose",

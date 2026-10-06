@@ -3197,6 +3197,12 @@ export const runtimeSchemas = {
     "title": "MetadataSet",
     "type": "object"
   },
+  "NativeId": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+    "title": "NativeId",
+    "type": "string"
+  },
   "NewComment": {
     "$defs": {
       "CommentBody": {
@@ -9323,7 +9329,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What `task render` and `document render` answer with.",
+    "description": "What `task render`, `project render` and `document render` answer with.",
     "properties": {
       "body": {
         "description": "The rendered content.",
@@ -15331,7 +15337,7 @@ export const runtimeSchemas = {
   "TemplateAnswers": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": true,
-    "description": "What `task answers` and `document answers` answer with: the resolved answers an item was\nlast rendered from — defaults applied, `null` for an optional variable given neither — by\nvariable name, exactly as its source keeps them.",
+    "description": "What `task answers`, `project answers` and `document answers` answer with: the resolved\nanswers an item was last rendered from — defaults applied, `null` for an optional variable\ngiven neither — by variable name, exactly as its source keeps them.",
     "title": "TemplateAnswers",
     "type": "object"
   },
@@ -15345,7 +15351,7 @@ export const runtimeSchemas = {
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
-    "description": "What a task or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
+    "description": "What a task, a project or a document created or regenerated from a template records under\n[`TemplateProvenance::KEY`].\n\nAn item created from a plain body records none.",
     "properties": {
       "answers_digest": {
         "$ref": "#/$defs/Sha256Digest",

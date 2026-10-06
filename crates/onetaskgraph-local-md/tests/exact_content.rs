@@ -375,15 +375,14 @@ async fn a_plain_write_whose_content_would_read_back_otherwise_is_refused_and_wr
                 .write_document(&write(Some(&document_id), document(content)))
                 .await,
         );
+        // A project keeps answers too, so its content cannot end in a block either.
+        refuses_content(&source.write_project(&write(None, project(content))).await);
+        refuses_content(
+            &source
+                .write_project(&write(Some(&project_id), project(content)))
+                .await,
+        );
     }
-    // A project keeps no answers, so only the carriage return cannot be held.
-    let lone = "Ends in a lone carriage return\r";
-    refuses_content(&source.write_project(&write(None, project(lone))).await);
-    refuses_content(
-        &source
-            .write_project(&write(Some(&project_id), project(lone)))
-            .await,
-    );
 
     assert_eq!(files(&root), before, "no file is created or changed");
     assert_eq!(task_content(&*source, &task_id).await, ENDINGS[1]);

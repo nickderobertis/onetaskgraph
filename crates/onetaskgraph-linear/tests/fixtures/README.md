@@ -313,6 +313,16 @@ finding beside the code it decided:
 The contract test parses every production operation against the pinned
 field and argument types and recursively validates each selected response-fixture shape.
 `issues.json` covers `Issue`, `WorkflowState`, `IssueLabel`, and `PageInfo`;
+A project's long form carries a later date. `Project.content` and the `content` member of
+`ProjectCreateInput` and `ProjectUpdateInput` were pinned on **2026-10-06** from Linear's
+published SDK schema (`packages/sdk/src/schema.graphql` in `linear/linear`, commit
+`b37823be308a42f837277671f3ded66d33d92e6c`), which documents `Project.description` as "the
+short description of the project" and `Project.content` as the project's Markdown body. A
+project's description and its metadata slot — which for a plan carries about ten kilobytes of
+budget answers — moved to `content` then, so `projects.json` and `project-relations.json`
+serve a project's long form as `content`. That date is documentation-derived; no credentialed
+run had observed a project's `content` when it was pinned.
+
 `projects.json` covers `Project`, its status, and `ProjectLabel`; `labels.json` covers the
 `issueLabels` connection; the two relation fixtures cover documented forward and inverse
 issue/project relation connections; `documents.json` covers the `documents` connection,

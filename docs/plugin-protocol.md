@@ -422,14 +422,16 @@ hosted over this protocol the engine answers the first itself, and refuses each 
 before sending anything, naming the source and the operation:
 
 - `keeps_template_answers`, which the engine answers itself: a hosted source keeps none;
-- `task_template_answers` and `document_template_answers`, a read of an item's stored
-  template answers;
-- `write_task_rendered` and `write_document_rendered`, a create from a template;
-- `set_task_rendering` and `set_document_rendering`, a regenerate in place.
+- `task_template_answers`, `project_template_answers` and `document_template_answers`, a read
+  of an item's stored template answers;
+- `write_task_rendered`, `write_project_rendered` and `write_document_rendered`, a create from
+  a template;
+- `set_task_rendering`, `set_project_rendering` and `set_document_rendering`, a regenerate in
+  place.
 
 The engine never stands `write_task` in for a create from a template, which would land the
 content and its provenance without the answers a regenerate needs. A plain-body create is
-`write_task` or `write_document` and crosses as it always has.
+`write_task`, `write_project` or `write_document` and crosses as it always has.
 
 ### 4.1 Common parameter shapes
 

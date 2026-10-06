@@ -271,7 +271,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 30);
+    assert_eq!(bundle["version"], 31);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -307,6 +307,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "project deps",
             "project copy",
             "project metadata set",
+            "project create",
+            "project render",
+            "project answers",
             "document list",
             "document show",
             "document copy",

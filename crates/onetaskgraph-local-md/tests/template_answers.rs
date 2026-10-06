@@ -1,4 +1,4 @@
-//! The template answers a task or a document stores in its own file, and the rendering write
+//! The template answers a task, a project or a document stores in its own file, and the rendering write
 //! that replaces its content, its provenance and those answers together.
 //!
 //! Every test drives the real plugin over a real folder and asserts both on what a later read
@@ -11,8 +11,9 @@ use std::fs;
 
 use onetaskgraph_local_md::{ANSWERS_CLOSE, ANSWERS_OPEN};
 use onetaskgraph_plugin_api::{
-    CommentBody, Document, ItemWrite, MetadataKey, NativeId, NewComment, Priority, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskSource,
+    CommentBody, Document, ItemWrite, MetadataKey, NativeId, NewComment, Priority, Project,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task,
+    TaskSource,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -584,11 +585,169 @@ async fn documents_store_answers_and_take_a_rendering_on_the_same_terms() {
     );
 }
 
-#[tokio::test]
-async fn a_project_keeps_no_answers_and_a_block_in_one_is_its_content() {
-    let text = "---\ntitle: Launch\nstatus: todo\n---\nPlan.\n\n<!-- onetaskgraph:template-answers\ngoal: x\n-->\n";
-    let (_root, source) = folder(&[("projects/launch.md", text)]);
+/// A project file holding a rendering: a provenance entry and the answers block after it.
+const RENDERED_PROJECT: &str = "---\ntitle: Launch\nstatus: todo\nmetadata:\n  onetaskgraph.template: {template: /t.md, digest: \"sha256:aa\", body_digest: \"sha256:bb\", answers_digest: \"sha256:cc\"}\n---\nPlan.\n\n<!-- onetaskgraph:template-answers\ngoal: x\n-->\n";
 
-    let project = source.get_project(&id("launch")).await.unwrap().unwrap();
-    assert!(project.content.unwrap().contains(ANSWERS_OPEN));
+/// The block exactly as [`RENDERED_PROJECT`] holds it.
+const PROJECT_BLOCK: &str = "<!-- onetaskgraph:template-answers\ngoal: x\n-->\n";
+
+fn project(title: &str, content: &str, category: StatusCategory, metadata: Value) -> Project {
+    Project {
+        id: id("launch"),
+        title: title.to_owned(),
+        content: Some(content.to_owned()),
+        status: Status {
+            category,
+            name: serde_json::to_value(category)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        },
+        labels: Vec::new(),
+        url: None,
+        location: None,
+        created_at: None,
+        updated_at: None,
+        metadata: serde_json::from_value(metadata).unwrap(),
+        repositories: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_project_stores_answers_and_takes_a_rendering_on_the_terms_a_document_does() {
+    let (root, source) = folder(&[("projects/launch.md", RENDERED_PROJECT)]);
+
+    // The block is the project's answers, in neither its content nor its metadata.
+    let held = source.get_project(&id("launch")).await.unwrap().unwrap();
+    assert_eq!(held.content.as_deref(), Some("Plan."));
+    assert!(held.metadata.keys().all(|key| key != "goal"));
+    assert_eq!(
+        source
+            .project_template_answers(&id("launch"))
+            .await
+            .unwrap(),
+        Some(answers(json!({"goal": "x"})))
+    );
+
+    // A rendering replaces the content, the provenance and the answers, and nothing else.
+    source
+        .set_project_rendering(
+            &id("launch"),
+            "Plan again.",
+            &provenance("/t.md"),
+            &answers(json!({"goal": "y"})),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let text = read(&root, "projects/launch.md");
+    assert!(
+        text.ends_with("Plan again.\n\n<!-- onetaskgraph:template-answers\ngoal: y\n-->\n"),
+        "{text}"
+    );
+    let after = source.get_project(&id("launch")).await.unwrap().unwrap();
+    assert_eq!(after.content.as_deref(), Some("Plan again."));
+    assert_eq!(after.title, "Launch");
+    assert_eq!(
+        after.metadata[MetadataKey::TEMPLATE_KEY],
+        provenance("/t.md")
+    );
+    assert_eq!(names(&root, "projects"), vec!["launch.md"]);
+
+    // A rendered create of a new project stores its answers after the content.
+    source
+        .write_project_rendered(
+            &ItemWrite {
+                target: None,
+                item: Project {
+                    id: id("fresh"),
+                    ..project(
+                        "Fresh",
+                        "Fresh plan.",
+                        StatusCategory::Todo,
+                        json!({MetadataKey::TEMPLATE_KEY: provenance("/t.md")}),
+                    )
+                },
+                depends_on: Vec::new(),
+            },
+            &answers(json!({"goal": "z"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        source.project_template_answers(&id("fresh")).await.unwrap(),
+        Some(answers(json!({"goal": "z"})))
+    );
+    assert_eq!(
+        source
+            .get_project(&id("fresh"))
+            .await
+            .unwrap()
+            .unwrap()
+            .content
+            .as_deref(),
+        Some("Fresh plan.")
+    );
+}
+
+#[tokio::test]
+async fn an_update_recording_provenance_keeps_a_project_block_and_a_plain_one_drops_it() {
+    let (root, source) = folder(&[("projects/launch.md", RENDERED_PROJECT)]);
+    let entry = provenance("/elsewhere.md");
+
+    // A copy over it carrying a provenance — another status, another content — keeps the
+    // block byte for byte.
+    source
+        .write_project(&ItemWrite {
+            target: Some(id("launch")),
+            item: project(
+                "Launch",
+                "Copied over.",
+                StatusCategory::Done,
+                json!({MetadataKey::TEMPLATE_KEY: entry, "caller.size": 3}),
+            ),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let text = read(&root, "projects/launch.md");
+    assert!(
+        text.ends_with(&format!("Copied over.\n\n{PROJECT_BLOCK}")),
+        "{text}"
+    );
+    let after = source.get_project(&id("launch")).await.unwrap().unwrap();
+    assert_eq!(after.content.as_deref(), Some("Copied over."));
+    assert_eq!(after.status.category, StatusCategory::Done);
+
+    // A metadata write keeps it too.
+    source
+        .set_project_metadata(
+            &id("launch"),
+            &MetadataKey::new("caller.size").unwrap(),
+            &json!(4),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(read(&root, "projects/launch.md").ends_with(PROJECT_BLOCK));
+
+    // A plain write — no provenance — drops it with the rendering it belonged to.
+    source
+        .write_project(&ItemWrite {
+            target: Some(id("launch")),
+            item: project("Launch", "Plain.", StatusCategory::Todo, json!({})),
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let text = read(&root, "projects/launch.md");
+    assert!(!text.contains(ANSWERS_OPEN), "{text}");
+    assert_eq!(
+        source
+            .project_template_answers(&id("launch"))
+            .await
+            .unwrap(),
+        None
+    );
 }

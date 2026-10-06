@@ -105,6 +105,11 @@ onetaskgraph project list / show / deps          # the same flags, minus the pro
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
+onetaskgraph project create <SOURCE> --id NATIVE-ID --title TITLE [--status CATEGORY]
+                            ...                  # the body, label, repository and metadata
+                                                 # flags of `task create`
+onetaskgraph project render <ID> ...             # the flags of `task render`
+onetaskgraph project answers <ID>
 
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
@@ -562,13 +567,17 @@ always do.
 
 ### Creating and regenerating from a template
 
-`task create` and `document create` make an item in one source, its body rendered from a
-template — `--template FILE`, or `--template-loader FILE` for a template a caller states
-(below) — with its answers taken exactly as `template render` takes them, or given as it is
-with `--body-file PATH` or on standard input. `task create` prints the new item's qualified
+`task create`, `project create` and `document create` make an item in one source, its body
+(a project's description) rendered from a template — `--template FILE`, or `--template-loader
+FILE` for a template a caller states (below) — with its answers taken exactly as `template
+render` takes them, or given as it is with `--body-file PATH` or on standard input. `task create` prints the new item's qualified
 id, and under `--json` the item exactly as `task show --json` prints it; `document create`
 answers as `document show` does, and with `--id DOC` naming a document the source holds it
-replaces that document rather than adding a second. A key of the reserved `onetaskgraph.`
+replaces that document rather than adding a second. `project create` names the project's own
+id with `--id` and answers as `project show` does; over a project the source holds it
+replaces the content, the answers and the provenance whole and keeps everything else — its
+status, labels and repositories unless `--status`, `--label` or `--repository` names them,
+every metadata key `--metadata` does not set, and its dependencies. A key of the reserved `onetaskgraph.`
 namespace given with `--metadata`, and a source that cannot be written, are refused by
 name before anything is written.
 
@@ -600,12 +609,12 @@ hand edit stays visible wherever it is copied.
 **The answers themselves are kept in one place only**: beside the item in a `local-md`
 folder's own file, which is where an item is authored — never in its content or its
 metadata, so they cost a hosted item nothing, and nothing of a task is written twice into a
-GitHub issue. `task answers` and `document answers` print them as YAML (`--json`: one JSON
+GitHub issue. `task answers`, `project answers` and `document answers` print them as YAML (`--json`: one JSON
 object), and refuse, naming the item, when none are stored — which is every item of a
 source that keeps none. A copy carries content and metadata alone, **never the answers**,
 at either end.
 
-`task render` and `document render` regenerate an item in place, and write its content, its
+`task render`, `project render` and `document render` regenerate an item in place, and write its content, its
 provenance and its stored answers in one write and **nothing else** — its id, title, status,
 labels, project, repositories, dependencies and every other metadata key stay as they were.
 The answers start from the stored ones when they hash to the recorded `answers_digest`;

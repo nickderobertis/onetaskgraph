@@ -1055,7 +1055,7 @@ impl Item {
 /// Ordered so it can key a map of what a destination holds, per interface: an id alone
 /// does not identify a destination item, for the reason [`Undo::kind`] records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Level {
+pub(super) enum Level {
     /// `get_task`, `write_task`, `delete_task`.
     Task,
     /// `get_project`, `write_project`, `delete_project`.
@@ -3798,7 +3798,7 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
 }
 
 /// Every forward edge at one item, walked to exhaustion one page at a time.
-async fn forward_edges(
+pub(super) async fn forward_edges(
     source: &ResolvedSource,
     id: &NativeId,
     kind: Level,

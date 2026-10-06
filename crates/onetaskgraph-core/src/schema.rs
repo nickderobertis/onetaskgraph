@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Priority,
-    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
+    DocumentQuery, Health, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
     StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields,
     UpdatedField,
 };
@@ -44,7 +44,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 30;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 31;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -71,6 +71,9 @@ pub fn schema_bundle() -> Value {
     // `task priority set` and `task list --priority` take one by name.
     roots.insert("Priority", schema_for!(Priority));
     roots.insert("SourceName", schema_for!(SourceName));
+    // A root of its own although every item reaches it, for the reason `SourceName` is one:
+    // `project create --id` takes one by name, a source's own id for the project it writes.
+    roots.insert("NativeId", schema_for!(NativeId));
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyEndpoint", schema_for!(DependencyEndpoint));
     roots.insert("QualifiedEndpoint", schema_for!(QualifiedEndpoint));

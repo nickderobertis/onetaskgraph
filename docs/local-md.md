@@ -346,9 +346,9 @@ their sections.
 
 ## Stored template answers
 
-A task or a document created or regenerated from a template keeps the answers it was rendered
-from **in its own file and nowhere else** — the one place this product stores them — after its
-content and, for a task, before its comments section:
+A task, a project or a document created or regenerated from a template keeps the answers it
+was rendered from **in its own file and nowhere else** — the one place this product stores them
+— after its content and, for a task, before its comments section:
 
 ```markdown
 ---
@@ -375,20 +375,31 @@ steps:
   line that is exactly `-->`. It is the last thing above the comments section, or in the
   file, and a Markdown renderer shows none of it.
 - **It is in neither the content nor the metadata.** `task show`, every query and every copy
-  read the content above it; `task answers` and `document answers` are what print it.
+  read the content above it; `task answers`, `project answers` and `document answers` are what
+  print it.
 - **It is written only with the content and the provenance**, in the same write: a create
-  from a template and a `task render` or `document render` replace all three through a
-  staging file and a rename, so a failed write — a file or a folder this process cannot
-  write — leaves the file exactly as it was, and no staging file behind. A render that would
-  change nothing writes nothing.
+  from a template and a `task render`, `project render` or `document render` replace all three
+  through a staging file and a rename, so a failed write — a file or a folder this process
+  cannot write — leaves the file exactly as it was, and no staging file behind. A render that
+  would change nothing writes nothing.
 - **Every other write keeps it byte for byte**: a status, priority, metadata, delivered-by,
   content or comment write edits around it, and a hand-written block is read on the same
   terms. Content that would itself end in a block where none follows is refused, rather than
   turned into answers nobody gave.
 - **A copy writes no answers.** Copying an item into this folder writes the item it carries,
-  and a copy over an existing file leaves no block behind: answers belong to the file an item
-  was rendered in, never to its copies.
-- A project keeps no answers; the block in a project file is ordinary content.
+  and a copy over an existing task or document file leaves no block behind: answers belong to
+  the file an item was rendered in, never to its copies.
+- **A project differs on one point: a copy over its file keeps the block.** A project's
+  answers block is read exactly as a document's is — the last thing in the file, in neither
+  the content nor the metadata — and `project create --id` over a held project replaces it
+  with the content and the provenance. But a write over a project file that still records an
+  `onetaskgraph.template` entry — a copy over it, a status a copy writes — keeps the block the
+  file holds byte for byte, where a task or a document file would lose it. The entry that
+  travelled with the copy is ordinarily another rendering's, so those answers no longer hash
+  to its `answers_digest`: a `project render` reads them as out of step, does not trust them,
+  and asks for every required answer — which is how they are brought back in step. A write
+  over a project recording no entry — a plain body replacing a rendering — keeps no block,
+  because nothing it records says which answers are its.
 
 ## Where this source says an entity is
 

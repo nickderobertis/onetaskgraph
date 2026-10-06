@@ -6,8 +6,9 @@
 //! over real HTTP. What stands in for Linear is a local server that answers a filtered listing
 //! from an index that has not caught up with a write for a number of reads, or never does.
 //! `settle::settled_label` is driven the same way, sending the plugin's own label lookup to a
-//! workspace whose label filter holds a just-created label late, never, or twice. A missing
-//! label is retried as index lag; duplicate data is refused immediately with its ids.
+//! workspace whose label filter holds a just-created label late, never, intermittently, or
+//! twice. A missing label is retried as index lag until it answers `LABEL_STEADY` times in a
+//! row; duplicate data is refused immediately with its ids.
 //!
 //! No credential and no third-party API: every issue and document below is one this file
 //! answered with. A short bound stands in for [`settle::LINEAR_INDEX`], because what is proven
@@ -32,8 +33,8 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_VARIABLE, settled_document_absent,
-    settled_documents, settled_label, settled_tasks, settled_walk,
+    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE,
+    settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
 };
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
@@ -673,7 +674,7 @@ fn the_label_wait_names_the_root_field_and_the_variable_of_the_plugins_own_looku
 }
 
 #[tokio::test]
-async fn a_label_the_lookup_holds_late_passes_without_looking_again() {
+async fn a_label_the_lookup_holds_late_passes_once_it_answers_steadily_and_not_once_more() {
     // Created a moment before, and not held by the label filter for the first two lookups.
     let (url, answered) = serve(|n, request| {
         assert_looks_up_label(request);
@@ -686,9 +687,51 @@ async fn a_label_the_lookup_holds_late_passes_without_looking_again() {
     .unwrap();
     assert_eq!(
         answered.load(Ordering::SeqCst),
-        3,
-        "the wait looks the label up until one answers, and not once more"
+        2 + LABEL_STEADY,
+        "the wait looks the label up until it answers LABEL_STEADY times in a row, and not \
+         once more"
     );
+}
+
+#[tokio::test]
+async fn a_label_the_lookup_answers_and_then_loses_starts_its_run_of_answers_over() {
+    // Held on the first lookup and lost on the second, as Linear answered a run that a write
+    // then refused; held steadily from the third.
+    let (url, answered) = serve(|n, request| {
+        assert_looks_up_label(request);
+        labels(if n == 2 { vec![] } else { vec!["l1"] })
+    });
+    settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        2 + LABEL_STEADY,
+        "a lost answer does not count toward the run the wait holds out for"
+    );
+}
+
+#[tokio::test]
+async fn a_label_the_lookup_never_holds_steadily_fails_within_the_bound_naming_its_run() {
+    // Answered on every other lookup and never twice in a row.
+    let (url, answered) = serve(|n, request| {
+        assert_looks_up_label(request);
+        labels(if n % 2 == 1 { vec!["l1"] } else { vec![] })
+    });
+    let refusal = settled_label(BOUND, LABEL, |query, variables| {
+        post(&url, query, variables)
+    })
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.starts_with(
+            r#"the label named "otg-live-label" by the lookup a write resolves it through found one match on only the last 1 of 5 reads"#
+        ),
+        "the failure names how short of a steady answer the lookup fell: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), BOUND.reads);
 }
 
 #[tokio::test]

@@ -9228,6 +9228,19 @@ impl TaskSource for GitHubProjectsSource {
             .await
     }
 
+    /// Replace one project issue's content and its provenance slot entry, on exactly the
+    /// terms of [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.replace_rendering(id, BoardKind::Work(ItemKind::Project), content, provenance)
+            .await
+    }
+
     /// Apply a targeted update with one read of the item and a write only for what differs:
     /// the `Status` and `Priority` field writes in one request, the `blockedBy` difference,
     /// and last one `updateIssue` for title, body and state. See `targeted_update`.

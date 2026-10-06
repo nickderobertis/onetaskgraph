@@ -11,7 +11,7 @@ import {
   type RenderOptions,
 } from "../src/index.ts";
 
-// Tasks and documents created from a template, regenerated and read back through the SDK,
+// Tasks, projects and documents created from a template, regenerated and read back through the SDK,
 // driving the real binary over a real folder of Markdown — which keeps the answers an item was
 // rendered from in its own file.
 
@@ -135,6 +135,30 @@ test("a plain body goes over stdin, and a document is created, rendered and answ
   expect(await client.documentAnswers("notes:design")).toEqual({ goal: "Design", steps: [] });
   const regenerated = await client.documentRender("notes:design", { vars: { goal: "Again" } });
   expect(regenerated.body).toBe("Goal: Again\n");
+});
+
+test("a project is created from a template, regenerated and its answers read", async () => {
+  const created = await client.projectCreate("notes", "plan-1", "The plan", {
+    template,
+    answers: { goal: "Plan it" },
+    status: "in-progress",
+    metadata: { "myapp.budget": 10 },
+  });
+  const project = created.items[0];
+  expect(project?.id).toBe("notes:plan-1");
+  expect(project?.item.content).toBe("Goal: Plan it\n");
+  expect(project?.item.metadata?.["myapp.budget"]).toBe(10);
+  const provenance = provenanceOf(project?.item.metadata);
+  expect(provenance.body_digest).toBe(sha256("Goal: Plan it\n"));
+  expect(provenance.answers_digest).toBe(sha256('{"goal":"Plan it","steps":[]}'));
+  expect(await client.projectAnswers("notes:plan-1")).toEqual({ goal: "Plan it", steps: [] });
+
+  const regenerated = await client.projectRender("notes:plan-1", { vars: { steps: "[budget]" } });
+  expect(regenerated.body).toBe("Goal: Plan it\n- budget\n");
+  expect((await client.projectRender("notes:plan-1")).changed).toBe(false);
+  const shown = (await client.projectShow("notes:plan-1")).items[0]?.item;
+  expect(shown?.status.category).toBe("in-progress");
+  expect(shown?.metadata?.["myapp.budget"]).toBe(10);
 });
 
 test("answers out of step refuse a partial render with exit 2, and a full one lands", async () => {
@@ -323,6 +347,9 @@ test("every flag the create, render, answers and template verbs take is spelled 
     "task create": ["taskCreate", "createArguments", ...template],
     "task render": ["taskRender", "renderInvocation", ...template],
     "task answers": ["taskAnswers"],
+    "project create": ["projectCreate", "createArguments", ...template],
+    "project render": ["projectRender", "renderInvocation", ...template],
+    "project answers": ["projectAnswers"],
     "document create": ["documentCreate", "createArguments", ...template],
     "document render": ["documentRender", "renderInvocation", ...template],
     "document answers": ["documentAnswers"],

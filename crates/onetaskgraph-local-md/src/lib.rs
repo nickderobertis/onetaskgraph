@@ -779,13 +779,14 @@ impl LocalMdSource {
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
         // comments, so a `## Comments` heading in one is ordinary content.
-        // Nor is a task's stored answers block, which ends the text above its section.
+        // Nor is a stored answers block, which ends a task's text above its section and a
+        // project's body.
         let content = match kind {
             WorkKind::Task => {
                 let (above, comments) = sectioned(body);
                 content_of(above, comments.is_some())
             }
-            WorkKind::Project => body_text(body, false),
+            WorkKind::Project => content_of(body, false),
         };
         let common = self.common(kind.kind(), path, content, shared)?;
         let status = Status {
@@ -1239,29 +1240,21 @@ impl TaskSource for LocalMdSource {
     ) -> Result<NativeId, SourceError> {
         self.write_task_with(write, Some(answers))
     }
+    /// One file under `projects/`. An update of a project whose file stores an answers block
+    /// keeps that block byte for byte when the project written records a rendering's
+    /// provenance — a copy over it, a status written by one — and drops it with the provenance
+    /// otherwise; see `docs/local-md.md`.
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
-        let project = &write.item;
-        self.write_entry(
-            write.target.as_ref(),
-            None,
-            &Outgoing::Work {
-                kind: WorkKind::Project,
-                status: &project.status,
-                priority: Priority::None,
-                depends_on: &write.depends_on,
-                delivers: &[],
-                delivered_by: &[],
-                fields: Fields {
-                    id: &project.id,
-                    title: &project.title,
-                    content: project.content.as_deref(),
-                    labels: &project.labels,
-                    project: None,
-                    metadata: &project.metadata,
-                    repositories: &project.repositories,
-                },
-            },
-        )
+        self.write_project_with(write, None)
+    }
+    /// A project written with the answers it was rendered from stored after its content, on
+    /// the terms of [`write_task_rendered`](TaskSource::write_task_rendered).
+    async fn write_project_rendered(
+        &self,
+        write: &ItemWrite<Project>,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<NativeId, SourceError> {
+        self.write_project_with(write, Some(answers))
     }
     /// One file under `documents/`, on exactly the terms a task lands under `tasks/`.
     ///
@@ -1563,6 +1556,13 @@ impl TaskSource for LocalMdSource {
     ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
         self.stored_answers(Kind::Document, id)
     }
+    /// The answers block of the project's file, read as YAML; see [`ANSWERS_OPEN`].
+    async fn project_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        self.stored_answers(Kind::Project, id)
+    }
     /// Replace the task's content, provenance and stored answers in one write of its file,
     /// keeping its front matter otherwise and its comments section byte for byte.
     async fn set_task_rendering(
@@ -1614,6 +1614,33 @@ impl TaskSource for LocalMdSource {
                     .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
             },
             |document| &document.title,
+        )
+    }
+    /// Replace the project's content, provenance and stored answers in one write of its file,
+    /// on the terms of [`set_task_rendering`](TaskSource::set_task_rendering).
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Option<()>, SourceError> {
+        self.set_rendering(
+            Kind::Project,
+            id,
+            &Rendering {
+                content,
+                provenance,
+                answers,
+            },
+            |path, text| self.parse_text(WorkKind::Project, path, text).map(project),
+            |project, content, provenance| {
+                project.content = (!content.is_empty()).then(|| content.to_owned());
+                project
+                    .metadata
+                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            },
+            |project| &project.title,
         )
     }
     async fn task_comments(
@@ -1687,7 +1714,8 @@ impl TaskSource for LocalMdSource {
     }
 }
 
-/// The line that opens the template answers a task or a document stores in its own file:
+/// The line that opens the template answers a task, a project or a document stores in its own
+/// file:
 /// this line, the answers as a YAML mapping, and a line that is exactly [`ANSWERS_CLOSE`],
 /// after the content and before a task's comments section. `docs/local-md.md` describes the
 /// block for a person.
@@ -1695,7 +1723,8 @@ impl TaskSource for LocalMdSource {
 /// What the code holds to: the block is found as the **last** such block the
 /// text above the section ends in, so content can never end in one where none follows — a
 /// write whose content would read back that way is refused — and every write but a rendering
-/// write edits around it byte for byte. A project keeps none.
+/// write edits around it byte for byte. A project's file keeps one after its content, which an
+/// update that still records the project's provenance keeps byte for byte.
 pub const ANSWERS_OPEN: &str = "<!-- onetaskgraph:template-answers";
 
 /// The line that closes the stored answers block.
@@ -2666,7 +2695,45 @@ impl LocalMdSource {
             Some(target) => (target.clone(), self.existing(kind, target)?),
             None => self.unused(kind, outgoing.fields().id)?,
         };
-        let mut document = self.render(outgoing, answers)?;
+        // An update of a project still recording a rendering's provenance — a copy over it, or
+        // a status a copy writes — keeps the answers block its file stores, byte for byte:
+        // those answers are the file's, and when the provenance that travelled with the copy
+        // is not theirs, a regenerate reads them as out of step rather than trusting them. A
+        // project written with no provenance — a plain body replacing a rendering — keeps
+        // none, because no entry it records says which answers are its.
+        let kept = match (target, kind, answers) {
+            (Some(_), Kind::Project, None)
+                if outgoing
+                    .fields()
+                    .metadata
+                    .contains_key(MetadataKey::TEMPLATE_KEY)
+                    && path.is_file() =>
+            {
+                let existing = Self::read_text(&path)?;
+                let held = Self::answers_in(kind, &path, &existing)?;
+                let (_, body_at) = front_matter(&existing).ok_or_else(|| unfronted(&path))?;
+                let body = &existing[body_at..];
+                answered(body)
+                    .map(|(region, _)| body[region.len()..].to_owned())
+                    .zip(held)
+            }
+            _ => None,
+        };
+        let mut document = match &kept {
+            Some((block, _)) => {
+                let mut document = self.render(outgoing, None)?;
+                let (_, body_at) = front_matter(&document).ok_or_else(|| unfronted(&path))?;
+                document.truncate(body_at);
+                document.push_str(&answered_body(
+                    outgoing.fields().content.unwrap_or_default(),
+                    block,
+                    "",
+                ));
+                document
+            }
+            None => self.render(outgoing, answers)?,
+        };
+        let answers = answers.or(kept.as_ref().map(|(_, held)| held));
         // An update of a task keeps the comments section the file already has, byte for byte:
         // a copy writes the task, and nothing a copy does adds, changes or removes a comment.
         // Only a file can hold a section: anything else at that path is left for the write
@@ -2756,8 +2823,7 @@ impl LocalMdSource {
         let (_, body) = Self::split_text(path, text)?;
         let block = match kind {
             Kind::Task => answered(sectioned(body).0),
-            Kind::Document => answered(body),
-            Kind::Project => None,
+            Kind::Document | Kind::Project => answered(body),
         };
         let Some((_, yaml)) = block else {
             return Ok(None);
@@ -2786,10 +2852,10 @@ impl LocalMdSource {
             return Ok(None);
         };
         let text = Self::read_text(&path)?;
-        if kind == Kind::Document {
-            self.parse_document_text(&path, &text)?;
-        } else {
-            self.parse_text(WorkKind::Task, &path, &text)?;
+        match kind {
+            Kind::Document => drop(self.parse_document_text(&path, &text)?),
+            Kind::Task => drop(self.parse_text(WorkKind::Task, &path, &text)?),
+            Kind::Project => drop(self.parse_text(WorkKind::Project, &path, &text)?),
         }
         Self::answers_in(kind, &path, &text)
     }
@@ -2911,6 +2977,37 @@ impl LocalMdSource {
                     project: task.project.as_ref(),
                     metadata: &task.metadata,
                     repositories: &task.repositories,
+                },
+            },
+        )
+    }
+
+    /// [`write_project`](TaskSource::write_project), storing `answers` after the content when
+    /// given.
+    fn write_project_with(
+        &self,
+        write: &ItemWrite<Project>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+    ) -> Result<NativeId, SourceError> {
+        let project = &write.item;
+        self.write_entry(
+            write.target.as_ref(),
+            answers,
+            &Outgoing::Work {
+                kind: WorkKind::Project,
+                status: &project.status,
+                priority: Priority::None,
+                depends_on: &write.depends_on,
+                delivers: &[],
+                delivered_by: &[],
+                fields: Fields {
+                    id: &project.id,
+                    title: &project.title,
+                    content: project.content.as_deref(),
+                    labels: &project.labels,
+                    project: None,
+                    metadata: &project.metadata,
+                    repositories: &project.repositories,
                 },
             },
         )
