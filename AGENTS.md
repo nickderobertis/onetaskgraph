@@ -833,14 +833,18 @@ them do; this is the inventory of what is owed, not a status board.
     re-copy each have every write they make refused in turn — whole, and as one aliased
     field failing after the one before it landed — and leave the item's body and metadata
     exactly as they stood.
-73. A Linear source's `status_mapping` writes every category it names as that workflow state
-    through `task status set`, `task update`, `task create` and a copy — never another state
-    of the same type — and reads an issue at it back as that category under its name; an
-    issue already there is not written; any other state reads by its type; and `--status`
-    returns exactly the issues that read as each category. A category it leaves out is written
-    as without the key, one set to `null` and a state the team lacks are refused before any
-    write, and one state named twice is refused when the configuration is read. `sources
-    fields` reports each mapped state present or missing with its type, and refuses `--apply`.
+73. A `github-projects` or `linear` source's `status_mapping` — one grammar: a name for every
+    kind, `null`, or an object naming a `task` and a `project` — writes every category as the
+    name it gives the written item's kind, through `task status set`, `task update`, `task
+    create` and a copy, a Linear project write and a routed member project included; reads an
+    item at a name its kind maps back as that category under the name and any other name as
+    `unknown`; and `--status` returns exactly the items that read as each category, for each
+    kind. A status write it gives that kind no name for, or whose name the kind's vocabulary
+    lacks, is refused naming the source, the kind, the category and the key to set, before any
+    mutation, and a Linear source without the key refuses every one; a malformed mapping and
+    two categories on one name of one kind are refused when the configuration is read. On a
+    GitHub board a category the mapping does not mention keeps its shipped default for both
+    kinds, and a closed issue reads by its state; on Linear nothing has a default.
 74. A Linear source configured with `project` reads only that project's issues, projects and
     documents, files a task copied in with no project under it, and refuses one naming another
     project, naming both; without the key it reads team-wide.
@@ -854,6 +858,16 @@ them do; this is the inventory of what is owed, not a status board.
     and one whose slot holds another value kept out; and a cross-source edge written to a
     Linear source is established in both directions and never taken from an issue of another
     team, or of another project when the source is scoped.
+78. `sources fields` reports every name a source's `status_mapping` gives each kind against that
+    kind's vocabulary — a board's `Status` options; a Linear team's workflow states and its
+    workspace's project statuses, each with its type — and `--apply` creates every missing one,
+    a Linear name of the type its category derives, never renaming, retyping or deleting one
+    that is there, reports what it created and creates nothing a second time; a create Linear
+    refuses fails the command naming the name and its kind, beside what it had created.
+79. A Linear source reads its team, workflow states and project statuses once per instance,
+    reads them once more on a miss, and holds nothing a failed call answered; a status write is
+    one mutation and no read once they are held, a settlement-shaped update one read and one
+    mutation, and `crates/onetaskgraph-linear/budgets.yaml` holds each of those figures.
 
 ## What a copied document's references are pointed at
 
