@@ -3047,6 +3047,13 @@ impl LinearWorkspace {
         data["_linear_refuse_names"] = Value::Array(refused);
     }
 
+    /// Answer the create of a workflow state or project status named `name` other than as
+    /// asked, from now on: `"other-type"` holds it, and answers it, under a type its category
+    /// does not derive; `"no-payload"` answers success with no state or status at all.
+    pub fn misanswer_create(&self, name: &str, how: &str) {
+        self.state.lock().unwrap()["_linear_misanswer_names"][name] = json!(how);
+    }
+
     /// Lift every refusal [`Self::refuse_create`] set.
     pub fn allow_create(&self) {
         self.state.lock().unwrap()["_linear_refuse_names"] = json!([]);
@@ -4637,6 +4644,17 @@ fn linear_create_status_name(
     {
         return Err(LINEAR_REFUSED_CREATE);
     }
+    let misanswer = data["_linear_misanswer_names"][name]
+        .as_str()
+        .map(str::to_owned);
+    let root = if project {
+        ("projectStatusCreate", "status")
+    } else {
+        ("workflowStateCreate", "workflowState")
+    };
+    if misanswer.as_deref() == Some("no-payload") {
+        return Ok(json!({(root.0): {"success":true,(root.1): null}}));
+    }
     let collection = if project {
         "_linear_project_statuses"
     } else {
@@ -4652,11 +4670,16 @@ fn linear_create_status_name(
     }) {
         return Err("a name the vocabulary already holds");
     }
+    let kind = if misanswer.as_deref() == Some("other-type") {
+        json!(if project { "paused" } else { "triage" })
+    } else {
+        input["type"].clone()
+    };
     let created = if project {
-        json!({"id":format!("STATUS-W{}", held.len() + 1),"name":name,"type":input["type"],
+        json!({"id":format!("STATUS-W{}", held.len() + 1),"name":name,"type":kind,
                "position":input["position"]})
     } else {
-        json!({"id":format!("STATE-W{}", held.len() + 1),"name":name,"type":input["type"]})
+        json!({"id":format!("STATE-W{}", held.len() + 1),"name":name,"type":kind})
     };
     held.push(created.clone());
     Ok(if project {

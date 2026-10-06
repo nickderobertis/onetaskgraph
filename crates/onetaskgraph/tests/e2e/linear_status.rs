@@ -992,7 +992,7 @@ fn an_apply_linear_refuses_part_way_names_what_it_created_and_a_rerun_creates_th
     assert!(!output.status.success(), "{}", stdout(&output));
     let said = stderr(&output);
     assert!(
-        said.contains("Linear refused to create the task status \"Second\"")
+        said.contains("the create of the task status \"Second\" failed")
             && said.contains("You do not have permission")
             && said.contains("--apply"),
         "{said}"
@@ -1244,7 +1244,7 @@ fn an_apply_linear_refuses_a_project_status_for_names_it_and_a_rerun_creates_it(
     assert!(!refused.status.success(), "{}", stdout(&refused));
     let said = stderr(&refused);
     assert!(
-        said.contains("Linear refused to create the project status \"Closing\""),
+        said.contains("the create of the project status \"Closing\" failed"),
         "{said}"
     );
     let printed = stdout(&refused);
@@ -1279,6 +1279,96 @@ fn an_apply_linear_refuses_a_project_status_for_names_it_and_a_rerun_creates_it(
             .project_statuses()
             .contains(&("Closing".to_owned(), "completed".to_owned()))
     );
+}
+
+#[test]
+fn an_apply_whose_create_linear_answers_other_than_asked_fails_beside_what_it_created() {
+    // Each create after the first answered under a type its category does not derive, or
+    // with no state or status at all: neither is reported created, nor held as the mapping's.
+    for (kind, name, how, said) in [
+        (
+            "task",
+            "Second",
+            "other-type",
+            "of type unstarted with \"Second\" of type triage",
+        ),
+        (
+            "task",
+            "Second",
+            "no-payload",
+            "missing workflowStateCreate.workflowState",
+        ),
+        (
+            "project",
+            "Closing",
+            "other-type",
+            "of type completed with \"Closing\" of type paused",
+        ),
+        (
+            "project",
+            "Closing",
+            "no-payload",
+            "missing projectStatusCreate.status",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let (config, workspace) = linear_workspace_with(
+            &sandbox,
+            held(Vec::new(), Vec::new()),
+            TEAM_STATES,
+            PROJECT_STATUSES,
+        );
+        sandbox.project_document(&document(&json!({
+            "linear": linear(&config, json!({"status_mapping": {
+                "todo": {"task": "First"},
+                "queued": {"task": "Second"},
+                "done": {"project": "Closing"},
+            }})),
+        })));
+        workspace.misanswer_create(name, how);
+        let failed = run(
+            &sandbox,
+            &["--json", "sources", "fields", "linear", "--apply"],
+        );
+        assert!(!failed.status.success(), "{how}: {}", stdout(&failed));
+        let stderr = stderr(&failed);
+        assert!(
+            stderr.contains(&format!(
+                "the create of the {kind} status \"{name}\" failed"
+            )) && stderr.contains(said),
+            "{how}: {stderr}"
+        );
+        let printed = stdout(&failed);
+        let report: Value = serde_json::Deserializer::from_str(&printed)
+            .into_iter::<Value>()
+            .next()
+            .expect("the report is printed")
+            .expect("the report is JSON");
+        assert_eq!(report["refused"]["kind"], kind, "{how}: {report:#}");
+        assert_eq!(report["refused"]["name"], name, "{how}: {report:#}");
+        let created = report["names"]
+            .as_array()
+            .expect("names")
+            .iter()
+            .filter(|row| row["created"] == true)
+            .map(|row| row["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let before = if kind == "task" {
+            vec!["First"]
+        } else {
+            vec!["First", "Second"]
+        };
+        assert_eq!(
+            created, before,
+            "{how}: only what landed as asked: {report:#}"
+        );
+        assert!(
+            workspace
+                .states()
+                .contains(&("First".to_owned(), "unstarted".to_owned())),
+            "{how}: the create before it landed"
+        );
+    }
 }
 
 #[test]

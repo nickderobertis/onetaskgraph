@@ -234,9 +234,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     return Err(Failure::decided(
                         "fields",
                         format!(
-                            "source {name}: Linear refused to create the {kind} status {:?}: {}; \
+                            "source {name}: the create of the {kind} status {:?} failed: {}; \
                              every name the report marks created was created before it.\n\
-                             next: fix what Linear refused (a key without permission to change \
+                             next: fix what that names (a key without permission to change \
                              team or workspace settings, say), then run `onetaskgraph sources \
                              fields {name} --apply` again, which creates only what is still \
                              missing.",

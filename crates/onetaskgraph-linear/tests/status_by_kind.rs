@@ -47,6 +47,8 @@ struct Held {
     missing: Missing,
     /// Say the team's states run on past the page the resolution reads.
     more_states: bool,
+    /// Say the workspace's project statuses run on past the page the resolution reads.
+    more_statuses: bool,
 }
 
 /// The spellings of Linear's refusal of a mutation naming nothing, each recognised on its own.
@@ -260,7 +262,7 @@ impl Workspace {
                 } else {
                     json!([])
                 };
-                json!({"teams":{"nodes":teams},"projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":false}}})
+                json!({"teams":{"nodes":teams},"projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":held.more_statuses}}})
             }
             graphql::ISSUE => {
                 json!({"issue": held.issues.iter().find(|issue| issue["id"] == id)})
@@ -1169,4 +1171,44 @@ async fn a_resolution_that_does_not_fit_one_page_is_refused_rather_than_read_sho
         "nothing was written"
     );
     assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+}
+
+#[tokio::test]
+async fn project_statuses_that_do_not_fit_one_page_are_refused_rather_than_read_short() {
+    let workspace = hello_patient("A");
+    workspace.issue("I-1", "Todo", None);
+    workspace.project("P-1", "Planned");
+    workspace.held().more_statuses = true;
+    let source = source(&workspace, hellopatient());
+    for refused in [
+        source
+            .write_project(&project_write(StatusCategory::Done, Some("P-1")))
+            .await
+            .expect_err("more project statuses than one page"),
+        source
+            .set_task_status(&"I-1".into(), StatusCategory::Done)
+            .await
+            .expect_err("a resolution read short is not held for a task either"),
+    ] {
+        assert!(
+            refused.to_string().contains(
+                "project statuses of its workspace in one page of 250, and Linear holds more"
+            ),
+            "{refused}"
+        );
+    }
+    assert_eq!(
+        workspace.names_since(0),
+        ["RESOLUTION", "RESOLUTION"],
+        "nothing was written, and nothing read short was held"
+    );
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Planned"));
+    assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+
+    workspace.held().more_statuses = false;
+    source
+        .write_project(&project_write(StatusCategory::Done, Some("P-1")))
+        .await
+        .expect("the whole vocabulary fits once Linear says so");
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
 }

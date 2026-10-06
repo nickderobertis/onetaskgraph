@@ -765,6 +765,26 @@ struct Held {
     position: f64,
 }
 
+impl Held {
+    /// One workflow state, or — `positioned` — one project status, as Linear answered it.
+    fn read(node: &Value, positioned: bool) -> Result<Self, SourceError> {
+        Ok(Self {
+            id: NativeId(backend_id(node, "id")?.into()),
+            name: held_name(node)?,
+            kind: str_at(node, "type")?.to_owned(),
+            position: if positioned {
+                node.get("position")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "missing number field position".into(),
+                    })?
+            } else {
+                0.0
+            },
+        })
+    }
+}
+
 /// The name of one workflow state or project status Linear answered with, which no name in
 /// Linear is blank.
 fn held_name(node: &Value) -> Result<StatusName, SourceError> {
@@ -810,22 +830,6 @@ impl Vocabulary {
                 });
             }
         };
-        let held = |node: &Value, positioned: bool| -> Result<Held, SourceError> {
-            Ok(Held {
-                id: NativeId(backend_id(node, "id")?.into()),
-                name: held_name(node)?,
-                kind: str_at(node, "type")?.to_owned(),
-                position: if positioned {
-                    node.get("position")
-                        .and_then(Value::as_f64)
-                        .ok_or_else(|| SourceError::Malformed {
-                            message: "missing number field position".into(),
-                        })?
-                } else {
-                    0.0
-                },
-            })
-        };
         let nodes = |pointer: &str| {
             data.pointer(pointer)
                 .and_then(Value::as_array)
@@ -870,11 +874,11 @@ impl Vocabulary {
             team,
             states: nodes("/teams/nodes/0/states/nodes")?
                 .iter()
-                .map(|node| held(node, false))
+                .map(|node| Held::read(node, false))
                 .collect::<Result<_, _>>()?,
             statuses: nodes("/projectStatuses/nodes")?
                 .iter()
-                .map(|node| held(node, true))
+                .map(|node| Held::read(node, true))
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -3693,6 +3697,8 @@ impl LinearSource {
                         .await
                     {
                         Ok(held) => {
+                            // Linear places it where it says it did, and the next goes after.
+                            position = position.max(held.position);
                             mapped.found = Found::Created(held.kind.clone());
                             self.remember(kind, held);
                             if let Some(held) = self.held_vocabulary() {
@@ -3752,12 +3758,21 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.{payload}", root.as_str()),
             })?;
-        Ok(Held {
-            id: NativeId(backend_id(created, "id")?.into()),
-            name: held_name(created)?,
-            kind: str_at(created, "type")?.to_owned(),
-            position,
-        })
+        let held = Held::read(created, kind == ItemKind::Project)?;
+        // Held only as what was asked for: an answer naming another name or type would be
+        // remembered as this mapping's name, and reported created, when it is not.
+        if held.name.as_str() != name || held.kind != kind_of {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "Linear answered the create of {} {name:?} of type {kind_of} with {:?} of \
+                     type {}",
+                    vocabulary_word(kind),
+                    held.name.as_str(),
+                    held.kind
+                ),
+            });
+        }
+        Ok(held)
     }
 }
 
