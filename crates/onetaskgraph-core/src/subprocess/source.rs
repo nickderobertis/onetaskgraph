@@ -939,6 +939,14 @@ impl TaskSource for SubprocessSource {
         Err(self.unrendered("a document's stored template answers, which `document answers` prints and `document render` regenerates over"))
     }
 
+    async fn project_template_answers(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+        let _ = id;
+        Err(self.unrendered("a project's stored template answers, which `project answers` prints and `project render` regenerates over"))
+    }
+
     async fn write_task_rendered(
         &self,
         write: &ItemWrite<Task>,
@@ -955,6 +963,15 @@ impl TaskSource for SubprocessSource {
     ) -> Result<NativeId, SourceError> {
         let _ = (write, answers);
         Err(self.unrendered("a document create from a template"))
+    }
+
+    async fn write_project_rendered(
+        &self,
+        write: &ItemWrite<Project>,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<NativeId, SourceError> {
+        let _ = (write, answers);
+        Err(self.unrendered("a project create from a template"))
     }
 
     async fn set_task_rendering(
@@ -977,6 +994,17 @@ impl TaskSource for SubprocessSource {
     ) -> Result<Option<()>, SourceError> {
         let _ = (id, content, provenance, answers);
         Err(self.unrendered("a document's regenerate in place"))
+    }
+
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let _ = (id, content, provenance, answers);
+        Err(self.unrendered("a project's regenerate in place"))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {

@@ -100,7 +100,7 @@ impl std::fmt::Display for Sha256Digest {
     }
 }
 
-/// What a task or a document created or regenerated from a template records under
+/// What a task, a project or a document created or regenerated from a template records under
 /// [`TemplateProvenance::KEY`].
 ///
 /// An item created from a plain body records none.

@@ -110,6 +110,12 @@ mod priority;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, an
 // in-memory source and the loopback GitHub board, with no credential and no network, in a few
+// seconds. Creating and regenerating a project is the engine's, so it cannot sit behind a
+// plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod project_render;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown, an
+// in-memory source and the loopback GitHub board, with no credential and no network, in a few
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
 // crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod rendered;

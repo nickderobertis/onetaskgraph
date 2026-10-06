@@ -3491,6 +3491,27 @@ impl TaskSource for LinearSource {
         }
         Ok(Some(()))
     }
+    /// One project's rendering, on the terms of `set_task_rendering`, through one
+    /// `projectUpdate` carrying the description alone.
+    async fn set_project_rendering(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<Option<()>, SourceError> {
+        let Some((project, description)) = self.project_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut slot) = metadata_description(description.clone())?;
+        slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let rewritten = Self::described(Some(content), &slot)?;
+        if rewritten != description {
+            self.write_project_description(&project.id, rewritten.as_deref())
+                .await?;
+        }
+        Ok(Some(()))
+    }
     /// One read of the issue and one `issueUpdate` carrying only what differs; see
     /// `targeted_update`.
     async fn update_task(

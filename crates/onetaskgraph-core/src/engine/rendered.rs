@@ -1,4 +1,4 @@
-//! Tasks and documents created from a body or a template, and regenerated in place.
+//! Tasks, projects and documents created from a body or a template, and regenerated in place.
 //!
 //! An item created or regenerated from a template records where it came from under the
 //! reserved `onetaskgraph.template` key ([`TemplateProvenance`]); one created from a plain
@@ -19,13 +19,14 @@ use std::path::{Path, PathBuf};
 
 use onetaskgraph_plugin_api::{
     DependencyEdge, DependencyEndpoint, DependencyKind, Document, ItemKind, ItemWrite, Label,
-    MetadataKey, MetadataRecord, NativeId, Priority, Repository, SourceName, Status,
+    MetadataKey, MetadataRecord, NativeId, Priority, Project, Repository, SourceName, Status,
     StatusCategory, Task, TaskRef,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::copy::{Level, forward_edges};
 use super::delivery::{qualified_task, source_failed, targets};
 use super::{Delivered, Engine, EngineError, Qualified};
 use crate::GlobalId;
@@ -177,6 +178,37 @@ pub struct DocumentCreate {
     pub metadata: BTreeMap<MetadataKey, Value>,
 }
 
+/// One project to create, or replace, in one source.
+///
+/// A project the source already holds under [`ProjectCreate::id`] has its content, its
+/// provenance and — where the source keeps them — its stored answers replaced whole, and
+/// keeps everything else it holds: its status, labels and repositories unless this names
+/// them, every metadata key this does not set, and its dependencies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectCreate {
+    /// The configured source to write it in.
+    pub source: SourceName,
+    /// The id to write it under: a project the source already holds by this id is replaced,
+    /// and otherwise one is created under it where the source lets a caller name what it
+    /// creates.
+    pub id: NativeId,
+    /// Its title.
+    pub title: String,
+    /// Its content.
+    pub body: Body,
+    /// Its status category: `todo` for a new project when none is given, and the status it
+    /// holds for one being replaced.
+    pub status: Option<StatusCategory>,
+    /// The names of its labels: none for a new project when not given, and the labels it
+    /// holds for one being replaced.
+    pub labels: Option<Vec<String>>,
+    /// The repositories it concerns: none for a new project when not given, and the ones it
+    /// holds for one being replaced.
+    pub repositories: Option<Vec<Repository>>,
+    /// The caller's own metadata keys, each set over what a project being replaced holds.
+    pub metadata: BTreeMap<MetadataKey, Value>,
+}
+
 /// What creating a task came to: the task as its source reads it back, and every task it
 /// delivers, kept in step with it.
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +226,8 @@ pub enum RenderedRecord {
     Task,
     /// A project document.
     Document,
+    /// A project.
+    Project,
 }
 
 impl fmt::Display for RenderedRecord {
@@ -207,6 +241,7 @@ impl RenderedRecord {
         match self {
             Self::Task => "task",
             Self::Document => "document",
+            Self::Project => "project",
         }
     }
 
@@ -214,6 +249,7 @@ impl RenderedRecord {
         match self {
             Self::Task => EngineError::NoSuchTask { id: id.to_string() },
             Self::Document => EngineError::NoSuchDocument { id: id.to_string() },
+            Self::Project => EngineError::NoSuchProject { id: id.to_string() },
         }
     }
 }
@@ -243,7 +279,7 @@ impl Default for RenderTemplate {
     }
 }
 
-/// What `task render` and `document render` are asked.
+/// What `task render`, `project render` and `document render` are asked.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderRequest {
     /// The template to render.
@@ -255,7 +291,7 @@ pub struct RenderRequest {
     pub dry_run: bool,
 }
 
-/// What `task render` and `document render` answer with.
+/// What `task render`, `project render` and `document render` answer with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Regenerated {
     /// The item regenerated.
@@ -271,9 +307,9 @@ pub struct Regenerated {
     pub body: String,
 }
 
-/// What `task answers` and `document answers` answer with: the resolved answers an item was
-/// last rendered from — defaults applied, `null` for an optional variable given neither — by
-/// variable name, exactly as its source keeps them.
+/// What `task answers`, `project answers` and `document answers` answer with: the resolved
+/// answers an item was last rendered from — defaults applied, `null` for an optional variable
+/// given neither — by variable name, exactly as its source keeps them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct TemplateAnswers(pub BTreeMap<String, Value>);
@@ -339,7 +375,7 @@ impl fmt::Display for UnusedAnswers {
 ///
 /// [`Engine::regeneration`] answers one and [`Engine::regenerate`] renders and writes it — the
 /// two halves apart so a caller that asks for answers, as the command line does when
-/// interactive, can ask between them. [`Engine::render_task`] and
+/// interactive, can ask between them. [`Engine::render_task`], [`Engine::render_project`] and
 /// [`Engine::render_document`] are the two together.
 #[derive(Debug, Clone)]
 pub struct Regeneration {
@@ -646,12 +682,112 @@ impl Engine {
         Ok(Qualified { id, item: document })
     }
 
-    /// The answers the task or document `id` was last rendered from, as its source keeps them.
+    /// Create one project, or replace the one the source holds under [`ProjectCreate::id`],
+    /// from a plain body or a template's rendering.
+    ///
+    /// A replacement lands the content, the provenance and — where the source keeps them — the
+    /// answers whole, as a create does, and writes back what the project holds otherwise: its
+    /// status, labels and repositories unless the request names them, every metadata key the
+    /// request does not set, and its dependencies. A plain body records no provenance, so it
+    /// takes away the entry a rendering recorded.
     ///
     /// # Errors
     ///
-    /// [`EngineError::NoSuchTask`] or [`EngineError::NoSuchDocument`] when the item is not
-    /// there, [`EngineError::NoStoredAnswers`] naming it when none are stored for it — which
+    /// [`EngineError::UnknownSource`] and [`EngineError::SourceUnavailable`] for a source that
+    /// cannot be reached, [`EngineError::NotCreatable`] for one with no write side — neither is
+    /// written — and [`EngineError::SourceFailed`] when the source refuses the project.
+    pub async fn create_project(
+        &self,
+        request: &ProjectCreate,
+    ) -> Result<Qualified<Project>, EngineError> {
+        let source = self.creatable(&request.source, MetadataRecord::Project)?;
+        let held = source
+            .source()
+            .get_project(&request.id)
+            .await
+            .map_err(|error| source_failed(source, error))?;
+        let Parts {
+            content,
+            metadata: given,
+            answers,
+        } = request.body.parts(&request.metadata);
+        let (target, depends_on, mut metadata, status, labels, repositories) = match held {
+            Some(held) => {
+                let edges = forward_edges(source, &held.id, Level::Project).await?;
+                let mut kept = held.metadata;
+                kept.remove(TemplateProvenance::KEY);
+                (
+                    Some(held.id),
+                    edges,
+                    kept,
+                    held.status,
+                    held.labels,
+                    held.repositories,
+                )
+            }
+            None => {
+                let category = StatusCategory::Todo;
+                (
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                    Status {
+                        category,
+                        name: category_word(category),
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                )
+            }
+        };
+        metadata.extend(given);
+        let status = request.status.map_or(status, |category| Status {
+            category,
+            name: category_word(category),
+        });
+        let write = ItemWrite {
+            target,
+            item: Project {
+                id: request.id.clone(),
+                title: request.title.clone(),
+                content: Some(content),
+                status,
+                labels: request.labels.as_deref().map_or(labels, self::labels),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata,
+                repositories: request.repositories.clone().unwrap_or(repositories),
+            },
+            depends_on,
+        };
+        let written = match answers {
+            Some(answers) => {
+                source
+                    .source()
+                    .write_project_rendered(&write, answers)
+                    .await
+            }
+            None => source.source().write_project(&write).await,
+        }
+        .map_err(|error| source_failed(source, error))?;
+        let id = GlobalId::new(request.source.clone(), written);
+        let project = source
+            .source()
+            .get_project(&id.native)
+            .await
+            .map_err(|error| source_failed(source, error))?
+            .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?;
+        Ok(Qualified { id, item: project })
+    }
+
+    /// The answers the task, project or document `id` was last rendered from, as its source keeps them.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoSuchTask`], [`EngineError::NoSuchProject`] or
+    /// [`EngineError::NoSuchDocument`] when the item is not there, [`EngineError::NoStoredAnswers`] naming it when none are stored for it — which
     /// is every item of a source that keeps none — and [`EngineError::SourceFailed`] when the
     /// source cannot answer.
     pub async fn template_answers(
@@ -677,12 +813,13 @@ impl Engine {
             })
     }
 
-    /// Read everything a regenerate of the task or document `id` needs, before it renders.
+    /// Read everything a regenerate of the task, project or document `id` needs, before it
+    /// renders.
     ///
     /// # Errors
     ///
-    /// [`EngineError::NoSuchTask`] or [`EngineError::NoSuchDocument`] when the item is not
-    /// there; [`EngineError::NoTemplate`] when no template is given and the item records
+    /// [`EngineError::NoSuchTask`], [`EngineError::NoSuchProject`] or
+    /// [`EngineError::NoSuchDocument`] when the item is not there; [`EngineError::NoTemplate`] when no template is given and the item records
     /// none; [`EngineError::MalformedProvenance`] when no template is given and the entry it
     /// records is not one this product writes; [`EngineError::TemplateNotAFile`] when no template is given and the one it
     /// records is not a readable file, which only a loader document can then stand in for;
@@ -835,6 +972,17 @@ impl Engine {
                         )
                         .await
                 }
+                RenderedRecord::Project => {
+                    source
+                        .source()
+                        .set_project_rendering(
+                            &id.native,
+                            &rendered.body,
+                            &value,
+                            &rendered.answers,
+                        )
+                        .await
+                }
             }
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| regeneration.record.no_such(id))?;
@@ -860,6 +1008,24 @@ impl Engine {
         request: &RenderRequest,
     ) -> Result<Regenerated, EngineError> {
         let regeneration = self.regeneration(RenderedRecord::Task, id, request).await?;
+        self.regenerate(&regeneration, &request.answers, request.dry_run)
+            .await
+    }
+
+    /// Regenerate one project in place, on the terms of [`render_task`](Self::render_task):
+    /// its content, its provenance and its stored answers, and nothing else about it.
+    ///
+    /// # Errors
+    ///
+    /// As [`render_task`](Self::render_task).
+    pub async fn render_project(
+        &self,
+        id: &GlobalId,
+        request: &RenderRequest,
+    ) -> Result<Regenerated, EngineError> {
+        let regeneration = self
+            .regeneration(RenderedRecord::Project, id, request)
+            .await?;
         self.regenerate(&regeneration, &request.answers, request.dry_run)
             .await
     }
@@ -917,6 +1083,11 @@ impl Engine {
                 .get_document(&id.native)
                 .await
                 .map(|document| document.map(|document| (document.content, document.metadata))),
+            RenderedRecord::Project => source
+                .source()
+                .get_project(&id.native)
+                .await
+                .map(|project| project.map(|project| (project.content, project.metadata))),
         }
         .map_err(|error| source_failed(source, error))?;
         let (content, metadata) = read.ok_or_else(|| record.no_such(id))?;
@@ -933,6 +1104,7 @@ impl Engine {
         match record {
             RenderedRecord::Task => source.source().task_template_answers(&id.native).await,
             RenderedRecord::Document => source.source().document_template_answers(&id.native).await,
+            RenderedRecord::Project => source.source().project_template_answers(&id.native).await,
         }
         .map_err(|error| source_failed(source, error))
     }

@@ -49,9 +49,12 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("document", "metadata", "set"): ("id", "key", "value"),
     ("document", "render"): ("id",),
     ("document", "show"): ("id",),
+    ("project", "answers"): ("id",),
     ("project", "copy"): ("id",),
+    ("project", "create"): ("source",),
     ("project", "deps"): ("id",),
     ("project", "metadata", "set"): ("id", "key", "value"),
+    ("project", "render"): ("id",),
     ("project", "show"): ("id",),
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
@@ -445,6 +448,24 @@ class GeneratedClient:
             source=source,
         )
 
+    async def project_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers:
+        """Run ``onetaskgraph project answers``."""
+        return await self._invoke(
+            ["project", "answers"],
+            TemplateAnswers,
+            id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
     async def project_copy(
         self,
         id: GlobalId | str,
@@ -473,6 +494,58 @@ class GeneratedClient:
             recreate=recreate,
             set=set,
             to=to,
+        )
+
+    async def project_create(
+        self,
+        source: SourceName | str,
+        id: str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> QueryResponseOfQualifiedProject:
+        """Run ``onetaskgraph project create``."""
+        return await self._invoke(
+            ["project", "create"],
+            QueryResponseOfQualifiedProject,
+            source=source,
+            id=id,
+            title=title,
+            body_file=body_file,
+            default_sources=default_sources,
+            label=label,
+            metadata=_strings("project_create", "metadata", metadata),
+            page_size=page_size,
+            repository=_strings("project_create", "repository", repository),
+            search_path=_strings("project_create", "search_path", search_path),
+            set=set,
+            status=status,
+            template=template,
+            template_loader=template_loader,
+            var=_strings("project_create", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin(
+                "project_create",
+                body,
+                answers,
+                template is not None or template_loader is not None or body_file is not None,
+            ),
         )
 
     async def project_deps(
@@ -570,6 +643,39 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+        )
+
+    async def project_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated:
+        """Run ``onetaskgraph project render``."""
+        return await self._invoke(
+            ["project", "render"],
+            Regenerated,
+            id=id,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            search_path=_strings("project_render", "search_path", search_path),
+            set=set,
+            template=template,
+            template_loader=template_loader,
+            unset=_strings("project_render", "unset", unset),
+            var=_strings("project_render", "var", var),
+            answers=None if answers is None else "-",
+            stdin=_stdin("project_render", None, answers),
         )
 
     async def project_show(
