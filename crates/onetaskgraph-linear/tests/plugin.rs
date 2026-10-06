@@ -6671,3 +6671,32 @@ async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_content
     assert_eq!(after.metadata.get(key.as_str()), Some(&answers));
     assert_eq!(after.metadata.get("onepipeline.budgets"), Some(&answers));
 }
+
+/// The breaking half of moving a project's long form: a project an earlier release wrote, whose
+/// description and metadata slot are still in its `description`, is read from its `content`
+/// alone. The query asks Linear for `content` and never for `description`, so even a workspace
+/// that answered both is not read for the old field, and such a project reads with no content
+/// and no metadata until it is copied again or migrated — never with a slot guessed back out.
+#[tokio::test]
+async fn a_project_whose_slot_is_still_in_its_description_is_read_from_its_content_alone() {
+    let legacy = "Written by an earlier release.\n\n<!-- onetaskgraph.metadata `{\"onetaskgraph.origin\":\"plan:P-1\"}` -->";
+    let (endpoint, wire) = response_server(vec![serde_json::json!({"project":{
+        "id":"P-OLD","name":"Old plan","description":legacy,"content":null,"url":null,
+        "createdAt":null,"updatedAt":null,"archivedAt":null,
+        "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}}})]);
+    let project = writable_source(&endpoint)
+        .get_project(&"P-OLD".into())
+        .await
+        .unwrap()
+        .expect("the project is held");
+    assert_eq!(project.content, None);
+    assert!(project.metadata.is_empty(), "{:?}", project.metadata);
+    let query = sent(&wire.recv().unwrap())["query"]
+        .as_str()
+        .expect("a query")
+        .to_owned();
+    assert!(
+        query.contains(" content ") && !query.contains("description"),
+        "{query}"
+    );
+}

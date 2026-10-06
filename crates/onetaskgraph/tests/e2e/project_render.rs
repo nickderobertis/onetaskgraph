@@ -583,6 +583,8 @@ fn a_create_over_a_held_project_replaces_its_rendering_and_keeps_everything_else
             "shipped",
             "--metadata",
             "myapp.size=5",
+            "--repository",
+            "github.com/acme/gadgets",
         ],
     );
     let again = plan.project(&id);
@@ -596,7 +598,7 @@ fn a_create_over_a_held_project_replaces_its_rendering_and_keeps_everything_else
             .collect::<Vec<_>>(),
         vec![json!("shipped")]
     );
-    assert_eq!(again["repositories"], before["repositories"]);
+    assert_eq!(again["repositories"], json!(["github.com/acme/gadgets"]));
     assert_eq!(again["metadata"]["myapp.size"], json!(5));
     assert_eq!(again["metadata"]["myapp.owner"], "ops");
     let answers = plan.json(&["project", "answers", &id]);
@@ -667,7 +669,7 @@ fn a_render_keeps_every_other_field_and_writes_nothing_when_nothing_would_change
             "myapp.owner=\"ops\"",
         ],
     );
-    // A dependency and a second metadata key, written after the create, both survive a render.
+    // A second metadata key, written after the create, survives a render.
     plan.exits(&["project", "metadata", "set", &id, "myapp.size", "3"], 0);
     let before = plan.project(&id);
 
@@ -818,7 +820,7 @@ fn a_hand_edited_project_is_regenerated_or_refused_as_a_hand_edited_document_is(
 }
 
 #[test]
-fn every_other_project_write_keeps_its_answers_block_byte_for_byte() {
+fn a_metadata_write_and_a_copy_over_a_rendered_project_keep_its_answers_block_byte_for_byte() {
     let plan = Plan::new();
     let id = plan.create(
         "notes",
@@ -828,7 +830,6 @@ fn every_other_project_write_keeps_its_answers_block_byte_for_byte() {
     );
     let held = block(&plan.notes_file(&id)).to_owned();
 
-    // A metadata write.
     plan.exits(&["project", "metadata", "set", &id, "myapp.size", "3"], 0);
     let file = plan.notes_file(&id);
     assert_eq!(
@@ -1047,6 +1048,47 @@ fn a_rendered_project_with_ten_kilobytes_of_metadata_copies_into_a_board_and_lin
         assert_eq!(
             plan.project(&landed)["metadata"]["onepipeline.budgets"],
             answers
+        );
+        // Regenerated where it landed, from every required answer: its description and a
+        // fresh entry move, and the caller's key of that size stays whole beside them.
+        let regenerated = plan.json(&[
+            "project",
+            "render",
+            &landed,
+            "--template",
+            &plan.template(),
+            "--search-path",
+            &plan.search_path(),
+            "--var",
+            &format!("goal=Regenerated on {destination}"),
+            "--no-interactive",
+        ]);
+        assert_eq!(regenerated["changed"], true, "{destination}");
+        let after = plan.project(&landed);
+        assert_eq!(after["content"], regenerated["body"], "{destination}");
+        assert!(
+            after["content"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Goal: Regenerated on {destination}")),
+            "{destination}"
+        );
+        assert_eq!(
+            after["metadata"]["onetaskgraph.template"]["body_digest"],
+            json!(sha256(after["content"].as_str().unwrap())),
+            "{destination}"
+        );
+        assert_eq!(
+            after["metadata"]["onepipeline.budgets"], answers,
+            "{destination}"
+        );
+        assert_eq!(
+            after["title"], copy["title"],
+            "{destination}: the title is kept"
+        );
+        assert_eq!(
+            after["status"], copy["status"],
+            "{destination}: the status is kept"
         );
     }
 }

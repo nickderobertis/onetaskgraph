@@ -86,7 +86,8 @@ RESPONSE_ROOTS = {
 # `LinearConfig` is a `linear` source's configuration — its `status_mapping` and its `project` —
 # which a caller writing one models by name. `StatusMapping` is that `status_mapping`'s one
 # grammar, which a `github-projects` source's configuration reaches too, and which a caller
-# writing either models by name.
+# writing either models by name. `NativeId` is a source's own id for one item, which `project
+# create --id` takes by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -95,6 +96,7 @@ CONTRACT_ROOTS = {
     "StatusCategory",
     "Priority",
     "SourceName",
+    "NativeId",
     "Document",
     "DocumentQuery",
     "Location",
@@ -244,7 +246,7 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     # `project create` names the id it writes under, which is required and is a project's own
     # native id rather than a document's, and a status.
     ("project", "create"): {
-        "id": OptionShape(type="str", placeholder="NATIVE-ID"),
+        "id": OptionShape(type="NativeId | str", placeholder="NATIVE-ID"),
         "status": OptionShape(type="choices", placeholder="CATEGORY"),
     },
     # `task list` keeps the tasks holding a metadata string at a key and nested path, where every
@@ -763,7 +765,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         *[
             f"    {root},"
             for root in sorted(
-                response_roots() | {"GlobalId", "Priority", "SourceName", "StatusCategory"}
+                response_roots()
+                | {"GlobalId", "NativeId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
         ")",

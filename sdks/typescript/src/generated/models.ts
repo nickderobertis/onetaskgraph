@@ -1792,6 +1792,18 @@ value: unknown
 
 }
 export type MetadataSet = GeneratedMetadataSet.MetadataSet;
+export namespace GeneratedNativeId {
+/**
+ * A source's own opaque identifier for one item.
+ *
+ * Deliberately unvalidated: a native id is whatever the upstream system says it
+ * is, colons included. The engine parses a qualified id by splitting on the
+ * *first* colon precisely so this stays true.
+ */
+export type NativeId = string
+
+}
+export type NativeId = GeneratedNativeId.NativeId;
 export namespace GeneratedNewComment {
 /**
  * One comment to add to a task.

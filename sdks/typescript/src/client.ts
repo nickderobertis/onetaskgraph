@@ -11,6 +11,7 @@ import type {
   EffectiveConfig,
   FieldsReport,
   MetadataSet,
+  NativeId,
   Priority,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
@@ -1003,7 +1004,7 @@ export class OnetaskgraphClient {
   // rendered from a template or given as it is; it answers as `projectShow` does.
   async projectCreate(
     source: string,
-    id: string,
+    id: NativeId,
     title: string,
     options: ProjectCreateOptions = {},
   ): Promise<QueryResponseOfQualifiedProject> {

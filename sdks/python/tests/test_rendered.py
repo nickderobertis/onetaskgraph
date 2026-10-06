@@ -19,6 +19,7 @@ import pytest
 
 from onetaskgraph_sdk import (
     Client,
+    NativeId,
     OnetaskgraphError,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedProject,
@@ -154,7 +155,7 @@ def test_a_project_is_created_regenerated_and_its_answers_read(
     created = run(
         client.project_create(
             "notes",
-            "plan-1",
+            NativeId("plan-1"),
             "The plan",
             template=str(template),
             answers={"goal": "Plan it"},

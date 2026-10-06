@@ -1556,7 +1556,7 @@ const THIRTIETH_BUNDLE_SHAPE: [(&str, u64); 95] = [
 /// The exact schema bundle published as version 31: version 30's document with projects among
 /// the items `Regenerated`, `TemplateAnswers` and `TemplateProvenance` describe — what
 /// `project render` and `project answers` answer with, and the entry `project create` records.
-const THIRTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 95] = [
+const THIRTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 96] = [
     ("Capabilities", 0x2f298b2a19e928e1),
     ("Comment", 0xfc9fab5a2266887e),
     ("CommentList", 0xcd30d5deff29948d),
@@ -1587,6 +1587,7 @@ const THIRTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 95] = [
     ("LinearConfig", 0x10a5b658053e0912),
     ("Location", 0x0690620b049c989a),
     ("MetadataSet", 0x1aa477c3499d2a40),
+    ("NativeId", 0x0150d4025c258cb8),
     ("NewComment", 0xda981b6b61244e61),
     ("Origin", 0x653235a0d0c3576e),
     ("OutputFormat", 0xa8a85cfd04d98684),

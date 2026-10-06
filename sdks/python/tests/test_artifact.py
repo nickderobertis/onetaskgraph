@@ -283,6 +283,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
         assert generate.RESPONSE_ROOTS[verb] == root, verb
         assert root in bundle["roots"], root
     assert "project" in json.dumps(emitted_bundle["roots"]["TemplateProvenance"])
+    # And a source's own id for one item, which `project create --id` takes, by name.
+    assert "NativeId" in bundle["roots"]
+    assert "NativeId" in generate.CONTRACT_ROOTS
+    from onetaskgraph_sdk import NativeId
+
+    assert NativeId.model_validate("plan:with:colons").root == "plan:with:colons"
     # Version 30 published the one `status_mapping` grammar as a root of its own, and the
     # generated package models it: a name for every kind, `null`, or a name per kind.
     assert "StatusMapping" in bundle["roots"]

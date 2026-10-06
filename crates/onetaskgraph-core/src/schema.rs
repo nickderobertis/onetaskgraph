@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Priority,
-    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
+    DocumentQuery, Health, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
     StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields,
     UpdatedField,
 };
@@ -71,6 +71,9 @@ pub fn schema_bundle() -> Value {
     // `task priority set` and `task list --priority` take one by name.
     roots.insert("Priority", schema_for!(Priority));
     roots.insert("SourceName", schema_for!(SourceName));
+    // A root of its own although every item reaches it, for the reason `SourceName` is one:
+    // `project create --id` takes one by name, a source's own id for the project it writes.
+    roots.insert("NativeId", schema_for!(NativeId));
     roots.insert("DependencyEdge", schema_for!(DependencyEdge));
     roots.insert("DependencyEndpoint", schema_for!(DependencyEndpoint));
     roots.insert("QualifiedEndpoint", schema_for!(QualifiedEndpoint));

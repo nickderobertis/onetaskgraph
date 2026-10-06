@@ -17,6 +17,7 @@ from .models import (
     FieldsReport,
     GlobalId,
     MetadataSet,
+    NativeId,
     Priority,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
@@ -499,7 +500,7 @@ class GeneratedClient:
     async def project_create(
         self,
         source: SourceName | str,
-        id: str,
+        id: NativeId | str,
         title: str,
         *,
         body_file: str | None = None,

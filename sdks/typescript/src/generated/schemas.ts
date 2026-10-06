@@ -3197,6 +3197,12 @@ export const runtimeSchemas = {
     "title": "MetadataSet",
     "type": "object"
   },
+  "NativeId": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+    "title": "NativeId",
+    "type": "string"
+  },
   "NewComment": {
     "$defs": {
       "CommentBody": {

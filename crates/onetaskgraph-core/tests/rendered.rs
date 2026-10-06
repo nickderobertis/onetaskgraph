@@ -1,4 +1,4 @@
-//! Tasks and documents created from a template, their stored answers read, and both
+//! Tasks, projects and documents created from a template, their stored answers read, and each
 //! regenerated in place — through the crate-root API alone, without the binary.
 //!
 //! Every test drives a real `local-md` folder, which keeps answers, and asserts on what a
@@ -10,11 +10,11 @@ use std::path::Path;
 
 use onetaskgraph_core::{
     Answers, Body, Config, CopyItems, CopyRequest, CopyScope, DocumentCreate, Engine, EngineError,
-    GlobalId, LoaderDocument, RenderRequest, RenderTemplate, RenderedRecord, RenderedTemplate,
-    TaskCreate, TemplateError, TemplateInput, TemplateProvenance,
+    GlobalId, LoaderDocument, ProjectCreate, RenderRequest, RenderTemplate, RenderedRecord,
+    RenderedTemplate, TaskCreate, TemplateError, TemplateInput, TemplateProvenance,
 };
 use onetaskgraph_plugin_api::{
-    Location, MetadataKey, NativeId, SecretResolver, SourceName, StatusCategory,
+    Location, MetadataKey, NativeId, Repository, SecretResolver, SourceName, StatusCategory,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -45,6 +45,7 @@ impl Fixture {
         let root = tempfile::tempdir().expect("a folder of notes");
         fs::create_dir_all(root.path().join("tasks")).unwrap();
         fs::create_dir_all(root.path().join("documents")).unwrap();
+        fs::create_dir_all(root.path().join("projects")).unwrap();
         let templates = tempfile::tempdir().expect("a template directory");
         fs::write(templates.path().join("task.md"), ENTRY).unwrap();
         let config = Config::from_document(json!({"sources": {
@@ -704,6 +705,122 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
             .as_str(),
         regenerated.body_digest.as_str()
     );
+}
+
+#[tokio::test]
+async fn a_project_is_created_and_regenerated_through_the_engine_on_both_kinds_of_source() {
+    let fixture = Fixture::new();
+    let template = TemplateInput::Loader(fixture.loader(BASE));
+    let request = RenderRequest {
+        template: RenderTemplate::Given(template.clone()),
+        answers: answers(json!({"goal": "Plan it"})),
+        ..RenderRequest::default()
+    };
+    let rendering = fixture
+        .engine
+        .regeneration(
+            RenderedRecord::Project,
+            &GlobalId::new(name("work"), NativeId::from("none")),
+            &request,
+        )
+        .await;
+    assert!(
+        matches!(rendering, Err(EngineError::NoSuchProject { .. })),
+        "a project the source does not hold is refused as one: {rendering:?}"
+    );
+
+    for source in ["work", "memory"] {
+        let created = fixture
+            .engine
+            .create_project(&ProjectCreate {
+                source: name(source),
+                id: NativeId::from("plan"),
+                title: "The plan".to_owned(),
+                body: Body::plain("Written by hand."),
+                status: Some(StatusCategory::InProgress),
+                labels: Some(vec!["budget".to_owned()]),
+                repositories: Some(vec![
+                    Repository::try_from("github.com/acme/widgets".to_owned()).unwrap(),
+                ]),
+                metadata: BTreeMap::from([(
+                    MetadataKey::new("myapp.owner").unwrap(),
+                    json!("ops"),
+                )]),
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.item.content.as_deref(), Some("Written by hand."));
+        assert!(
+            TemplateProvenance::read(&created.item.metadata)
+                .unwrap()
+                .is_none()
+        );
+
+        let regenerated = fixture
+            .engine
+            .render_project(&created.id, &request)
+            .await
+            .unwrap();
+        assert!(regenerated.changed, "{source}");
+        let read = fixture
+            .engine
+            .project(&created.id)
+            .await
+            .unwrap()
+            .items
+            .remove(0)
+            .item;
+        assert_eq!(
+            read.content.as_deref(),
+            Some(regenerated.body.as_str()),
+            "{source}"
+        );
+        assert_eq!(read.title, "The plan", "{source}: the title is kept");
+        assert_eq!(read.status.category, StatusCategory::InProgress, "{source}");
+        assert_eq!(read.labels.len(), 1, "{source}: the labels are kept");
+        assert_eq!(read.repositories, created.item.repositories, "{source}");
+        assert_eq!(read.metadata["myapp.owner"], json!("ops"), "{source}");
+        let provenance = TemplateProvenance::read(&read.metadata).unwrap().unwrap();
+        assert_eq!(provenance.template, "caller:task/default");
+        assert_eq!(provenance.body_digest.as_str(), sha256(&regenerated.body));
+
+        // A folder keeps the answers in the project's file; an in-memory source keeps none.
+        let stored = fixture
+            .engine
+            .template_answers(RenderedRecord::Project, &created.id)
+            .await;
+        if source == "work" {
+            assert_eq!(
+                stored.unwrap().0,
+                BTreeMap::from([
+                    ("goal".to_owned(), json!("Plan it")),
+                    ("owner".to_owned(), Value::Null),
+                    ("steps".to_owned(), json!([])),
+                ])
+            );
+        } else {
+            assert!(
+                matches!(stored, Err(EngineError::NoStoredAnswers { .. })),
+                "{stored:?}"
+            );
+        }
+
+        // The same request again writes nothing on the folder, whose answers it starts from.
+        if source == "work" {
+            let again = fixture
+                .engine
+                .render_project(
+                    &created.id,
+                    &RenderRequest {
+                        template: RenderTemplate::Given(template.clone()),
+                        ..RenderRequest::default()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(!again.changed);
+        }
+    }
 }
 
 #[test]
