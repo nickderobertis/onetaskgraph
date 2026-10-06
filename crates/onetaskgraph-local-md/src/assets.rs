@@ -51,6 +51,21 @@ pub(crate) fn listed(record: &Path) -> Result<Vec<Asset>, SourceError> {
     Ok(assets)
 }
 
+/// Every asset the record whose file is `record` holds, with its bytes: what putting the
+/// record's assets back after a failed write restores.
+pub(crate) fn files(record: &Path) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
+    held(&directory_of(record))?
+        .into_iter()
+        .map(|(name, path)| {
+            fs::read(&path)
+                .map(|bytes| (name, bytes))
+                .map_err(|e| SourceError::Unavailable {
+                    message: format!("cannot read {}: {e}", path.display()),
+                })
+        })
+        .collect()
+}
+
 /// The bytes of the asset `name` the record whose file is `record` holds, when it holds it.
 pub(crate) fn bytes(record: &Path, name: &AssetName) -> Result<Option<Vec<u8>>, SourceError> {
     let path = directory_of(record).join(name.as_str());

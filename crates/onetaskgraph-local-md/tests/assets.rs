@@ -493,4 +493,44 @@ async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_stagin
         vec!["a.png"],
         "no staging file is left beside it"
     );
+    assert!(
+        !root.path().join("tasks/blocked.md").exists(),
+        "the create is taken back whole"
+    );
+
+    // An update whose assets cannot be installed leaves the record and its assets as they were.
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("held", "![b](./b.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("b.png", b"before")]),
+        )
+        .await
+        .expect("lands");
+    let file = root.path().join("tasks/held.md");
+    let text = fs::read_to_string(&file).expect("the record");
+    let blocked = root.path().join("tasks/held.assets/a.png");
+    fs::create_dir_all(&blocked).expect("a directory in the asset's place");
+    fs::write(blocked.join("inside"), "keeps it non-empty").expect("a file");
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: Some(id("held")),
+                item: task("held", "![a](./a.png) ![b](./b.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"new"), ("b.png", b"after")]),
+        )
+        .await
+        .expect_err("the asset cannot be written");
+    assert_eq!(fs::read_to_string(&file).expect("the record"), text);
+    assert_eq!(
+        fs::read(root.path().join("tasks/held.assets/b.png")).expect("the asset"),
+        b"before"
+    );
 }

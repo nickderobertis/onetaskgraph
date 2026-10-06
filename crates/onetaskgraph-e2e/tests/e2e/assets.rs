@@ -934,6 +934,49 @@ fn a_task_copy_and_a_document_copy_each_carry_their_assets_byte_for_byte() {
 }
 
 #[test]
+fn a_copy_whose_assets_cannot_be_installed_leaves_the_destination_as_it_was() {
+    let folders = Folders::new();
+    let (task, ..) = rendered_pair(&folders, 180);
+    let report = folders.copy(&["task", "copy", &task, "--to", "back"]);
+    let copied = landed(&report);
+    let native = copied.split_once(':').expect("qualified").1;
+    let file = folders.back.join(format!("tasks/{native}.md"));
+    let before = std::fs::read(&file).expect("the copied record");
+    let held = folders.back.join(format!("tasks/{native}.assets"));
+    let screen = std::fs::read(held.join("screen.png")).expect("the copied asset");
+
+    // The source gains a picture whose place at the destination is taken by a directory.
+    let extra = folders.image("extra", "extra.gif", &images::gif(181));
+    let both = folders.text("both.yaml", "shots: [screen.png, detail.webp, extra.gif]\n");
+    folders.exits(
+        &[
+            "task",
+            "render",
+            &task,
+            "--no-interactive",
+            "--answers",
+            &both,
+            "--asset",
+            &extra,
+        ],
+        0,
+    );
+    std::fs::create_dir_all(held.join("extra.gif").join("inside")).expect("a blocking directory");
+
+    let said = folders.refused(&["task", "copy", &task, "--to", "back"]);
+    assert!(said.contains("extra.gif"), "{said}");
+    assert_eq!(
+        std::fs::read(&file).expect("the record"),
+        before,
+        "the record as it was"
+    );
+    assert_eq!(
+        std::fs::read(held.join("screen.png")).expect("the asset"),
+        screen
+    );
+}
+
+#[test]
 fn a_copy_into_a_source_that_stores_no_assets_is_refused_naming_it_and_writes_nothing() {
     let folders = Folders::new();
     let (task, document, ..) = rendered_pair(&folders, 70);

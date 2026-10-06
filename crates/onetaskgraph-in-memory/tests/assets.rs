@@ -252,3 +252,39 @@ async fn a_name_given_twice_and_a_reuse_of_bytes_this_source_never_held_are_refu
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn deleting_a_document_takes_its_assets_with_it() {
+    let source = source("native");
+    let written = source
+        .write_document_with_assets(
+            &ItemWrite {
+                target: None,
+                item: serde_json::from_value::<Document>(
+                    json!({"id": "D-1", "title": "Design", "content": "![a](./a.png)", "labels": []}),
+                )
+                .unwrap(),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"aaa")]),
+        )
+        .await
+        .expect("lands");
+    assert_eq!(source.document_assets(&written.id).await.unwrap().len(), 1);
+    source.delete_document(&written.id).await.expect("removed");
+    assert!(
+        source
+            .document_assets(&written.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        source
+            .document_asset(&written.id, &name("a.png"))
+            .await
+            .unwrap(),
+        None
+    );
+}

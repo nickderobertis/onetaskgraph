@@ -1565,8 +1565,9 @@ impl TaskSource for LocalMdSource {
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
         let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
+        let before = self.snapshot(Kind::Task, write.target.as_ref())?;
         let id = self.write_task_with(write, answers)?;
-        assets::replace(&self.existing(Kind::Task, &id)?, &files)?;
+        self.install(Kind::Task, &id, &files, before)?;
         Ok(AssetsWritten {
             id,
             content: write.item.content.clone(),
@@ -1581,8 +1582,9 @@ impl TaskSource for LocalMdSource {
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
         let files = self.asset_files(Kind::Document, write.target.as_ref(), assets)?;
+        let before = self.snapshot(Kind::Document, write.target.as_ref())?;
         let id = self.write_document_with(write, answers)?;
-        assets::replace(&self.existing(Kind::Document, &id)?, &files)?;
+        self.install(Kind::Document, &id, &files, before)?;
         Ok(AssetsWritten {
             id,
             content: write.item.content.clone(),
@@ -1599,6 +1601,7 @@ impl TaskSource for LocalMdSource {
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
         let files = self.asset_files(Kind::Task, Some(id), assets)?;
+        let before = self.snapshot(Kind::Task, Some(id))?;
         if self
             .set_task_rendering(id, content, provenance, answers)
             .await?
@@ -1606,7 +1609,7 @@ impl TaskSource for LocalMdSource {
         {
             return Ok(None);
         }
-        assets::replace(&self.existing(Kind::Task, id)?, &files)?;
+        self.install(Kind::Task, id, &files, before)?;
         Ok(Some(AssetsWritten {
             id: id.clone(),
             content: (!content.is_empty()).then(|| content.to_owned()),
@@ -1623,6 +1626,7 @@ impl TaskSource for LocalMdSource {
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
         let files = self.asset_files(Kind::Document, Some(id), assets)?;
+        let before = self.snapshot(Kind::Document, Some(id))?;
         if self
             .set_document_rendering(id, content, provenance, answers)
             .await?
@@ -1630,7 +1634,7 @@ impl TaskSource for LocalMdSource {
         {
             return Ok(None);
         }
-        assets::replace(&self.existing(Kind::Document, id)?, &files)?;
+        self.install(Kind::Document, id, &files, before)?;
         Ok(Some(AssetsWritten {
             id: id.clone(),
             content: (!content.is_empty()).then(|| content.to_owned()),
@@ -3163,6 +3167,51 @@ impl LocalMdSource {
         assets::remove(&path)
     }
 
+    /// The file and the assets of the item `target` names, as they are before a write over it:
+    /// `None` for a create, or a target this folder does not hold.
+    fn snapshot(&self, kind: Kind, target: Option<&NativeId>) -> Result<Option<Held>, SourceError> {
+        let Some(path) = target
+            .map(|target| self.locate(kind, target))
+            .transpose()?
+            .flatten()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Held {
+            text: Self::read_text(&path)?,
+            assets: assets::files(&path)?,
+        }))
+    }
+
+    /// Make the item `id` hold exactly `files` as its assets, its file just written; and when
+    /// that fails, take the write back — the file and the assets as `before` held them, or
+    /// neither for a create — so the write lands whole or not at all.
+    fn install(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        files: &[(AssetName, Vec<u8>)],
+        before: Option<Held>,
+    ) -> Result<(), SourceError> {
+        let path = self.existing(kind, id)?;
+        let Err(failed) = assets::replace(&path, files) else {
+            return Ok(());
+        };
+        // Best effort, and the failure that started it is what is reported: a putting back that
+        // itself fails would only hide why the write did not land.
+        match before {
+            Some(held) => {
+                let _ = write_atomically(&path, &held.text);
+                let _ = assets::replace(&path, &held.assets);
+            }
+            None => {
+                let _ = fs::remove_file(&path);
+                let _ = assets::remove(&path);
+            }
+        }
+        Err(failed)
+    }
+
     /// The assets the item `id` names holds, or none when there is no such item.
     fn held_assets(&self, kind: Kind, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
         match self.locate(kind, id)? {
@@ -3758,6 +3807,12 @@ impl LocalMdSource {
 fn compact(value: &serde_json::Value) -> String {
     // A `serde_json::Value` always serializes: its map keys are strings.
     serde_json::to_string(value).expect("a JSON value renders")
+}
+
+/// One item's file and its assets, as they were before a write that may have to be taken back.
+struct Held {
+    text: String,
+    assets: Vec<(AssetName, Vec<u8>)>,
 }
 
 /// Write `text` at `path` — replacing the file there, or creating one where there is none —
