@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.58...v0.3.0) - 2026-10-06
+
+### Added
+
+- *(status)* [**breaking**] scope status_mapping by item kind, refuse unmapped statuses, and drop Linear's by-type fallback ([#3262](https://github.com/nickderobertis/onetaskgraph/pull/3262))
+
 ## [0.2.56](https://github.com/nickderobertis/onetaskgraph/compare/v0.2.55...v0.2.56) - 2026-10-02
 
 ### Added
