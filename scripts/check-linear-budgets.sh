@@ -3,8 +3,7 @@
 #
 # A step of the Linear crate's own `test` target, so it runs whenever affected selection
 # selects that crate. onebudgetspec is this workspace's own pinned devDependency, from the
-# locked install every Nx recipe heals a fresh worktree with; a worktree whose install
-# predates the pin gets the locked install here the same way.
+# locked install `just bootstrap` makes.
 #
 # Quiet when every budget is within its threshold; otherwise onebudgetspec's own report,
 # which names each budget's actual figure, its threshold and its headroom.
@@ -14,16 +13,9 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 if [ ! -x "node_modules/.bin/onebudgetspec" ]; then
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "check-linear-budgets: bun is not installed, and onebudgetspec is installed through it" >&2
-    echo "check-linear-budgets: next: install bun from https://bun.sh, then re-run" >&2
-    exit 1
-  fi
-  if ! install_log="$(bun install --frozen-lockfile 2>&1)"; then
-    printf '%s\n' "$install_log" >&2
-    echo "check-linear-budgets: the locked install failed — see above; try 'bun install' by hand" >&2
-    exit 1
-  fi
+  echo "check-linear-budgets: onebudgetspec is not installed in this worktree; it is a pinned devDependency of package.json" >&2
+  echo "check-linear-budgets: next: run 'just bootstrap', which installs the locked Node toolchain, then re-run" >&2
+  exit 1
 fi
 
 if ! report="$(node_modules/.bin/onebudgetspec check crates/onetaskgraph-linear/budgets.yaml 2>&1)"; then

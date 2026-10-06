@@ -1280,3 +1280,40 @@ fn an_apply_linear_refuses_a_project_status_for_names_it_and_a_rerun_creates_it(
             .contains(&("Closing".to_owned(), "completed".to_owned()))
     );
 }
+
+#[test]
+fn sources_fields_says_in_words_what_it_found_and_what_it_created() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace_with(
+        &sandbox,
+        held(Vec::new(), Vec::new()),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": {"done": "Wrapped Up"}})),
+        "unmapped": linear(&config, json!({"status_mapping": {}})),
+    })));
+    assert_eq!(
+        stdout(&exits(&sandbox, &["sources", "fields", "unmapped"], 0)).trim_end(),
+        "unmapped: status_mapping names no status"
+    );
+    let applied = stdout(&exits(
+        &sandbox,
+        &["sources", "fields", "linear", "--apply"],
+        0,
+    ));
+    assert_eq!(
+        applied.trim_end().lines().collect::<Vec<_>>(),
+        [
+            "linear: task done -> Wrapped Up: created as a workflow state of team FIX (completed)",
+            "linear: project done -> Wrapped Up: created as a project status of this workspace \
+             (completed)",
+        ]
+    );
+    assert!(
+        workspace
+            .project_statuses()
+            .contains(&("Wrapped Up".to_owned(), "completed".to_owned()))
+    );
+}

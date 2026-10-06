@@ -664,6 +664,54 @@ const fn vocabulary_word(kind: ItemKind) -> &'static str {
     }
 }
 
+/// A `WorkflowState.type` a workflow state `sources fields --apply` creates is given — the five
+/// Linear's `WorkflowStateCreateInput.type` documents taking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreatedStateType {
+    Backlog,
+    Unstarted,
+    Started,
+    Completed,
+    Canceled,
+}
+
+impl CreatedStateType {
+    /// The type as Linear spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Backlog => "backlog",
+            Self::Unstarted => "unstarted",
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
+/// A `ProjectStatusType` a project status `sources fields --apply` creates is given — a member
+/// of that enum, which `paused` is too and which nothing here creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreatedStatusType {
+    Backlog,
+    Planned,
+    Started,
+    Completed,
+    Canceled,
+}
+
+impl CreatedStatusType {
+    /// The type as Linear spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Backlog => "backlog",
+            Self::Planned => "planned",
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
 /// The `WorkflowState.type` a workflow state `sources fields --apply` creates for `category`
 /// is given, and the `ProjectStatusType` a project status it creates is given.
 ///
@@ -671,22 +719,29 @@ const fn vocabulary_word(kind: ItemKind) -> &'static str {
 /// it, and `draft`, `queued` and `unknown` — which no type of either vocabulary means — as the
 /// nearest neighbour's. An exhaustive match, so a category the contract adds fails to compile
 /// here rather than being created as something unstated.
-const fn created_types(category: StatusCategory) -> (&'static str, &'static str) {
+const fn created_types(category: StatusCategory) -> (CreatedStateType, CreatedStatusType) {
     match category {
-        StatusCategory::Backlog | StatusCategory::Draft => ("backlog", "backlog"),
-        StatusCategory::Todo | StatusCategory::Queued => ("unstarted", "planned"),
-        StatusCategory::InProgress | StatusCategory::Unknown => ("started", "started"),
-        StatusCategory::Done => ("completed", "completed"),
-        StatusCategory::Cancelled => ("canceled", "canceled"),
+        StatusCategory::Backlog | StatusCategory::Draft => {
+            (CreatedStateType::Backlog, CreatedStatusType::Backlog)
+        }
+        StatusCategory::Todo | StatusCategory::Queued => {
+            (CreatedStateType::Unstarted, CreatedStatusType::Planned)
+        }
+        StatusCategory::InProgress | StatusCategory::Unknown => {
+            (CreatedStateType::Started, CreatedStatusType::Started)
+        }
+        StatusCategory::Done => (CreatedStateType::Completed, CreatedStatusType::Completed),
+        StatusCategory::Cancelled => (CreatedStateType::Canceled, CreatedStatusType::Canceled),
     }
 }
 
-/// The type a name of `kind` that `sources fields --apply` creates for `category` is given.
+/// The type, as Linear spells it, a name of `kind` that `sources fields --apply` creates for
+/// `category` is given.
 const fn created_type(category: StatusCategory, kind: ItemKind) -> &'static str {
     let (state, status) = created_types(category);
     match kind {
-        ItemKind::Task => state,
-        ItemKind::Project => status,
+        ItemKind::Task => state.as_str(),
+        ItemKind::Project => status.as_str(),
     }
 }
 

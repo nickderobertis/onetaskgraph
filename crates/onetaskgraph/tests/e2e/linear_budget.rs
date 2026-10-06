@@ -623,7 +623,7 @@ const BASE_COPY_PROJECT_AND_TASKS: usize = 6; // PROJECTS, and ISSUES for each o
 const BASE_RECOPY_PROJECT: usize = 3; // PROJECTS, PROJECT, PROJECT_RELATIONS
 
 #[test]
-fn every_linear_read_and_every_copys_discovery_costs_no_more_than_on_the_base() {
+fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_on_the_base() {
     let sandbox = Sandbox::new();
     let (config, workspace) =
         hellopatient(&sandbox, vec![issue("L-READ", "In Progress", json!({}))]);
