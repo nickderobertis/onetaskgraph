@@ -98,6 +98,9 @@
 # `WorkflowStateFilter`, and the `type` member of `ProjectStatusFilter`, which nothing sends any
 # more, are gone with the lookups that sent them. The corrections recorded above stand as the
 # record of what Linear refused.
+# `Query.teams` gains its `first: Int` argument on 2026-10-05, from the published schema,
+# where it is every connection's: the resolution document asks for two teams, because the
+# live journey sent it at Linear's default page and Linear refused it `Query too complex`.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -110,7 +113,7 @@ type Query {
   documents(first: Int, after: String, filter: DocumentFilter): DocumentConnection!
   issueLabels(first: Int, after: String, filter: IssueLabelFilter): IssueLabelConnection!
   projectLabels(filter: ProjectLabelFilter): ProjectLabelConnection!
-  teams(filter: TeamFilter): TeamConnection!
+  teams(first: Int, filter: TeamFilter): TeamConnection!
   projectStatuses(first: Int, after: String): ProjectStatusConnection!
 }
 type Mutation {

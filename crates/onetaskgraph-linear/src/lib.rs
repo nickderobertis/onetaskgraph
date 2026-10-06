@@ -433,7 +433,16 @@ pub mod graphql {
     /// "Query.projectStatuses"`, which is why a project status is matched by name here, locally.
     /// `position` is read for one reason: a project status `sources fields --apply` creates is
     /// placed after the workspace's last.
-    pub const RESOLUTION: &str = "query($key:String!){ teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
+    ///
+    /// `teams` is read at `first:2` and never at Linear's default page of 50, because Linear
+    /// scores a connection's selection once per node its page may hold: at the default, the 250
+    /// states asked of each of fifty possible teams scored this document 30905 against Linear's
+    /// limit of 10000, and the live journey's first status write was refused `Query too complex`.
+    /// Two rather than one so a key matching more than one team is still seen, and refused, by
+    /// the exactly-one rule that reads this answer. Like [`super::MAX_PAGE_SIZE`], nothing
+    /// offline can hold this — complexity appears in no schema — and the live journey is what
+    /// guards it.
+    pub const RESOLUTION: &str = "query($key:String!){ teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Create a workflow state on the configured team, for `sources fields --apply`.
     pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";
     /// Create a workspace project status, for `sources fields --apply`.

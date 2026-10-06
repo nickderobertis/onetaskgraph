@@ -3901,7 +3901,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
         .write_document(&written("Loose", None, None))
         .await
         .expect("the orphan document is created");
-    assert!(wire.recv().unwrap().contains("teams(filter:"));
+    assert!(wire.recv().unwrap().contains("teams(first:2,filter:"));
     let request = wire.recv().unwrap();
     assert!(request.contains(r#""teamId":"TEAM""#), "{request}");
     // And no `projectId` at all, not a null one. `documentCreate` refuses an input naming
