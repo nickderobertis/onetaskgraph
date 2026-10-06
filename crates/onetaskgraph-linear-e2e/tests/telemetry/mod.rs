@@ -28,7 +28,21 @@ pub fn file(budget: &str) -> PathBuf {
 }
 
 /// The figure and the detail `budget`'s journey recorded, or why there is none to read.
+///
+/// `budget` comes from the environment, so it is held to onebudgetspec's own grammar for an
+/// id, `^[a-z][a-z0-9-]*$`, before it names a file: nothing else can reach outside the
+/// telemetry directory.
 pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
+    let mut characters = budget.chars();
+    let well_formed = characters
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase())
+        && characters.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !well_formed {
+        return Err(format!(
+            "{budget:?} is not a budget id (^[a-z][a-z0-9-]*$); name one of budgets.yaml's"
+        ));
+    }
     let path = file(budget);
     let text = std::fs::read_to_string(&path).map_err(|error| {
         format!(

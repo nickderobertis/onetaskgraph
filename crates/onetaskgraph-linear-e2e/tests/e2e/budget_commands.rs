@@ -3,7 +3,8 @@
 //! Windows reads no `#!` line and has no POSIX shell to hand a command to, so a budget that
 //! names a script or leans on shell syntax would run on two runners and fail on the third. These
 //! hold `budgets.yaml`'s commands and this project's `budgets` target to programs every runner
-//! starts directly, and the runner they name to the one failure it owes.
+//! starts directly, the runner they name to the failures it owes, and the reporter it links to
+//! the release of the onebudgetspec that judges it.
 
 use std::path::Path;
 
@@ -128,5 +129,35 @@ fn a_budget_whose_journey_recorded_nothing_is_refused_naming_the_target_that_rec
     assert!(
         refused.contains("scripts/nx.sh run onetaskgraph-linear-e2e:test"),
         "{refused}"
+    );
+}
+
+#[test]
+fn a_budget_id_that_is_not_one_names_no_file() {
+    for id in ["../escape", "/abs", "Upper", "", "a/b"] {
+        let refused = telemetry::recorded(id).expect_err("not an id");
+        assert!(refused.contains("is not a budget id"), "{id:?}: {refused}");
+    }
+}
+
+/// The version `text` gives after `prefix`, on the one line that starts with it.
+fn pinned<'a>(text: &'a str, prefix: &str) -> &'a str {
+    let line = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("no line starts with {prefix}"));
+    line.trim_matches(|c: char| c == '"' || c == ',' || c == '=' || c.is_whitespace())
+}
+
+#[test]
+fn the_reporter_is_the_release_of_the_onebudgetspec_that_judges_it() {
+    let workspace = manifest("../../Cargo.toml");
+    let packages = manifest("../../package.json");
+    let cargo = pinned(&workspace, "onebudgetspec-core = ");
+    let npm = pinned(&packages, "\"@onebudgetspec/cli\": ");
+    assert_eq!(
+        cargo, npm,
+        "Cargo.toml's onebudgetspec-core and package.json's @onebudgetspec/cli are one release: \
+         one release workflow publishes both, so move them together"
     );
 }

@@ -58,7 +58,8 @@ minijinja = { version = "2.24.0", features = ["loader", "loop_controls", "json",
 # spelling of it here would be a second answer nobody reconciles.
 github-graphql-node-count = "0.0.1"
 # The reporter of the Linear request budgets' runner (`crates/onetaskgraph-linear-e2e`). Exact,
-# because it must be the release whose `onebudgetspec` binary package.json pins to judge it.
+# because it is the release of the `onebudgetspec` package.json pins to judge it; that crate's
+# tests/e2e/budget_commands.rs fails when the two pins part.
 onebudgetspec-core = "=0.1.3"
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
