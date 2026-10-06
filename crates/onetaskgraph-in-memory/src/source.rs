@@ -5,13 +5,14 @@ use std::sync::{Mutex, MutexGuard};
 
 use chrono::Utc;
 use onetaskgraph_plugin_api::{
-    Asset, AssetName, AssetUpload, AssetUploads, AssetWrite, AssetsWritten, Capabilities, Comment,
-    CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction,
-    Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, assetless,
-    commentless, documentless, serve_asset_references, unwritable, unwritable_field,
+    Asset, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten,
+    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
+    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UpdatedField, WriteSupport, assetless, commentless, documentless, serve_asset_references,
+    unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -80,7 +81,21 @@ struct Held {
     /// Addressed by content, as a hosted destination's uploads are, so a write that reuses an
     /// upload by its digest — a copy undone, putting back what a record held before — finds
     /// the bytes it names even after the record itself was given others.
-    blobs: BTreeMap<String, Vec<u8>>,
+    blobs: BTreeMap<Digest, Vec<u8>>,
+}
+
+/// The SHA-256 of an asset's bytes, as `asset_sha256` spells it: made only from a payload that
+/// [`AssetPayload::checked`] has accepted, so its digest is well formed and any bytes it carries
+/// hash to it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Digest(String);
+
+impl Digest {
+    /// The digest of `payload`, once it has passed [`AssetPayload::checked`].
+    fn of(payload: &AssetPayload) -> Result<Self, SourceError> {
+        payload.checked()?;
+        Ok(Self(payload.sha256.clone()))
+    }
 }
 
 /// Which kind of record an asset belongs to: the two that hold assets.
@@ -98,8 +113,7 @@ struct HeldAsset {
     /// The record it belongs to.
     record: NativeId,
     name: AssetName,
-    // llmlint: ignore[invalid_states_unrepresentable] The digest a write's payload carried, which `uploads` refuses unless its bytes hash to it before anything is kept; it keys `blobs`, which holds exactly the strings `asset_sha256` spells, so a newtype here would only re-wrap the contract's own `AssetPayload::sha256`.
-    sha256: String,
+    sha256: Digest,
 }
 
 /// The URL this source serves the asset `name` with digest `sha256` at.
@@ -1197,9 +1211,11 @@ impl InMemorySource {
         if !self.declared().assets.is_native() {
             return Err(assetless(KIND));
         }
+        // Nothing is kept here: the bytes are stored by `keep_assets`, once the whole write has
+        // been accepted and its record written, so a refusal leaves nothing behind.
         let mut uploads = AssetUploads::default();
         for payload in &assets.assets {
-            payload.checked()?;
+            let digest = Digest::of(payload)?;
             if uploads.0.contains_key(&payload.name) {
                 return Err(SourceError::Refused {
                     message: format!(
@@ -1208,33 +1224,33 @@ impl InMemorySource {
                     ),
                 });
             }
-            let url = match &payload.bytes {
-                Some(bytes) => {
-                    self.held()?
-                        .blobs
-                        .insert(payload.sha256.clone(), bytes.clone());
-                    served_at(&payload.sha256, &payload.name)
-                }
-                // Reused only when this source really holds the bytes the record names: a
-                // record a caller handed over is no evidence of an upload on its own.
-                None => assets
-                    .recorded_assets
-                    .as_ref()
-                    .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
-                    .filter(|url| !url.is_empty())
-                    .filter(|_| {
-                        self.held()
-                            .is_ok_and(|held| held.blobs.contains_key(&payload.sha256))
-                    })
-                    .map(str::to_owned)
-                    .ok_or_else(|| SourceError::Refused {
-                        message: format!(
-                            "the asset {} carries no bytes and nothing records an upload of it \
+            let url =
+                match &payload.bytes {
+                    Some(_) => served_at(&payload.sha256, &payload.name),
+                    // Reused only when this source really holds the bytes the record names — or
+                    // this very write sends them under another name: a record a caller handed over
+                    // is no evidence of an upload on its own.
+                    None => assets
+                        .recorded_assets
+                        .as_ref()
+                        .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
+                        .filter(|url| !url.is_empty())
+                        .filter(|_| {
+                            assets.assets.iter().any(|other| {
+                                other.bytes.is_some() && other.sha256 == payload.sha256
+                            }) || self
+                                .held()
+                                .is_ok_and(|held| held.blobs.contains_key(&digest))
+                        })
+                        .map(str::to_owned)
+                        .ok_or_else(|| SourceError::Refused {
+                            message: format!(
+                                "the asset {} carries no bytes and nothing records an upload of it \
                              with sha256 {}; next: send its bytes",
-                            payload.name, payload.sha256
-                        ),
-                    })?,
-            };
+                                payload.name, payload.sha256
+                            ),
+                        })?,
+                };
             uploads.0.insert(
                 payload.name.clone(),
                 AssetUpload {
@@ -1257,11 +1273,15 @@ impl InMemorySource {
         held.assets
             .retain(|asset| asset.owner != owner || &asset.record != id);
         for payload in &write.assets {
+            let digest = Digest::of(payload)?;
+            if let Some(bytes) = &payload.bytes {
+                held.blobs.insert(digest.clone(), bytes.clone());
+            }
             held.assets.push(HeldAsset {
                 owner,
                 record: id.clone(),
                 name: payload.name.clone(),
-                sha256: payload.sha256.clone(),
+                sha256: digest,
             });
         }
         Ok(())
@@ -1275,7 +1295,7 @@ impl InMemorySource {
             .filter(|asset| asset.owner == owner && &asset.record == id)
             .map(|asset| Asset {
                 name: asset.name.clone(),
-                sha256: asset.sha256.clone(),
+                sha256: asset.sha256.0.clone(),
                 content_type: asset.name.content_type(),
                 path: None,
             })

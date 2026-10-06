@@ -124,6 +124,32 @@ async fn a_native_source_serves_each_asset_at_a_url_and_rewrites_the_references_
     assert!(source.task_assets(&written.id).await.unwrap().is_empty());
 }
 
+/// Whether `source` refuses a write reusing, without sending them, `bytes` under a record
+/// claiming an upload of them — which it accepts only for bytes it really holds.
+async fn refuses_a_reuse_of(source: &InMemorySource, bytes: &[u8]) -> bool {
+    let mut claimed = carrying(&[("a.png", bytes)]);
+    claimed.recorded_assets = Some(AssetUploads(std::collections::BTreeMap::from([(
+        name("a.png"),
+        onetaskgraph_plugin_api::AssetUpload {
+            sha256: claimed.assets[0].sha256.clone(),
+            url: "in-memory://assets/claimed".to_owned(),
+        },
+    )])));
+    claimed.assets[0].bytes = None;
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &claimed,
+        )
+        .await
+        .is_err_and(|refused| refused.to_string().contains("carries no bytes"))
+}
+
 #[tokio::test]
 async fn a_payload_without_bytes_that_nothing_records_is_refused() {
     let source = source("native");
@@ -227,6 +253,8 @@ async fn a_name_given_twice_and_a_reuse_of_bytes_this_source_never_held_are_refu
     };
     let twice = write(carrying(&[("a.png", b"one"), ("a.png", b"two")])).await;
     assert!(twice.to_string().contains("given twice"), "{twice}");
+    // The refused write kept none of its bytes, not even the payload before the duplicate.
+    assert!(refuses_a_reuse_of(&source, b"one").await);
 
     // A record a caller handed over claims an upload this source never received.
     let mut claimed = carrying(&[("a.png", b"never sent")]);
@@ -445,6 +473,8 @@ async fn a_rendering_with_assets_of_a_record_this_source_does_not_hold_answers_n
     assert!(source.get_document(&missing).await.unwrap().is_none());
     assert!(source.task_assets(&missing).await.unwrap().is_empty());
     assert!(source.document_assets(&missing).await.unwrap().is_empty());
+    // Nor did it keep the bytes it was sent for a record it does not hold.
+    assert!(refuses_a_reuse_of(&source, b"aaa").await);
     // The records it does hold are as they were, with no asset of the refused rendering.
     for id in ["T-1", "D-1"] {
         let id = NativeId::from(id);
