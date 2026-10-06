@@ -1307,7 +1307,8 @@ them. The reason is a person: between two commands they may edit an item's body 
 another status, and a write based on what was held before would overwrite the edit or move the
 item from where it no longer is.
 
-`result` is an empty object, and members in it are ignored (§2.1). An error envelope means the
+`result` is an empty object — the trait method carries `()`, so there is nothing for it to say
+beyond having done it — and members in it are ignored (§2.1). An error envelope means the
 plugin could not be sure it dropped what it held, and the engine reports it against the source
 as `Engine::end_command`'s failure; the caller should not go on to the next command on that
 source.

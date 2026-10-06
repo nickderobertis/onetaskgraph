@@ -10282,3 +10282,153 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
         next,
     }
 }
+
+/// What [`TaskSource::end_command`] leaves of this source's held state, asserted on the state
+/// itself: the journeys in `crates/onetaskgraph/tests/e2e/end_command.rs` prove a settlement
+/// reads afresh after it, and these prove every holder is emptied — including those no single
+/// journey fills at once — and that a lock an earlier failure poisoned works again after it.
+#[cfg(test)]
+mod end_command_tests {
+    use super::*;
+
+    struct Token;
+
+    impl SecretResolver for Token {
+        fn get(&self, var: &str) -> Option<SecretString> {
+            (var == "GH_PROJECTS_TOKEN").then(|| "test-token".into())
+        }
+    }
+
+    fn source() -> GitHubProjectsSource {
+        let config = serde_json::from_value(json!({
+            "owner": "octo-org", "project_number": 7, "repository": "acme/work",
+            // Nothing here is sent: the source is only built and its state inspected.
+            "endpoint": "http://127.0.0.1:9/graphql",
+        }))
+        .expect("a usable configuration");
+        GitHubProjectsSource::new(&SourceName::new("work").unwrap(), config, &Token)
+            .expect("the source builds")
+    }
+
+    /// One issue as a board read answers it.
+    fn resolved(source: &GitHubProjectsSource) -> Resolved {
+        source
+            .resolve(&json!({
+                "id": "ITEM-1",
+                "content": {"__typename": "Issue", "id": "I_1", "title": "Held",
+                            "body": "what a person may since have edited", "state": "OPEN",
+                            "stateReason": null, "url": null, "number": 1,
+                            "subIssuesSummary": {"total": 0},
+                            "labels": {"nodes": [], "pageInfo": {"hasNextPage": false}}},
+                "fieldValues": {"nodes": [], "pageInfo": {"hasNextPage": false}},
+            }))
+            .expect("the item reads")
+            .expect("an issue")
+    }
+
+    /// Hold something in every holder the call clears, and the repository id it keeps.
+    fn fill(source: &GitHubProjectsSource) {
+        let item = resolved(source);
+        source.created.lock().unwrap().push(item.clone());
+        source.updated.lock().unwrap().push(item.clone());
+        *source.board_cache.lock().unwrap() = Some(Board {
+            id: "PVT-board".into(),
+            fields: json!({"nodes": []}),
+            items: vec![item.clone()],
+        });
+        *source.search_cache.lock().unwrap() = Some(vec![item.clone()]);
+        source
+            .narrowed_cache
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), vec![item.clone()]);
+        source
+            .search_next
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), Some("cursor".into()));
+        source
+            .resolved_cache
+            .lock()
+            .unwrap()
+            .insert(item.id.clone(), item);
+        *source.fields_cache.lock().unwrap() = Some(BoardFields {
+            id: BoardId::parse("PVT-board").unwrap(),
+            fields: json!({"nodes": []}),
+        });
+        source
+            .repository_cache
+            .lock()
+            .unwrap()
+            .insert(RepositoryTarget::parse("acme/work").unwrap(), "R_1".into());
+    }
+
+    fn assert_dropped(source: &GitHubProjectsSource) {
+        assert!(source.created().unwrap().is_empty(), "created");
+        assert!(source.updated().unwrap().is_empty(), "updated");
+        assert!(source.board_cache().unwrap().is_none(), "board");
+        assert!(source.search_cache.lock().unwrap().is_none(), "search");
+        assert!(source.narrowed_cache.lock().unwrap().is_empty(), "narrowed");
+        assert!(
+            source.search_next.lock().unwrap().is_empty(),
+            "search paging"
+        );
+        assert!(
+            source.resolved_cache().unwrap().is_empty(),
+            "resolved records"
+        );
+        assert!(source.fields_cache().unwrap().is_none(), "board fields");
+        assert_eq!(
+            source.repository_cache().unwrap().len(),
+            1,
+            "a repository's node id stays valid and is kept"
+        );
+    }
+
+    fn end(source: &GitHubProjectsSource) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(source.end_command())
+            .expect("the command ends");
+    }
+
+    #[test]
+    fn the_call_drops_every_item_search_and_board_read_and_keeps_repository_ids() {
+        let source = source();
+        fill(&source);
+        end(&source);
+        assert_dropped(&source);
+    }
+
+    #[test]
+    fn the_call_clears_a_lock_an_earlier_failure_poisoned() {
+        fn poison<T: Send>(held: &Mutex<T>) {
+            std::thread::scope(|scope| {
+                let _ = scope
+                    .spawn(|| {
+                        let _guard = held.lock().unwrap();
+                        panic!("a failure while the lock is held");
+                    })
+                    .join();
+            });
+            assert!(held.is_poisoned());
+        }
+        let source = source();
+        fill(&source);
+        poison(&source.created);
+        poison(&source.updated);
+        poison(&source.board_cache);
+        poison(&source.search_cache);
+        poison(&source.narrowed_cache);
+        poison(&source.search_next);
+        poison(&source.resolved_cache);
+        poison(&source.fields_cache);
+        assert!(
+            source.resolved_cache().is_err(),
+            "a poisoned lock is refused before the call"
+        );
+        end(&source);
+        assert_dropped(&source);
+    }
+}

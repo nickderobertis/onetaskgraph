@@ -2568,50 +2568,99 @@ async fn a_plugin_that_does_not_declare_end_command_is_never_sent_it() {
         .expect("nothing is sent to a plugin that holds nothing to drop");
 }
 
-#[tokio::test]
-async fn a_plugin_that_cannot_end_its_command_fails_the_engines_call_by_its_name() {
-    let source = scripted(vec![
+/// A peer that shakes hands declaring `end_command`, then answers every request with an empty
+/// result and records each request it was sent.
+fn recording_end_commands() -> (SubprocessSource, Arc<Mutex<Vec<Value>>>) {
+    let (to_engine, mut from_peer) = pipe().expect("a pipe");
+    let (to_peer, from_engine) = pipe().expect("a pipe");
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&asked);
+    std::thread::spawn(move || {
+        let mut lines = BufReader::new(to_peer);
+        loop {
+            let mut line = String::new();
+            match lines.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let request: Value = serde_json::from_str(&line).expect("a request");
+            let result = if request["method"] == "initialize" {
+                json!({"protocol_version": 2, "kind": "made-up",
+                       "capabilities": capabilities(), "ends_commands": true})
+            } else {
+                json!({})
+            };
+            recorded.lock().unwrap().push(request.clone());
+            let answer = json!({"id": request["id"], "result": result});
+            if writeln!(from_peer, "{answer}").is_err() || from_peer.flush().is_err() {
+                return;
+            }
+        }
+    });
+    let source =
+        SubprocessSource::over(from_engine, to_engine, &name(), &json!({}), BTreeMap::new())
+            .expect("the handshake succeeds");
+    (source, asked)
+}
+
+/// A peer declaring `end_command` that refuses it with `message`.
+fn refusing_end_command(message: &str) -> SubprocessSource {
+    scripted(vec![
         json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
                "capabilities": capabilities(), "ends_commands": true}})
         .to_string(),
-        json!({"id": "1", "error": {"kind": "unavailable",
-               "message": "the held board could not be dropped"}})
-        .to_string(),
+        json!({"id": "1", "error": {"kind": "unavailable", "message": message}}).to_string(),
     ])
-    .expect("the handshake succeeds");
-    let beside = plugin_for("in-memory")
-        .expect("in-memory is registered")
-        .build(
-            &SourceName::new("beside").unwrap(),
-            &hosted_settings()["config"],
-            &NoSecrets,
-        )
-        .expect("the in-memory source builds");
+    .expect("the handshake succeeds")
+}
+
+fn ready(name: &str, source: impl TaskSource + 'static) -> onetaskgraph_core::ConfiguredSource {
+    onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
+        SourceName::new(name).unwrap(),
+        Box::new(source),
+    ))
+}
+
+#[tokio::test]
+async fn the_engine_asks_every_source_past_a_failure_and_names_the_first_that_failed() {
+    let (recorded, asked) = recording_end_commands();
     let engine = onetaskgraph_core::Engine::new(
         vec![
-            onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
-                SourceName::new("beside").unwrap(),
-                beside,
-            )),
-            onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
-                name(),
-                Box::new(source),
-            )),
+            ready(
+                "first",
+                refusing_end_command("the first source's board stayed held"),
+            ),
+            ready("between", recorded),
+            ready(
+                "last",
+                refusing_end_command("the last source's board stayed held"),
+            ),
         ],
         vec![name()],
     );
     let refused = engine
         .end_command()
         .await
-        .expect_err("a plugin that could not drop what it held");
+        .expect_err("two sources could not drop what they held");
     let onetaskgraph_core::EngineError::SourceFailed { name, error } = &refused else {
         panic!("named as the source that failed: {refused:?}");
     };
-    assert_eq!(name, "work");
+    assert_eq!(name, "first", "the first failure is the one reported");
     assert!(
         error
             .to_string()
-            .contains("the held board could not be dropped"),
+            .contains("the first source's board stayed held"),
         "{error}"
+    );
+    let methods = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request["method"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        [json!("initialize"), json!("end_command")],
+        "the source after the failure was still asked"
     );
 }
