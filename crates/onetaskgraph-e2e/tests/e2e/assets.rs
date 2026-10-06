@@ -896,25 +896,50 @@ fn a_project_copy_carries_its_tasks_assets_and_its_document_follows_with_its_own
     let folders = Folders::new();
     let (task, document, ..) = rendered_pair(&folders, 50);
     let report = folders.copy(&["project", "copy", "notes:launch", "--to", "back"]);
-    let copied_task = report["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .find(|outcome| outcome["source"] == json!(task))
-        .and_then(|outcome| outcome["destination"].as_str())
-        .expect("the task was copied with its project")
-        .to_owned();
-    carried_whole(
-        &folders.show("task", &task),
-        &folders.show("task", &copied_task),
-    );
+    let landed_as = |source: &str| {
+        report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|outcome| outcome["source"] == json!(source))
+            .and_then(|outcome| outcome["destination"].as_str())
+            .unwrap_or_else(|| panic!("{source} was copied with its project"))
+            .to_owned()
+    };
+    let copied_project = landed_as("notes:launch");
+    let copied_task = landed_as(&task);
+    let task_copy = folders.show("task", &copied_task);
+    carried_whole(&folders.show("task", &task), &task_copy);
     // A project copy carries its tasks; its document follows by `document copy`, into the
     // project the copy just made.
     let report = folders.copy(&["document", "copy", &document, "--to", "back"]);
-    carried_whole(
-        &folders.show("document", &document),
-        &folders.show("document", &landed(&report)),
-    );
+    let document_copy = folders.show("document", &landed(&report));
+    carried_whole(&folders.show("document", &document), &document_copy);
+
+    // Both copies sit in the copied project, and each one's references name its own uploaded
+    // copies: the files beside its own record in the destination folder.
+    let project_native = copied_project.split_once(':').expect("qualified").1;
+    for (copy, folder) in [(&task_copy, "tasks"), (&document_copy, "documents")] {
+        assert_eq!(item(copy)["project"], json!(project_native), "{folder}");
+        let record = item(copy)["location"]["path"]
+            .as_str()
+            .expect("a local record");
+        assert!(Path::new(record).starts_with(&folders.back), "{record}");
+        let own = Path::new(record).with_extension("assets");
+        let content = item(copy)["content"].as_str().expect("content");
+        for asset in copy["assets"].as_array().expect("assets") {
+            let name = asset["name"].as_str().expect("a name");
+            assert!(
+                content.contains(&format!("](./{name})")),
+                "{folder} references {name}"
+            );
+            assert_eq!(
+                Path::new(asset["path"].as_str().expect("a path")),
+                own.join(name),
+                "{folder}: {name} is the copied record's own"
+            );
+        }
+    }
 }
 
 #[test]
