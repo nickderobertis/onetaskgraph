@@ -8,6 +8,7 @@ import type {
   CommentList,
   CopyReport,
   DeletedComment,
+  DocumentDetail,
   EffectiveConfig,
   FieldsReport,
   MetadataSet,
@@ -99,12 +100,16 @@ export type CreateOptions = TemplateSourceOptions & {
   repositories?: string[];
   metadata?: Record<string, JsonValue>;
 };
-export type TaskCreateOptions = CreateOptions & {
-  status?: StatusCategory;
-  dependsOn?: string[];
-  delivers?: string[];
-};
-export type DocumentCreateOptions = CreateOptions & { id?: string };
+// The image files a create or a render stores with a task or a document, each under its base
+// name, which the content references as `![alt](./<name>)`.
+export type AssetOptions = { assets?: string[] };
+export type TaskCreateOptions = CreateOptions &
+  AssetOptions & {
+    status?: StatusCategory;
+    dependsOn?: string[];
+    delivers?: string[];
+  };
+export type DocumentCreateOptions = CreateOptions & AssetOptions & { id?: string };
 // A project is filed under no project, so it names none; its `id` is required instead, and a
 // project the source holds under it is replaced — its status, labels, repositories and every
 // metadata key not named here kept.
@@ -127,6 +132,8 @@ export type TaskUpdateOptions = {
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
 export type RenderOptions = TemplateSourceOptions & { unset?: string[]; dryRun?: boolean };
+// A regenerate of a task or a document, which may store image assets with it.
+export type ItemRenderOptions = RenderOptions & AssetOptions;
 // A value JSON can carry, and so a value an answers document can hold.
 export type JsonValue =
   | string
@@ -199,7 +206,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project render": "Regenerated",
   "project answers": "TemplateAnswers",
   "document list": "QueryResponseOfQualifiedDocument",
-  "document show": "QueryResponseOfQualifiedDocument",
+  "document show": "DocumentDetail",
   "document copy": "CopyReport",
   "document metadata set": "MetadataSet",
   "label list": "QueryResponseOfQualifiedLabel",
@@ -210,7 +217,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task create": "TaskDetail",
   "task render": "Regenerated",
   "task answers": "TemplateAnswers",
-  "document create": "QueryResponseOfQualifiedDocument",
+  "document create": "DocumentDetail",
   "document render": "Regenerated",
   "document answers": "TemplateAnswers",
 };
@@ -706,6 +713,14 @@ function renderInvocation(
   return [command, [id, ...args], input];
 }
 
+// One `--asset` per image file `assets` names, each refused unless it is a path.
+function assetFlags(method: string, options: AssetOptions): string[] {
+  return stringList(method, "assets", options.assets).flatMap((path) => [
+    "--asset",
+    pathOption(method, "assets", path),
+  ]);
+}
+
 function copyFlags(options: CopyOptions): string[] {
   const args: string[] = [];
   if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
@@ -915,7 +930,7 @@ export class OnetaskgraphClient {
   documentShow(
     id: string,
     options: Pick<QueryOptions, "allowPartial"> = {},
-  ): Promise<QueryResponseOfQualifiedDocument> {
+  ): Promise<DocumentDetail> {
     return this.run("document show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
   }
   documentCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
@@ -991,11 +1006,14 @@ export class OnetaskgraphClient {
     for (const id of stringList("taskCreate", "delivers", options.delivers)) {
       args.push("--delivers", id);
     }
+    args.push(...assetFlags("taskCreate", options));
     return this.run("task create", [source, ...args], input);
   }
-  // Regenerate one task in place from its template, over its stored answers.
-  async taskRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
-    return this.run(...renderInvocation("task render", "taskRender", id, options));
+  // Regenerate one task in place from its template, over its stored answers, keeping every
+  // stored image asset its new content still references and storing `assets` with it.
+  async taskRender(id: string, options: ItemRenderOptions = {}): Promise<Regenerated> {
+    const [command, args, input] = renderInvocation("task render", "taskRender", id, options);
+    return this.run(command, [...args, ...assetFlags("taskRender", options)], input);
   }
   taskAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("task answers", [id]);
@@ -1029,17 +1047,24 @@ export class OnetaskgraphClient {
     project: string,
     title: string,
     options: DocumentCreateOptions = {},
-  ): Promise<QueryResponseOfQualifiedDocument> {
+  ): Promise<DocumentDetail> {
     const { args, input } = createArguments(
       "documentCreate",
       ["--project", project, "--title", title],
       options,
     );
     if (options.id !== undefined) args.push("--id", options.id);
+    args.push(...assetFlags("documentCreate", options));
     return this.run("document create", [source, ...args], input);
   }
-  async documentRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
-    return this.run(...renderInvocation("document render", "documentRender", id, options));
+  async documentRender(id: string, options: ItemRenderOptions = {}): Promise<Regenerated> {
+    const [command, args, input] = renderInvocation(
+      "document render",
+      "documentRender",
+      id,
+      options,
+    );
+    return this.run(command, [...args, ...assetFlags("documentRender", options)], input);
   }
   documentAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("document answers", [id]);

@@ -19,9 +19,9 @@ import pytest
 
 from onetaskgraph_sdk import (
     Client,
+    DocumentDetail,
     NativeId,
     OnetaskgraphError,
-    QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedProject,
     Regenerated,
     TaskDetail,
@@ -137,7 +137,8 @@ def test_a_plain_body_and_a_document_through_the_sdk(binary: Path, tmp_path: Pat
             "notes", "P-1", "Design", id="design", template=str(template), var=["goal=Design"]
         )
     )
-    assert isinstance(document, QueryResponseOfQualifiedDocument)
+    assert isinstance(document, DocumentDetail)
+    assert document.assets == []
     assert document.items[0].id.root == "notes:design"
     assert run(client.document_answers("notes:design")).model_dump() == {
         "goal": "Design",
@@ -236,3 +237,44 @@ def test_a_loader_document_names_the_template_and_body_with_answers_is_refused(
                 "notes", "P-1", "Both", template=str(template), body="x", answers={"goal": "x"}
             )
         )
+
+
+def gif(seed: int) -> bytes:
+    """A valid 1x1 GIF, built here: the first colour of its table drawn from `seed`."""
+    return (
+        b"GIF89a"
+        + bytes([1, 0, 1, 0, 0x80, 0, 0, seed & 0xFF, (seed >> 8) & 0xFF, 7, 0, 0, 0])
+        + bytes([0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B])
+    )
+
+
+def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_show(
+    binary: Path, tmp_path: Path
+) -> None:
+    """`asset` names the files a create stores; `assets` lists them on what it answers."""
+    client, _ = plan(binary, tmp_path)
+    (tmp_path / "inputs").mkdir()
+    pixel = tmp_path / "inputs" / "pixel.gif"
+    data = gif(5)
+    pixel.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    body = "![pixel](./pixel.gif)\n"
+
+    task = run(client.task_create("notes", "P-1", "Pictured", body=body, asset=[str(pixel)]))
+    assert [(a.name.root, a.sha256, a.content_type.value) for a in task.assets or []] == [
+        ("pixel.gif", digest, "image/gif")
+    ]
+    document = run(
+        client.document_create(
+            "notes", "P-1", "Pictured", id="pictured", body=body, asset=[str(pixel)]
+        )
+    )
+    assert isinstance(document, DocumentDetail)
+    shown = run(client.document_show("notes:pictured"))
+    held = (shown.assets or [])[0]
+    assert Path(held.path or "").read_bytes() == data
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_create("notes", "P-1", "Refused", body="none", asset=[str(pixel)]))
+    assert refused.value.exit_code == 1
+    assert "pixel.gif" in str(refused.value)
