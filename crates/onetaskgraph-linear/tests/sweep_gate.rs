@@ -129,18 +129,12 @@ fn ended_run() -> Run {
 
 /// Run `take` while no drive is going and no other registration is being taken or given up.
 ///
-/// Every registration a test takes outside its drive goes through this, and so does the
-/// spawn of the second process, because a registration is a lock on an open file and the
-/// tests here run on threads of one process at the same time. A fork copies the file table,
-/// so a child spawned while [`ended_run`] had its registration open inherited that exclusive
-/// lock and kept it until `execve` closed it — and a sweep in that window read the ended run
-/// as live and never attempted the deletes it was being proven on, which failed
-/// `an_artifact_another_deleter_took_first_leaves_the_cleanup_successful` on a loaded host
-/// with nothing refused. And [`Registry::finished_runs`] holds a shared lock on every
-/// registration for an instant while it asks, so a `Registration::take` racing another
-/// drive's sweep was refused. Both are one shape, and the GitHub Projects lane's sweep gate
-/// closes it the same way: holding [`ONE_AT_A_TIME`] over each is what a real second
-/// process gets for free, since it has a file table of its own.
+/// A registration is a lock on an open file, and these tests are threads of one process. A
+/// fork copies the file table, so a child spawned while [`ended_run`] holds a registration
+/// keeps that lock until `execve`, and a sweep in that window reads the ended run as live.
+/// And [`Registry::finished_runs`] briefly holds a shared lock on every registration, so a
+/// `Registration::take` racing a sweep is refused. Every registration taken outside a drive,
+/// and the spawn of the second process, goes through this.
 fn with_no_drive_going<T>(take: impl FnOnce() -> T) -> T {
     let _exclusive = ONE_AT_A_TIME
         .lock()
