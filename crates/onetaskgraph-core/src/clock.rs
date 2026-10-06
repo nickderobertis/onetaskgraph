@@ -186,6 +186,7 @@ impl Shared {
     /// The coordinator is gone, or said something that is not a time: this process's time is
     /// no longer known, and no answer it could give would be true. A simulated clock is only
     /// ever a test's, so the test is stopped saying so rather than run on a time nobody kept.
+    // llmlint: ignore[no_panics_on_recoverable_errors] `Clock::now` and `Clock::sleep` are infallible by the contract every plugin waits through, so there is no caller to propagate to; the only alternatives are a fabricated time or a wait that never ends, and both would let a test report figures nobody measured. This client exists only under a coordinator a test started, so its loss is that test's failure, and stopping with the reason is the recoverable path.
     fn lost(&self) -> ! {
         panic!(
             "the simulated clock at {} closed its connection or answered with something that \

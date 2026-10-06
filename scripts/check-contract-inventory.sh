@@ -83,6 +83,10 @@ EXCEPTIONS = {
         "a free function, not one of the contract's types — the one spelling of the "
         "`body_digest` a rendering records, which `serve_asset_references` re-records"
     ),
+    "is_sha256": (
+        "a free function, not one of the contract's types — the one check of the lowercase "
+        "hex SHA-256 spelling `asset_sha256` produces, which reading a recorded upload applies"
+    ),
     "system_clock": (
         "a free function, not one of the contract's types — the real `Clock`, which the "
         "binary hands every in-process source when no test asked for simulated time"

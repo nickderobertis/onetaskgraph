@@ -3814,19 +3814,18 @@ async fn carried_assets(
     id: &GlobalId,
     item: &Item,
 ) -> Result<Vec<AssetPayload>, EngineError> {
-    let (content, document) = match item {
-        Item::Task(task) => (task.content.as_deref(), false),
-        Item::Document(document) => (document.content.as_deref(), true),
+    let (content, owner) = match item {
+        Item::Task(task) => (task.content.as_deref(), assets::Owner::Task),
+        Item::Document(document) => (document.content.as_deref(), assets::Owner::Document),
         Item::Project(_) => return Ok(Vec::new()),
     };
     let referenced = onetaskgraph_plugin_api::asset_references(content.unwrap_or_default());
     if referenced.is_empty() {
         return Ok(Vec::new());
     }
-    let listed = if document {
-        source.source().document_assets(&id.native).await
-    } else {
-        source.source().task_assets(&id.native).await
+    let listed = match owner {
+        assets::Owner::Document => source.source().document_assets(&id.native).await,
+        assets::Owner::Task => source.source().task_assets(&id.native).await,
     }
     .map_err(|error| refused(source, error))?;
     let mut carried = Vec::with_capacity(referenced.len());
@@ -3838,10 +3837,9 @@ async fn carried_assets(
         if !listed.iter().any(|asset| asset.name == name) {
             return Err(not_held());
         }
-        let bytes = if document {
-            source.source().document_asset(&id.native, &name).await
-        } else {
-            source.source().task_asset(&id.native, &name).await
+        let bytes = match owner {
+            assets::Owner::Document => source.source().document_asset(&id.native, &name).await,
+            assets::Owner::Task => source.source().task_asset(&id.native, &name).await,
         }
         .map_err(|error| refused(source, error))?
         .ok_or_else(not_held)?;
@@ -3859,14 +3857,17 @@ async fn held_assets(
     id: &NativeId,
     item: &Item,
 ) -> Result<Option<Vec<AssetPayload>>, EngineError> {
-    if kind == Level::Project || !destination.source().capabilities().assets.is_native() {
+    let owner = match kind {
+        Level::Task => assets::Owner::Task,
+        Level::Document => assets::Owner::Document,
+        Level::Project => return Ok(None),
+    };
+    if !destination.source().capabilities().assets.is_native() {
         return Ok(None);
     }
-    let document = kind == Level::Document;
-    let listed = if document {
-        destination.source().document_assets(id).await
-    } else {
-        destination.source().task_assets(id).await
+    let listed = match owner {
+        assets::Owner::Document => destination.source().document_assets(id).await,
+        assets::Owner::Task => destination.source().task_assets(id).await,
     }
     .map_err(|error| refused(destination, error))?;
     if listed.is_empty() {
@@ -3882,18 +3883,14 @@ async fn held_assets(
             .is_some_and(|recorded| recorded.reusable(&asset.name, &asset.sha256).is_some())
         {
             None
-        } else if document {
-            destination
-                .source()
-                .document_asset(id, &asset.name)
-                .await
-                .map_err(|error| refused(destination, error))?
         } else {
-            destination
-                .source()
-                .task_asset(id, &asset.name)
-                .await
-                .map_err(|error| refused(destination, error))?
+            match owner {
+                assets::Owner::Document => {
+                    destination.source().document_asset(id, &asset.name).await
+                }
+                assets::Owner::Task => destination.source().task_asset(id, &asset.name).await,
+            }
+            .map_err(|error| refused(destination, error))?
         };
         held.push(AssetPayload {
             name: asset.name,

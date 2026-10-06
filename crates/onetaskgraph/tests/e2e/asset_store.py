@@ -34,6 +34,17 @@ PROTOCOL_VERSION = 2
 MAX_PAGE_SIZE = 50
 KINDS = {"task": "tasks", "project": "projects", "document": "documents"}
 ASSETS_KEY = "onetaskgraph.assets"
+# An asset name (§4.9a): a bare file name with an accepted image extension, in any case.
+ASSET_NAME = re.compile(
+    r"(?!.*\.\.)[^/\\\s()<>]+\.(?i:png|jpe?g|gif|webp)"
+)
+CONTENT_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
 TEMPLATE_KEY = "onetaskgraph.template"
 
 
@@ -136,6 +147,18 @@ def store_assets(item, payloads, recorded):
         ):
             raise malformed("an asset is {name, sha256, content_type, bytes}")
         name = payload["name"]
+        if not ASSET_NAME.fullmatch(name):
+            raise malformed(
+                "%r is not an asset name: a bare file name ending in .png, .jpg, .jpeg, .gif or "
+                ".webp" % name
+            )
+        if payload["content_type"] != CONTENT_TYPES[name.rsplit(".", 1)[1].lower()]:
+            raise malformed(
+                "the asset %s is sent as %s, which is not the content type its extension gives it"
+                % (name, payload["content_type"])
+            )
+        if name in uploads:
+            raise malformed("the asset %s is sent twice" % name)
         if "bytes" in payload:
             try:
                 data = base64.b64decode(payload["bytes"], validate=True)

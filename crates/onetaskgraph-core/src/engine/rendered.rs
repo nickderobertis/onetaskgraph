@@ -298,7 +298,8 @@ pub struct RenderRequest {
     pub dry_run: bool,
     /// Image assets to store with a task or a document, each replacing a stored one of the
     /// same name. The item keeps every stored asset its regenerated content still references,
-    /// and drops every one it no longer does. A project holds no assets.
+    /// and drops every one it no longer does. A project holds no assets, and a render of one
+    /// given any is refused before anything is read.
     pub assets: Vec<AssetPayload>,
 }
 
@@ -895,6 +896,13 @@ impl Engine {
         if record == RenderedRecord::Document {
             documentary(source)?;
         }
+        // A project holds no assets, so a render handing one some is refused before it reads.
+        if let (RenderedRecord::Project, Some(given)) = (record, request.assets.first()) {
+            return Err(EngineError::AssetNotReferenced {
+                record: format!("project {id}"),
+                asset: given.name.to_string(),
+            });
+        }
         let (content, metadata) = self.read_item(source, record, id).await?;
         let read = TemplateProvenance::read(&metadata);
         let held_assets = match record {
@@ -1172,6 +1180,12 @@ impl Engine {
             if !still || given {
                 continue;
             }
+            // llmlint: ignore[changed_behavior_has_e2e] The source listed this asset a moment
+            // ago in `regeneration`, so a read of it failing now needs the store to change
+            // between two calls of one command — a race no journey can pose without a double of
+            // the filesystem, which the repository's test rules forbid. A failure is the
+            // source's own refusal, reported as every other source failure is, before anything
+            // is written.
             let bytes = match regeneration.record {
                 RenderedRecord::Task => source.source().task_asset(&id.native, &held.name).await,
                 _ => source.source().document_asset(&id.native, &held.name).await,

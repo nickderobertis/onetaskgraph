@@ -365,3 +365,49 @@ async fn a_copy_that_cannot_finish_takes_away_the_assets_it_added_to_tasks_and_d
         "the asset the copy added is gone"
     );
 }
+
+#[tokio::test]
+async fn a_rendering_edited_by_hand_keeps_its_provenance_verbatim_when_its_references_are_served() {
+    let root = tempfile::tempdir().expect("a folder");
+    std::fs::create_dir_all(root.path().join("tasks/edited.assets")).expect("a folder");
+    // A rendering whose recorded body_digest no longer matches its content: a hand edit.
+    let entry = json!({
+        "template": "/templates/task.md", "digest": format!("sha256:{}", "a".repeat(64)),
+        "body_digest": format!("sha256:{}", "b".repeat(64)),
+        "answers_digest": format!("sha256:{}", "c".repeat(64)),
+    });
+    std::fs::write(
+        root.path().join("tasks/edited.md"),
+        format!(
+            "---\ntitle: Edited\nstatus: todo\nmetadata:\n  onetaskgraph.template: {entry}\n---\n\
+             ![shot](./shot.png) edited by hand\n"
+        ),
+    )
+    .expect("a task");
+    std::fs::write(root.path().join("tasks/edited.assets/shot.png"), [9; 16]).expect("an asset");
+    let engine = engine(root.path(), json!({"capabilities": {"assets": "native"}}));
+    let task: GlobalId = "notes:edited".parse().expect("an id");
+    let report = engine
+        .copy(&copy_of(std::slice::from_ref(&task), CopyScope::Tasks))
+        .await
+        .expect("the copy lands");
+    let copied = destination(&report.items[0].action);
+    let held = engine
+        .task(&copied)
+        .await
+        .expect("read")
+        .items
+        .remove(0)
+        .item;
+    assert!(
+        held.content
+            .as_deref()
+            .unwrap_or_default()
+            .contains("in-memory://"),
+        "the reference is served"
+    );
+    assert_eq!(
+        held.metadata["onetaskgraph.template"], entry,
+        "carried verbatim"
+    );
+}

@@ -174,3 +174,33 @@ async fn a_source_declaring_nothing_refuses_an_asset_write_and_writes_nothing() 
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn a_payload_whose_bytes_do_not_hash_to_its_digest_is_refused_and_nothing_is_written() {
+    let source = source("native");
+    let mut write = carrying(&[("a.png", b"aaa")]);
+    write.assets[0].sha256 = onetaskgraph_plugin_api::asset_sha256(b"other");
+    let refused = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &write,
+        )
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&refused, SourceError::Refused { message } if message.contains("do not hash")),
+        "{refused:?}"
+    );
+    assert!(
+        source
+            .get_task(&NativeId::from("T-1"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

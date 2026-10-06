@@ -173,6 +173,15 @@ impl AssetContentType {
     }
 }
 
+/// Whether `digest` is a SHA-256 as this contract spells one: 64 lowercase hex digits.
+#[must_use]
+pub fn is_sha256(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// The lowercase hex SHA-256 of `bytes`: what [`Asset::sha256`], [`AssetPayload::sha256`] and
 /// [`AssetUpload::sha256`] hold.
 #[must_use]
@@ -191,13 +200,13 @@ pub struct Asset {
     /// Its name, which the record's content references as `./<name>`.
     pub name: AssetName,
     /// The lowercase hex SHA-256 of its bytes.
-    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
+    // llmlint: ignore[invalid_states_unrepresentable] This member's JSON shape — a lowercase hex string — is the asset contract `docs/plugin-protocol.md` §4.9a states, and plugins in other crates and other languages read and write it as exactly that. The digest is computed by `asset_sha256` wherever it is made, and every source that receives bytes refuses them unless they hash to it before storing anything; a recorded one is checked as a digest where `AssetUploads::read` reads it.
     pub sha256: String,
     /// The content type its extension gives it.
     pub content_type: AssetContentType,
     /// The absolute path holding its bytes on this machine, for a source that keeps them
     /// here; `null` for a hosted source.
-    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member as an absolute path string or null in what `show --json` prints, and the sibling plugin nodes build against that definition in parallel now. Only a source reports it, from the path it wrote the bytes to — local-md's canonicalized record path joined with the asset's validated name — and nothing reads it back to decide anything.
+    // llmlint: ignore[invalid_states_unrepresentable] This member is an absolute path string or null in what `show --json` prints, as the README states. Only a source reports it, from the path it wrote the bytes to — local-md's canonicalized record path joined with the asset's validated name — and nothing reads it back to decide anything.
     pub path: Option<String>,
 }
 
@@ -211,7 +220,7 @@ pub struct AssetPayload {
     /// Its name, which the record's content references as `./<name>`.
     pub name: AssetName,
     /// The lowercase hex SHA-256 of its bytes.
-    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
+    // llmlint: ignore[invalid_states_unrepresentable] This member's JSON shape — a lowercase hex string — is the asset contract `docs/plugin-protocol.md` §4.9a states, and plugins in other crates and other languages read and write it as exactly that. The digest is computed by `asset_sha256` wherever it is made, and every source that receives bytes refuses them unless they hash to it before storing anything; a recorded one is checked as a digest where `AssetUploads::read` reads it.
     pub sha256: String,
     /// The content type its extension gives it.
     pub content_type: AssetContentType,
@@ -270,10 +279,10 @@ fn base64_in<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<u8
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AssetUpload {
     /// The lowercase hex SHA-256 of the bytes uploaded.
-    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
+    // llmlint: ignore[invalid_states_unrepresentable] This member's JSON shape — a lowercase hex string — is the asset contract `docs/plugin-protocol.md` §4.9a states, and plugins in other crates and other languages read and write it as exactly that. The digest is computed by `asset_sha256` wherever it is made, and every source that receives bytes refuses them unless they hash to it before storing anything; a recorded one is checked as a digest where `AssetUploads::read` reads it.
     pub sha256: String,
     /// Where the destination serves them.
-    // llmlint: ignore[invalid_states_unrepresentable] The task fixes `onetaskgraph.assets` as `{"sha256": <hex>, "url": <string>}`, and both hosted plugin nodes build against that one definition in parallel now. A URL is whatever the destination serves the bytes at — its own scheme, as `in-memory://` shows — so no narrower type says more than a string; nothing here dereferences one.
+    // llmlint: ignore[invalid_states_unrepresentable] `onetaskgraph.assets` is `{"sha256": <hex>, "url": <string>}` in the contract `docs/plugin-protocol.md` §4.9a states. A URL is whatever the destination serves the bytes at — its own scheme, as `in-memory://` shows — so no narrower type says more than a string; nothing here dereferences one.
     pub url: String,
 }
 
@@ -295,18 +304,30 @@ impl AssetUploads {
     ///
     /// A message naming the key when what it holds is not this shape.
     pub fn read(metadata: &BTreeMap<String, Value>) -> Result<Option<Self>, String> {
-        metadata
-            .get(MetadataKey::ASSETS_KEY)
-            .map(|value| {
-                serde_json::from_value(value.clone()).map_err(|error| {
-                    format!(
-                        "{} holds {value}, which is not an object of asset names to \
-                         {{\"sha256\", \"url\"}}: {error}",
-                        MetadataKey::ASSETS_KEY
-                    )
-                })
-            })
-            .transpose()
+        let Some(value) = metadata.get(MetadataKey::ASSETS_KEY) else {
+            return Ok(None);
+        };
+        let uploads: Self = serde_json::from_value(value.clone()).map_err(|error| {
+            format!(
+                "{} holds {value}, which is not an object of asset names to \
+                 {{\"sha256\", \"url\"}}: {error}",
+                MetadataKey::ASSETS_KEY
+            )
+        })?;
+        if let Some((name, upload)) = uploads
+            .0
+            .iter()
+            .find(|(_, upload)| !is_sha256(&upload.sha256) || upload.url.is_empty())
+        {
+            return Err(format!(
+                "{} records {name} with sha256 {:?} and url {:?}; a record is a lowercase hex \
+                 SHA-256 and a non-empty url",
+                MetadataKey::ASSETS_KEY,
+                upload.sha256,
+                upload.url
+            ));
+        }
+        Ok(Some(uploads))
     }
 
     /// The value this record is written under [`MetadataKey::ASSETS_KEY`] as.
@@ -551,6 +572,21 @@ mod tests {
         };
         let value = serde_json::to_value(&reused).expect("serializes");
         assert!(value.get("bytes").is_none());
+    }
+
+    #[test]
+    fn a_record_whose_digest_is_not_one_is_refused_where_it_is_read() {
+        let metadata = BTreeMap::from([(
+            MetadataKey::ASSETS_KEY.to_owned(),
+            serde_json::json!({"a.png": {"sha256": "not hex", "url": "https://h/a"}}),
+        )]);
+        let refused = AssetUploads::read(&metadata).expect_err("refused");
+        assert!(
+            refused.contains("a.png") && refused.contains("not hex"),
+            "{refused}"
+        );
+        assert!(is_sha256(&asset_sha256(b"x")));
+        assert!(!is_sha256(&asset_sha256(b"x").to_uppercase()));
     }
 
     #[test]

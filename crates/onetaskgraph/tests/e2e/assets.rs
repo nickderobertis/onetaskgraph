@@ -131,6 +131,18 @@ impl Folders {
         stderr(&self.exits(arguments, 1))
     }
 
+    /// The `kind` of the failure document a run refused with exit `1` writes under `--json`.
+    fn failure_kind(&self, arguments: &[&str]) -> String {
+        let mut all = arguments.to_vec();
+        all.push("--json");
+        let output = self.exits(&all, 1);
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        failure["failure"]["kind"]
+            .as_str()
+            .expect("a failure kind")
+            .to_owned()
+    }
+
     /// `<verb> show <id> --json`, whole.
     fn show(&self, verb: &str, id: &str) -> Value {
         serde_json::from_str(&stdout(&self.exits(&[verb, "show", id, "--json"], 0)))
@@ -437,6 +449,22 @@ fn every_refusal_a_create_owes_names_the_file_or_reference_and_writes_nothing() 
             said.contains("./a.png") && said.contains("--asset"),
             "{verb}: {said}"
         );
+        let kind = |extra: &[&str]| {
+            let mut all = create.clone();
+            all.extend_from_slice(&["--body-file", &body]);
+            all.extend_from_slice(extra);
+            folders.failure_kind(&all)
+        };
+        assert_eq!(kind(&[]), "asset-not-given");
+        assert_eq!(
+            kind(&["--asset", &a, "--asset", &again]),
+            "asset-given-twice"
+        );
+        assert_eq!(
+            kind(&["--asset", &a, "--asset", &other]),
+            "asset-not-referenced"
+        );
+        assert_eq!(kind(&["--asset", &a, "--asset", &bitmap]), "asset-name");
         let said = with(&["--asset", &a, "--asset", &other]);
         assert!(
             said.contains("other.png") && said.contains("does not reference"),
@@ -550,6 +578,71 @@ fn a_render_keeps_stored_assets_replaces_one_by_name_and_drops_one_no_longer_ref
                 item(&shown)["content"].as_str().expect("content")
             ))
         );
+    }
+}
+
+#[test]
+fn every_refusal_a_render_owes_names_the_asset_and_leaves_the_record_as_it_was() {
+    let folders = Folders::new();
+    let template = folders.text("pictures.md", PICTURES);
+    let one = folders.text("one.yaml", "shots: [keep.png]\n");
+    let two = folders.text("two.yaml", "shots: [keep.png, new.png]\n");
+    let keep_path = folders.image("render", "keep.png", &images::png(130, 55_000));
+    let stray = folders.image("render", "stray.png", &images::png(131, 55_000));
+    let again = folders.image("again", "keep.png", &images::png(132, 55_000));
+    let held = |folders: &Folders| {
+        Folders::files(&folders.notes)
+            .into_iter()
+            .map(|file| {
+                (
+                    std::fs::read(folders.notes.join(&file)).expect("a file"),
+                    file,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    for verb in ["task", "document"] {
+        let id = folders.created(&[
+            verb,
+            "create",
+            "notes",
+            "--project",
+            "launch",
+            "--title",
+            "Refusing",
+            "--template",
+            &template,
+            "--answers",
+            &one,
+            "--no-interactive",
+            "--asset",
+            &keep_path,
+        ]);
+        let before = held(&folders);
+        for (extra, kind, named) in [
+            (
+                vec!["--asset", stray.as_str()],
+                "asset-not-referenced",
+                "stray.png",
+            ),
+            (
+                vec!["--answers", two.as_str()],
+                "asset-not-given",
+                "new.png",
+            ),
+            (
+                vec!["--asset", keep_path.as_str(), "--asset", again.as_str()],
+                "asset-given-twice",
+                "keep.png",
+            ),
+        ] {
+            let mut arguments = vec![verb, "render", id.as_str(), "--no-interactive"];
+            arguments.extend_from_slice(&extra);
+            let said = folders.refused(&arguments);
+            assert!(said.contains(named), "{verb} {extra:?}: {said}");
+            assert_eq!(folders.failure_kind(&arguments), kind, "{verb} {extra:?}");
+        }
+        assert_eq!(held(&folders), before, "{verb}: nothing was written");
     }
 }
 
@@ -856,7 +949,35 @@ fn a_copy_into_a_source_that_stores_no_assets_is_refused_naming_it_and_writes_no
             }),
             "{arguments:?}: nothing was written for the record"
         );
+        assert_eq!(folders.failure_kind(&arguments), "assets-unsupported");
     }
+    // A create carrying an asset into it is refused on the same terms, before it is written.
+    let body = folders.text("create.md", "![screen](./screen.png)\n");
+    let screen = folders.image("create", "screen.png", &images::png(71, 50_000));
+    for verb in ["task", "document"] {
+        let arguments = [
+            verb,
+            "create",
+            "plain",
+            "--project",
+            "launch",
+            "--title",
+            "Refused",
+            "--body-file",
+            &body,
+            "--asset",
+            &screen,
+        ];
+        let said = folders.refused(&arguments);
+        assert!(
+            said.contains("plain") && said.contains("screen.png") && said.contains("Refused"),
+            "{verb}: {said}"
+        );
+        assert_eq!(folders.failure_kind(&arguments), "assets-unsupported");
+    }
+    assert!(Folders::logged(&folders.plain_log).iter().all(|write| {
+        write["method"] != json!("write_task") && write["method"] != json!("write_document")
+    }));
 }
 
 #[test]
@@ -869,6 +990,10 @@ fn a_copy_of_a_record_referencing_an_asset_it_does_not_hold_is_refused_naming_bo
     )
     .expect("a task referencing an asset it does not hold");
     let said = folders.refused(&["task", "copy", "notes:ghost", "--to", "back"]);
+    assert_eq!(
+        folders.failure_kind(&["task", "copy", "notes:ghost", "--to", "back"]),
+        "asset-not-held"
+    );
     assert!(
         said.contains("notes:ghost") && said.contains("ghost.png"),
         "{said}"
@@ -1422,6 +1547,5 @@ fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
     keys.sort();
     assert_eq!(keys, properties(&bundle, "AssetUpload"));
 
-    // And the capability is the one `Capabilities` emits.
     assert!(bundle["roots"]["Capabilities"]["properties"]["assets"].is_object());
 }

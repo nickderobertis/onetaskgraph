@@ -438,7 +438,6 @@ pub(crate) struct TaskWriteParams {
     pub(crate) write: ItemWrite<Task>,
 }
 
-/// `write_project` parameters (§4.9).
 /// The params of a `write_task` that carries a record's image assets: the write, and beside
 /// it the two members of [`AssetWrite`] — `assets` and `recorded_assets` — which are the
 /// in-process trait's own argument, flattened, so the two cannot spell a field differently.
@@ -472,6 +471,7 @@ pub(crate) struct ServedWriteParams<T> {
     pub(crate) recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
 }
 
+/// `write_project` parameters (§4.9).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProjectWriteParams {
     /// The item to create or update, and what to write into it.

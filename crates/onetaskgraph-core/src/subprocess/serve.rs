@@ -521,6 +521,14 @@ async fn dispatch(
         }
         "write_task" => {
             let params: ServedWriteParams<Task> = decode(method, params)?;
+            if params.assets.is_none() && params.recorded_assets.is_some() {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "{method} carries `recorded_assets` without `assets`; a write carrying \
+                         assets names them in `assets` (docs/plugin-protocol.md §4.9a)"
+                    ),
+                });
+            }
             match params.assets {
                 Some(assets) => encode(
                     source
@@ -561,6 +569,14 @@ async fn dispatch(
         }
         "write_document" => {
             let params: ServedWriteParams<Document> = decode(method, params)?;
+            if params.assets.is_none() && params.recorded_assets.is_some() {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "{method} carries `recorded_assets` without `assets`; a write carrying \
+                         assets names them in `assets` (docs/plugin-protocol.md §4.9a)"
+                    ),
+                });
+            }
             match params.assets {
                 Some(assets) => encode(
                     source

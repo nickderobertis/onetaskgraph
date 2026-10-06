@@ -75,7 +75,6 @@ pub fn png(seed: u64, size: usize) -> Vec<u8> {
 /// give two files.
 pub fn jpeg(seed: u64) -> Vec<u8> {
     let mut out = vec![0xFF, 0xD8];
-    // A comment naming the seed.
     let comment = format!("onetaskgraph test image {seed}");
     segment(&mut out, 0xFE, comment.as_bytes());
     // One quantisation table, every entry 1.
