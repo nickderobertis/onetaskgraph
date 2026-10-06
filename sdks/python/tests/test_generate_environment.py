@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +16,18 @@ PACKAGE = Path(__file__).parents[1]
 STRAY = "ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM"
 
 
+async def schema(binary: Path) -> tuple[int | None, str]:
+    """What `onetaskgraph schema` exits with and writes to stderr, run as the caller is."""
+    process = await asyncio.create_subprocess_exec(
+        str(binary),
+        "schema",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    return process.returncode, stderr.decode("utf-8")
+
+
 def test_a_callers_configuration_does_not_reach_the_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -24,14 +36,9 @@ def test_a_callers_configuration_does_not_reach_the_binary(
     import generate
 
     monkeypatch.setenv(STRAY, "ENG")
-    direct = subprocess.run(
-        [str(generate.BINARY), "schema"],
-        capture_output=True,
-        encoding="utf-8",
-        check=False,
-    )
-    assert direct.returncode != 0, "the stray setting no longer makes the binary refuse"
-    assert "sources.stray" in direct.stderr
+    code, stderr = asyncio.run(schema(generate.BINARY))
+    assert code != 0, "the stray setting no longer makes the binary refuse"
+    assert "sources.stray" in stderr
 
     bundle = generate.validate_schema_bundle(json.loads(generate.run_workspace_binary("schema")))
     assert "StatusMapping" in bundle["roots"]
