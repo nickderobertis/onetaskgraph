@@ -81,16 +81,18 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, Cursor,
+    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
+    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
 
+mod assets;
 #[cfg(windows)]
 mod probe;
 
@@ -1530,6 +1532,109 @@ impl TaskSource for LocalMdSource {
             |path, text| self.parse_document_text(path, text),
             |document| &mut document.metadata,
         )
+    }
+    /// The files in the task's own asset directory; see `docs/local-md.md`.
+    async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.held_assets(Kind::Task, id)
+    }
+    /// The files in the document's own asset directory; see `docs/local-md.md`.
+    async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.held_assets(Kind::Document, id)
+    }
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Kind::Task, id, name)
+    }
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Kind::Document, id, name)
+    }
+    /// The task's file, written as [`write_task`](TaskSource::write_task) writes it, and then
+    /// its asset directory made to hold exactly `assets`; the content is stored unchanged,
+    /// because a reference to `./<name>` already names the file beside it.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
+        let id = self.write_task_with(write, answers)?;
+        assets::replace(&self.existing(Kind::Task, &id)?, &files)?;
+        Ok(AssetsWritten {
+            id,
+            content: write.item.content.clone(),
+        })
+    }
+    /// The document's file and its asset directory, on the terms of
+    /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let files = self.asset_files(Kind::Document, write.target.as_ref(), assets)?;
+        let id = self.write_document_with(write, answers)?;
+        assets::replace(&self.existing(Kind::Document, &id)?, &files)?;
+        Ok(AssetsWritten {
+            id,
+            content: write.item.content.clone(),
+        })
+    }
+    /// The task's rendering, replaced as [`set_task_rendering`](TaskSource::set_task_rendering)
+    /// replaces it, and then its asset directory made to hold exactly `assets`.
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let files = self.asset_files(Kind::Task, Some(id), assets)?;
+        if self
+            .set_task_rendering(id, content, provenance, answers)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        assets::replace(&self.existing(Kind::Task, id)?, &files)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: (!content.is_empty()).then(|| content.to_owned()),
+        }))
+    }
+    /// The document's rendering and its asset directory, on the terms of
+    /// [`set_task_rendering_with_assets`](TaskSource::set_task_rendering_with_assets).
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let files = self.asset_files(Kind::Document, Some(id), assets)?;
+        if self
+            .set_document_rendering(id, content, provenance, answers)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        assets::replace(&self.existing(Kind::Document, id)?, &files)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: (!content.is_empty()).then(|| content.to_owned()),
+        }))
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Task, id)
@@ -3053,7 +3158,45 @@ impl LocalMdSource {
         };
         fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", path.display()),
-        })
+        })?;
+        // The record's assets go with it: nothing is left of a removed record.
+        assets::remove(&path)
+    }
+
+    /// The assets the item `id` names holds, or none when there is no such item.
+    fn held_assets(&self, kind: Kind, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        match self.locate(kind, id)? {
+            Some(path) => assets::listed(&path),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The bytes of the asset `name` the item `id` names holds, when it holds it.
+    fn asset_bytes(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        match self.locate(kind, id)? {
+            Some(path) => assets::bytes(&path, name),
+            None => Ok(None),
+        }
+    }
+
+    /// Every asset `write` carries with its bytes, checked against what the item `target`
+    /// names already holds before anything is written.
+    fn asset_files(
+        &self,
+        kind: Kind,
+        target: Option<&NativeId>,
+        write: &AssetWrite,
+    ) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
+        let existing = match target {
+            Some(target) => self.locate(kind, target)?,
+            None => None,
+        };
+        assets::resolved(existing.as_deref(), write)
     }
 
     /// The path of the item `id` names in that folder, refusing when there is no such file.
