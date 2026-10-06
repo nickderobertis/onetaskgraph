@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use onetaskgraph_core::{
-    Body, Config, CopyAction, CopyItems, CopyRequest, CopyScope, Engine, EngineError, GlobalId,
-    TaskCreate,
+    Body, Config, CopyAction, CopyItems, CopyRequest, CopyScope, DocumentCreate, Engine,
+    EngineError, GlobalId, TaskCreate,
 };
 use onetaskgraph_plugin_api::{
     AssetName, AssetPayload, AssetUploads, NativeId, SecretResolver, SourceName, asset_sha256,
@@ -157,7 +157,7 @@ async fn a_copy_into_a_destination_that_stores_no_assets_is_refused_before_anyth
 }
 
 #[tokio::test]
-async fn a_copy_that_cannot_finish_takes_back_what_it_created_and_puts_back_what_it_changed() {
+async fn a_copy_that_cannot_finish_puts_back_the_assets_of_each_task_it_changed() {
     let root = tempfile::tempdir().expect("a folder");
     std::fs::create_dir_all(root.path().join("projects")).expect("a projects folder");
     std::fs::write(
@@ -221,5 +221,147 @@ async fn a_copy_that_cannot_finish_takes_back_what_it_created_and_puts_back_what
             .contains(&asset_sha256(&[1; 64])),
         "{:?}",
         before.1
+    );
+}
+
+/// A plain task and a plain document in `notes` holding no asset, filed under `launch`.
+async fn plain(engine: &Engine, title: &str) -> (GlobalId, GlobalId) {
+    let notes = SourceName::new("notes").expect("a name");
+    let task = engine
+        .create_task(&TaskCreate {
+            source: notes.clone(),
+            project: NativeId::from("launch"),
+            title: title.to_owned(),
+            body: Body::plain("no picture yet\n"),
+            status: None,
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            depends_on: Vec::new(),
+            delivers: Vec::new(),
+            metadata: Default::default(),
+            assets: Vec::new(),
+        })
+        .await
+        .expect("the task is created")
+        .task
+        .id;
+    let document = engine
+        .create_document(&DocumentCreate {
+            source: notes,
+            project: NativeId::from("launch"),
+            title: title.to_owned(),
+            id: None,
+            body: Body::plain("no picture yet\n"),
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            metadata: Default::default(),
+            assets: Vec::new(),
+        })
+        .await
+        .expect("the document is created")
+        .id;
+    (task, document)
+}
+
+/// Give the record whose file is `file` under `root` a reference to `shot.png`, holding `bytes`.
+fn picture(root: &Path, file: &str, bytes: &[u8]) {
+    let path = root.join(file);
+    let text = std::fs::read_to_string(&path).expect("the record's file");
+    std::fs::write(&path, text.replace("no picture yet", "![shot](./shot.png)"))
+        .expect("the reference");
+    let directory = path.with_extension("assets");
+    std::fs::create_dir_all(&directory).expect("its asset directory");
+    std::fs::write(directory.join("shot.png"), bytes).expect("the asset");
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_finish_takes_away_the_assets_it_added_to_tasks_and_documents() {
+    let root = tempfile::tempdir().expect("a folder");
+    std::fs::create_dir_all(root.path().join("projects")).expect("a projects folder");
+    std::fs::write(
+        root.path().join("projects/launch.md"),
+        "---\ntitle: Launch\nstatus: todo\n---\n",
+    )
+    .expect("a project");
+    let engine = engine(
+        root.path(),
+        json!({"capabilities": {
+            "assets": "native", "documents": "native", "half_written_titles": ["Second"]
+        }}),
+    );
+    let (first_task, first_document) = plain(&engine, "First").await;
+    let (second_task, second_document) = plain(&engine, "Second").await;
+    let first_copy = engine
+        .copy(&copy_of(
+            &[first_task.clone(), second_task.clone()],
+            CopyScope::Tasks,
+        ))
+        .await
+        .expect("the tasks land with no assets");
+    let documents = engine
+        .copy(&copy_of(
+            &[first_document.clone(), second_document.clone()],
+            CopyScope::Documents,
+        ))
+        .await
+        .expect("the documents land with no assets");
+    let copied_task = destination(&first_copy.items[0].action);
+    let copied_document = destination(&documents.items[0].action);
+    let before_task = engine
+        .task(&copied_task)
+        .await
+        .expect("read")
+        .items
+        .remove(0)
+        .item;
+    let before_document = engine
+        .document(&copied_document)
+        .await
+        .expect("read")
+        .items
+        .remove(0)
+        .item;
+
+    // Each first record gains a picture at its source; each second record changes too, and its
+    // update is refused after it was applied, so each copy is undone.
+    for (file, bytes) in [
+        (format!("tasks/{}.md", first_task.native), [5; 32]),
+        (format!("tasks/{}.md", second_task.native), [6; 32]),
+        (format!("documents/{}.md", first_document.native), [7; 32]),
+        (format!("documents/{}.md", second_document.native), [8; 32]),
+    ] {
+        picture(root.path(), &file, &bytes);
+    }
+    engine
+        .copy(&copy_of(&[first_task, second_task], CopyScope::Tasks))
+        .await
+        .expect_err("the second task's update is refused");
+    engine
+        .copy(&copy_of(
+            &[first_document, second_document],
+            CopyScope::Documents,
+        ))
+        .await
+        .expect_err("the second document's update is refused");
+
+    let task = engine
+        .task_without_comments(&copied_task)
+        .await
+        .expect("read");
+    assert_eq!(task.response.items[0].item, before_task);
+    assert_eq!(
+        task.assets,
+        Some(Vec::new()),
+        "the asset the copy added is gone"
+    );
+    let document = engine
+        .document_detail(&copied_document)
+        .await
+        .expect("read");
+    assert_eq!(document.response.items[0].item, before_document);
+    assert_eq!(
+        document.assets,
+        Some(Vec::new()),
+        "the asset the copy added is gone"
     );
 }

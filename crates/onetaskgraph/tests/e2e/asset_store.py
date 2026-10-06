@@ -66,7 +66,26 @@ def read_store(path):
         isinstance(held.get(name, []), list) for name in KINDS.values()
     ):
         raise malformed("%s is not a store of tasks, projects and documents" % path)
+    for name in KINDS.values():
+        for item in held.get(name, []):
+            checked_item(item, "%s's %s" % (path, name))
     return {name: held.get(name, []) for name in KINDS.values()}
+
+
+def checked_item(item, what):
+    """An item as this source holds it: an object with a string `id`, and a string or null
+    `content` and an object or null `metadata`, the three members this source reads."""
+    if (
+        not isinstance(item, dict)
+        or not isinstance(item.get("id"), str)
+        or not isinstance(item.get("content", None), (str, type(None)))
+        or not isinstance(item.get("metadata", None), (dict, type(None)))
+    ):
+        raise malformed(
+            "%s holds an item that is not an object with a string id, a string or null "
+            "content and an object or null metadata" % what
+        )
+    return item
 
 
 def write_store(path, held):
@@ -138,7 +157,11 @@ def store_assets(item, payloads, recorded):
             )
         else:
             held = (recorded or {}).get(name)
-            if not isinstance(held, dict) or held.get("sha256") != payload["sha256"]:
+            if (
+                not isinstance(held, dict)
+                or held.get("sha256") != payload["sha256"]
+                or not isinstance(held.get("url"), str)
+            ):
                 raise refused(
                     "the asset %s carries no bytes and nothing records an upload of it with "
                     "sha256 %s" % (name, payload["sha256"])
@@ -187,7 +210,9 @@ def write(settings, kind, params):
     if not isinstance(written, dict) or not isinstance(written.get("item"), dict):
         raise malformed("write_%s needs a `write` carrying an `item`" % kind)
     target = written.get("target")
-    item = dict(written["item"])
+    if target is not None and not isinstance(target, str):
+        raise malformed("write_%s's target must be a native id or null" % kind)
+    item = dict(checked_item(written["item"], "write_%s's item" % kind))
     carrying = "assets" in params
     entry = {
         "method": "write_" + kind,
@@ -241,10 +266,16 @@ def capabilities(settings):
 
 def page_of(items, page):
     """One page of `items`: this source applies no predicate, so it answers the wider set."""
-    cursor = page.get("cursor") if isinstance(page, dict) else None
-    limit = page.get("limit", MAX_PAGE_SIZE) if isinstance(page, dict) else MAX_PAGE_SIZE
-    start = int(cursor) if isinstance(cursor, str) and cursor.isdigit() else 0
-    end = min(start + max(1, min(limit, MAX_PAGE_SIZE)), len(items))
+    if not isinstance(page, dict):
+        raise malformed("a paged method needs a `page` object")
+    cursor = page.get("cursor")
+    limit = page.get("limit")
+    if cursor is not None and not (isinstance(cursor, str) and cursor.isdigit()):
+        raise malformed("cursor %r was not issued by this source" % (cursor,))
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise malformed("a page limit is a positive integer")
+    start = int(cursor) if cursor is not None else 0
+    end = min(start + min(limit, MAX_PAGE_SIZE), len(items))
     return {"items": items[start:end], "next": str(end) if end < len(items) else None}
 
 
@@ -326,9 +357,14 @@ def main():
         except (ValueError, KeyError, TypeError):
             print("%s: ignoring an unaddressed line" % KIND, file=sys.stderr)
             continue
-        method = request.get("method", "")
+        if not isinstance(identifier, str):
+            print("%s: ignoring a line whose id is not a string" % KIND, file=sys.stderr)
+            continue
+        method = request.get("method")
         params = request.get("params")
         try:
+            if not isinstance(method, str):
+                raise malformed("a request names its method as a string")
             if not isinstance(params, dict):
                 raise malformed("a request carries an object `params`")
             if method == "initialize":

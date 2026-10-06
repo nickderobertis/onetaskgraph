@@ -12,6 +12,15 @@ use onetaskgraph_plugin_api::{
 use super::EngineError;
 use crate::resolve::ResolvedSource;
 
+/// Which kind of record an asset belongs to: the two that hold assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Owner {
+    /// A task.
+    Task,
+    /// A document.
+    Document,
+}
+
 /// The assets a write of `content` carries: one payload per asset it references, in the order
 /// it first references them, each taken from `given` or else from `kept`.
 ///

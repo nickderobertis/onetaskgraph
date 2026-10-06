@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::common::images;
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::document_store::interpreter;
 use crate::fixtures::document;
 
@@ -440,6 +440,14 @@ fn every_refusal_a_create_owes_names_the_file_or_reference_and_writes_nothing() 
         let said = with(&["--asset", &a, "--asset", &other]);
         assert!(
             said.contains("other.png") && said.contains("does not reference"),
+            "{verb}: {said}"
+        );
+        // A path that names no file it can read — here a directory called `a.png`.
+        let unreadable = spelled(&folders.inputs.join("unreadable").join("a.png"));
+        std::fs::create_dir_all(&unreadable).expect("a directory in the file's place");
+        let said = with(&["--asset", &unreadable]);
+        assert!(
+            said.contains(&unreadable) && said.contains("could not be read"),
             "{verb}: {said}"
         );
     }
@@ -1072,7 +1080,15 @@ fn the_png_generator_holds_its_range_and_its_tolerance() {
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
     assert!((450_000..=500_000).contains(&images::png(4, SCREENSHOT).len()));
-    assert_ne!(images::png(5, 50_000), images::png(6, 50_000));
+    for seed in 0..8 {
+        assert_ne!(
+            images::png(seed, 50_000),
+            images::png(seed + 1, 50_000),
+            "{seed}"
+        );
+    }
+    assert_ne!(images::gif(1), images::gif(2));
+    assert_ne!(images::webp(1), images::webp(2));
     assert_eq!(images::png(5, 50_000), images::png(5, 50_000));
     for outside in [
         *images::PNG_SIZE_RANGE.start() - 1,
@@ -1086,6 +1102,206 @@ fn the_png_generator_holds_its_range_and_its_tolerance() {
             .unwrap_or_default();
         assert!(said.contains(&outside.to_string()), "{said}");
     }
+}
+
+#[test]
+fn a_record_whose_assets_cannot_be_read_is_shown_without_them_and_the_failure_named() {
+    let folders = Folders::new();
+    let body = folders.text("pictured.md", "![p](./p.png)\n");
+    let png = folders.image("p", "p.png", &images::png(100, 50_000));
+    let task = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Broken",
+        "--body-file",
+        &body,
+        "--asset",
+        &png,
+    ]);
+    let document = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Broken",
+        "--body-file",
+        &body,
+        "--asset",
+        &png,
+    ]);
+    // Each record's asset directory replaced by a file: its assets can no longer be listed.
+    for directory in ["tasks/broken.assets", "documents/broken.assets"] {
+        let directory = folders.notes.join(directory);
+        std::fs::remove_dir_all(&directory).expect("the asset directory");
+        std::fs::write(&directory, "not a directory").expect("a file in its place");
+    }
+    for arguments in [
+        vec!["task", "show", task.as_str(), "--json"],
+        vec!["task", "show", task.as_str(), "--no-comments", "--json"],
+        vec!["document", "show", document.as_str(), "--json"],
+    ] {
+        let output = folders.exits(&arguments, 4);
+        let shown: Value = serde_json::from_str(&stdout(&output)).expect("a partial answer");
+        assert!(shown.get("assets").is_none(), "{arguments:?}: {shown}");
+        assert_eq!(item(&shown)["title"], json!("Broken"));
+        assert!(
+            shown["errors"][0]["error"]["message"]
+                .as_str()
+                .expect("the failure")
+                .contains("broken.assets")
+        );
+        assert!(stderr(&output).contains("broken.assets"), "{arguments:?}");
+    }
+}
+
+#[test]
+fn a_render_dry_run_reports_an_asset_change_and_writes_nothing() {
+    let folders = Folders::new();
+    let template = folders.text("pictures.md", PICTURES);
+    let answers = folders.text("one.yaml", "shots: [shot.png]\n");
+    let shot = images::png(110, 60_000);
+    let id = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Dry",
+        "--template",
+        &template,
+        "--answers",
+        &answers,
+        "--no-interactive",
+        "--asset",
+        &folders.image("old", "shot.png", &shot),
+    ]);
+    let before = Folders::files(&folders.notes);
+    let output = folders.exits(
+        &[
+            "task",
+            "render",
+            &id,
+            "--no-interactive",
+            "--dry-run",
+            "--json",
+            "--asset",
+            &folders.image("new", "shot.png", &images::png(111, 60_000)),
+        ],
+        0,
+    );
+    let report: Value = serde_json::from_str(&stdout(&output)).expect("a report");
+    assert_eq!(report["changed"], json!(true), "the asset differs");
+    assert_eq!(Folders::files(&folders.notes), before);
+    assert_eq!(held_bytes(&folders.show("task", &id)), vec![shot]);
+}
+
+#[test]
+fn the_reference_host_carries_a_copys_assets_and_refuses_a_rendered_create_with_them() {
+    let sandbox = Sandbox::new();
+    let notes = sandbox.subdirectory("notes");
+    let hosted = sandbox.subdirectory("hosted");
+    let inputs = sandbox.subdirectory("inputs");
+    sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "hosted": SourceBoundary::Subprocess.source("local-md", json!({"root": hosted})),
+    })));
+    let run = |arguments: &[&str], code: i32| {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+        output
+    };
+    let screen = images::png(120, SCREENSHOT);
+    let screen_path = inputs.join("screen.png");
+    std::fs::write(&screen_path, &screen).expect("an image");
+    let body = inputs.join("body.md");
+    std::fs::write(&body, "![screen](./screen.png)\n").expect("a body");
+    for verb in ["task", "document"] {
+        let id = stdout(&run(
+            &[
+                verb,
+                "create",
+                "notes",
+                "--project",
+                "launch",
+                "--title",
+                "Hosted",
+                "--body-file",
+                &spelled(&body),
+                "--asset",
+                &spelled(&screen_path),
+            ],
+            0,
+        ))
+        .trim()
+        .to_owned();
+        let report: Value = serde_json::from_str(&stdout(&run(
+            &[verb, "copy", &id, "--to", "hosted", "--json"],
+            0,
+        )))
+        .expect("a report");
+        let landed = report["items"][0]["destination"].as_str().expect("an id");
+        let native = landed.split_once(':').expect("qualified").1;
+        let folder = if verb == "task" { "tasks" } else { "documents" };
+        // The host stored them where its folder keeps a record's assets.
+        assert_eq!(
+            std::fs::read(
+                hosted
+                    .join(folder)
+                    .join(format!("{native}.assets/screen.png"))
+            )
+            .expect("the hosted folder holds the asset"),
+            screen,
+            "{verb}"
+        );
+    }
+    // A create rendered from a template is not carried over the protocol, assets or none.
+    let template = inputs.join("pictures.md");
+    std::fs::write(&template, PICTURES).expect("a template");
+    let answers = inputs.join("answers.yaml");
+    std::fs::write(&answers, "shots: [screen.png]\n").expect("answers");
+    for verb in ["task", "document"] {
+        let said = stderr(&run(
+            &[
+                verb,
+                "create",
+                "hosted",
+                "--project",
+                "launch",
+                "--title",
+                "Rendered",
+                "--template",
+                &spelled(&template),
+                "--answers",
+                &spelled(&answers),
+                "--no-interactive",
+                "--asset",
+                &spelled(&screen_path),
+            ],
+            1,
+        ));
+        assert!(
+            said.contains("from a template") && said.contains("stdio plugin protocol"),
+            "{verb}: {said}"
+        );
+    }
+    assert!(!hosted.join("tasks").join("rendered.md").exists());
 }
 
 /// The first-column names of the table headed `header` inside `section`.

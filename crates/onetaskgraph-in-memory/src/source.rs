@@ -83,14 +83,22 @@ struct Held {
     blobs: BTreeMap<String, Vec<u8>>,
 }
 
+/// Which kind of record an asset belongs to: the two that hold assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    Task,
+    Document,
+}
+
 /// One image asset of one record: its name, and the digest of the bytes it is.
 #[derive(Debug)]
 struct HeldAsset {
-    /// Whether the record is a document rather than a task.
-    document: bool,
+    /// The kind of record it belongs to.
+    owner: Owner,
     /// The record it belongs to.
     record: NativeId,
     name: AssetName,
+    // llmlint: ignore[invalid_states_unrepresentable] The digest a write's payload carried, which `uploads` refuses unless its bytes hash to it before anything is kept; it keys `blobs`, which holds exactly the strings `asset_sha256` spells, so a newtype here would only re-wrap the contract's own `AssetPayload::sha256`.
     sha256: String,
 }
 
@@ -622,16 +630,16 @@ impl TaskSource for InMemorySource {
         let mut held = self.held()?;
         held.documents.retain(|document| &document.id != id);
         held.assets
-            .retain(|asset| !(asset.document && &asset.record == id));
+            .retain(|asset| !(asset.owner == Owner::Document && &asset.record == id));
         Ok(())
     }
 
     async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
-        self.listed_assets(false, id)
+        self.listed_assets(Owner::Task, id)
     }
 
     async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
-        self.listed_assets(true, id)
+        self.listed_assets(Owner::Document, id)
     }
 
     async fn task_asset(
@@ -639,7 +647,7 @@ impl TaskSource for InMemorySource {
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
-        self.asset_bytes(false, id, name)
+        self.asset_bytes(Owner::Task, id, name)
     }
 
     async fn document_asset(
@@ -647,7 +655,7 @@ impl TaskSource for InMemorySource {
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
-        self.asset_bytes(true, id, name)
+        self.asset_bytes(Owner::Document, id, name)
     }
 
     /// The task as [`write_task`](TaskSource::write_task) writes it, its references pointed at
@@ -676,7 +684,7 @@ impl TaskSource for InMemorySource {
                 depends_on: write.depends_on.clone(),
             })
             .await?;
-        self.keep_assets(false, &id, assets)?;
+        self.keep_assets(Owner::Task, &id, assets)?;
         Ok(AssetsWritten {
             id,
             content: item.content,
@@ -707,7 +715,7 @@ impl TaskSource for InMemorySource {
                 depends_on: Vec::new(),
             })
             .await?;
-        self.keep_assets(true, &id, assets)?;
+        self.keep_assets(Owner::Document, &id, assets)?;
         Ok(AssetsWritten {
             id,
             content: item.content,
@@ -995,7 +1003,7 @@ impl TaskSource for InMemorySource {
         // would hand a later task created under the same id comments nobody wrote on it.
         held.comments.retain(|comment| &comment.task != id);
         held.assets
-            .retain(|asset| asset.document || &asset.record != id);
+            .retain(|asset| asset.owner != Owner::Task || &asset.record != id);
         Ok(())
     }
 
@@ -1162,16 +1170,16 @@ impl InMemorySource {
     /// Make the record `id` hold exactly the assets `write` names.
     fn keep_assets(
         &self,
-        document: bool,
+        owner: Owner,
         id: &NativeId,
         write: &AssetWrite,
     ) -> Result<(), SourceError> {
         let mut held = self.held()?;
         held.assets
-            .retain(|asset| asset.document != document || &asset.record != id);
+            .retain(|asset| asset.owner != owner || &asset.record != id);
         for payload in &write.assets {
             held.assets.push(HeldAsset {
-                document,
+                owner,
                 record: id.clone(),
                 name: payload.name.clone(),
                 sha256: payload.sha256.clone(),
@@ -1180,12 +1188,12 @@ impl InMemorySource {
         Ok(())
     }
 
-    fn listed_assets(&self, document: bool, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+    fn listed_assets(&self, owner: Owner, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
         Ok(self
             .held()?
             .assets
             .iter()
-            .filter(|asset| asset.document == document && &asset.record == id)
+            .filter(|asset| asset.owner == owner && &asset.record == id)
             .map(|asset| Asset {
                 name: asset.name.clone(),
                 sha256: asset.sha256.clone(),
@@ -1197,7 +1205,7 @@ impl InMemorySource {
 
     fn asset_bytes(
         &self,
-        document: bool,
+        owner: Owner,
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
@@ -1205,7 +1213,7 @@ impl InMemorySource {
         Ok(held
             .assets
             .iter()
-            .find(|asset| asset.document == document && &asset.record == id && &asset.name == name)
+            .find(|asset| asset.owner == owner && &asset.record == id && &asset.name == name)
             .and_then(|asset| held.blobs.get(&asset.sha256))
             .cloned())
     }

@@ -383,3 +383,46 @@ async fn a_payload_without_bytes_reuses_the_asset_the_record_already_holds_by_di
         b"png"
     );
 }
+
+#[tokio::test]
+async fn replacing_and_removing_assets_leaves_a_file_a_person_put_beside_them() {
+    let (root, source) = folder();
+    let write = |assets: AssetWrite| {
+        let source = &source;
+        async move {
+            source
+                .write_task_with_assets(
+                    &ItemWrite {
+                        target: None,
+                        item: task("kept", "![a](./a.png)"),
+                        depends_on: Vec::new(),
+                    },
+                    None,
+                    &assets,
+                )
+                .await
+        }
+    };
+    write(carrying(&[("a.png", b"png")])).await.expect("lands");
+    let directory = root.path().join("tasks/kept.assets");
+    std::fs::write(directory.join("notes.txt"), "a person's own note").expect("a note");
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: Some(id("kept")),
+                item: task("kept", "no pictures"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &AssetWrite::default(),
+        )
+        .await
+        .expect("updates");
+    assert_eq!(files_in(&directory), vec!["notes.txt"]);
+    source.delete_task(&id("kept")).await.expect("removed");
+    assert_eq!(
+        files_in(&directory),
+        vec!["notes.txt"],
+        "only assets are ever removed"
+    );
+}

@@ -843,5 +843,19 @@ mod tests {
         let mut task_members = members(&task);
         assert!(task_members.remove("write"));
         assert_eq!(task_members, beside_the_write);
+
+        // The reference host reads what the engine sends through a shape of its own; both
+        // halves of it read back exactly the trait's argument, and a plain write reads as none.
+        for sent in [wire, task] {
+            let served: super::ServedWriteParams<Value> =
+                serde_json::from_value(sent).expect("the host reads the write");
+            assert_eq!(served.assets, Some(whole().assets));
+            assert_eq!(served.recorded_assets, whole().recorded_assets);
+        }
+        let plain: super::ServedWriteParams<Value> = serde_json::from_value(json!({
+            "write": {"target": null, "item": {}, "depends_on": []}
+        }))
+        .expect("the host reads a plain write");
+        assert!(plain.assets.is_none() && plain.recorded_assets.is_none());
     }
 }

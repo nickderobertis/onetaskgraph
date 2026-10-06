@@ -52,6 +52,26 @@ fn clock_client_process_entry() {
                         .await;
                     report(step);
                 }
+                Some(("abandon", seconds)) => {
+                    // A wait begun and dropped before it is woken, while a handler holds this
+                    // client's request — which keeps virtual time still — so the coordinator
+                    // reads the wait and its cancellation before it could advance to it.
+                    let seconds: u64 = seconds.parse().expect("seconds");
+                    let (taken, held) = std::sync::mpsc::channel();
+                    let (go, going) = std::sync::mpsc::channel::<()>();
+                    let sending = std::thread::spawn(move || {
+                        send_request_after(|| {
+                            let _ = taken.send(());
+                            going.recv().expect("the wait is dropped");
+                        });
+                    });
+                    held.recv().expect("the handler took the request");
+                    drop(clock.sleep(Duration::from_secs(seconds)));
+                    let _ = clock.now();
+                    go.send(()).expect("the sender is waiting");
+                    sending.join().expect("the request completes");
+                    report(step);
+                }
                 Some(("compute", millis)) => {
                     let until = Instant::now() + Duration::from_millis(millis.parse().expect("ms"));
                     while Instant::now() < until {
@@ -323,6 +343,32 @@ fn a_handler_receiving_a_body_holds_virtual_time_while_its_client_sleeps() {
             "request-while-sleeping:10".to_owned(),
             Duration::from_secs(10)
         )]
+    );
+}
+
+#[test]
+fn a_wait_dropped_before_it_is_woken_holds_no_client_as_waiting() {
+    let clock = SimulatedClock::start(1);
+    let (address, _) = endpoint(&clock, 0, Duration::ZERO);
+    let output = client(
+        &clock,
+        0,
+        "abandon:3,compute:300,sleep:5",
+        Some(&address),
+        0,
+    )
+    .wait_with_output()
+    .expect("the client finishes");
+    // Had the dropped wait still counted, the client would have read as waiting while it
+    // computed after its request, and three seconds would have passed before its own five
+    // began.
+    assert_eq!(
+        reported(&output),
+        vec![
+            ("abandon:3".to_owned(), Duration::ZERO),
+            ("compute:300".to_owned(), Duration::ZERO),
+            ("sleep:5".to_owned(), Duration::from_secs(5)),
+        ]
     );
 }
 

@@ -278,3 +278,49 @@ def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_
         run(client.task_create("notes", "P-1", "Refused", body="none", asset=[str(pixel)]))
     assert refused.value.exit_code == 1
     assert "pixel.gif" in str(refused.value)
+
+
+PICTURED = """---
+onetaskgraph_template: 1
+variables:
+  caption:
+    description: What the picture shows
+---
+![{{ caption }}](./pixel.gif)
+"""
+
+
+def test_a_render_stores_the_assets_it_is_given(binary: Path, tmp_path: Path) -> None:
+    """`asset` on `task_render` and `document_render` replaces the stored asset by name."""
+    client, _ = plan(binary, tmp_path)
+    template = tmp_path / "pictured.md"
+    template.write_text(PICTURED, encoding="utf-8", newline="\n")
+    for name, seed in (("old", 7), ("new", 8)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "pixel.gif").write_bytes(gif(seed))
+    old, new = str(tmp_path / "old" / "pixel.gif"), str(tmp_path / "new" / "pixel.gif")
+    task = (
+        run(
+            client.task_create(
+                "notes", "P-1", "Rendered", template=str(template), var=["caption=a"], asset=[old]
+            )
+        )
+        .items[0]
+        .id.root
+    )
+    run(
+        client.document_create(
+            "notes",
+            "P-1",
+            "Rendered",
+            id="rendered",
+            template=str(template),
+            var=["caption=a"],
+            asset=[old],
+        )
+    )
+    assert run(client.task_render(task, asset=[new])).changed
+    assert run(client.document_render("notes:rendered", asset=[new])).changed
+    digest = hashlib.sha256(gif(8)).hexdigest()
+    assert [a.sha256 for a in run(client.task_show(task)).assets or []] == [digest]
+    assert [a.sha256 for a in run(client.document_show("notes:rendered")).assets or []] == [digest]

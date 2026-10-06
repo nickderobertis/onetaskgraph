@@ -161,8 +161,10 @@ struct Noise(u64);
 
 impl Noise {
     fn new(seed: u64) -> Self {
-        // Never zero, which xorshift cannot leave.
-        Self(seed ^ 0x9E37_79B9_7F4A_7C15 | 1)
+        // A multiplication by an odd constant is a bijection, so every seed starts its own
+        // stream; never zero, which xorshift cannot leave.
+        let state = seed.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        Self(if state == 0 { 1 } else { state })
     }
 
     fn byte(&mut self) -> u8 {

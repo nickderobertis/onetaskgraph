@@ -191,11 +191,13 @@ pub struct Asset {
     /// Its name, which the record's content references as `./<name>`.
     pub name: AssetName,
     /// The lowercase hex SHA-256 of its bytes.
+    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
     pub sha256: String,
     /// The content type its extension gives it.
     pub content_type: AssetContentType,
     /// The absolute path holding its bytes on this machine, for a source that keeps them
     /// here; `null` for a hosted source.
+    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member as an absolute path string or null in what `show --json` prints, and the sibling plugin nodes build against that definition in parallel now. Only a source reports it, from the path it wrote the bytes to — local-md's canonicalized record path joined with the asset's validated name — and nothing reads it back to decide anything.
     pub path: Option<String>,
 }
 
@@ -209,6 +211,7 @@ pub struct AssetPayload {
     /// Its name, which the record's content references as `./<name>`.
     pub name: AssetName,
     /// The lowercase hex SHA-256 of its bytes.
+    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
     pub sha256: String,
     /// The content type its extension gives it.
     pub content_type: AssetContentType,
@@ -267,8 +270,10 @@ fn base64_in<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<u8
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AssetUpload {
     /// The lowercase hex SHA-256 of the bytes uploaded.
+    // llmlint: ignore[invalid_states_unrepresentable] The task fixes this member's JSON shape as a plain string for this run, and `otg-assets-github` and `otg-assets-linear` are building against that one definition in parallel now; a newtype would move their Rust surface under them. The engine computes every digest it sends with `asset_sha256`, and every source that receives bytes checks they hash to it before storing them (local-md's `assets::resolved`, in-memory's `uploads`, the stdio peer's `store_assets`).
     pub sha256: String,
     /// Where the destination serves them.
+    // llmlint: ignore[invalid_states_unrepresentable] The task fixes `onetaskgraph.assets` as `{"sha256": <hex>, "url": <string>}`, and both hosted plugin nodes build against that one definition in parallel now. A URL is whatever the destination serves the bytes at — its own scheme, as `in-memory://` shows — so no narrower type says more than a string; nothing here dereferences one.
     pub url: String,
 }
 

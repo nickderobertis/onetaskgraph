@@ -295,16 +295,15 @@ impl Engine {
         &self,
         response: &mut QueryResponse<Qualified<T>>,
         content: impl Fn(&T) -> Option<&str>,
-        document: bool,
+        owner: assets::Owner,
     ) -> Option<Vec<Asset>> {
         let item = response.items.first()?;
         let source = self
             .ready()
             .find(|source| source.name() == &item.id.source)?;
-        let listed = if document {
-            source.source().document_assets(&item.id.native).await
-        } else {
-            source.source().task_assets(&item.id.native).await
+        let listed = match owner {
+            assets::Owner::Document => source.source().document_assets(&item.id.native).await,
+            assets::Owner::Task => source.source().task_assets(&item.id.native).await,
         };
         match listed {
             Ok(listed) => Some(assets::ordered(listed, content(&item.item))),
@@ -327,7 +326,11 @@ impl Engine {
     pub async fn task_without_comments(&self, id: &GlobalId) -> Result<TaskDetail, EngineError> {
         let mut response = self.task(id).await?;
         let assets = self
-            .assets_of(&mut response, |task: &Task| task.content.as_deref(), false)
+            .assets_of(
+                &mut response,
+                |task: &Task| task.content.as_deref(),
+                assets::Owner::Task,
+            )
             .await;
         Ok(TaskDetail {
             response,
@@ -348,7 +351,7 @@ impl Engine {
             .assets_of(
                 &mut response,
                 |document: &Document| document.content.as_deref(),
-                true,
+                assets::Owner::Document,
             )
             .await;
         Ok(DocumentDetail { response, assets })

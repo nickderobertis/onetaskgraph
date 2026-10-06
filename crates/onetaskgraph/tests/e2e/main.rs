@@ -30,8 +30,9 @@ mod common;
 // second. The flag and the engine's narrowing are the binary's and the engine's, so they cannot
 // sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
 // depth.
-// The simulated clock: its coordinator driven by real client processes, and the binary
-// attaching to it. No source, no network, and no real waiting.
+// The simulated clock: its coordinator driven by real client processes over loopback, and the
+// binary attaching to it. No source and no third party; nothing waits in real time but the
+// deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.
 // Image assets on tasks and documents: stored, listed, rendered and copied through the
 // binary against folders of Markdown and the Python asset store over a real pipe.
 mod assets;

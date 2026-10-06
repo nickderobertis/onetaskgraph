@@ -82,8 +82,18 @@ pub fn clock_choice(value: Option<&str>) -> Result<ClockChoice, String> {
         )
     };
     let (address, client) = value.rsplit_once('/').ok_or_else(refuse)?;
+    let address: SocketAddr = address.parse().map_err(|_| refuse())?;
+    // A simulated clock is a test's, on the machine the test runs on: an address anywhere else
+    // would put this process's every wait in the hands of a host nobody named for that.
+    if !address.ip().is_loopback() {
+        return Err(format!(
+            "{SIMULATED_CLOCK_VARIABLE} names {address}, which is not a loopback address; a \
+             simulated clock is a test's own, on this machine — unset it to run on the real \
+             clock"
+        ));
+    }
     Ok(ClockChoice::Simulated {
-        address: address.parse().map_err(|_| refuse())?,
+        address,
         client: client.parse().map_err(|_| refuse())?,
     })
 }
@@ -130,6 +140,7 @@ pub fn attach(address: SocketAddr, client: usize) -> Result<SharedClock, String>
         ));
     }
     let shared = Arc::new(Shared {
+        address,
         writer: Mutex::new(writer),
         pending: Mutex::new(Pending::default()),
         sequence: AtomicU64::new(0),
@@ -146,6 +157,7 @@ struct SimulatedClient {
 
 /// What a client's calls and its listening thread share.
 struct Shared {
+    address: SocketAddr,
     writer: Mutex<TcpStream>,
     pending: Mutex<Pending>,
     sequence: AtomicU64,
@@ -171,6 +183,17 @@ impl Shared {
         let _ = writeln!(writer, "{line}").and_then(|()| writer.flush());
     }
 
+    /// The coordinator is gone, or said something that is not a time: this process's time is
+    /// no longer known, and no answer it could give would be true. A simulated clock is only
+    /// ever a test's, so the test is stopped saying so rather than run on a time nobody kept.
+    fn lost(&self) -> ! {
+        panic!(
+            "the simulated clock at {} closed its connection or answered with something that \
+             is not a time, so this process's time is unknown; check the test that started it",
+            self.address
+        )
+    }
+
     fn next(&self) -> u64 {
         self.sequence.fetch_add(1, Ordering::Relaxed)
     }
@@ -184,19 +207,26 @@ impl Shared {
                 .pending
                 .lock()
                 .expect("the clock's waiters are not poisoned");
-            match (words.next(), words.next().and_then(|seq| seq.parse().ok())) {
-                (Some("now"), Some(seq)) => {
-                    let nanos: u64 = words.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            let verb = words.next();
+            let seq = words.next().and_then(|seq| seq.parse::<u64>().ok());
+            match (verb, seq, words.next(), words.next()) {
+                (Some("now"), Some(seq), Some(nanos), None) => {
+                    // A time that is not one ends the connection rather than reading as zero:
+                    // every wait after it would be measured from a time nobody said.
+                    let Ok(nanos) = nanos.parse::<u64>() else {
+                        break;
+                    };
                     if let Some(waiter) = pending.nows.remove(&seq) {
                         let _ = waiter.send(Duration::from_nanos(nanos));
                     }
                 }
-                (Some("wake"), Some(seq)) => {
+                (Some("wake"), Some(seq), None, None) => {
                     if let Some(waiter) = pending.wakes.remove(&seq) {
                         let _ = waiter.send(());
                     }
                 }
-                _ => {}
+                // A line that is not one of the coordinator's ends the connection too.
+                _ => break,
             }
         }
         let mut pending = self
@@ -220,12 +250,12 @@ impl Clock for SimulatedClient {
                 .lock()
                 .expect("the clock's waiters are not poisoned");
             if pending.closed {
-                return Duration::ZERO;
+                self.shared.lost();
             }
             pending.nows.insert(seq, sender);
         }
         self.shared.send(&format!("now {seq}"));
-        receiver.recv().unwrap_or_default()
+        receiver.recv().unwrap_or_else(|_| self.shared.lost())
     }
 
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
@@ -238,7 +268,7 @@ impl Clock for SimulatedClient {
                 .lock()
                 .expect("the clock's waiters are not poisoned");
             if pending.closed {
-                return Box::pin(std::future::ready(()));
+                self.shared.lost();
             }
             pending.wakes.insert(seq, sender);
         }
@@ -266,12 +296,13 @@ impl Future for Wait {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
-        // A closed connection completes the wait as well: nothing will ever wake it.
         match Pin::new(&mut self.receiver).poll(context) {
-            Poll::Ready(_) => {
+            Poll::Ready(Ok(())) => {
                 self.woken = true;
                 Poll::Ready(())
             }
+            // Nothing will ever wake it, and completing it would claim a time that never came.
+            Poll::Ready(Err(_)) => self.shared.lost(),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -311,7 +342,12 @@ mod tests {
                 client: 1,
             })
         );
-        for malformed in ["127.0.0.1:4567", "nowhere/0", "127.0.0.1:4567/x"] {
+        for malformed in [
+            "127.0.0.1:4567",
+            "nowhere/0",
+            "127.0.0.1:4567/x",
+            "192.0.2.1:4567/0",
+        ] {
             let refused = clock_choice(Some(malformed)).expect_err("refused");
             assert!(refused.contains(SIMULATED_CLOCK_VARIABLE), "{refused}");
         }
