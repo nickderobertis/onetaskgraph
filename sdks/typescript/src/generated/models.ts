@@ -5951,8 +5951,8 @@ export namespace GeneratedStatusNamesReport {
  * every name it gives a project, checked against the workspace's project statuses.
  *
  * With `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on
- * the team, a project status in the workspace — of the type its category derives
- * ([`created_types`]), and the report names what it created. Nothing that exists is renamed,
+ * the team, a project status in the workspace — of the type its category derives (see the
+ * crate's ruling on `sources fields --apply`), and the report names what it created. Nothing that exists is renamed,
  * retyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and
  * every name created before it is reported created.
  */

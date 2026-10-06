@@ -11541,7 +11541,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What `onetaskgraph sources fields` reports for a `linear` source: every name its\n`status_mapping` gives a task, checked against the configured team's workflow states, and\nevery name it gives a project, checked against the workspace's project statuses.\n\nWith `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on\nthe team, a project status in the workspace — of the type its category derives\n([`created_types`]), and the report names what it created. Nothing that exists is renamed,\nretyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and\nevery name created before it is reported created.",
+    "description": "What `onetaskgraph sources fields` reports for a `linear` source: every name its\n`status_mapping` gives a task, checked against the configured team's workflow states, and\nevery name it gives a project, checked against the workspace's project statuses.\n\nWith `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on\nthe team, a project status in the workspace — of the type its category derives (see the\ncrate's ruling on `sources fields --apply`), and the report names what it created. Nothing that exists is renamed,\nretyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and\nevery name created before it is reported created.",
     "properties": {
       "names": {
         "description": "Every name `status_mapping` gives a task, then every name it gives a project, each in\ncategory order. A bare name is reported once for each kind. Empty when it names none.",
