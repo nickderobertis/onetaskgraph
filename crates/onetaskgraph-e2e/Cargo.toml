@@ -1,0 +1,38 @@
+[package]
+name = "onetaskgraph-e2e"
+description = "The engine's and the command line's own journeys, driven through the compiled onetaskgraph binary."
+# Test-only and never published: it holds nothing but `tests/`, which spawn the binary
+# `onetaskgraph:build` made. The literal version is the one every crate manifest here spells,
+# for the reason crates/onetaskgraph-live/Cargo.toml gives.
+version = "0.3.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Every dependency is a dev-dependency: the package has no library or binary of its own.
+[dev-dependencies]
+assert_cmd.workspace = true
+jsonschema.workspace = true
+# The journeys that drive the engine the binary links — a long-lived caller ending a command,
+# and the schema bundle the binary emits — with every plugin kind the binary registers.
+onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
+onetaskgraph-e2e-support.workspace = true
+# The documents the loopback board and workspace are asserted to have been sent, read from the
+# plugins' own constants rather than from a copy a journey could drift from.
+onetaskgraph-github-projects.workspace = true
+onetaskgraph-linear.workspace = true
+onetaskgraph-plugin-api.workspace = true
+predicates.workspace = true
+serde_json.workspace = true
+# The rendering journeys hash a created item's content and answers themselves, rather than
+# asking the engine that wrote the hashes to check its own work.
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+# A pseudo-terminal for the template prompting journeys, which only a Unix host can open.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["pty", "fs", "termios"] }

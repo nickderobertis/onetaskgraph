@@ -1094,24 +1094,16 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "onetaskgraph"
 version = "0.3.0"
 dependencies = [
- "assert_cmd",
  "chrono",
  "clap",
  "dialoguer",
- "graphql-parser",
- "jsonschema",
  "onetaskgraph-core",
- "onetaskgraph-github-projects",
  "onetaskgraph-linear",
  "onetaskgraph-plugin-api",
  "onetaskgraph-status-options",
- "predicates",
- "rustix",
  "schemars",
  "serde",
  "serde_json",
- "sha2",
- "tempfile",
  "tokio",
 ]
 
@@ -1141,6 +1133,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "onetaskgraph-e2e"
+version = "0.3.0"
+dependencies = [
+ "assert_cmd",
+ "jsonschema",
+ "onetaskgraph-core",
+ "onetaskgraph-e2e-support",
+ "onetaskgraph-github-projects",
+ "onetaskgraph-linear",
+ "onetaskgraph-plugin-api",
+ "predicates",
+ "rustix",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "onetaskgraph-e2e-support"
+version = "0.3.0"
+dependencies = [
+ "assert_cmd",
+ "chrono",
+ "graphql-parser",
+ "onetaskgraph-github-projects",
+ "onetaskgraph-linear",
+ "onetaskgraph-plugin-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "onetaskgraph-github-projects"
 version = "0.3.0"
 dependencies = [
@@ -1156,6 +1182,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "onetaskgraph-github-projects-e2e"
+version = "0.3.0"
+dependencies = [
+ "onetaskgraph-e2e-support",
+ "onetaskgraph-github-projects",
+ "serde_json",
 ]
 
 [[package]]
@@ -1185,6 +1220,18 @@ dependencies = [
  "schemars",
  "secrecy",
  "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "onetaskgraph-linear-e2e"
+version = "0.3.0"
+dependencies = [
+ "onetaskgraph-core",
+ "onetaskgraph-e2e-support",
+ "onetaskgraph-linear",
+ "onetaskgraph-plugin-api",
  "serde_json",
  "tokio",
 ]
@@ -1233,6 +1280,14 @@ dependencies = [
  "secrecy",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "onetaskgraph-status-options-e2e"
+version = "0.3.0"
+dependencies = [
+ "onetaskgraph-e2e-support",
+ "serde_json",
 ]
 
 [[package]]

@@ -6,10 +6,10 @@
 //! which state an issue is at, which status a project is at, the names its vocabularies hold,
 //! and every request it was sent.
 //!
-//! The vocabulary is Hello Patient's: its project statuses as `projectStatuses` answered on
-//! 2026-10-05, and the team states this host maps, with `Triage` and `In Review` beside them
-//! so an unmapped name has something to read. The mapping is the one ai-orchestrator configures
-//! for it.
+//! The vocabulary is the example team's of `onetaskgraph_e2e_support::linear_vocabulary`: its
+//! project statuses as `projectStatuses` answered on 2026-10-05, and the team states its
+//! mapping names, with `Triage` and `In Review` beside them so an unmapped name has something
+//! to read.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -18,52 +18,7 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
-
-/// The `hellopatient` source's `status_mapping`, exactly as ai-orchestrator writes it.
-pub(crate) fn hellopatient_mapping() -> Value {
-    json!({
-        "backlog":     {"task": "Proposed",        "project": "Proposal"},
-        "draft":       {"task": "Backlog",         "project": "Idea"},
-        "todo":        {"task": "Todo",            "project": "Planned"},
-        "queued":      {"task": "Queued",          "project": "Accepted"},
-        "in-progress": "In Progress",
-        "unknown":     {"task": "Needs Attention", "project": "Blocked"},
-        "done":        {"task": "Done",            "project": "Completed"},
-        "cancelled":   "Canceled",
-    })
-}
-
-/// The team's workflow states: the eight the mapping names, and `Triage` and `In Review`.
-pub(crate) const TEAM_STATES: &[(&str, &str, &str)] = &[
-    ("S-proposed", "Proposed", "backlog"),
-    ("S-backlog", "Backlog", "backlog"),
-    ("S-todo", "Todo", "unstarted"),
-    ("S-queued", "Queued", "unstarted"),
-    ("S-in-progress", "In Progress", "started"),
-    ("S-needs-attention", "Needs Attention", "started"),
-    ("S-done", "Done", "completed"),
-    ("S-canceled", "Canceled", "canceled"),
-    ("S-triage", "Triage", "triage"),
-    ("S-in-review", "In Review", "started"),
-];
-
-/// Hello Patient's project statuses, in Linear's order.
-pub(crate) const PROJECT_STATUSES: &[(&str, &str)] = &[
-    ("Idea", "backlog"),
-    ("Proposal", "backlog"),
-    ("Backlog", "backlog"),
-    ("Discovery", "planned"),
-    ("Planned", "planned"),
-    ("Accepted", "planned"),
-    ("Requirements Gathering", "started"),
-    ("In Design", "started"),
-    ("PRD Review", "started"),
-    ("In Progress", "started"),
-    ("Blocked", "started"),
-    ("Maintenance", "completed"),
-    ("Completed", "completed"),
-    ("Canceled", "canceled"),
-];
+use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES, example_mapping};
 
 /// Every category, in the order a cycle through them never repeats one.
 const CATEGORIES: [&str; 8] = [
@@ -276,7 +231,7 @@ fn destination(report: &Value) -> String {
 #[test]
 fn every_category_is_written_and_read_back_for_both_kinds_under_its_mapped_name() {
     let sandbox = Sandbox::new();
-    let mapping = hellopatient_mapping();
+    let mapping = example_mapping();
     let (config, workspace) = linear_workspace_with(
         &sandbox,
         held(
@@ -732,7 +687,7 @@ const UNMAPPED_STATUSES: &[(&str, &str)] = &[("On Hold", "paused"), ("Abandoned"
 #[test]
 fn an_unmapped_name_reads_as_unknown_and_status_returns_exactly_what_reads_as_each_category() {
     let sandbox = Sandbox::new();
-    let mapping = hellopatient_mapping();
+    let mapping = example_mapping();
     let states: Vec<(&str, &str, &str)> =
         TEAM_STATES.iter().chain(UNMAPPED_STATES).copied().collect();
     let statuses: Vec<(&str, &str)> = PROJECT_STATUSES

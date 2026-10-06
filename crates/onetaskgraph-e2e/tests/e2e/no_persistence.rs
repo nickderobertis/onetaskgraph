@@ -83,7 +83,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 /// see either.
 const DESTINATION: &str = "notes";
 
-/// Where [`DESTINATION`] routes petsinc work: the second store a routed copy writes into.
+/// Where [`DESTINATION`] routes widgetco work: the second store a routed copy writes into.
 const ROUTED: &str = "team";
 
 /// The configuration this journey runs against: one source whose every field is a
@@ -97,7 +97,7 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
                 // `todo` too, the word a created task is written with when none is given.
                 "status_mapping": {SENTINELS[4]: "todo", "todo": "todo"},
             },
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": ROUTED}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": ROUTED}],
         },
         ROUTED: {"plugin": "local-md", "config": {
             "root": sandbox.subdirectory(ROUTED),
@@ -114,7 +114,7 @@ fn planted(sandbox: &Sandbox, boundary: SourceBoundary) -> String {
                     // Routed: a project copy of P-1 lands it beside the home's member.
                     {"id": "T-3", "title": "routed", "content": SENTINELS[1],
                      "status": {"category": "todo", "name": SENTINELS[4]}, "labels": [],
-                     "project": "P-1", "repositories": ["github.com/petsinc/sentinel"]}
+                     "project": "P-1", "repositories": ["github.com/widgetco/sentinel"]}
                 ],
                 "projects": [
                     // The sentinel status, at the one category this journey's destination
@@ -165,7 +165,7 @@ fn every_verb() -> Vec<Vec<String>> {
             DESTINATION,
             "--no-tasks",
         ]),
-        // The routed copy: the home stays in the destination, the petsinc task lands in the
+        // The routed copy: the home stays in the destination, the widgetco task lands in the
         // routed store under a member project, and a dry run of it writes nothing at all.
         owned(&[
             "project",
@@ -189,7 +189,7 @@ fn every_verb() -> Vec<Vec<String>> {
             "route",
             DESTINATION,
             "--repository",
-            "github.com/petsinc/sentinel",
+            "github.com/widgetco/sentinel",
         ]),
         owned(&["sources", "list"]),
         owned(&["task", "list"]),
@@ -371,7 +371,7 @@ fn driving_every_verb_writes_nothing_of_a_users_work_anywhere() {
 
         let mut answered = 0;
         for arguments in every_verb() {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+            let mut command = Command::new(onetaskgraph_e2e_support::binary());
             for (name, _) in std::env::vars() {
                 if name.starts_with("ONETASKGRAPH_") {
                     command.env_remove(name);

@@ -28,6 +28,10 @@ onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", ver
 # and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
 # the crates that name it, so nothing a consumer installs can reach it.
 onetaskgraph-live = { path = "crates/onetaskgraph-live" }
+# The harness every binary end-to-end suite shares — the sandbox, the binary runner, the
+# loopback servers and the journey-matrix table. Path-only and unpublished for the reason
+# `onetaskgraph-live` is: only the test-only e2e members name it.
+onetaskgraph-e2e-support = { path = "crates/onetaskgraph-e2e-support" }
 
 async-trait = "0.1.92"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }

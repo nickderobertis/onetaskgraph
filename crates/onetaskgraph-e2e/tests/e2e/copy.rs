@@ -3704,7 +3704,7 @@ fn linear_at(boundary: SourceBoundary, config: Value) -> Value {
         SourceBoundary::Subprocess => json!({
             "plugin": "subprocess",
             "config": {
-                "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                "command": onetaskgraph_e2e_support::source_binary(),
                 "secrets": ["LINEAR_API_KEY"],
                 "settings": {"kind": "linear", "config": config},
             },

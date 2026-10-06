@@ -1,0 +1,24 @@
+[package]
+name = "onetaskgraph-linear-e2e"
+description = "The Linear plugin's journeys, driven through the compiled onetaskgraph binary."
+# Test-only and never published: it holds nothing but `tests/`, which spawn the binary
+# `onetaskgraph:build` made. The literal version is the one every crate manifest here spells,
+# for the reason crates/onetaskgraph-live/Cargo.toml gives.
+version = "0.3.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Every dependency is a dev-dependency: the package has no library or binary of its own.
+[dev-dependencies]
+# The warm budget measurements drive the engine the binary links, as a long-lived caller holds
+# one source instance across writes.
+onetaskgraph-core = { workspace = true, features = ["linear"] }
+onetaskgraph-e2e-support.workspace = true
+onetaskgraph-linear.workspace = true
+onetaskgraph-plugin-api.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

@@ -9,11 +9,11 @@
 //! the binary wrote. Nothing here stands in for the filesystem or for the
 //! environment: those *are* the layer under test.
 
-mod common;
-
 use std::process::Output;
 
-use common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, one_source, stderr, stdout};
+use onetaskgraph_e2e_support::common::{
+    SOURCE_BOUNDARIES, Sandbox, SourceBoundary, one_source, stderr, stdout,
+};
 use serde_json::{Value, json};
 
 /// The whole `config show --json` document.
@@ -899,7 +899,7 @@ fn subprocess_document(secrets: &[&str]) -> String {
             "work": {
                 "plugin": "subprocess",
                 "config": {
-                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "command": onetaskgraph_e2e_support::source_binary(),
                     "secrets": secrets,
                     "settings": {
                         "kind": "in-memory",
@@ -1280,7 +1280,9 @@ fn mistyped(sandbox: &Sandbox, arguments: &[&str]) -> String {
 fn a_working_directory_that_no_longer_exists_is_reported_rather_than_crashing() {
     let sandbox = Sandbox::new();
     let doomed = sandbox.subdirectory("doomed");
-    let binary = env!("CARGO_BIN_EXE_onetaskgraph");
+    let binary = onetaskgraph_e2e_support::binary()
+        .to_str()
+        .expect("the binary's path is UTF-8");
 
     // The shell removes the directory it is standing in and then execs the binary into
     // it, so the binary really starts life somewhere the kernel can no longer name —
@@ -1780,7 +1782,7 @@ fn both_sides_of_the_seam(root: &str) -> String {
             "hosted": {
                 "plugin": "subprocess",
                 "config": {
-                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "command": onetaskgraph_e2e_support::source_binary(),
                     "settings": {"kind": "local-md", "config": {"root": root}},
                 },
             },
@@ -1928,7 +1930,7 @@ fn a_hosted_plugin_that_declares_no_path_has_nothing_in_its_settings_resolved() 
                 "hosted": {
                     "plugin": "subprocess",
                     "config": {
-                        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                        "command": onetaskgraph_e2e_support::source_binary(),
                         "settings": {
                             "kind": "in-memory",
                             "config": {
@@ -2003,7 +2005,7 @@ fn an_empty_root_a_document_supplies_behind_the_seam_is_not_rebased_onto_the_doc
                 "hosted": {
                     "plugin": "subprocess",
                     "config": {
-                        "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                        "command": onetaskgraph_e2e_support::source_binary(),
                         "settings": {"kind": "local-md", "config": {"root": ""}},
                     },
                 },

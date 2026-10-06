@@ -15,14 +15,14 @@ use crate::common::Sandbox;
 
 /// The shipped host, ready to be given a connection on its standard input.
 fn source_host() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+    let mut command = Command::new(onetaskgraph_e2e_support::binary());
     command.args(["plugin-serve", "in-memory"]);
     command
 }
 
 #[test]
 fn plugin_serve_is_hidden_from_normal_help() {
-    let output = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let output = Command::new(onetaskgraph_e2e_support::binary())
         .arg("--help")
         .output()
         .expect("the main command runs");
@@ -37,7 +37,7 @@ fn plugin_serve_is_hidden_from_normal_help() {
 
 #[test]
 fn plugin_serve_refuses_a_source_this_build_does_not_have() {
-    let output = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let output = Command::new(onetaskgraph_e2e_support::binary())
         .args(["plugin-serve", "missing"])
         .output()
         .expect("the main command runs");
@@ -300,7 +300,7 @@ impl Hosted {
     }
 
     fn connection(&self) -> (Command, Value) {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        let mut command = Command::new(onetaskgraph_e2e_support::binary());
         command.args(["plugin-serve", self.kind]);
         let handshake = json!({
             "id": "0",

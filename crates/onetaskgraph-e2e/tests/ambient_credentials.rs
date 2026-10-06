@@ -1,4 +1,4 @@
-//! The sandbox's removal of [`common::AMBIENT_CREDENTIALS`], driven against a host that
+//! The sandbox's removal of [`onetaskgraph_e2e_support::common::AMBIENT_CREDENTIALS`], driven against a host that
 //! really has them set.
 //!
 //! **A binary of its own, holding one test.** `std::env::set_var` is unsafe because
@@ -6,15 +6,7 @@
 //! a single test has none — which is what lets this one set the variables in its own
 //! process, so the child would inherit them if the sandbox did not take them away.
 
-// The same shared sandbox `tests/configuration.rs` and the e2e target use, and the same
-// allowance those make: this target drives one journey and needs a handful of its helpers.
-#[allow(
-    dead_code,
-    reason = "one shared sandbox, three test targets, a subset used by each"
-)]
-mod common;
-
-use common::{AMBIENT_CREDENTIALS, Sandbox, stderr, stdout};
+use onetaskgraph_e2e_support::common::{AMBIENT_CREDENTIALS, Sandbox, stderr, stdout};
 use serde_json::json;
 
 #[test]

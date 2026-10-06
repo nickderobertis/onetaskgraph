@@ -1,7 +1,7 @@
 //! What a plan and a follow-up flow write to a Linear source, driven the way a user drives it.
 //!
 //! Every journey spawns the compiled binary against the shared stateful fake Linear — a real
-//! HTTP server whose one team carries the Hello Patient team's workflow state names and types,
+//! HTTP server whose one team carries the example team's workflow state names and types,
 //! two of type `backlog` and two of type `unstarted` among them, so a state written by name and
 //! one written as the first of its type land in different places. Each asserts on the exit
 //! code, stdout and stderr, and on what the workspace holds afterwards — its raw descriptions
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LINEAR_TEAM_STATES, LinearWorkspace, document, linear_workspace};
 
-/// The eight-entry mapping the Hello Patient team is configured with.
+/// The eight-entry mapping the example team is configured with.
 fn eng_mapping() -> Value {
     json!({
         "backlog": "Proposed",

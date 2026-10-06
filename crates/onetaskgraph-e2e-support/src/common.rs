@@ -43,7 +43,7 @@ impl SourceBoundary {
             Self::Subprocess => json!({
                 "plugin": "subprocess",
                 "config": {
-                    "command": env!("CARGO_BIN_EXE_onetaskgraph-source"),
+                    "command": crate::source_binary(),
                     "secrets": secrets,
                     "settings": {"kind": plugin, "config": config},
                 },
@@ -85,7 +85,8 @@ impl SourceBoundary {
 /// whole of the harm and the whole of the gate.
 ///
 /// A journey that wants one set says so with `.env`, which lands after this removal and
-/// wins. `tests/ambient_credentials.rs` drives it with the variables set in the parent.
+/// wins. `crates/onetaskgraph-e2e/tests/ambient_credentials.rs` drives it with the variables
+/// set in the parent.
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These names are what one leg of the CI workflow exports, not a copy of the plugins' defaults, and there is nothing to derive them from: the schema `onetaskgraph schema` emits carries no default for `api_key_env` or `token_env`, and a `github-projects` source with an empty block is refused over `owner` before it names its token. The gate is the one stated above, and it is the one that fired.
 pub const AMBIENT_CREDENTIALS: [&str; 2] = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
 
@@ -95,6 +96,13 @@ pub struct Sandbox {
     _directory: TempDir,
     /// The same tree, named the way the child process will name it.
     root: PathBuf,
+}
+
+/// A fresh, empty host, as [`Sandbox::new`] makes one.
+impl Default for Sandbox {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sandbox {
@@ -154,7 +162,7 @@ impl Sandbox {
     /// clearing it would silently stop attributing this binary's lines to its crate.
     /// [`AMBIENT_CREDENTIALS`] goes with them, for the reason recorded there.
     pub fn command_in(&self, directory: &Path) -> Command {
-        let mut command = Command::from_std(self.subprocess(env!("CARGO_BIN_EXE_onetaskgraph")));
+        let mut command = Command::from_std(self.subprocess(crate::binary()));
         command.current_dir(directory);
         command
     }

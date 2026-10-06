@@ -6,8 +6,8 @@
 //! writes the figure there. The cold figures go through the real binary, one invocation being
 //! one fresh source instance; the warm ones through `onetaskgraph-core`'s own `Engine`, which
 //! is what a long-lived caller — onepipeline's write-back worker — links, and where one source
-//! instance makes write after write. Every workspace is Hello Patient's vocabulary, configured
-//! with the per-kind mapping ai-orchestrator writes for it.
+//! instance makes write after write. Every workspace is the example team's vocabulary, configured
+//! with its per-kind mapping.
 //!
 //! The figures are an inner measure of headroom on a production Linear key shared by every
 //! manager of a host, which no check may reach; the base's own counts, measured at commit
@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
-use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES, hellopatient_mapping};
+use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES, example_mapping};
 
 /// The documents a whole project write sends of its own: the resolution when it is the first
 /// write, the label lookups, the create or the rewrite, and the relation reads and writes. A
@@ -114,17 +114,17 @@ fn held(tasks: Vec<Value>) -> Value {
            "task_dependencies": [], "project_dependencies": []})
 }
 
-/// Hello Patient's workspace over `tasks`, and the source configuration that reaches it.
-fn hellopatient(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
+/// The example team's workspace over `tasks`, and the source configuration that reaches it.
+fn example_workspace(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
     let (mut config, workspace) =
         linear_workspace_with(sandbox, held(tasks), TEAM_STATES, PROJECT_STATUSES);
-    config["status_mapping"] = hellopatient_mapping();
+    config["status_mapping"] = example_mapping();
     (config, workspace)
 }
 
-/// Hello Patient's workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
+/// The example team's workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
 /// and `tasks`; and the configuration of a source scoped to `LP-SCOPE` that reaches it.
-fn hellopatient_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
+fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
     let projects = ["LP-SCOPE", "LP-ELSEWHERE"]
         .iter()
         .map(|id| {
@@ -138,7 +138,7 @@ fn hellopatient_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWo
     dataset["projects"] = json!(projects);
     let (mut config, workspace) =
         linear_workspace_with(sandbox, dataset, TEAM_STATES, PROJECT_STATUSES);
-    config["status_mapping"] = hellopatient_mapping();
+    config["status_mapping"] = example_mapping();
     config["project"] = json!("LP-SCOPE");
     (config, workspace)
 }
@@ -148,7 +148,7 @@ fn hellopatient_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWo
 /// `task status set` and `task update --status` sent, in that order.
 fn scoped_cold() -> Vec<usize> {
     let sandbox = Sandbox::new();
-    let (config, workspace) = hellopatient_scoped(
+    let (config, workspace) = example_workspace_scoped(
         &sandbox,
         vec![
             issue("L-IN", "Todo", json!({"project": "LP-SCOPE"})),
@@ -267,7 +267,7 @@ fn per_write(served: &[(String, Value)], documents: &[&str], creates: &[&str]) -
 #[test]
 fn measure_linear_requests_per_status_write_cold() {
     let sandbox = Sandbox::new();
-    let (config, workspace) = hellopatient(
+    let (config, workspace) = example_workspace(
         &sandbox,
         vec![
             issue("L-SET", "Todo", json!({})),
@@ -293,7 +293,7 @@ fn measure_linear_requests_per_status_write_cold() {
             (
                 "tasks/pets.md",
                 "---\ntitle: Pets\nstatus: todo\nproject: goal\n\
-                 repositories: [github.com/petsinc/api]\n---\nRoutes.\n",
+                 repositories: [github.com/widgetco/api]\n---\nRoutes.\n",
             ),
         ],
     );
@@ -302,7 +302,7 @@ fn measure_linear_requests_per_status_write_cold() {
         "patients": {"plugin": "linear", "config": config},
         "plan": markdown(&plan),
         "notes": {"plugin": "local-md", "config": {"root": notes},
-                  "routes": [{"repositories": ["github.com/petsinc/*"], "to": "patients"}]},
+                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": "patients"}]},
     })));
 
     // A task, from a mapped state of one category to a mapped state of another, each by a
@@ -388,7 +388,7 @@ fn measure_linear_requests_per_status_write_warm() {
     // A copy creating a project and its five tasks, each create carrying a status: one
     // resolution, then one mutation per item.
     let sandbox = Sandbox::new();
-    let (config, workspace) = hellopatient(&sandbox, Vec::new());
+    let (config, workspace) = example_workspace(&sandbox, Vec::new());
     let mut files = vec![(
         "projects/big.md".to_owned(),
         "---\ntitle: Big\nstatus: todo\n---\nFive tasks.\n".to_owned(),
@@ -437,7 +437,7 @@ fn measure_linear_requests_per_status_write_warm() {
     let tasks = (0..5)
         .map(|at| issue(&format!("L-{at}"), "Todo", json!({})))
         .collect();
-    let (config, workspace) = hellopatient(&sandbox, tasks);
+    let (config, workspace) = example_workspace(&sandbox, tasks);
     let plan = folder(
         &sandbox,
         &[(
@@ -528,7 +528,7 @@ fn measure_linear_requests_per_status_write_warm() {
             issue(&format!("L-{at}"), "Todo", json!({"project": project}))
         })
         .collect();
-    let (config, workspace) = hellopatient_scoped(&sandbox, tasks);
+    let (config, workspace) = example_workspace_scoped(&sandbox, tasks);
     let scoped_engine = self::engine(&config, None);
     let mut scoped = Vec::new();
     runtime.block_on(async {
@@ -619,7 +619,7 @@ fn settlements() -> Vec<usize> {
             )
         })
         .collect();
-    let (config, workspace) = hellopatient(&sandbox, tasks);
+    let (config, workspace) = example_workspace(&sandbox, tasks);
     let before = (0..5)
         .map(|at| {
             workspace
@@ -730,7 +730,7 @@ fn discovery(served: &[(String, Value)]) -> usize {
 /// Measured at commit c9e75a8 — `chore: release v0.2.58` — through the same binary and
 /// engine calls against the same loopback workspace, on a configuration that commit completes:
 /// the shared workspace's team with no `status_mapping`, which that commit wrote by type and
-/// read by type, and its projects at the dataset's own status names. (The `hellopatient`
+/// read by type, and its projects at the dataset's own status names. (The example team's
 /// mapping is one it could not load, and a project status it resolved by the item's own name
 /// is one it could not find.)
 const BASE: &str = "c9e75a8";
@@ -747,7 +747,7 @@ const BASE_RECOPY_PROJECT: usize = 3; // PROJECTS, PROJECT, PROJECT_RELATIONS
 fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_on_the_base() {
     let sandbox = Sandbox::new();
     let (config, workspace) =
-        hellopatient(&sandbox, vec![issue("L-READ", "In Progress", json!({}))]);
+        example_workspace(&sandbox, vec![issue("L-READ", "In Progress", json!({}))]);
     let plan = folder(
         &sandbox,
         &[
@@ -767,7 +767,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             (
                 "tasks/pets.md",
                 "---\ntitle: Pets\nstatus: todo\nproject: goal\n\
-                 repositories: [github.com/petsinc/api]\n---\nRoutes.\n",
+                 repositories: [github.com/widgetco/api]\n---\nRoutes.\n",
             ),
         ],
     );
@@ -776,7 +776,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         "patients": {"plugin": "linear", "config": config},
         "plan": markdown(&plan),
         "notes": {"plugin": "local-md", "config": {"root": notes},
-                  "routes": [{"repositories": ["github.com/petsinc/*"], "to": "patients"}]},
+                  "routes": [{"repositories": ["github.com/widgetco/*"], "to": "patients"}]},
     })));
     let alone = counted(
         &sandbox,
@@ -866,7 +866,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
     // A copy of a project and its five tasks, and a project re-copied into one engine, besides
     // what their writes send.
     let sandbox = Sandbox::new();
-    let (config, workspace) = hellopatient(&sandbox, Vec::new());
+    let (config, workspace) = example_workspace(&sandbox, Vec::new());
     let mut files = vec![(
         "projects/big.md".to_owned(),
         "---\ntitle: Big\nstatus: todo\n---\nFive tasks.\n".to_owned(),

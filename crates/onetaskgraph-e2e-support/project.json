@@ -1,0 +1,73 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph-e2e-support",
+  "projectType": "library",
+  "tags": [
+    "lang:rust",
+    "layer:testing"
+  ],
+  "//": "The harness every e2e suite shares; implicitDependencies mirror its Cargo dependencies, as every crate's do. It is never a graph dependency of a plugin suite, which names it in its `default` input instead, because its edges reach both hosted plugins.",
+  "implicitDependencies": [
+    "onetaskgraph-github-projects",
+    "onetaskgraph-linear",
+    "onetaskgraph-plugin-api"
+  ],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-e2e-support"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-e2e-support -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-e2e-support --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-e2e-support --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-e2e-support --all-features --locked"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "workspace:coverage-clear"
+      ],
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-e2e-support"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target/*.profraw"
+      ],
+      "cache": false,
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
+    }
+  }
+}

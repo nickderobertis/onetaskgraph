@@ -1,0 +1,87 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph-github-projects-e2e",
+  "projectType": "application",
+  "tags": [
+    "lang:rust",
+    "layer:e2e"
+  ],
+  "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
+  "implicitDependencies": [
+    "onetaskgraph-github-projects"
+  ],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "sharedGlobals",
+      "{workspaceRoot}/crates/onetaskgraph/**/*",
+      "{workspaceRoot}/crates/onetaskgraph-core/**/*",
+      "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+      "{workspaceRoot}/crates/onetaskgraph-in-memory/**/*",
+      "{workspaceRoot}/crates/onetaskgraph-local-md/**/*"
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-github-projects-e2e"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-github-projects-e2e -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-github-projects-e2e --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-github-projects-e2e --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-github-projects-e2e --all-features --locked"
+      },
+      "dependsOn": [
+        "onetaskgraph:build"
+      ],
+      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement."
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "workspace:coverage-clear",
+        "onetaskgraph:coverage"
+      ],
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-github-projects-e2e"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target/*.profraw"
+      ],
+      "cache": false,
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
+    }
+  }
+}

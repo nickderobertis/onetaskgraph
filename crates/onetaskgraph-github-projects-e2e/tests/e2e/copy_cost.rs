@@ -841,7 +841,7 @@ fn detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks(
             let output = command
                 .current_dir(plan.sandbox.project())
                 .env("XDG_CONFIG_HOME", plan.sandbox.config_home())
-                .env("DISPATCH_BINARY", env!("CARGO_BIN_EXE_onetaskgraph"))
+                .env("DISPATCH_BINARY", onetaskgraph_e2e_support::binary())
                 .env("DISPATCH_ITEM", &id)
                 .output()
                 .unwrap();

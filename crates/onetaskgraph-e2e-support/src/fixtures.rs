@@ -4563,7 +4563,7 @@ fn linear_state(v: &Value) -> Value {
 /// The workflow states of this workspace's one team, in the order Linear lists them: id,
 /// name, `WorkflowState.type`.
 ///
-/// The Hello Patient team's own names and types, as observed on 2026-10-01 — two states of type
+/// A real team's own names and types, as observed on 2026-10-01 — two states of type
 /// `backlog`, two of type `unstarted`, review states typed `started`, `canceled` and
 /// `duplicate`, and `Triage` — so a state written by name and one written as the first of its
 /// type land in different places, and a journey can tell which a source did. The first state
@@ -4597,7 +4597,7 @@ const LINEAR_SHARED_STATES: &[(&str, &str, &str)] = &[
 
 /// The workspace's project statuses, in Linear's order: name and `ProjectStatusType`. A name
 /// for every category [`linear_default_mapping`] gives, so a project of any of them can be
-/// written, and Hello Patient's `In Progress` and `Done` beside them.
+/// written, and the example team's `In Progress` and `Done` beside them.
 const LINEAR_SHARED_PROJECT_STATUSES: &[(&str, &str)] = &[
     ("Backlog", "backlog"),
     ("Todo", "planned"),
@@ -5258,7 +5258,7 @@ fn hosted_block(_sandbox: &Sandbox) -> Value {
     let mut settings = dataset();
     settings["capabilities"] = native_capabilities();
     json!({
-        "command": env!("CARGO_BIN_EXE_onetaskgraph"),
+        "command": crate::binary(),
         "args": ["plugin-serve", "in-memory"],
         "settings": settings,
     })

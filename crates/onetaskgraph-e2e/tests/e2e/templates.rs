@@ -604,7 +604,7 @@ fn a_rendered_body_that_cannot_be_written_exits_one_naming_it() {
         .open("/dev/full")
         .expect("/dev/full exists on Linux");
     let output = sandbox
-        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
+        .subprocess(onetaskgraph_e2e_support::binary())
         .current_dir(sandbox.project())
         .env("XDG_CONFIG_HOME", sandbox.config_home())
         .args([
@@ -942,7 +942,7 @@ variables:\n  \
         std::fs::write(&task, PROMPTED).expect("the template");
         let (master, terminal) = pseudo_terminal();
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        let mut command = Command::new(onetaskgraph_e2e_support::binary());
         for (variable, _) in std::env::vars() {
             if variable.starts_with("ONETASKGRAPH_") {
                 command.env_remove(variable);
@@ -977,7 +977,7 @@ variables:\n  \
         std::fs::write(&task, PROMPTED).expect("the template");
         let (master, terminal) = pseudo_terminal();
 
-        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        let mut command = Command::new(onetaskgraph_e2e_support::binary());
         for (variable, _) in std::env::vars() {
             if variable.starts_with("ONETASKGRAPH_") {
                 command.env_remove(variable);
@@ -1057,7 +1057,7 @@ variables:\n  \
 
         // A plain process rather than the sandbox's `assert_cmd` one, which cannot hand its
         // child a terminal: the same sandboxed environment, spelled out.
-        let mut command = Command::new(env!("CARGO_BIN_EXE_onetaskgraph"));
+        let mut command = Command::new(onetaskgraph_e2e_support::binary());
         for (variable, _) in std::env::vars() {
             if variable.starts_with("ONETASKGRAPH_") {
                 command.env_remove(variable);

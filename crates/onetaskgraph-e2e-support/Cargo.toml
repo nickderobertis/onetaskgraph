@@ -1,0 +1,26 @@
+[package]
+name = "onetaskgraph-e2e-support"
+description = "The harness every binary end-to-end suite of this workspace drives the CLI through."
+# Not published: the test-only e2e members name it as a path-only dev-dependency, and nothing a
+# consumer installs can reach it. The literal version is the one every crate manifest here
+# spells, for the reason crates/onetaskgraph-live/Cargo.toml gives.
+version = "0.3.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+assert_cmd.workspace = true
+chrono.workspace = true
+graphql-parser.workspace = true
+# The loopback board and workspace answer the documents each hosted plugin declares, read
+# from the plugin's own constants rather than from a copy of them a fixture could drift from.
+onetaskgraph-github-projects.workspace = true
+onetaskgraph-linear.workspace = true
+onetaskgraph-plugin-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

@@ -3,7 +3,7 @@
 //!
 //! A source's `routes` send an item written to it somewhere else by the item's
 //! repositories. Two shapes are proven: two folders of Markdown, one routing to the other,
-//! for the general rule; and a GitHub board routing `github.com/petsinc/*` to a Linear
+//! for the general rule; and a GitHub board routing `github.com/widgetco/*` to a Linear
 //! workspace, over the shared loopback servers, for the plan this exists for — a goal that
 //! spans both orgs and lands as one home with a member project, not as two plans.
 //!
@@ -24,8 +24,8 @@ use crate::fixtures::{
 const PLAN: &str = "plan";
 /// The source a plan is copied to, which routes.
 const BOARD: &str = "plans";
-/// Where it routes `github.com/petsinc/*`.
-const LINEAR: &str = "hellopatient";
+/// Where it routes `github.com/widgetco/*`.
+const LINEAR: &str = "example";
 
 fn run(sandbox: &Sandbox, arguments: &[&str]) -> Output {
     sandbox
@@ -94,7 +94,7 @@ fn mixed_plan(sandbox: &Sandbox) -> std::path::PathBuf {
         "tasks",
         "app",
         "title: App consumes it\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]\ndepends_on: [lib]",
+         repositories: [github.com/widgetco/app]\ndepends_on: [lib]",
     );
     record(
         &root,
@@ -112,21 +112,21 @@ fn mixed_plan(sandbox: &Sandbox) -> std::path::PathBuf {
     root
 }
 
-/// An all-petsinc plan with its design document.
-fn petsinc_plan(root: &Path) {
+/// An all-widgetco plan with its design document.
+fn widgetco_plan(root: &Path) {
     record(root, "projects", "pets", "title: Pets only\nstatus: todo");
     record(
         root,
         "tasks",
         "pets-a",
-        "title: Pets A\nstatus: todo\nproject: pets\nrepositories: [github.com/petsinc/api]",
+        "title: Pets A\nstatus: todo\nproject: pets\nrepositories: [github.com/widgetco/api]",
     );
     record(
         root,
         "tasks",
         "pets-b",
         "title: Pets B\nstatus: todo\nproject: pets\n\
-         repositories: [github.com/petsinc/web]\ndepends_on: [pets-a]",
+         repositories: [github.com/widgetco/web]\ndepends_on: [pets-a]",
     );
     record(
         root,
@@ -153,7 +153,7 @@ fn board_and(sandbox: &Sandbox, linear: Value) {
         BOARD: {
             "plugin": "github-projects",
             "config": board,
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}],
         },
         LINEAR: {"plugin": "linear", "config": linear},
     })));
@@ -202,7 +202,7 @@ fn depends_on(sandbox: &Sandbox, task: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_mixed_plan_lands_its_home_on_the_board_and_its_petsinc_tasks_in_a_linear_member() {
+fn a_mixed_plan_lands_its_home_on_the_board_and_its_widgetco_tasks_in_a_linear_member() {
     let sandbox = Sandbox::new();
     mixed_plan(&sandbox);
     board_and_linear(&sandbox);
@@ -257,7 +257,7 @@ fn a_mixed_plan_lands_its_home_on_the_board_and_its_petsinc_tasks_in_a_linear_me
         "and of a member, its home:\n{human}"
     );
 
-    // The petsinc task is filed under the member, and the edges cross both ways.
+    // The widgetco task is filed under the member, and the edges cross both ways.
     let app = landed(&report, "plan:app");
     let lib = landed(&report, "plan:lib");
     let docs = landed(&report, "plan:docs");
@@ -318,10 +318,10 @@ fn a_mixed_plan_lands_its_home_on_the_board_and_its_petsinc_tasks_in_a_linear_me
 }
 
 #[test]
-fn an_all_petsinc_plan_lands_wholly_in_linear_with_its_document() {
+fn an_all_widgetco_plan_lands_wholly_in_linear_with_its_document() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory(PLAN);
-    petsinc_plan(&root);
+    widgetco_plan(&root);
     board_and_linear(&sandbox);
 
     let report = answer(
@@ -374,7 +374,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
             "plugin": "local-md",
             "config": {"root": sandbox.project().join("never-created")},
             "routes": [
-                {"repositories": ["github.com/petsinc/*"], "to": LINEAR},
+                {"repositories": ["github.com/widgetco/*"], "to": LINEAR},
                 {"repositories": ["github.com/nickderobertis/*"], "to": LINEAR},
                 {"repositories": ["github.com/*/*"], "to": LINEAR},
             ],
@@ -403,7 +403,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "route",
                 BOARD,
                 "--repository",
-                "github.com/petsinc/api"
+                "github.com/widgetco/api"
             ]
         ),
         json!({"source": BOARD, "destination": LINEAR, "route": 0})
@@ -430,7 +430,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "route",
                 BOARD,
                 "--repository",
-                "github.com/petsinc/api",
+                "github.com/widgetco/api",
                 "--repository",
                 "gitlab.com/other/x"
             ]
@@ -455,7 +455,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
             "route",
             BOARD,
             "--repository",
-            "github.com/petsinc/api",
+            "github.com/widgetco/api",
         ],
     );
     let fields: Vec<Vec<&str>> = matched
@@ -479,21 +479,21 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
     );
     let malformed = refused(
         &sandbox,
-        &["sources", "route", BOARD, "--repository", "petsinc/api"],
+        &["sources", "route", BOARD, "--repository", "widgetco/api"],
         2,
     );
     assert!(
-        malformed.contains("petsinc/api"),
+        malformed.contains("widgetco/api"),
         "a malformed origin is refused by name:\n{malformed}"
     );
 }
 
 /// The folder a routed write is sent to by name.
 const NOTES: &str = "notes";
-/// The folder `notes` routes `github.com/petsinc/*` to.
+/// The folder `notes` routes `github.com/widgetco/*` to.
 const TEAM: &str = "team";
 
-/// Three folders of Markdown: a plan, `notes` routing petsinc work to `team`, and `team`.
+/// Three folders of Markdown: a plan, `notes` routing widgetco work to `team`, and `team`.
 fn folders(sandbox: &Sandbox) -> std::path::PathBuf {
     let plan = sandbox.subdirectory(PLAN);
     sandbox.project_document(&document(&json!({
@@ -501,7 +501,7 @@ fn folders(sandbox: &Sandbox) -> std::path::PathBuf {
         NOTES: {
             "plugin": "local-md",
             "config": {"root": sandbox.subdirectory(NOTES)},
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": TEAM}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": TEAM}],
         },
         TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
     })));
@@ -558,7 +558,7 @@ fn filed_under(sandbox: &Sandbox, task: &str) -> String {
 }
 
 #[test]
-fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_other_in_the_named_one()
+fn task_create_and_task_copy_land_a_widgetco_task_in_the_routed_source_and_any_other_in_the_named_one()
  {
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
@@ -573,7 +573,7 @@ fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_ot
         &plan,
         "tasks",
         "app",
-        "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+        "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
@@ -632,7 +632,7 @@ fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_ot
             "--title",
             "Pets work",
             "--repository",
-            "github.com/petsinc/api",
+            "github.com/widgetco/api",
             "--body-file",
             &body,
         ],
@@ -679,7 +679,7 @@ fn task_create_and_task_copy_land_a_petsinc_task_in_the_routed_source_and_any_ot
             "--title",
             "More pets work",
             "--repository",
-            "github.com/petsinc/web",
+            "github.com/widgetco/web",
             "--body-file",
             &body,
         ],
@@ -692,12 +692,12 @@ fn a_project_copy_places_its_home_by_its_tasks_or_by_its_own_repositories_withou
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
     // Its tasks are every one of them nickderobertis work, but the project itself names
-    // petsinc: without its tasks, the project's own repositories alone decide.
+    // widgetco: without its tasks, the project's own repositories alone decide.
     record(
         &plan,
         "projects",
         "pets-owned",
-        "title: Pets owned\nstatus: todo\nrepositories: [github.com/petsinc/app]",
+        "title: Pets owned\nstatus: todo\nrepositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
@@ -767,7 +767,7 @@ fn a_member_copy_places_the_named_tasks_and_a_home_wholly_routed_keeps_its_place
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     record(
         &plan,
@@ -776,7 +776,7 @@ fn a_member_copy_places_the_named_tasks_and_a_home_wholly_routed_keeps_its_place
         "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
     );
 
-    // Only the petsinc task is named, so every task copied routes to `team`: the home
+    // Only the widgetco task is named, so every task copied routes to `team`: the home
     // follows it there, wholly.
     let first = answer(
         &sandbox,
@@ -842,7 +842,7 @@ fn a_project_whose_last_unrouted_task_is_gone_lands_wholly_in_the_routed_source(
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     record(
         &plan,
@@ -869,7 +869,7 @@ fn a_dry_run_reports_the_placement_the_copy_then_makes_and_writes_nothing() {
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     record(
         &plan,
@@ -918,7 +918,7 @@ fn a_routed_copy_refuses_an_item_whose_counterpart_sits_where_it_no_longer_route
         &plan,
         "tasks",
         "moving",
-        "title: Moving\nstatus: todo\nrepositories: [github.com/petsinc/api]",
+        "title: Moving\nstatus: todo\nrepositories: [github.com/widgetco/api]",
     );
     let first = answer(&sandbox, &["task", "copy", "plan:moving", "--to", NOTES]);
     let counterpart = landed(&first, "plan:moving");
@@ -929,7 +929,7 @@ fn a_routed_copy_refuses_an_item_whose_counterpart_sits_where_it_no_longer_route
     let text = std::fs::read_to_string(&path).expect("the task");
     std::fs::write(
         &path,
-        text.replace("github.com/petsinc/api", "github.com/nickderobertis/api"),
+        text.replace("github.com/widgetco/api", "github.com/nickderobertis/api"),
     )
     .expect("the task is edited");
     let before = (
@@ -981,10 +981,10 @@ fn a_home_reads_with_its_members_across_pages_and_reports_a_member_it_cannot_rea
     record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
     for (id, repository) in [
         ("a", "github.com/nickderobertis/a"),
-        ("b", "github.com/petsinc/b"),
+        ("b", "github.com/widgetco/b"),
         ("c", "github.com/nickderobertis/c"),
-        ("d", "github.com/petsinc/d"),
-        ("e", "github.com/petsinc/e"),
+        ("d", "github.com/widgetco/d"),
+        ("e", "github.com/widgetco/e"),
     ] {
         record(
             &plan,
@@ -1073,7 +1073,7 @@ fn a_home_reads_with_its_members_across_pages_and_reports_a_member_it_cannot_rea
 }
 
 #[test]
-fn a_member_copy_adding_a_petsinc_task_to_a_board_home_creates_its_linear_member_once() {
+fn a_member_copy_adding_a_widgetco_task_to_a_board_home_creates_its_linear_member_once() {
     let sandbox = Sandbox::new();
     let plan = sandbox.subdirectory(PLAN);
     record(&plan, "projects", "goal", "title: One goal\nstatus: todo");
@@ -1091,13 +1091,13 @@ fn a_member_copy_adding_a_petsinc_task_to_a_board_home_creates_its_linear_member
     assert!(members_of(&sandbox, &home).is_empty(), "no member yet");
     let lib = landed(&first, "plan:lib");
 
-    // A running engine adds a Hello Patient task to the plan and writes it back.
+    // A running engine adds a routed task to the plan and writes it back.
     record(
         &plan,
         "tasks",
         "app",
         "title: App consumes it\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]\ndepends_on: [lib]",
+         repositories: [github.com/widgetco/app]\ndepends_on: [lib]",
     );
     let added = answer(
         &sandbox,
@@ -1134,7 +1134,7 @@ fn a_member_copy_adding_a_petsinc_task_to_a_board_home_creates_its_linear_member
         "tasks",
         "app2",
         "title: App follows up\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]",
+         repositories: [github.com/widgetco/app]",
     );
     let again = answer(
         &sandbox,
@@ -1199,7 +1199,7 @@ fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() 
     let listed_before = answer(&sandbox, &["task", "list", "--project", &home, "--members"]);
     let plan_before = tree(&plan);
 
-    // The next copy writes the board first — the home's title — then Linear. Two new petsinc
+    // The next copy writes the board first — the home's title — then Linear. Two new widgetco
     // tasks land there, the first depending on the second; that edge is written once the
     // second has landed, as an update of the first, and Linear refuses it — after a new
     // board task has landed too.
@@ -1221,14 +1221,14 @@ fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() 
         "tasks",
         "app2",
         "title: App follows up\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]\ndepends_on: [app3]",
+         repositories: [github.com/widgetco/app]\ndepends_on: [app3]",
     );
     record(
         &plan,
         "tasks",
         "app3",
         "title: App finishes\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]",
+         repositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
@@ -1285,15 +1285,15 @@ fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() 
 fn a_configuration_whose_routes_cannot_hold_is_refused_at_load_naming_the_source_and_entry() {
     for (routes, wanted) in [
         (
-            json!([{"repositories": ["github.com/petsinc/*"], "to": "nowhere"}]),
+            json!([{"repositories": ["github.com/widgetco/*"], "to": "nowhere"}]),
             "nowhere",
         ),
         (
-            json!([{"repositories": ["github.com/petsinc/*"], "to": NOTES}]),
+            json!([{"repositories": ["github.com/widgetco/*"], "to": NOTES}]),
             "itself",
         ),
         (
-            json!([{"repositories": ["github.com/petsinc/*"], "to": "chained"}]),
+            json!([{"repositories": ["github.com/widgetco/*"], "to": "chained"}]),
             "routes of its own",
         ),
         (json!([{"repositories": [], "to": TEAM}]), "empty"),
@@ -1340,11 +1340,11 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nrepositories: [github.com/widgetco/api]",
     );
     let flags = [
         "--set",
-        "sources.notes.routes.0.repositories=github.com/petsinc/*",
+        "sources.notes.routes.0.repositories=github.com/widgetco/*",
         "--set",
         "sources.notes.routes.0.to=team",
     ];
@@ -1361,7 +1361,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
             "route",
             NOTES,
             "--repository",
-            "github.com/petsinc/api"
+            "github.com/widgetco/api"
         ]),
         json!({"source": NOTES, "destination": TEAM, "route": 0})
     );
@@ -1372,7 +1372,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
     for (key, value) in [
         (
             "sources.notes.routes.0.repositories",
-            json!("github.com/petsinc/*"),
+            json!("github.com/widgetco/*"),
         ),
         ("sources.notes.routes.0.to", json!("team")),
     ] {
@@ -1389,7 +1389,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
         .command()
         .env(
             "ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__REPOSITORIES",
-            "github.com/petsinc/*",
+            "github.com/widgetco/*",
         )
         .env("ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__TO", TEAM)
         .args([
@@ -1397,7 +1397,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
             "route",
             NOTES,
             "--repository",
-            "github.com/petsinc/api",
+            "github.com/widgetco/api",
             "--json",
         ])
         .assert()
@@ -1409,7 +1409,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
             .command()
             .env(
                 "ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__REPOSITORIES",
-                "github.com/petsinc/*",
+                "github.com/widgetco/*",
             )
             .env("ONETASKGRAPH_SOURCES__NOTES__ROUTES__0__TO", TEAM)
             .args(arguments)
@@ -1449,7 +1449,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
         .find(|line| line.starts_with("sources.notes.routes"))
         .unwrap_or_else(|| panic!("config show prints routes:\n{human}"));
     assert!(
-        line.contains("github.com/petsinc/*") && line.contains("file "),
+        line.contains("github.com/widgetco/*") && line.contains("file "),
         "with its layer: {line}"
     );
 }
@@ -1457,10 +1457,10 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
 #[test]
 fn every_malformed_routes_value_is_refused_at_load_naming_its_key() {
     let to = json!(TEAM);
-    let pets = json!(["github.com/petsinc/*"]);
+    let pets = json!(["github.com/widgetco/*"]);
     for (routes, key, wanted) in [
         (
-            json!("github.com/petsinc/*"),
+            json!("github.com/widgetco/*"),
             "sources.notes.routes",
             "list of entries",
         ),
@@ -1566,9 +1566,9 @@ fn routes_a_flag_sets_replace_the_documents_rather_than_merging_into_them() {
         json!({"source": NOTES, "destination": TEAM, "route": 0})
     );
     assert_eq!(
-        with("github.com/petsinc/api"),
+        with("github.com/widgetco/api"),
         json!({"source": NOTES, "destination": NOTES, "route": null}),
-        "the document's petsinc entry is gone, not kept beside the flag's"
+        "the document's widgetco entry is gone, not kept beside the flag's"
     );
 }
 
@@ -1632,7 +1632,7 @@ fn a_project_whose_tasks_and_own_repositories_disagree_keeps_its_home_in_the_nam
         &plan,
         "projects",
         "split",
-        "title: Split\nstatus: todo\nrepositories: [github.com/petsinc/app]",
+        "title: Split\nstatus: todo\nrepositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
@@ -1662,13 +1662,13 @@ fn a_document_with_no_home_to_follow_goes_where_its_own_repositories_route_it() 
         &plan,
         "documents",
         "loose",
-        "title: Loose\nrepositories: [github.com/petsinc/app]",
+        "title: Loose\nrepositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
         "documents",
         "early",
-        "title: Early\nproject: uncopied\nrepositories: [github.com/petsinc/app]",
+        "title: Early\nproject: uncopied\nrepositories: [github.com/widgetco/app]",
     );
     record(
         &plan,
@@ -1716,7 +1716,7 @@ fn a_member_the_routed_source_no_longer_holds_is_replaced_and_recorded() {
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
     let member = members_of(&sandbox, "notes:goal")[0].clone();
@@ -1730,7 +1730,7 @@ fn a_member_the_routed_source_no_longer_holds_is_replaced_and_recorded() {
         &plan,
         "tasks",
         "pets2",
-        "title: Pets two\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/web]",
+        "title: Pets two\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/web]",
     );
     let added = answer(
         &sandbox,
@@ -1762,7 +1762,7 @@ fn a_routed_delivers_entry_names_the_task_in_the_source_it_landed_in() {
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     record(
         &plan,
@@ -1806,7 +1806,7 @@ fn a_routed_task_create_refuses_a_missing_home_and_takes_back_a_member_its_faile
             "--title".to_owned(),
             title.to_owned(),
             "--repository".to_owned(),
-            "github.com/petsinc/api".to_owned(),
+            "github.com/widgetco/api".to_owned(),
             "--body-file".to_owned(),
             body.clone(),
         ]
@@ -1859,7 +1859,7 @@ fn a_routed_task_create_refuses_a_missing_home_and_takes_back_a_member_its_faile
             "--title",
             "Rendered work",
             "--repository",
-            "github.com/petsinc/api",
+            "github.com/widgetco/api",
             "--template",
             &template.display().to_string(),
             "--var",
@@ -1894,7 +1894,7 @@ fn a_routed_copy_whose_member_project_cannot_be_made_leaves_every_source_as_it_f
     answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
     let notes_before = tree(&sandbox.project().join(NOTES));
 
-    // The re-copy has the home and the task already there to write, and a petsinc task whose
+    // The re-copy has the home and the task already there to write, and a widgetco task whose
     // member project `team` cannot hold: a file stands where its project folder goes.
     for (file, from, to) in [
         ("projects/goal.md", "Body of goal.", "A new body."),
@@ -1910,7 +1910,7 @@ fn a_routed_copy_whose_member_project_cannot_be_made_leaves_every_source_as_it_f
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     let obstacle = sandbox.project().join(TEAM).join("projects");
     std::fs::write(&obstacle, "not a folder").expect("an obstacle");
@@ -1951,7 +1951,7 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
         NOTES: {
             "plugin": "local-md",
             "config": {"root": sandbox.subdirectory(NOTES)},
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": TEAM}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": TEAM}],
         },
         TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
         // A source that cannot be built: its credential is nowhere.
@@ -1963,8 +1963,8 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
     record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
     for (id, repository) in [
         ("a", "github.com/nickderobertis/a"),
-        ("b", "github.com/petsinc/b"),
-        ("c", "github.com/petsinc/c"),
+        ("b", "github.com/widgetco/b"),
+        ("c", "github.com/widgetco/c"),
     ] {
         record(
             &plan,
@@ -2082,7 +2082,7 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
             &plan,
             "tasks",
             "d",
-            "title: d\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/d]",
+            "title: d\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/d]",
         );
         let refusal = refused(
             &sandbox,
@@ -2173,14 +2173,14 @@ fn a_members_read_refuses_a_stale_token_and_reports_every_member_it_cannot_read(
 fn a_routed_document_copy_points_its_references_at_the_source_its_project_landed_in() {
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
-    petsinc_plan(&plan);
+    widgetco_plan(&plan);
     let authored = task_path(&sandbox, "plan:pets-a");
     record(
         &plan,
         "documents",
         "pets-design",
         &format!(
-            "title: Pets design\nproject: pets\nrepositories: [github.com/petsinc/api]\n---\n\
+            "title: Pets design\nproject: pets\nrepositories: [github.com/widgetco/api]\n---\n\
              Start at `{authored}`.\n\n<!-- -->"
         ),
     );
@@ -2209,7 +2209,7 @@ fn a_routed_document_copy_points_its_references_at_the_source_its_project_landed
 fn documents_one_copy_lands_in_two_sources_each_point_at_the_records_where_they_landed() {
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
-    petsinc_plan(&plan);
+    widgetco_plan(&plan);
     record(&plan, "projects", "own", "title: Own goal\nstatus: todo");
     record(
         &plan,
@@ -2314,7 +2314,7 @@ fn a_routed_copy_whose_home_member_list_write_fails_takes_back_the_member_and_it
         BOARD: {
             "plugin": "github-projects",
             "config": board,
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}],
         },
         LINEAR: {"plugin": "linear", "config": linear},
     })));
@@ -2336,7 +2336,7 @@ fn a_routed_copy_whose_home_member_list_write_fails_takes_back_the_member_and_it
         "tasks",
         "app",
         "title: App consumes it\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]",
+         repositories: [github.com/widgetco/app]",
     );
     // The member and the task land in Linear, and then the board refuses the home's new list.
     let refusal = refused(
@@ -2390,7 +2390,7 @@ fn a_routed_task_create_whose_home_member_list_write_fails_takes_back_the_member
         BOARD: {
             "plugin": "github-projects",
             "config": board,
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}],
         },
         LINEAR: {"plugin": "linear", "config": linear},
     })));
@@ -2415,7 +2415,7 @@ fn a_routed_task_create_whose_home_member_list_write_fails_takes_back_the_member
             "--title",
             "App consumes it",
             "--repository",
-            "github.com/petsinc/app",
+            "github.com/widgetco/app",
             "--body-file",
             &body.display().to_string(),
         ],
@@ -2480,7 +2480,7 @@ fn an_entry_matches_by_any_of_its_patterns_and_a_star_stands_for_one_whole_segme
             "plugin": "local-md",
             "config": {"root": sandbox.subdirectory(NOTES)},
             "routes": [{
-                "repositories": ["github.com/petsinc/*", "gitlab.com/petsinc/*"],
+                "repositories": ["github.com/widgetco/*", "gitlab.com/widgetco/*"],
                 "to": TEAM,
             }],
         },
@@ -2494,15 +2494,15 @@ fn an_entry_matches_by_any_of_its_patterns_and_a_star_stands_for_one_whole_segme
         answer(&sandbox, &arguments)["route"].clone()
     };
     assert_eq!(
-        route(&["github.com/petsinc/api", "gitlab.com/petsinc/web"]),
+        route(&["github.com/widgetco/api", "gitlab.com/widgetco/web"]),
         json!(0),
         "two repositories, each matching a different pattern of one entry"
     );
-    assert_eq!(route(&["gitlab.com/petsinc/web"]), json!(0));
+    assert_eq!(route(&["gitlab.com/widgetco/web"]), json!(0));
     for unrouted in [
-        "github.com/petsinc/api/sub",
-        "github.com/petsincorporated/api",
-        "bitbucket.org/petsinc/api",
+        "github.com/widgetco/api/sub",
+        "github.com/widgetcompany/api",
+        "bitbucket.org/widgetco/api",
     ] {
         assert_eq!(route(&[unrouted]), Value::Null, "{unrouted} stays");
     }
@@ -2516,7 +2516,7 @@ fn a_document_whose_counterpart_sits_where_it_no_longer_routes_is_refused() {
         &plan,
         "documents",
         "loose",
-        "title: Loose\nrepositories: [github.com/petsinc/app]",
+        "title: Loose\nrepositories: [github.com/widgetco/app]",
     );
     let first = answer(&sandbox, &["document", "copy", "plan:loose", "--to", NOTES]);
     let counterpart = landed(&first, "plan:loose");
@@ -2525,7 +2525,7 @@ fn a_document_whose_counterpart_sits_where_it_no_longer_routes_is_refused() {
     let text = std::fs::read_to_string(&path).expect("the document");
     std::fs::write(
         &path,
-        text.replace("github.com/petsinc/app", "github.com/nickderobertis/app"),
+        text.replace("github.com/widgetco/app", "github.com/nickderobertis/app"),
     )
     .expect("an edit");
     let before = tree(&sandbox.project().join(NOTES));
@@ -2560,7 +2560,7 @@ fn a_copy_carries_no_member_keys_of_its_own_and_keeps_the_destinations() {
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
     let member = members_of(&sandbox, "notes:goal")[0].clone();
@@ -2644,7 +2644,7 @@ fn a_dry_run_into_an_existing_home_that_needs_a_member_makes_none() {
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     let before = (
         tree(&sandbox.project().join(NOTES)),
@@ -2686,8 +2686,8 @@ fn a_task_copied_on_its_own_into_a_home_in_another_source_is_filed_under_its_mem
     let plan = folders(&sandbox);
     record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
     for (id, repository) in [
-        ("pets", "github.com/petsinc/api"),
-        ("pets2", "github.com/petsinc/web"),
+        ("pets", "github.com/widgetco/api"),
+        ("pets2", "github.com/widgetco/web"),
     ] {
         record(
             &plan,
@@ -2784,8 +2784,8 @@ fn a_routed_project_copy_reports_what_the_plan_dropped_in_its_home_and_in_its_me
     for (id, repository) in [
         ("own", "github.com/nickderobertis/lib"),
         ("own2", "github.com/nickderobertis/lib"),
-        ("pets", "github.com/petsinc/api"),
-        ("pets2", "github.com/petsinc/web"),
+        ("pets", "github.com/widgetco/api"),
+        ("pets2", "github.com/widgetco/web"),
     ] {
         record(
             &plan,
@@ -2831,7 +2831,7 @@ fn a_routed_task_create_qualifies_its_edges_and_deliveries_from_where_it_lands()
         &plan,
         "tasks",
         "pets",
-        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/api]",
+        "title: Pets\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
     );
     let copied = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
     let own = landed(&copied, "plan:own");
@@ -2853,7 +2853,7 @@ fn a_routed_task_create_qualifies_its_edges_and_deliveries_from_where_it_lands()
             "--title",
             "Routed from a template",
             "--repository",
-            "github.com/petsinc/web",
+            "github.com/widgetco/web",
             "--template",
             template.to_str().expect("a path"),
             "--var",
@@ -2929,7 +2929,7 @@ fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source()
         BOARD: {
             "plugin": "github-projects",
             "config": board,
-            "routes": [{"repositories": ["github.com/petsinc/*"], "to": LINEAR}],
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}],
         },
         LINEAR: {"plugin": "linear", "config": linear},
     })));
@@ -2939,7 +2939,7 @@ fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source()
         "tasks",
         "app",
         "title: App consumes it\nstatus: todo\nproject: goal\n\
-         repositories: [github.com/petsinc/app]",
+         repositories: [github.com/widgetco/app]",
     );
     let refusal = refused(
         &sandbox,
@@ -2961,7 +2961,7 @@ fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source()
         .unwrap_or_else(|| panic!("the refusal names what is left:\n{refusal}"));
     let issue = left
         .split([' ', ','])
-        .find(|word| word.starts_with("hellopatient:"))
+        .find(|word| word.starts_with("example:"))
         .unwrap_or_else(|| panic!("what is left is named in the source it is in: {left}"));
     let held = answer(&sandbox, &["task", "show", issue]);
     assert_eq!(
@@ -2970,10 +2970,10 @@ fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source()
     );
 }
 
-/// Hello Patient's Linear workspace — its fourteen project statuses, and team states named
-/// otherwise — configured with the per-kind mapping ai-orchestrator writes for it, and empty.
-fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
-    use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES, hellopatient_mapping};
+/// The example team's Linear workspace — its fourteen project statuses, and team states named
+/// otherwise — configured with its per-kind mapping, and empty.
+fn example_workspace(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
+    use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES, example_mapping};
     let (mut config, workspace) = crate::fixtures::linear_workspace_with(
         sandbox,
         json!({"tasks": [], "projects": [], "documents": [], "labels": [],
@@ -2981,7 +2981,7 @@ fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) 
         TEAM_STATES,
         PROJECT_STATUSES,
     );
-    config["status_mapping"] = hellopatient_mapping();
+    config["status_mapping"] = example_mapping();
     (config, workspace)
 }
 
@@ -3006,7 +3006,7 @@ fn a_routed_plan_home_at_todo_creates_its_linear_member_at_the_mapped_project_st
     let root = mixed_plan(&sandbox);
     // The home's own status is `todo`, named `Todo` — the name a Linear project status is not.
     record(&root, "projects", "goal", "title: One goal\nstatus: Todo");
-    let (linear, workspace) = hellopatient(&sandbox);
+    let (linear, workspace) = example_workspace(&sandbox);
     board_and(&sandbox, linear);
 
     let report = answer(
@@ -3040,9 +3040,9 @@ fn a_routed_plan_home_at_todo_creates_its_linear_member_at_the_mapped_project_st
 
 #[test]
 fn a_routed_member_project_its_mapping_names_no_status_for_is_refused_before_linear_is_written() {
-    use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES};
+    use crate::linear_vocabulary::{PROJECT_STATUSES, TEAM_STATES};
     for (mapping, names) in [
-        // No project name for `todo` at all, and one Hello Patient's workspace does not have.
+        // No project name for `todo` at all, and one The example team's workspace does not have.
         (
             json!({"todo": {"task": "Todo"}}),
             "status_mapping.todo.project",
@@ -3069,7 +3069,7 @@ fn a_routed_member_project_its_mapping_names_no_status_for_is_refused_before_lin
             1,
         );
         assert!(
-            said.contains("source hellopatient")
+            said.contains("source example")
                 && said.contains("project status")
                 && said.contains("todo")
                 && said.contains(names),
