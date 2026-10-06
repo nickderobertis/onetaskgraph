@@ -277,14 +277,24 @@ impl JsonSchema for StatusNames {
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         let name = generator.subschema_for::<StatusName>();
+        let only = |kind: &str| {
+            json_schema!({
+                "type": "object",
+                "properties": { (kind): name },
+                "required": [kind],
+                "additionalProperties": false
+            })
+        };
         json_schema!({
             "description": "What one category of a status_mapping names: one name for every item kind, or an object naming it for a task, for a project, or for each. A kind the object leaves out leaves the category unmapped for that kind.",
             "anyOf": [
                 name,
+                only("task"),
+                only("project"),
                 {
                     "type": "object",
                     "properties": { "task": name, "project": name },
-                    "minProperties": 1,
+                    "required": ["task", "project"],
                     "additionalProperties": false
                 }
             ]

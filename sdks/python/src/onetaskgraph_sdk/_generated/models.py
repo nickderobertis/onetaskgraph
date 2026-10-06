@@ -31,6 +31,8 @@ from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
 from .source_route import SourceRoute as SourceRoute
 from .status_category import StatusCategory as StatusCategory
+from .status_mapping import StatusMapping as StatusMapping
+from .status_names_report import StatusNamesReport as StatusNamesReport
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .task_content_set import TaskContentSet as TaskContentSet
 from .task_detail import TaskDetail as TaskDetail
@@ -45,7 +47,6 @@ from .template_variable import TemplateVariable as TemplateVariable
 from .template_variables import TemplateVariables as TemplateVariables
 from .updated_field import UpdatedField as UpdatedField
 from .variable_type import VariableType as VariableType
-from .workflow_states_report import WorkflowStatesReport as WorkflowStatesReport
 
 # Every root is named here rather than left to the `import X as X` form alone: a
 # root whose generated class carries another name — every `QueryResponseOf…`, and
@@ -85,6 +86,8 @@ __all__ = [
     "SourceName",
     "SourceRoute",
     "StatusCategory",
+    "StatusMapping",
+    "StatusNamesReport",
     "StatusOptionsReport",
     "TaskContentSet",
     "TaskDetail",
@@ -99,5 +102,4 @@ __all__ = [
     "TemplateVariables",
     "UpdatedField",
     "VariableType",
-    "WorkflowStatesReport",
 ]

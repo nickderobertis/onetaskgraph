@@ -79,7 +79,9 @@ RESPONSE_ROOTS = {
 # which a caller checking for a hand edit or a changed template reads by name. `UpdatedField` is
 # the vocabulary `task update` reports what it wrote in, which a caller branches on by name.
 # `LinearConfig` is a `linear` source's configuration — its `status_mapping` and its `project` —
-# which a caller writing one models by name.
+# which a caller writing one models by name. `StatusMapping` is that `status_mapping`'s one
+# grammar, which a `github-projects` source's configuration reaches too, and which a caller
+# writing either models by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
     "SourceFailure",
@@ -101,12 +103,13 @@ CONTRACT_ROOTS = {
     "TemplateProvenance",
     "UpdatedField",
     "LinearConfig",
+    "StatusMapping",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
-# fields` answers a `FieldsReport` for a GitHub Projects board and a `WorkflowStatesReport` for a
-# Linear team. The generated method returns the union and validates against it.
-ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {"sources_fields": ("WorkflowStatesReport",)}
+# fields` answers a `FieldsReport` for a GitHub Projects board and a `StatusNamesReport` for a
+# Linear source. The generated method returns the union and validates against it.
+ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {"sources_fields": ("StatusNamesReport",)}
 
 
 def response_roots() -> set[str]:
@@ -478,6 +481,8 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
                 )
                 for line in generated
             ]
+        if root == "LinearConfig":
+            generated = root_model_default(generated, "status_mapping", "StatusMapping")
         if root == "MetadataSet":
             generated = any_json_value(
                 generated,
@@ -1112,6 +1117,39 @@ def schema_variants(schema: dict[str, JsonValue], combinator: str) -> list[JsonV
                 "every variant as a JSON Schema object or boolean"
             )
     return variants
+
+
+def root_model_default(generated: list[str], field: str, model: str) -> list[str]:
+    """`generated` with `field`'s default spelled as an instance of the root model it is typed by.
+
+    A configuration member the schema types by reference to a root of its own, and defaults to
+    an empty object, is generated as that root model with the default `{}`: a dict literal a
+    type checker refuses for a `RootModel`, although the model validates it into one. Spelled
+    `Model({})`, it is the same default, typed. Refused rather than skipped when the member is
+    not generated that way, so a generator change cannot leave the default as it was quietly.
+    """
+    start = next(
+        (at for at, line in enumerate(generated) if line == f"    {field}: Annotated["), None
+    )
+    end = next(
+        (
+            at
+            for at, line in enumerate(generated)
+            if start is not None and at > start and line.startswith("    ] = ")
+        ),
+        None,
+    )
+    if start is None or end is None or generated[start + 1].strip() != f"{model},":
+        raise SystemExit(
+            f"the generated `{field}` is no longer a `{model}` with a default; next: drop the "
+            "root_model_default call for it, or emit the member the way it expects"
+        )
+    if generated[end] != "    ] = {}":
+        raise SystemExit(
+            f"the generated `{field}` defaults to {generated[end].removeprefix('    ] = ')!r}, "
+            "not an empty object; next: update root_model_default to spell that default"
+        )
+    return [*generated[:end], f"    ] = {model}({{}})", *generated[end + 1 :]]
 
 
 def resolve_reference(reference: str, root: JsonValue) -> JsonValue:

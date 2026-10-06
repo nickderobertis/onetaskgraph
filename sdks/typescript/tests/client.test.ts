@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
-import type { CopyReport, FieldsReport, WorkflowStatesReport } from "../src/generated/models.ts";
+import type { CopyReport, FieldsReport, StatusNamesReport } from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
 import {
   assertCompleteCommandSurface,
@@ -1099,8 +1099,8 @@ test("sources fields names a source that is not backed by GitHub Projects", asyn
   );
 });
 
-/** Whether `sources fields` answered with a board's fields rather than a team's states. */
-function isFieldsReport(report: FieldsReport | WorkflowStatesReport): report is FieldsReport {
+/** Whether `sources fields` answered with a board's fields rather than a Linear source's names. */
+function isFieldsReport(report: FieldsReport | StatusNamesReport): report is FieldsReport {
   return "fields" in report;
 }
 
@@ -1150,15 +1150,28 @@ test("sources fields forwards apply through the executable boundary", async () =
   }
 });
 
-test("sources fields answers a Linear team's workflow states", async () => {
+test("sources fields answers a Linear source's status names for both kinds", async () => {
   const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-states-"));
   try {
     const report = {
       source: "team",
       team: "FIX",
-      states: [
-        { category: "queued", state: "Queued", present: true, type: "unstarted" },
-        { category: "done", state: "Shipped", present: false },
+      names: [
+        {
+          kind: "task",
+          category: "queued",
+          name: "Queued",
+          present: true,
+          type: "unstarted",
+          expected_type: "unstarted",
+        },
+        {
+          kind: "project",
+          category: "done",
+          name: "Shipped",
+          present: false,
+          expected_type: "completed",
+        },
       ],
     };
     const statesClient = new OnetaskgraphClient({
@@ -1171,10 +1184,10 @@ test("sources fields answers a Linear team's workflow states", async () => {
       ]),
     });
     const answered = await statesClient.sourcesFields("team");
-    if (isFieldsReport(answered)) throw new Error("a Linear team answers with its states");
-    expect(answered.states.map((state) => [state.state, state.present])).toEqual([
-      ["Queued", true],
-      ["Shipped", false],
+    if (isFieldsReport(answered)) throw new Error("a Linear source answers with its status names");
+    expect(answered.names.map((name) => [name.kind, name.name, name.present])).toEqual([
+      ["task", "Queued", true],
+      ["project", "Shipped", false],
     ]);
 
     // A shape neither root describes is still refused.

@@ -1,9 +1,10 @@
 //! A read/write source over Linear's published GraphQL API.
 //!
 //! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `Document` to [`Document`],
-//! `IssueLabel` and `ProjectLabel` to [`Label`], and `WorkflowState.name` is preserved
-//! while its `type` (`backlog`, `unstarted`, `started`, `completed`, or `canceled`) maps to
-//! the normalized status category. Issue `relations`/`inverseRelations` and
+//! `IssueLabel` and `ProjectLabel` to [`Label`], and an issue's `WorkflowState.name` and a
+//! project's `ProjectStatus.name` are preserved as the status's name while the source's
+//! `status_mapping` — the one grammar every source that names its statuses is configured with,
+//! [`StatusMapping`] — decides its category. Issue `relations`/`inverseRelations` and
 //! project relations provide native dependency traversal in both directions.
 //!
 //! Label, workflow-state, project, and orphan filters are sent in the
@@ -35,7 +36,7 @@
 //! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin`. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
-//! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows with `state:{type:{in:[…]}}` over `WorkflowState.type`; a project narrows with `status:{type:{in:[…]}}` over `ProjectStatusType`, a different member of a different filter over a different vocabulary. See the ruling below. |
+//! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows by its workflow state's name, `state:{name:{eqIgnoreCase:…}}`; a project by its project status's name, `status:{name:{eqIgnoreCase:…}}` — a different member of a different filter over a different vocabulary — each by the names its kind's half of `status_mapping` gives, and `unknown` by every name that half does not give. See the ruling below. |
 //! | `search_title` | **Supported and proven.** A task query's text is `title:{containsIgnoreCase:…}`, every candidate confirmed by the contract's case-insensitive substring rule; a project or document query's text is applied by that same rule over the page Linear answered. |
 //! | `search_content` | **Supported and proven,** on the same terms, `description:{containsIgnoreCase:…}`, confirmed over the visible content — the trailing metadata slot Linear's comparator also reads is not part of what the rule confirms. A `title-or-content` search sends the two under one `or`. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
@@ -164,12 +165,10 @@
 //! reaches `accessibleTeams:{some:{key:{eqIgnoreCase:…}}}`. And a project's status is not
 //! an issue's state: the counterpart of `IssueFilter.state` is `ProjectFilter.status`,
 //! while `ProjectFilter.state` exists and is a bare `StringComparator` over something else.
-//! The two do not even share a vocabulary — `ProjectStatus.type` is the `ProjectStatusType`
-//! enum, `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`, where a
-//! workflow state is `backlog`, `unstarted`, `started`, `completed`, `canceled`, `triage`.
-//! So `planned` is where `unstarted` would be, `paused` reads as in progress and has no
-//! issue counterpart, and a filter spelled in the other level's words matches nothing while
-//! being refused by nothing.
+//! The two do not even share a vocabulary — a project's statuses are the workspace's, Hello
+//! Patient's `Idea`, `Proposal`, `Planned`, `Completed` among them, where an issue's states are
+//! the team's — which is why `status_mapping` names each kind's statuses separately, and why a
+//! filter spelled in the other level's names matches nothing while being refused by nothing.
 //!
 //! **Neither of those could be caught by reading a document, and that is the general
 //! lesson.** A filter is built at runtime and handed over as `$filter`, so it appears in no
@@ -209,38 +208,82 @@
 //! same-source dependencies. Only cross-source far ends use the reserved
 //! `onetaskgraph.depends_on` metadata key.
 //!
-//! ## Ruling: a status is written by `status_mapping`, and by type where it names none
+//! ## Ruling: a status is the name `status_mapping` gives the item's kind, and nothing else
 //!
-//! A Linear team can hold several workflow states of one type — `Todo` and `Queued` are both
-//! `unstarted`, `Proposed` and `Backlog` both `backlog` — and a category says nothing about
-//! which of them it means. `status_mapping` is what does: a category it names is written as
-//! the state of exactly that name by every write — `set_task_status`, the targeted update and
-//! `write_task`, so `task create` and every copy — and never as another state of the same
-//! type. A name the team does not have is refused before any write, naming the state, the team
-//! and the category, after one read of the team's states through
-//! [`graphql::TEAM_WORKFLOW_STATES`]. A category it sets to `null` is refused as disabled
-//! before any request. Two categories mapped to one name are refused when the configuration is
-//! read, because that state could read back as only one of them.
+//! Linear has no built-in names: a team's workflow states and a workspace's project statuses
+//! are whatever the people who own them called them, and a type says nothing about which of
+//! several states of it a category means — `Todo` and `Queued` are both `unstarted`. So the
+//! source's `status_mapping` ([`StatusMapping`]) is the whole of what a status is written as
+//! and read by: a task's names are the configured team's workflow states, a project's the
+//! workspace's project statuses.
 //!
-//! On a read, an issue at a state the mapping names is that category under the state's own
-//! name; every other state reads by its type, as it always has — the review states only
-//! people write, `Triage` among them, which nothing here ever writes. `filter_by_status`
-//! returns exactly the issues whose status reads as each category asked for: those at the
-//! state the mapping names for it, and those at an unmapped state whose type falls back to
-//! it — never one at a state mapped to another category. So `--status queued` returns the
-//! issues at `Queued` and never one at `Todo`; `--status in-progress` returns those at
-//! `In Progress` and at an unmapped `started` state such as `In Review`, and never one at
-//! `Needs Attention` when that is mapped to `unknown`; and `--status unknown` also returns
-//! those at a state of a type none of the five categories stands for, `Triage` among them.
+//! **A write** of a category is the name the mapping gives the kind of the item being written —
+//! `set_task_status`, the targeted update and `write_task` for a task, so `task create` and every
+//! copy; `write_project` for a project, whose own status name plays no part. A write the mapping
+//! gives that kind no name for — a category it does not mention, one set to `null`, one a
+//! per-kind object leaves out — is refused before any request, naming the source, the kind, the
+//! category and the key to set; one whose name that kind's vocabulary does not hold is refused
+//! naming the name, after the resolution and before any mutation. Nothing falls back by type, or
+//! by the name a status was called where it came from, and a source with no mapping refuses
+//! every status write.
 //!
-//! A category the mapping does not mention keeps the behaviour of a source without the key
-//! exactly: `set_task_status` and the targeted update write the team's first state of the
-//! type `workflow_state_types` gives — `backlog`, `todo`, `in-progress`, `done` and
-//! `cancelled` — and refuse `draft`, `queued` and `unknown`, which no type stands for, before
-//! any request; `write_task` resolves the state by the status's own name, as it always has. A
-//! task already in the category asked for keeps the state it is in and nothing is written:
-//! moving an issue from `In Review` to `In Progress` because it was asked to be in progress is
-//! a change nobody asked for.
+//! **A read** of an item at a name its kind's mapping gives is that category, under the name;
+//! every other name reads as `unknown`, under its own name, whatever its type — the review
+//! states only people write, `Triage` among them. `filter_by_status` returns exactly the items
+//! that read as each category asked for: those at the name the kind's mapping gives it, and for
+//! `unknown` every item at a name that mapping does not give at all. Each is confirmed in process
+//! as well, so a row reading as another category is never returned.
+//!
+//! ## Ruling: the resolution is read once per source instance, and a status write reads nothing
+//!
+//! A Linear key is shared by every manager of a host, so what a status write costs is counted at
+//! Linear's endpoint, and `crates/onetaskgraph-linear/budgets.yaml` holds it. A source resolves
+//! the configured team's id, its workflow states and the workspace's project statuses in one
+//! request — [`graphql::RESOLUTION`] — the first time a write or `sources fields` needs them, and
+//! holds the answer for its own lifetime: per instance, never per process, never shared between
+//! sources. Building a source sends nothing. A mapped name the held answer lacks is looked for
+//! once more in a fresh read, so one added in Linear since is found; nothing a failed call
+//! answered is held, and a write that fails while carrying a held id drops the answer, so the
+//! next reads afresh rather than sending that id again. A name `sources fields --apply` creates is
+//! added to what is held.
+//!
+//! `set_task_status`, and a targeted update naming a status and nothing else, are one
+//! `issueUpdate` and no read: [`graphql::ISSUE_UPDATE_READ`] selects the whole issue, which is
+//! what the answered status — and the engine keeping a delivered task in step — need. So writing
+//! the category an issue already reads as sends the same state again, setting `unknown` on an
+//! issue at a name the mapping does not give moves it to the mapped `unknown` name, and an issue
+//! Linear does not hold is no such task from the mutation's own refusal — `Entity not found` —
+//! rather than from a read. That spelling is the one Linear documents for its own input
+//! validation; a live run has not yet re-observed it here. A source scoped to one project reads
+//! the issue first all the same, because Linear has no update conditional on where an issue is
+//! filed and a write must not reach one filed elsewhere. A targeted update naming anything else
+//! keeps its one read of the issue: the metadata slot is merged into the description Linear
+//! holds, and writing it without that read would overwrite whatever a person wrote there since.
+//! A whole rewrite of an issue or a project reads the relations it replaces in its own answer
+//! ([`graphql::ISSUE_REWRITE`], [`graphql::PROJECT_REWRITE`]) rather than in a read of its own.
+//!
+//! ## Ruling: `sources fields --apply` creates every name the mapping needs
+//!
+//! For parity with a GitHub Projects board, whose `--apply` adds the `Status` options it lacks:
+//! `--apply` creates each name the mapping gives a task that the team lacks, as a workflow state
+//! (`workflowStateCreate`), and each name it gives a project that the workspace lacks, as a
+//! project status (`projectStatusCreate`) — a bare name in both. The type of what it creates is
+//! its category's, by this fixed table:
+//!
+//! | Category | Workflow state | Project status |
+//! | --- | --- | --- |
+//! | `backlog`, `draft` | `backlog` | `backlog` |
+//! | `todo`, `queued` | `unstarted` | `planned` |
+//! | `in-progress`, `unknown` | `started` | `started` |
+//! | `done` | `completed` | `completed` |
+//! | `cancelled` | `canceled` | `canceled` |
+//!
+//! Both create inputs also require a colour, and a project status a place in the workspace's
+//! flow, and nothing in a mapping says either: every name is created in Linear's neutral grey,
+//! `#95a2b3`, and a project status after the workspace's last. Nothing that exists is renamed, retyped or deleted, and a name present
+//! under another type is reported with its type and left as it is. A create Linear refuses stops
+//! the run, and the report names what it created before it. Whether to run it against a
+//! workspace is the operator's decision.
 //!
 //! ## Ruling: `project` scopes a source to one project
 //!
@@ -808,8 +851,8 @@ impl SourcePlugin for Plugin {
 /// every name it gives a project, checked against the workspace's project statuses.
 ///
 /// With `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on
-/// the team, a project status in the workspace — of the type its category derives
-/// ([`created_types`]), and the report names what it created. Nothing that exists is renamed,
+/// the team, a project status in the workspace — of the type its category derives (see the
+/// crate's ruling on `sources fields --apply`), and the report names what it created. Nothing that exists is renamed,
 /// retyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and
 /// every name created before it is reported created.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
@@ -930,7 +973,10 @@ struct MappedStatusNameWire<'a> {
     /// of another type is reported and left as it is.
     expected_type: &'static str,
     /// Whether this run created the name; absent when it did not.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    // Kept in the schema as `"default": false` although the JSON leaves `false` out, so both
+    // SDKs model an absent `created` as `false` rather than as a member that must be there.
+    #[schemars(!skip_serializing_if)]
     created: bool,
 }
 
@@ -3006,10 +3052,9 @@ impl TaskSource for LinearSource {
         id: &NativeId,
         priority: Priority,
     ) -> Result<Option<Priority>, SourceError> {
-        // Read first, on exactly the terms `set_task_status` reads: Linear answers an
-        // `issueUpdate` naming no issue with an errored response rather than a null, so the
-        // read is what tells "no such task" from a refusal — and a trashed issue is not one
-        // this source holds, so it is never written to.
+        // Read first: a trashed issue is not one this source holds, so it is never written
+        // to, and the read is what tells "no such task" from a refusal here — unlike a status
+        // write, whose budget the read is not worth.
         let Some(task) = self.get_task(id).await? else {
             return Ok(None);
         };

@@ -32,6 +32,21 @@ class FieldOutcome(StrEnum):
     FieldOutcomeCreated = "created"
 
 
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
+class KindMissing(BaseModel):
+    kind: Annotated[ItemKind, Field(description="The kind these names are configured for.")]
+    missing: Annotated[
+        list[str],
+        Field(
+            description="The names that kind maps a category to and the field lacked, in category order."
+        ),
+    ]
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -83,6 +98,13 @@ class FieldReport(BaseModel):
         bool, Field(description="Whether the board had the field before the operation.")
     ]
     field: Annotated[BoardField, Field(description="Which field.")]
+    kinds: Annotated[
+        list[KindMissing],
+        Field(
+            description="For the `Status` field, which item kind each missing name is configured for: one\nentry per kind `status_mapping` names a missing option for, task before project, each\nlisting that kind's missing names in category order. A name both kinds use is in\nboth. Empty — and left out of the JSON — when nothing is missing, and always for\n`Priority`, which only a task holds.",
+            validate_default=True,
+        ),
+    ] = []
     missing: Annotated[
         list[str],
         Field(

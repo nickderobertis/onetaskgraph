@@ -2710,6 +2710,9 @@ pub struct FieldReport {
     /// both. Empty — and left out of the JSON — when nothing is missing, and always for
     /// `Priority`, which only a task holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although the JSON leaves an empty list out, so
+    // both SDKs model an absent `kinds` as an empty list rather than as `null`.
+    #[schemars(!skip_serializing_if)]
     pub kinds: Vec<KindMissing>,
     /// What the requested operation did.
     pub outcome: FieldOutcome,
