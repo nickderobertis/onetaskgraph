@@ -3049,7 +3049,8 @@ impl LinearWorkspace {
 
     /// Answer the create of a workflow state or project status named `name` other than as
     /// asked, from now on: `"other-type"` holds it, and answers it, under a type its category
-    /// does not derive; `"no-payload"` answers success with no state or status at all.
+    /// does not derive; `"other-name"` holds it, and answers it, under another name; and
+    /// `"no-payload"` answers success with no state or status at all.
     pub fn misanswer_create(&self, name: &str, how: &str) {
         self.state.lock().unwrap()["_linear_misanswer_names"][name] = json!(how);
     }
@@ -4674,6 +4675,11 @@ fn linear_create_status_name(
         json!(if project { "paused" } else { "triage" })
     } else {
         input["type"].clone()
+    };
+    let name = if misanswer.as_deref() == Some("other-name") {
+        format!("{name} (renamed)")
+    } else {
+        name.to_owned()
     };
     let created = if project {
         json!({"id":format!("STATUS-W{}", held.len() + 1),"name":name,"type":kind,

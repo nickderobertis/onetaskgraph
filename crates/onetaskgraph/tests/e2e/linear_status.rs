@@ -1340,14 +1340,27 @@ fn an_apply_linear_refuses_a_project_status_for_names_it_and_a_rerun_creates_it(
 
 #[test]
 fn an_apply_whose_create_linear_answers_other_than_asked_fails_beside_what_it_created() {
-    // Each create after the first answered under a type its category does not derive, or
-    // with no state or status at all: neither is reported created, nor held as the mapping's.
+    // Each create after the first answered under a type its category does not derive, under
+    // another name, or with no state or status at all: none is reported created, nor held as
+    // the mapping's.
     for (kind, name, how, said) in [
         (
             "task",
             "Second",
             "other-type",
             "of type unstarted with \"Second\" of type triage",
+        ),
+        (
+            "task",
+            "Second",
+            "other-name",
+            "of type unstarted with \"Second (renamed)\" of type unstarted",
+        ),
+        (
+            "project",
+            "Closing",
+            "other-name",
+            "of type completed with \"Closing (renamed)\" of type completed",
         ),
         (
             "task",
@@ -1425,6 +1438,19 @@ fn an_apply_whose_create_linear_answers_other_than_asked_fails_beside_what_it_cr
                 .contains(&("First".to_owned(), "unstarted".to_owned())),
             "{how}: the create before it landed"
         );
+        if how == "other-name" {
+            // What Linear named otherwise is not the mapping's name: a fresh read still finds
+            // the asked name absent from that kind's vocabulary.
+            let reread = answered(&sandbox, &["--json", "sources", "fields", "linear"]);
+            let row = reread["names"]
+                .as_array()
+                .expect("names")
+                .iter()
+                .find(|row| row["kind"] == kind && row["name"] == name)
+                .unwrap_or_else(|| panic!("{how}: a row for {name}: {reread:#}"))
+                .clone();
+            assert_eq!(row["present"], false, "{how}: {reread:#}");
+        }
     }
 }
 
