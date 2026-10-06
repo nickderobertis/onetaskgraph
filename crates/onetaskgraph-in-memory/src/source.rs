@@ -5,12 +5,13 @@ use std::sync::{Mutex, MutexGuard};
 
 use chrono::Utc;
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, WriteSupport, commentless, documentless, unwritable, unwritable_field,
+    Asset, AssetName, AssetUpload, AssetUploads, AssetWrite, AssetsWritten, Capabilities, Comment,
+    CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencySupport, Direction,
+    Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId, NewComment,
+    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
+    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport, assetless,
+    commentless, documentless, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -72,6 +73,31 @@ struct Held {
     labels: Vec<Label>,
     task_dependencies: Vec<DependencyEdge>,
     project_dependencies: Vec<DependencyEdge>,
+    /// Every record's image assets, each beside the record it belongs to.
+    assets: Vec<HeldAsset>,
+}
+
+/// One image asset of one record, and the URL this source serves it at.
+#[derive(Debug)]
+struct HeldAsset {
+    /// Whether the record is a document rather than a task.
+    document: bool,
+    /// The record it belongs to.
+    record: NativeId,
+    name: AssetName,
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+/// One asset a write sent bytes for: its name, its bytes and their digest.
+type Sent = (AssetName, Vec<u8>, String);
+
+/// The URL this source serves the asset `name` with digest `sha256` at.
+///
+/// Addressed by content, as a hosted destination's upload is: bytes that did not change keep
+/// their URL, and bytes that did get a new one.
+fn served_at(sha256: &str, name: &AssetName) -> String {
+    format!("in-memory://assets/{sha256}/{name}")
 }
 
 /// A source that serves exactly the work it was constructed with, plus whatever has been
@@ -106,6 +132,7 @@ impl InMemorySource {
                 labels: config.labels,
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
+                assets: Vec::new(),
             }),
         })
     }
@@ -589,8 +616,99 @@ impl TaskSource for InMemorySource {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.documentary()?;
         self.deletable(id)?;
-        self.held()?.documents.retain(|document| &document.id != id);
+        let mut held = self.held()?;
+        held.documents.retain(|document| &document.id != id);
+        held.assets
+            .retain(|asset| !(asset.document && &asset.record == id));
         Ok(())
+    }
+
+    async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.listed_assets(false, id)
+    }
+
+    async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.listed_assets(true, id)
+    }
+
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(false, id, name)
+    }
+
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(true, id, name)
+    }
+
+    /// The task as [`write_task`](TaskSource::write_task) writes it, its references pointed at
+    /// where this source serves each asset and what it served recorded under
+    /// `onetaskgraph.assets` — a payload without bytes reusing the URL the record already
+    /// records for it — and its asset set replaced by exactly `assets`.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = answers;
+        let (uploads, bytes) = self.uploads(assets)?;
+        let mut item = write.item.clone();
+        let content = item.content.take().unwrap_or_default();
+        item.content = Some(serve_asset_references(
+            &content,
+            &mut item.metadata,
+            &uploads,
+        ));
+        let id = self
+            .write_task(&ItemWrite {
+                target: write.target.clone(),
+                item: item.clone(),
+                depends_on: write.depends_on.clone(),
+            })
+            .await?;
+        self.keep_assets(false, &id, assets, bytes)?;
+        Ok(AssetsWritten {
+            id,
+            content: item.content,
+        })
+    }
+
+    /// The document, on the terms of
+    /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = answers;
+        let (uploads, bytes) = self.uploads(assets)?;
+        let mut item = write.item.clone();
+        let content = item.content.take().unwrap_or_default();
+        item.content = Some(serve_asset_references(
+            &content,
+            &mut item.metadata,
+            &uploads,
+        ));
+        let id = self
+            .write_document(&ItemWrite {
+                target: write.target.clone(),
+                item: item.clone(),
+                depends_on: Vec::new(),
+            })
+            .await?;
+        self.keep_assets(true, &id, assets, bytes)?;
+        Ok(AssetsWritten {
+            id,
+            content: item.content,
+        })
     }
 
     /// Set the held task's status, keeping its name when the category is the one it already
@@ -873,6 +991,8 @@ impl TaskSource for InMemorySource {
         // A comment is on its task, so a task that is gone takes them with it: leaving them
         // would hand a later task created under the same id comments nobody wrote on it.
         held.comments.retain(|comment| &comment.task != id);
+        held.assets
+            .retain(|asset| asset.document || &asset.record != id);
         Ok(())
     }
 
@@ -994,6 +1114,103 @@ impl InMemorySource {
     /// contract's own [`documentless`] rather than this plugin's wording: a caller that
     /// reached one of these methods anyway must not be able to tell which plugin was
     /// behind it apart from the kind the message names.
+    /// What a write of `assets` serves each asset at, and the bytes this source keeps for each
+    /// — a payload carrying bytes served at a new URL, one without them at the URL its record
+    /// already records.
+    fn uploads(&self, assets: &AssetWrite) -> Result<(AssetUploads, Vec<Sent>), SourceError> {
+        if !self.declared().assets.is_native() {
+            return Err(assetless(KIND));
+        }
+        let mut uploads = AssetUploads::default();
+        let mut kept = Vec::new();
+        for payload in &assets.assets {
+            let url = match &payload.bytes {
+                Some(bytes) => {
+                    kept.push((payload.name.clone(), bytes.clone(), payload.sha256.clone()));
+                    served_at(&payload.sha256, &payload.name)
+                }
+                None => assets
+                    .recorded_assets
+                    .as_ref()
+                    .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
+                    .map(str::to_owned)
+                    .ok_or_else(|| SourceError::Refused {
+                        message: format!(
+                            "the asset {} carries no bytes and nothing records an upload of it                              with sha256 {}; next: send its bytes",
+                            payload.name, payload.sha256
+                        ),
+                    })?,
+            };
+            uploads.0.insert(
+                payload.name.clone(),
+                AssetUpload {
+                    sha256: payload.sha256.clone(),
+                    url,
+                },
+            );
+        }
+        Ok((uploads, kept))
+    }
+
+    /// Make the record `id` hold exactly the assets `write` named: those it sent bytes for
+    /// now, and those it reused as they were.
+    fn keep_assets(
+        &self,
+        document: bool,
+        id: &NativeId,
+        write: &AssetWrite,
+        sent: Vec<Sent>,
+    ) -> Result<(), SourceError> {
+        let mut held = self.held()?;
+        held.assets.retain(|asset| {
+            asset.document != document
+                || &asset.record != id
+                || write
+                    .assets
+                    .iter()
+                    .any(|payload| payload.name == asset.name && payload.bytes.is_none())
+        });
+        for (name, bytes, sha256) in sent {
+            held.assets.push(HeldAsset {
+                document,
+                record: id.clone(),
+                name,
+                bytes,
+                sha256,
+            });
+        }
+        Ok(())
+    }
+
+    fn listed_assets(&self, document: bool, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        Ok(self
+            .held()?
+            .assets
+            .iter()
+            .filter(|asset| asset.document == document && &asset.record == id)
+            .map(|asset| Asset {
+                name: asset.name.clone(),
+                sha256: asset.sha256.clone(),
+                content_type: asset.name.content_type(),
+                path: None,
+            })
+            .collect())
+    }
+
+    fn asset_bytes(
+        &self,
+        document: bool,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        Ok(self
+            .held()?
+            .assets
+            .iter()
+            .find(|asset| asset.document == document && &asset.record == id && &asset.name == name)
+            .map(|asset| asset.bytes.clone()))
+    }
+
     fn documentary(&self) -> Result<(), SourceError> {
         if self.declared().documents.is_native() {
             return Ok(());
