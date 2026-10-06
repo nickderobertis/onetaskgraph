@@ -1174,6 +1174,29 @@ impl GitHubBoardFields {
         held["priority"] = name.map_or(Value::Null, |name| json!(name));
     }
 
+    /// Rewrite one issue's body, as a person editing it on GitHub would.
+    pub fn edit_body(&self, id: &str, body: &str) {
+        self.board.lock().unwrap().find(&json!(id))["body"] = json!(body);
+    }
+
+    /// Move one item's card to the `Status` option named `name`, as a person dragging it on
+    /// the board would.
+    pub fn move_card(&self, id: &str, name: &str) {
+        self.board.lock().unwrap().find(&json!(id))["status"] = json!(name);
+    }
+
+    /// The name of the `Status` option one item sits in, or `None`.
+    #[must_use]
+    pub fn status(&self, id: &str) -> Option<String> {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["status"].as_str().map(str::to_owned))
+    }
+
     /// The name of the `Priority` option one item sits in, or `None`.
     #[must_use]
     pub fn priority(&self, id: &str) -> Option<String> {

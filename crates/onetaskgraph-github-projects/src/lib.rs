@@ -2403,8 +2403,8 @@ pub struct GitHubProjectsSource {
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
     client: Client,
-    /// Every item this source has created since it was built, in the order it created
-    /// them.
+    /// Every item this source has created in this command, in the order it created them —
+    /// dropped by [`TaskSource::end_command`].
     ///
     /// GitHub's `projectV2.items` is eventually consistent: an issue added to a board with
     /// `addProjectV2ItemById` is routinely absent from the very next read of that board, so
@@ -2417,8 +2417,8 @@ pub struct GitHubProjectsSource {
     /// itself just write, it lives and dies with the process, and it is never consulted for
     /// an item this source did not create.
     created: Mutex<Vec<Resolved>>,
-    /// Every item that already existed and that this source has written since it was built,
-    /// as it wrote it.
+    /// Every item that already existed and that this source has written in this command, as
+    /// it wrote it — dropped by [`TaskSource::end_command`].
     ///
     /// The other half of [`Self::created`], held on the same terms and for the reason a
     /// narrowed read needs it: an answer from GitHub's search or from the board's own field
@@ -2434,7 +2434,8 @@ pub struct GitHubProjectsSource {
     /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
     /// what it is measured from.
     last_mutation: Mutex<Option<Instant>>,
-    /// The board as this process last read it, for the length of one command.
+    /// The board as this process last read it, for the length of one command — dropped by
+    /// [`TaskSource::end_command`].
     ///
     /// A copy of a project used to re-read the whole board, paged, before writing each of
     /// its items, which is by far the largest part of a copy's request count and none of
@@ -2449,7 +2450,8 @@ pub struct GitHubProjectsSource {
     /// board updates the entry here too, so what this holds is the last read plus this
     /// process's own writes rather than a snapshot taken before them.
     board_cache: Mutex<Option<Board>>,
-    /// Every issue this board's own search reported, for the length of one command.
+    /// Every issue this board's own search reported, for the length of one command — dropped
+    /// by [`TaskSource::end_command`].
     ///
     /// The second half of a board read, and cached for the same reason and on the same
     /// terms as the first: it lives and dies with the process, nothing is written down, and
@@ -2458,7 +2460,7 @@ pub struct GitHubProjectsSource {
     /// that lists this board's projects and its tasks pays for one search rather than two.
     search_cache: Mutex<Option<Vec<Resolved>>>,
     /// What each narrowed question GitHub was asked answered, keyed by that question, for
-    /// the length of one command.
+    /// the length of one command — dropped by [`TaskSource::end_command`].
     ///
     /// The narrowed counterpart of [`Self::search_cache`], held on the same terms: it lives
     /// and dies with the process, nothing is written down, a write this process makes
@@ -2468,11 +2470,13 @@ pub struct GitHubProjectsSource {
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
     search_next: Mutex<BTreeMap<String, Option<String>>>,
-    /// Records already resolved in this source instance, reused by writes and
-    /// for comment identity. Explicit item reads still reach GitHub. Nothing is persisted.
+    /// Records already resolved in this command, reused by writes and for comment identity.
+    /// Explicit item reads still reach GitHub. Nothing is persisted, and
+    /// [`TaskSource::end_command`] drops every record, so a write in the next command reads
+    /// its item as a person has since left it.
     resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// The board's own id and field definitions as this process last read them on their
-    /// own, for the length of one command.
+    /// own, for the length of one command — dropped by [`TaskSource::end_command`].
     ///
     /// What a write needs of the board and its item does not say, read once per command
     /// rather than once per item written, on the terms [`Self::board_cache`] is held on: it
@@ -9464,6 +9468,39 @@ impl TaskSource for GitHubProjectsSource {
     /// the two cannot count one request two ways.
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(Some(self.ledger.snapshot().metering()))
+    }
+
+    /// Drop every item, search answer and board read this source holds, so the next command
+    /// reads the board as a person has since left it.
+    ///
+    /// Every one of those is held on the assumption that nothing but this source writes the
+    /// board while a command runs, which stops being true the moment the command is over: a
+    /// body a person edited would be overwritten from the record held here, and a card they
+    /// moved would be read as still where this source left it. The board's own field
+    /// definitions go too, because a person can add or delete a `Status` option and a write
+    /// resolved against the held list would not re-read on a miss. What stays is what stays
+    /// valid in normal use: each repository's node id, which a miss re-reads, the pacing of
+    /// mutations, which is about GitHub's limiter rather than anybody's work, and the running
+    /// accounting [`metering`](TaskSource::metering) answers from.
+    ///
+    /// Infallible in practice: a lock an earlier failure poisoned is cleared rather than
+    /// refused, because clearing it is what puts it right.
+    async fn end_command(&self) -> Result<(), SourceError> {
+        fn clear<T: Default>(held: &Mutex<T>) {
+            *held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = T::default();
+            held.clear_poison();
+        }
+        clear(&self.created);
+        clear(&self.updated);
+        clear(&self.board_cache);
+        clear(&self.search_cache);
+        clear(&self.narrowed_cache);
+        clear(&self.search_next);
+        clear(&self.resolved_cache);
+        clear(&self.fields_cache);
+        Ok(())
     }
 }
 

@@ -44,7 +44,8 @@ budgets:
       `update_task` calls in one `Engine`, five more through a source scoped to one project,
       alternating between issues of its project and issues filed in another of its team, and
       five rewrites of one project a copy keeps in step, counting `write_project`'s own
-      requests. The mutation alone.
+      requests — every call in one `Engine` followed by `Engine::end_command`, as the worker
+      ends each unit of work, which keeps the resolution. The mutation alone.
       Base (c9e75a8): a copy's task create 4 (TEAM, ISSUE_STATE, ISSUE_CREATE,
       ISSUE_RELATIONS); a status-only update 5 (ISSUE, TEAM, ISSUE_STATE_OF_TYPE,
       ISSUE_UPDATE, ISSUE), and through a scoped source 5 to an issue of its project (the same
@@ -77,7 +78,8 @@ budgets:
     description: >-
       Inner measure of headroom on a production Linear key every manager of a host shares,
       which no check may reach: the requests each settlement-shaped `update_task` after the
-      first sends on one source instance in one `Engine`. The issue read and the mutation.
+      first sends on one source instance in one `Engine`, with `Engine::end_command` after
+      each, as the write-back worker ends each settlement. The issue read and the mutation.
       Base (c9e75a8): 5 (ISSUE, TEAM, ISSUE_STATE_OF_TYPE, ISSUE_UPDATE, ISSUE).
     labels: [linear]
     measure: reported

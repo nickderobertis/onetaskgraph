@@ -845,8 +845,8 @@ fn held_name(node: &Value) -> Result<StatusName, SourceError> {
 /// workspace's project statuses.
 ///
 /// Read in one request and held by one source instance for its own lifetime — never by the
-/// process, and never shared between sources — so every status write after the first sends
-/// its mutation alone. A name not found in it is looked for once more in a fresh read, so a
+/// process, never shared between sources, and kept across [`TaskSource::end_command`] — so
+/// every status write after the first sends its mutation alone. A name not found in it is looked for once more in a fresh read, so a
 /// name added in Linear after it was read is found; nothing a failed call answered is held.
 #[derive(Debug, Clone)]
 struct Vocabulary {
@@ -3498,6 +3498,15 @@ impl TaskSource for LinearSource {
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
+    }
+
+    /// Nothing to drop: what this source holds across a command is its [`Vocabulary`] — the
+    /// team's id, its workflow states and the workspace's project statuses — which stays valid
+    /// in normal use and is read afresh when a name misses. No issue, project, document or
+    /// search answer outlives the call that read it, so the next command already reads each
+    /// item as a person left it.
+    async fn end_command(&self) -> Result<(), SourceError> {
+        Ok(())
     }
 }
 

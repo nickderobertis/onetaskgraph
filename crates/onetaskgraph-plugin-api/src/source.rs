@@ -844,6 +844,30 @@ pub trait TaskSource: Send + Sync {
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(None)
     }
+
+    /// End one command: drop everything held that a person can change.
+    ///
+    /// A command is one unit of work — one invocation of the binary, or whatever a caller
+    /// holding one engine for many units of work calls between them. Within a command a
+    /// source may hold what it read and reuse it; across this call it may not. After it
+    /// returns, a source answers no read and bases no write on item content, statuses, board
+    /// contents or search results it held before the call. It may keep only identifiers and
+    /// vocabulary that stay valid in normal use — a repository's node id, a team's workflow
+    /// states — and only where a lookup that misses one re-reads rather than refusing.
+    ///
+    /// Defaulted to doing nothing, which is right for a source that holds nothing between
+    /// calls or holds only what the rule above lets it keep. A source that holds more owes
+    /// an override. Never called by the engine on its own: the binary's one command is its
+    /// whole process, so only a caller that outlives a command calls it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not be sure it dropped what it held —
+    /// ordinarily a hosted plugin that did not answer. A caller should not go on to the next
+    /// command on that source's earlier reads.
+    async fn end_command(&self) -> Result<(), SourceError> {
+        Ok(())
+    }
 }
 
 /// The factory that turns one configuration block into a live [`TaskSource`].

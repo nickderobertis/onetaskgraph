@@ -266,6 +266,9 @@ async fn initialize(
                 // And the targeted update: every plugin of this build applies one, through its
                 // own override or the contract's default.
                 targeted_updates: true,
+                // And the end of a command: this host forwards it to whichever plugin it
+                // serves, which drops what it holds or holds nothing and does nothing.
+                ends_commands: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -574,6 +577,10 @@ async fn dispatch(
             }))
         }
         "metering" => encode(json!({ "metering": source.metering().await? })),
+        "end_command" => {
+            source.end_command().await?;
+            encode(json!({}))
+        }
         other => Err(SourceError::Malformed {
             message: format!("protocol version {PROTOCOL_VERSION} has no method called {other:?}"),
         }),

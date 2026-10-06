@@ -301,6 +301,14 @@ pub(crate) struct InitializeResult {
     /// answers — correct, and merely not minimal.
     #[serde(default)]
     pub(crate) targeted_updates: bool,
+    /// Whether this plugin answers `end_command` (§3.11).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, which
+    /// §3.11 lets only a plugin holding nothing between requests that a person can change
+    /// leave out. Omitted when `false`, so what a plugin answering no such thing writes is
+    /// what it wrote before the member existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) ends_commands: bool,
 }
 
 /// The `metering` result (§4.14).

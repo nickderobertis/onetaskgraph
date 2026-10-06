@@ -2525,3 +2525,93 @@ fn a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links() {
     ]);
     assert_eq!(refusal(&other[1]), "malformed", "{:#}", other[1]);
 }
+
+#[test]
+fn the_reference_host_declares_end_command_and_answers_it() {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id": "1", "method": "end_command", "params": {}}),
+    ]);
+    assert_eq!(
+        answers[0]["result"]["ends_commands"],
+        json!(true),
+        "{:#}",
+        answers[0]
+    );
+    assert_eq!(answers[1], json!({"id": "1", "result": {}}));
+}
+
+#[tokio::test]
+async fn end_command_crosses_the_wire_and_the_hosted_source_still_answers() {
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    there.end_command().await.expect("the command ends");
+    let task = there
+        .get_task(&NativeId("T-1".into()))
+        .await
+        .expect("a read after the call")
+        .expect("T-1 is held");
+    assert_eq!(task.title, "Alpha");
+}
+
+#[tokio::test]
+async fn a_plugin_that_does_not_declare_end_command_is_never_sent_it() {
+    // The peer answers the handshake and then hangs up: a request sent to it would fail.
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities()}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    source
+        .end_command()
+        .await
+        .expect("nothing is sent to a plugin that holds nothing to drop");
+}
+
+#[tokio::test]
+async fn a_plugin_that_cannot_end_its_command_fails_the_engines_call_by_its_name() {
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "ends_commands": true}})
+        .to_string(),
+        json!({"id": "1", "error": {"kind": "unavailable",
+               "message": "the held board could not be dropped"}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let beside = plugin_for("in-memory")
+        .expect("in-memory is registered")
+        .build(
+            &SourceName::new("beside").unwrap(),
+            &hosted_settings()["config"],
+            &NoSecrets,
+        )
+        .expect("the in-memory source builds");
+    let engine = onetaskgraph_core::Engine::new(
+        vec![
+            onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
+                SourceName::new("beside").unwrap(),
+                beside,
+            )),
+            onetaskgraph_core::ConfiguredSource::Ready(onetaskgraph_core::ResolvedSource::adopt(
+                name(),
+                Box::new(source),
+            )),
+        ],
+        vec![name()],
+    );
+    let refused = engine
+        .end_command()
+        .await
+        .expect_err("a plugin that could not drop what it held");
+    let onetaskgraph_core::EngineError::SourceFailed { name, error } = &refused else {
+        panic!("named as the source that failed: {refused:?}");
+    };
+    assert_eq!(name, "work");
+    assert!(
+        error
+            .to_string()
+            .contains("the held board could not be dropped"),
+        "{error}"
+    );
+}
