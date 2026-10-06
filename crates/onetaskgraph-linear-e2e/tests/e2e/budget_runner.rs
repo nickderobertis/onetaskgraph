@@ -76,6 +76,11 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
     )
     .expect("writable");
     std::fs::write(
+        telemetry::file_in(&recorded, "linear-requests-undetailed"),
+        json!({"value": 1, "detail": null}).to_string(),
+    )
+    .expect("writable");
+    std::fs::write(
         telemetry::file_in(&recorded, "linear-requests-wordless"),
         json!({"value": 1, "detail": 7}).to_string(),
     )
@@ -91,6 +96,7 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
         "linear-requests-malformed",
         "linear-requests-valueless",
         "linear-requests-wordless",
+        "linear-requests-undetailed",
     ];
     let budgets = ids
         .iter()
@@ -138,6 +144,14 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
     assert_eq!(
         within["detail"],
         "two requests, as the journey counted them"
+    );
+    let undetailed = result("linear-requests-undetailed");
+    assert_eq!(undetailed["verdict"], "within", "{undetailed:#}");
+    assert_eq!(undetailed["actual"], 1.0);
+    assert_eq!(
+        undetailed["detail"],
+        Value::Null,
+        "no detail is reported as none"
     );
 
     for (id, reason) in [
