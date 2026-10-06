@@ -25,6 +25,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
 readonly ROOT
 readonly BUDGETS="crates/onetaskgraph-linear/budgets.yaml"
 
+# Skipped on Windows for the reason scripts/check-linear-budgets.sh is: onebudgetspec publishes
+# no win32-x64 build, so there is nothing real to drive the wrappers against. The Linux and macOS
+# lanes run every case below, the two skips included, on every change that reaches these scripts.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-linear-budget-wrappers: skipped on Windows (onebudgetspec publishes no win32-x64 build); the Linux and macOS lanes gate the Linear budget wrappers" >&2
+    exit 0
+    ;;
+esac
+
 [ -x "$ROOT/node_modules/.bin/onebudgetspec" ] || fatal \
   "onebudgetspec is not installed in this worktree, so the wrappers cannot be driven against it" \
   "run 'just bootstrap', which installs the locked Node toolchain, then rerun"
@@ -142,14 +152,39 @@ run report 1 env -u ONEBUDGETSPEC_RESULT bash scripts/linear-budget.sh \
 [ "$status" -eq 2 ] || fail "no ONEBUDGETSPEC_RESULT, but the measurement exited $status"
 [ -z "$calls" ] || fail "no ONEBUDGETSPEC_RESULT, but a journey still ran: $calls"
 
+# On Windows, where onebudgetspec has no build, the check skips with its notice naming the lanes
+# that gate it, and runs no journey. OS is what the Windows runner's bash inherits, and what
+# the skip reads; OSTYPE is bash's own and cannot be seeded from outside.
+run report 9 env OS=Windows_NT bash scripts/check-linear-budgets.sh
+[ "$status" -eq 0 ] || fail "on Windows the budget check should skip, but it exited $status: $output"
+case "$output" in
+  *"skipped on Windows"*"Linux and macOS lanes gate"*) ;;
+  *) fail "on Windows the budget check did not print its skip naming the lanes that gate it: $output" ;;
+esac
+[ -z "$calls" ] || fail "on Windows the budget check skipped but still ran a journey: $calls"
+
 # A worktree with no onebudgetspec is refused naming the bootstrap that installs it.
-rm "$tree/node_modules"
+rm -rf "$tree/node_modules"
 run report 1 bash scripts/check-linear-budgets.sh
 [ "$status" -eq 1 ] || fail "onebudgetspec absent, but the check exited $status"
 case "$output" in
   *"just bootstrap"*) ;;
   *) fail "onebudgetspec absent, but the check did not name 'just bootstrap': $output" ;;
 esac
+
+# And this check skips there the same way, before it lays anything out. It runs last, from a
+# tree whose onebudgetspec is gone, so a copy whose skip did not take stops at the missing tool
+# rather than driving this whole check again inside itself.
+cp "$ROOT/scripts/check-linear-budget-wrappers.sh" "$tree/scripts/" || fatal \
+  "could not copy scripts/check-linear-budget-wrappers.sh into the scratch tree" \
+  "restore it with 'git checkout -- scripts/check-linear-budget-wrappers.sh', then rerun"
+run report 1 env OS=Windows_NT bash scripts/check-linear-budget-wrappers.sh
+[ "$status" -eq 0 ] || fail "on Windows the wrapper check should skip, but it exited $status: $output"
+case "$output" in
+  *"check-linear-budget-wrappers: skipped on Windows"*"Linux and macOS lanes gate"*) ;;
+  *) fail "on Windows the wrapper check did not print its skip naming the lanes that gate it: $output" ;;
+esac
+[ -z "$calls" ] || fail "on Windows the wrapper check skipped but still ran a journey: $calls"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-linear-budget-wrappers: $failures case(s) failed — see above" >&2

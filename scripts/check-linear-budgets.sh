@@ -12,6 +12,17 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# onebudgetspec publishes no build for win32-x64: its launcher there stops with "no build for
+# win32-x64", which would read as a budget having failed. So the check is skipped there with a
+# notice, by the convention scripts/check-affected-selection.sh follows for its own platform
+# reason. The Linux and macOS lanes run every budget on every change that selects this crate.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-linear-budgets: skipped on Windows (onebudgetspec publishes no win32-x64 build); the Linux and macOS lanes gate the Linear request budgets" >&2
+    exit 0
+    ;;
+esac
+
 if [ ! -x "node_modules/.bin/onebudgetspec" ]; then
   echo "check-linear-budgets: onebudgetspec is not installed in this worktree; it is a pinned devDependency of package.json" >&2
   echo "check-linear-budgets: next: run 'just bootstrap', which installs the locked Node toolchain, then re-run" >&2
