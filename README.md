@@ -57,9 +57,12 @@ onetaskgraph sources fields <SOURCE> [--apply] [--json]
 # Priority field and its options when priority_mapping is set. --apply adds the missing
 # options and creates a missing Priority field, sending every existing option back with its
 # id, then verifies every pre-existing option and every item's values of both fields and
-# prints recovery data if GitHub drifted. For a Linear source it reports each workflow state
-# its status_mapping names as present on the team, with its type, or missing; --apply is
-# refused there, because workflow states are team settings people own.
+# prints recovery data if GitHub drifted; a status name is reported missing for each item kind
+# that names it. For a Linear source it reports every name its status_mapping gives a task
+# against the team's workflow states, and every name it gives a project against the
+# workspace's project statuses, each present with its type or missing; --apply creates each
+# missing one first, of the type its category derives, and renames, retypes or deletes nothing.
+# See "Status mapping" below.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 # The Status-only form of `sources fields`, which supersedes it; kept as it was.
 onetaskgraph sources route <SOURCE> [--repository R]... [--json]
@@ -229,8 +232,8 @@ answers with the status as the source reads it back. `queued` is the category fo
 claimed by something that will do it and not yet started, between `todo` (ready, and nothing
 has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`; a GitHub
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
-another; Linear writes it to the workflow state its source's `status_mapping.queued` names, and
-refuses it by name when that source maps none.
+another; Linear writes it as the name its source's `status_mapping.queued` gives the item's
+kind, and refuses it by name when that source gives none. See "Status mapping" below.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This user-facing summary is required to describe the GitHub projection; the loopback plugin tests and shared live journey drive the resolved mapping, mutations, and observed read-back together. -->
 On GitHub Projects, terminal writes keep both GitHub representations aligned: `done`
@@ -799,12 +802,11 @@ sources:
     config: { root: ~/notes/tasks }
 ```
 
-A `linear` source writes a status category as the workflow state its `status_mapping` names,
-and reads an issue at that state as the category — which is how a team with two states of one
-type, `Todo` and `Queued`, keeps them apart; a category it does not name is written as the
-team's first state of the matching type, as without the key, and `null` disables one. Its
-`project`, the id of one Linear project of the team, scopes the source to that project: every
-read is narrowed to it and a task written with no project is placed in it.
+A `linear` source's `project`, the id of one Linear project of the team, scopes the source to
+that project: every read and listing is narrowed to it, a task written with no project is
+placed in it, and a write to any project but that one is refused naming the scope. A status-only
+write — `task status set`, or `task update` naming a status alone — is one mutation to the item
+it names, wherever that item is filed, with no read before it.
 
 ```yaml
 sources:
@@ -814,15 +816,106 @@ sources:
       team: ENG
       project: 986a467e-775a-4f8f-80dd-aca405063cf4   # optional
       status_mapping:
-        backlog: Proposed
-        draft: Backlog
-        todo: Todo
-        queued: Queued
+        backlog:     { task: Proposed,        project: Proposal }
+        draft:       { task: Backlog,         project: Idea }
+        todo:        { task: Todo,            project: Planned }
+        queued:      { task: Queued,          project: Accepted }
         in-progress: In Progress
-        unknown: Needs Attention
-        done: Done
-        cancelled: Canceled
+        unknown:     { task: Needs Attention, project: Blocked }
+        done:        { task: Done,            project: Completed }
+        cancelled:   Canceled
 ```
+
+### Status mapping
+
+A `github-projects` or `linear` source names its statuses with one `status_mapping`, the same
+grammar on both. Its keys are status categories — `draft`, `backlog`, `todo`, `queued`,
+`in-progress`, `done`, `cancelled`, `unknown` — and each value is one of:
+
+- **a name**, which is the category's name for a task and for a project alike;
+- **`null`**, which disables the category for every kind;
+- **an object with the keys `task` and `project`**, each optional and each a name, which names
+  the category per item kind; a kind the object leaves out leaves the category unmapped for
+  that kind.
+
+```yaml
+status_mapping:
+  todo: Todo                                 # every kind
+  draft: null                                # disabled for every kind
+  done: { task: Done, project: Completed }   # per kind
+```
+
+Anything else is refused when the configuration loads, naming the source, the category and the
+part: a key that is not a category, an object naming no kind (`{}` — write `null` to disable a
+category), naming another key, holding a `null`, or a blank name. So are two categories mapped
+to one name of one kind, compared ignoring case — that name could read back as only one of them
+— naming the source, the kind, both categories and the name; a bare name counts for both kinds,
+and one name used by different categories in different kinds is fine.
+
+**Writes.** A status is written as the name its category maps to for the kind of the item being
+written. A write the source has no name for — a category it does not map, one set to `null`, or
+one its per-kind object leaves out — is refused before any mutation, naming the source, the kind
+(`task` or `project`), the category and the key to set, `status_mapping.<category>.<kind>`. So
+is a mapped name that kind's vocabulary does not hold, naming the name. Nothing falls back by a
+status's type, or by the name it was called where it came from.
+
+**Reads.** An item at a name its kind maps reads as that category, under the name; every other
+name reads as `unknown`, under its own name. `--status` returns exactly the items that read as
+each category it names, `unknown` among them.
+
+**On a GitHub Projects board** both kinds' names are options of its one `Status` field. A
+category the source does not mention keeps its shipped default for both kinds — `backlog` →
+`Backlog`, `todo` → `Todo`, `queued` → `Queued`, `in-progress` → `In Progress`, `done` → `Done`,
+`cancelled` → `Cancelled`; `draft` and `unknown` have none — and a category it does mention uses
+only what it configures. `done` and `cancelled` close the issue as completed or not planned,
+for both kinds, and a closed issue reads by its state whatever its option.
+
+**On Linear** a task's names are the configured team's workflow states and a project's are the
+workspace's project statuses — two vocabularies. Linear has no built-in names, so a source
+without a `status_mapping` reads every item as `unknown` and refuses every status write. A
+source resolves its team, the team's workflow states and the workspace's project statuses in
+one request, the first time a write or `sources fields` needs them, and holds them for its own
+lifetime — never longer, and never shared with another source. A name it does not find is
+looked for once more in a fresh read, so one added in Linear since is found; nothing a failed
+call answered is held. A status write sends its mutation alone, with no read of the issue
+first — one request once the resolution is held. `sources fields <SOURCE> --apply` creates every
+mapped name a vocabulary lacks — a workflow state on the team for a task's, a project status in
+the workspace for a project's, both for a bare name — of the type its category derives, in
+Linear's neutral grey, a project status after the workspace's last; it never renames, retypes
+or deletes a name that is there, and reports one present under another type as it is:
+
+| Category | Workflow state | Project status |
+| --- | --- | --- |
+| `backlog`, `draft` | `backlog` | `backlog` |
+| `todo`, `queued` | `unstarted` | `planned` |
+| `in-progress`, `unknown` | `started` | `started` |
+| `done` | `completed` | `completed` |
+| `cancelled` | `canceled` | `canceled` |
+
+A create Linear refuses stops the run, naming the name and its kind, and the report names every
+name created before it; run `--apply` again once the refusal is lifted, and it creates only what
+is still missing.
+
+**Migrating to 0.3.** This grammar changes what an existing configuration does:
+
+- On Linear, a write no longer falls back to the team's first state of the category's type, or
+  resolves a category by the status's own name: a category with no mapped name is refused.
+- On Linear, a project write resolves its status through the project side of the mapping, and
+  no longer through the item's own status name.
+- On Linear, a name the mapping does not give its kind reads as `unknown`, and no longer by
+  its `WorkflowState.type` or `ProjectStatusType`.
+- A Linear source without a `status_mapping` refuses every status write.
+- On GitHub Projects, a category configured as a per-kind object no longer gets the shipped
+  default for the kind it leaves out.
+- On Linear, a status write no longer reads the issue first. Setting the category an issue
+  already reads as sends a same-state update; setting `unknown` on an issue at a name the
+  mapping does not give a task moves it to the mapped `unknown` name; and an issue Linear does
+  not hold is reported from the mutation's own not-found refusal.
+- On Linear, a status-only write through a source scoped to one project (`project` set) goes
+  to the item it names wherever that item is filed, while reads, listings and creation stay
+  scoped.
+- On Linear, `sources fields --apply` creates every missing mapped name, as workflow states and
+  project statuses, where it used to be refused.
 
 Every setting is reachable at three layers, lowest precedence first: **the file, then the
 environment, then a command-line flag.**

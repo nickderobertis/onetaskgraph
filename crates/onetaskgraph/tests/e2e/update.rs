@@ -757,7 +757,11 @@ fn a_linear_update_sends_one_issue_update_of_what_differs() {
     );
     assert_eq!(written(&answer), ["status", "metadata"]);
     let after = shown("linear", &sandbox, &id);
-    assert_eq!(after["status"], json!({"category": "done", "name": "Done"}));
+    // `done` is the name the shared workspace's mapping gives it, and nothing else.
+    assert_eq!(
+        after["status"],
+        json!({"category": "done", "name": "Shipped"})
+    );
     assert_eq!(
         after["metadata"]["onepipeline.settlement"],
         json!({"outcome": "landed"})

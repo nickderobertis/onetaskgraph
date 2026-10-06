@@ -25,6 +25,7 @@ use std::net::TcpListener;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -101,14 +102,44 @@ static RUNS: LazyLock<Runs> = LazyLock::new(|| {
     }
 });
 
+/// The next process number [`ended_run`] hands out, so no two parallel tests hold one
+/// registration. It starts past any pid Linux issues (`pid_max` is at most 2^22), so it is
+/// never the real child [`LiveRunBeside`] spawns.
+static NEXT_ENDED_PROCESS: AtomicU32 = AtomicU32::new(1 << 31);
+
 /// A run of this machine that has ENDED: really registered, and its registration really
 /// given up, which is the state the kernel leaves behind when a process dies.
-fn ended_run(offset: u32) -> Run {
-    let registration = Registration::take(&RUNS.registry, process(40_000 + offset))
-        .expect("a run that this check then ends");
-    let run = registration.run();
-    drop(registration);
-    run
+fn ended_run() -> Run {
+    let process = process(NEXT_ENDED_PROCESS.fetch_add(1, Ordering::Relaxed));
+    with_no_drive_going(|| {
+        assert!(
+            !RUNS.registry.registration_path(process).exists(),
+            "process {process} was already registered here by another test, so its \
+             registration is not this test's alone"
+        );
+        let registration =
+            Registration::take(&RUNS.registry, process).expect("a run that this check then ends");
+        let run = registration.run();
+        // Given up here, so the lock is free — the same thing the kernel does for a process
+        // that has died, and the only state that authorises a removal.
+        drop(registration);
+        run
+    })
+}
+
+/// Run `take` while no drive is going and no other registration is being taken or given up.
+///
+/// A registration is a lock on an open file, and these tests are threads of one process. A
+/// fork copies the file table, so a child spawned while [`ended_run`] holds a registration
+/// keeps that lock until `execve`, and a sweep in that window reads the ended run as live.
+/// And [`Registry::finished_runs`] briefly holds a shared lock on every registration, so a
+/// `Registration::take` racing a sweep is refused. Every registration taken outside a drive,
+/// and the spawn of the second process, goes through this.
+fn with_no_drive_going<T>(take: impl FnOnce() -> T) -> T {
+    let _exclusive = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    take()
 }
 
 /// A run's process id, which no operating system numbers zero.
@@ -133,6 +164,14 @@ struct LiveRunBeside {
 
 impl LiveRunBeside {
     fn start() -> Self {
+        // Spawned and waited for under the one guard the drives hold, so no test is taking
+        // or giving up a registration while the fork copies this process's file table, and
+        // the child has closed every copy it inherited — by registering, which is after its
+        // `execve` — before any of them can go on; see `with_no_drive_going`.
+        with_no_drive_going(Self::spawn)
+    }
+
+    fn spawn() -> Self {
         let child = Command::new(
             std::env::current_exe().expect("the path of the test binary being re-executed"),
         )
@@ -387,8 +426,8 @@ async fn a_sweep_leaves_a_concurrent_live_runs_artifacts_however_old_they_are() 
     // session Linear's own rate limiter has parked becomes. Nothing about their age is
     // different from an abandoned run's; the lock is the whole of the difference.
     let mut beside = LiveRunBeside::start();
-    let ended = ended_run(1);
-    let fresh_ended = ended_run(2);
+    let ended = ended_run();
+    let fresh_ended = ended_run();
     let theirs = artifacts_of(beside.run, aged(10), "theirs");
     let mine = artifacts_of(RUNS.mine, aged(10), "mine");
     let stale = artifacts_of(ended, aged(2), "stale");
@@ -455,7 +494,7 @@ async fn an_artifact_another_deleter_took_first_leaves_the_cleanup_successful() 
     // The workspace answers the listing and then the entity is gone — swept by another run,
     // removed by hand, whatever. Linear refuses the delete that follows, and treating that
     // refusal as a failure once killed a whole journey over an issue that had already gone.
-    let ended = ended_run(3);
+    let ended = ended_run();
     let racing = artifacts_of(ended, aged(2), "racing");
     let ids: Vec<String> = racing.iter().map(|entity| entity.id.clone()).collect();
     let drive = Drive::plant(racing, ids.clone(), vec![]);
@@ -479,7 +518,7 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     // The other half of the arrangement: the sweep above recovers an ended run's, and this
     // removes this run's own — whether the journey passed or failed, which is
     // `run_then_cleanup`'s and is asserted below.
-    let ended = ended_run(4);
+    let ended = ended_run();
     let mine = artifacts_of(RUNS.mine, NOW, "mine");
     let also_mine = artifacts_of(RUNS.mine, NOW + 1, "also-mine");
     let theirs = artifacts_of(ended, NOW, "theirs");
@@ -507,7 +546,7 @@ async fn residue_a_delete_never_takes_fails_the_cleanup_rather_than_passing_quie
     // for something that has already GONE is the outcome the delete was asking for; a delete
     // refused for something still there is residue left in somebody's real workspace, and a
     // cleanup that reported success would leave it there with nothing said.
-    let ended = ended_run(5);
+    let ended = ended_run();
     let stuck = artifacts_of(ended, aged(2), "stuck");
     let ids: Vec<String> = stuck.iter().map(|entity| entity.id.clone()).collect();
     let names: Vec<String> = stuck.iter().map(|entity| entity.name.clone()).collect();

@@ -89,6 +89,14 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine answers it for a hosted source from `get_task` "
         "and `task_comments`, which carry everything it reads"
     ),
+    "check_status_write": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, and the plugin's own write refuses a status it has no name for"
+    ),
+    "set_task_status_reading": (
+        "not a message: §4.17 says the engine answers it for a hosted source from `get_task` "
+        "and `set_task_status`, which carry everything it reads and writes"
+    ),
     "keeps_template_answers": NOT_CARRIED_REASON,
     "task_template_answers": NOT_CARRIED_REASON,
     "document_template_answers": NOT_CARRIED_REASON,

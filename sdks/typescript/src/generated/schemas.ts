@@ -2646,6 +2646,14 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/BoardField",
             "description": "Which field."
           },
+          "kinds": {
+            "default": [],
+            "description": "For the `Status` field, which item kind each missing name is configured for: one\nentry per kind `status_mapping` names a missing option for, task before project, each\nlisting that kind's missing names in category order. A name both kinds use is in\nboth. Empty — and left out of the JSON — when nothing is missing, and always for\n`Priority`, which only a task holds.",
+            "items": {
+              "$ref": "#/$defs/KindMissing"
+            },
+            "type": "array"
+          },
           "missing": {
             "description": "Configured option names the field lacked before the operation — every one of them,\nin the order a new field lists them, when the field was not there at all.",
             "items": {
@@ -2664,6 +2672,42 @@ export const runtimeSchemas = {
           "missing",
           "outcome",
           "existing"
+        ],
+        "type": "object"
+      },
+      "ItemKind": {
+        "description": "The kind of work item named by a dependency endpoint.",
+        "oneOf": [
+          {
+            "const": "task",
+            "description": "A task.",
+            "type": "string"
+          },
+          {
+            "const": "project",
+            "description": "A project.",
+            "type": "string"
+          }
+        ]
+      },
+      "KindMissing": {
+        "description": "The `Status` option names one item kind's `status_mapping` names that the field lacked.",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ItemKind",
+            "description": "The kind these names are configured for."
+          },
+          "missing": {
+            "description": "The names that kind maps a category to and the field lacked, in category order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "missing"
         ],
         "type": "object"
       },
@@ -2880,11 +2924,6 @@ export const runtimeSchemas = {
         "minLength": 1,
         "type": "string"
       },
-      "LinearWorkflowStateName": {
-        "description": "The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
-        "minLength": 1,
-        "type": "string"
-      },
       "StatusCategory": {
         "description": "The normalised status vocabulary shared across every source.",
         "oneOf": [
@@ -2929,6 +2968,77 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "StatusMapping": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusNames"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": "Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each.",
+        "propertyNames": {
+          "$ref": "#/$defs/StatusCategory"
+        },
+        "type": "object"
+      },
+      "StatusName": {
+        "description": "One status name a source's backend holds, matched ignoring case. Never blank.",
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "StatusNames": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StatusName"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "task": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "project"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/StatusName"
+              },
+              "task": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "task",
+              "project"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "What one category of a status_mapping names: one name for every item kind, or an object naming it for a task, for a project, or for each. A kind the object leaves out leaves the category unmapped for that kind."
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2958,22 +3068,9 @@ export const runtimeSchemas = {
         "description": "The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
       },
       "status_mapping": {
-        "additionalProperties": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LinearWorkflowStateName"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "$ref": "#/$defs/StatusMapping",
         "default": {},
-        "description": "Per-instance mapping from a status category to the exact name of one workflow state\nof the configured team, or `null` to disable that category.\n\nThe keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,\n`done`, `cancelled` and `unknown`. A mapped category is written as the named state by\nevery write — never as the first state of that state's type — and an issue at a state\nthe mapping names reads as that category, under that state's name; any other state\nreads by its type, and `--status` returns exactly the issues that read as the\ncategories it names. A category this does not mention keeps the\nbehaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and\n`cancelled` are written as the team's first state of the matching type, and `draft`,\n`queued` and `unknown` are disabled. A name the team lacks is refused before any\nwrite, and two categories mapped to one name are refused when this configuration is\nread.",
-        "propertyNames": {
-          "$ref": "#/$defs/StatusCategory"
-        },
-        "type": "object"
+        "description": "Which workflow state of the configured team a task's status category is, and which of\nthe workspace's project statuses a project's is — the shared `status_mapping` grammar.\n\nLinear has no built-in names, so this is the whole of what a status is written as and\nread by: a category is written as exactly the name its kind maps it to, and a status\nwrite it gives no name for is refused before any mutation, naming the key to set; an\nitem at a name its kind maps reads as that category under the name, and every other\nname reads as `unknown`. A source without it reads every item as `unknown` and refuses\nevery status write. Two categories mapped to one name of one kind are refused when this\nconfiguration is read."
       },
       "team": {
         "anyOf": [
@@ -11176,6 +11273,311 @@ export const runtimeSchemas = {
     ],
     "title": "StatusCategory"
   },
+  "StatusMapping": {
+    "$defs": {
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusName": {
+        "description": "One status name a source's backend holds, matched ignoring case. Never blank.",
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "StatusNames": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StatusName"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "task": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "project"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/StatusName"
+              },
+              "task": {
+                "$ref": "#/$defs/StatusName"
+              }
+            },
+            "required": [
+              "task",
+              "project"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "What one category of a status_mapping names: one name for every item kind, or an object naming it for a task, for a project, or for each. A kind the object leaves out leaves the category unmapped for that kind."
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StatusNames"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "description": "Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each.",
+    "propertyNames": {
+      "$ref": "#/$defs/StatusCategory"
+    },
+    "title": "StatusMapping",
+    "type": "object"
+  },
+  "StatusNamesReport": {
+    "$defs": {
+      "ItemKind": {
+        "description": "The kind of work item named by a dependency endpoint.",
+        "oneOf": [
+          {
+            "const": "task",
+            "description": "A task.",
+            "type": "string"
+          },
+          {
+            "const": "project",
+            "description": "A project.",
+            "type": "string"
+          }
+        ]
+      },
+      "LinearTeam": {
+        "description": "A Linear team's key or id.",
+        "minLength": 1,
+        "type": "string"
+      },
+      "MappedStatusName": {
+        "description": "[`MappedStatusName`] as it is written: `present`, and the name's `type` where it is.\n\nThe wire shape of the report, spelled once for its serialization and its schema, so the\npublic type can hold only the combinations [`Found`] allows.",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The category the mapping sends to the name."
+          },
+          "created": {
+            "default": false,
+            "description": "Whether this run created the name; absent when it did not.",
+            "type": "boolean"
+          },
+          "expected_type": {
+            "description": "The type `--apply` creates a missing name of this category and kind as; a present name\nof another type is reported and left as it is.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ItemKind",
+            "description": "`task` for a workflow state of the team, `project` for a project status of the workspace."
+          },
+          "name": {
+            "$ref": "#/$defs/StatusName",
+            "description": "The name, as the mapping spells it."
+          },
+          "present": {
+            "description": "Whether that kind's vocabulary has a name of that spelling, ignoring case.",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "The name's type in Linear — a `WorkflowState.type` for a task, a `ProjectStatusType`\nfor a project — absent when it is missing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "category",
+          "name",
+          "present",
+          "expected_type"
+        ],
+        "type": "object"
+      },
+      "RefusedCreate": {
+        "description": "A name `sources fields --apply` could not create, and why.",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ItemKind",
+            "description": "Whether it was a workflow state (`task`) or a project status (`project`)."
+          },
+          "message": {
+            "description": "What Linear said.",
+            "type": "string"
+          },
+          "name": {
+            "$ref": "#/$defs/StatusName",
+            "description": "The name it would have created."
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "message"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusName": {
+        "description": "One status name a source's backend holds, matched ignoring case. Never blank.",
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `onetaskgraph sources fields` reports for a `linear` source: every name its\n`status_mapping` gives a task, checked against the configured team's workflow states, and\nevery name it gives a project, checked against the workspace's project statuses.\n\nWith `--apply`, each name a kind's vocabulary lacks is created first — a workflow state on\nthe team, a project status in the workspace — of the type its category derives (see the\ncrate's ruling on `sources fields --apply`), and the report names what it created. Nothing that exists is renamed,\nretyped or deleted. A create Linear refuses stops the run: [`Self::refused`] names it, and\nevery name created before it is reported created.",
+    "properties": {
+      "names": {
+        "description": "Every name `status_mapping` gives a task, then every name it gives a project, each in\ncategory order. A bare name is reported once for each kind. Empty when it names none.",
+        "items": {
+          "$ref": "#/$defs/MappedStatusName"
+        },
+        "type": "array"
+      },
+      "refused": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RefusedCreate"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The create Linear refused, which stopped an `--apply`; absent when nothing was refused."
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The configured source name."
+      },
+      "team": {
+        "$ref": "#/$defs/LinearTeam",
+        "description": "The configured team, as `team` names it."
+      }
+    },
+    "required": [
+      "source",
+      "team",
+      "names"
+    ],
+    "title": "StatusNamesReport",
+    "type": "object"
+  },
   "StatusOptionsReport": {
     "$defs": {
       "ColumnName": {
@@ -15299,125 +15701,5 @@ export const runtimeSchemas = {
       }
     ],
     "title": "VariableType"
-  },
-  "WorkflowStatesReport": {
-    "$defs": {
-      "LinearTeam": {
-        "description": "A Linear team's key or id.",
-        "minLength": 1,
-        "type": "string"
-      },
-      "LinearWorkflowStateName": {
-        "description": "The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
-        "minLength": 1,
-        "type": "string"
-      },
-      "MappedWorkflowState": {
-        "description": "[`MappedWorkflowState`] as it is written: `present`, and the state's `type` where it is.\n\nThe wire shape of the report, spelled once for its serialization and its schema, so the\npublic type can hold only the combinations [`Found`] allows.",
-        "properties": {
-          "category": {
-            "$ref": "#/$defs/StatusCategory",
-            "description": "The category the mapping sends to the state."
-          },
-          "present": {
-            "description": "Whether the configured team has a workflow state of that name.",
-            "type": "boolean"
-          },
-          "state": {
-            "$ref": "#/$defs/LinearWorkflowStateName",
-            "description": "The state's name, as the mapping spells it."
-          },
-          "type": {
-            "description": "The state's `WorkflowState.type` on the team — `backlog`, `unstarted`, `started`,\n`completed`, `canceled`, `triage` or another Linear names — absent when it is missing.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "category",
-          "state",
-          "present"
-        ],
-        "type": "object"
-      },
-      "SourceName": {
-        "description": "The name a configuration document gives one configured source.",
-        "pattern": "^[a-z0-9][a-z0-9-]*$",
-        "type": "string"
-      },
-      "StatusCategory": {
-        "description": "The normalised status vocabulary shared across every source.",
-        "oneOf": [
-          {
-            "const": "draft",
-            "description": "Written down but not yet committed to as work.",
-            "type": "string"
-          },
-          {
-            "const": "backlog",
-            "description": "Known about, not yet accepted as ready to work.",
-            "type": "string"
-          },
-          {
-            "const": "todo",
-            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
-            "type": "string"
-          },
-          {
-            "const": "queued",
-            "description": "Claimed by work that will do it, and not yet started.",
-            "type": "string"
-          },
-          {
-            "const": "in-progress",
-            "description": "Being worked on.",
-            "type": "string"
-          },
-          {
-            "const": "done",
-            "description": "Finished.",
-            "type": "string"
-          },
-          {
-            "const": "cancelled",
-            "description": "Abandoned.",
-            "type": "string"
-          },
-          {
-            "const": "unknown",
-            "description": "The source reported a status this vocabulary cannot place.",
-            "type": "string"
-          }
-        ]
-      }
-    },
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What `onetaskgraph sources fields` reports for a `linear` source: each workflow state its\n`status_mapping` names, and whether the configured team has it.\n\nA plan and nothing else. Workflow states are settings of the team that the people who own\nit decide, so this source never creates, renames or retypes one; a state reported missing\nis added in Linear's own team settings.",
-    "properties": {
-      "source": {
-        "$ref": "#/$defs/SourceName",
-        "description": "The configured source name."
-      },
-      "states": {
-        "description": "Every workflow state `status_mapping` names, in category order. Empty when the mapping\nnames none.",
-        "items": {
-          "$ref": "#/$defs/MappedWorkflowState"
-        },
-        "type": "array"
-      },
-      "team": {
-        "$ref": "#/$defs/LinearTeam",
-        "description": "The configured team, as `team` names it."
-      }
-    },
-    "required": [
-      "source",
-      "team",
-      "states"
-    ],
-    "title": "WorkflowStatesReport",
-    "type": "object"
   }
 } as const;

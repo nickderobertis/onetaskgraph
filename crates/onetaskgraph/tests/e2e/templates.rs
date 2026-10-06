@@ -603,7 +603,8 @@ fn a_rendered_body_that_cannot_be_written_exits_one_naming_it() {
         .write(true)
         .open("/dev/full")
         .expect("/dev/full exists on Linux");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_onetaskgraph"))
+    let output = sandbox
+        .subprocess(env!("CARGO_BIN_EXE_onetaskgraph"))
         .current_dir(sandbox.project())
         .env("XDG_CONFIG_HOME", sandbox.config_home())
         .args([

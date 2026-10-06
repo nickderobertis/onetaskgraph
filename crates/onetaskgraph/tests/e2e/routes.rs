@@ -2969,3 +2969,112 @@ fn a_routed_copy_that_cannot_be_undone_names_what_it_left_in_the_routed_source()
         "and it is really there: {held:#}"
     );
 }
+
+/// Hello Patient's Linear workspace — its fourteen project statuses, and team states named
+/// otherwise — configured with the per-kind mapping ai-orchestrator writes for it, and empty.
+fn hellopatient(sandbox: &Sandbox) -> (Value, crate::fixtures::LinearWorkspace) {
+    use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES, hellopatient_mapping};
+    let (mut config, workspace) = crate::fixtures::linear_workspace_with(
+        sandbox,
+        json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+               "task_dependencies": [], "project_dependencies": []}),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    config["status_mapping"] = hellopatient_mapping();
+    (config, workspace)
+}
+
+/// The mutations one Linear workspace answered after its `from`th request, by root field.
+fn linear_mutations(workspace: &crate::fixtures::LinearWorkspace, from: usize) -> Vec<String> {
+    workspace.served()[from..]
+        .iter()
+        .filter(|(query, _)| query.trim_start().starts_with("mutation"))
+        .map(|(query, _)| {
+            query
+                .split_once('{')
+                .and_then(|(_, rest)| rest.trim_start().split('(').next())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn a_routed_plan_home_at_todo_creates_its_linear_member_at_the_mapped_project_status() {
+    let sandbox = Sandbox::new();
+    let root = mixed_plan(&sandbox);
+    // The home's own status is `todo`, named `Todo` — the name a Linear project status is not.
+    record(&root, "projects", "goal", "title: One goal\nstatus: Todo");
+    let (linear, workspace) = hellopatient(&sandbox);
+    board_and(&sandbox, linear);
+
+    let report = answer(
+        &sandbox,
+        &["project", "copy", &format!("{PLAN}:goal"), "--to", BOARD],
+    );
+    let home = landed(&report, "plan:goal");
+    let held = answer(&sandbox, &["project", "show", &home]);
+    let members = held["items"][0]["item"]["metadata"]["onetaskgraph.members"].clone();
+    let member = members[0]
+        .as_str()
+        .unwrap_or_else(|| panic!("the home names its Linear member: {held:#}"))
+        .to_owned();
+    assert_eq!(source_of(&member), LINEAR);
+    let native = member.split_once(':').expect("a qualified id").1;
+    assert_eq!(
+        workspace.status_of(native).as_deref(),
+        Some("Planned"),
+        "the member is created at the project status `todo` maps a project to"
+    );
+    let shown = answer(&sandbox, &["project", "show", &member]);
+    assert_eq!(
+        shown["items"][0]["item"]["status"],
+        json!({"category": "todo", "name": "Planned"})
+    );
+    // And its routed task at the task state `todo` maps a task to.
+    let app = landed(&report, "plan:app");
+    let app = app.split_once(':').expect("a qualified id").1;
+    assert_eq!(workspace.state_of(app).as_deref(), Some("Todo"));
+}
+
+#[test]
+fn a_routed_member_project_its_mapping_names_no_status_for_is_refused_before_linear_is_written() {
+    use crate::linear_status::{PROJECT_STATUSES, TEAM_STATES};
+    for (mapping, names) in [
+        // No project name for `todo` at all, and one Hello Patient's workspace does not have.
+        (
+            json!({"todo": {"task": "Todo"}}),
+            "status_mapping.todo.project",
+        ),
+        (
+            json!({"todo": {"task": "Todo", "project": "Todo"}}),
+            "\"Todo\"",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        mixed_plan(&sandbox);
+        let (mut linear, workspace) = crate::fixtures::linear_workspace_with(
+            &sandbox,
+            json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+                   "task_dependencies": [], "project_dependencies": []}),
+            TEAM_STATES,
+            PROJECT_STATUSES,
+        );
+        linear["status_mapping"] = mapping;
+        board_and(&sandbox, linear);
+        let said = refused(
+            &sandbox,
+            &["project", "copy", &format!("{PLAN}:goal"), "--to", BOARD],
+            1,
+        );
+        assert!(
+            said.contains("source hellopatient")
+                && said.contains("project status")
+                && said.contains("todo")
+                && said.contains(names),
+            "{said}"
+        );
+        assert_eq!(linear_mutations(&workspace, 0), Vec::<String>::new());
+    }
+}

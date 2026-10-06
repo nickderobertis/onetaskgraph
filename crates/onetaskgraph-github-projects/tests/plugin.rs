@@ -43,6 +43,10 @@ mod board;
 
 use board::{FIXTURE_BUDGET_LIMIT, Pricing, ample_allowance};
 
+// `status_mapping` scoped by item kind, over this file's board: a module of this target
+// rather than a target of its own because it is this board it drives.
+mod status_by_kind;
+
 struct Secrets;
 impl SecretResolver for Secrets {
     fn get(&self, var: &str) -> Option<SecretString> {
@@ -5611,11 +5615,18 @@ async fn an_unknown_status_category_key_names_the_instance() {
 }
 
 #[tokio::test]
-async fn a_status_mapping_accepts_only_board_option_names_or_null() {
+async fn a_status_mapping_accepts_only_the_shared_grammar() {
+    // An object is a per-kind name now, so `closed` — the shape this once refused as not an
+    // option name at all — is refused as an item kind the grammar does not have.
     let message = build_refusal(json!({"owner":"octo-org","project_number":7,
         "endpoint":"https://api.github.com/graphql",
         "status_mapping":{"unknown":{"closed":"completed"}}}));
-    assert!(message.contains("data did not match"), "{message}");
+    assert!(
+        message.contains(
+            "source work: status_mapping.unknown names \"closed\", which is not an item kind"
+        ),
+        "{message}"
+    );
 }
 
 #[tokio::test]

@@ -199,7 +199,7 @@ fn a_missing_option_of_either_field_is_added_with_every_existing_option_and_valu
         .clone();
     assert_eq!(
         stdout(&planned),
-        "board: missing configured Status options: Queued\n\
+        "board: missing configured Status options: task: Queued; project: Queued\n\
          board: missing configured Priority options: Medium\n"
     );
     let applied = report(

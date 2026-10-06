@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
     DocumentQuery, Health, ItemKind, Label, Location, NewComment, Page, PageRequest, Priority,
-    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields, UpdatedField,
+    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
+    StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, TextFields,
+    UpdatedField,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -43,7 +44,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 29;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 30;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -61,6 +62,11 @@ pub fn schema_bundle() -> Value {
     roots.insert("Label", schema_for!(Label));
     roots.insert("Status", schema_for!(Status));
     roots.insert("StatusCategory", schema_for!(StatusCategory));
+    // A root of its own although both network plugins' configurations reach it, for the
+    // reason `StatusCategory` is one: it is one grammar every source that names its statuses
+    // is configured with, and a caller writing a configuration models it by name rather than
+    // by whichever plugin's schema it happens to read it out of.
+    roots.insert("StatusMapping", schema_for!(StatusMapping));
     // A root of its own although `Task` reaches it, for the reason `StatusCategory` is one:
     // `task priority set` and `task list --priority` take one by name.
     roots.insert("Priority", schema_for!(Priority));

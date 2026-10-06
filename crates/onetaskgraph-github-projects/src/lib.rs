@@ -81,23 +81,35 @@
 //! is kept in that same slot, written by that same update.
 //!
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This public module documentation is a required user-facing description; the loopback plugin tests and shared live journey drive StatusMapping resolution, both mutations, and observed read-back together.
-//! **Status.** `status_mapping` is per-instance configuration from a status category to
-//! `null` or a board `Status` option name. `done` selects its mapped option and closes the
-//! issue as `COMPLETED`; `cancelled` selects its mapped option and closes it as
-//! `NOT_PLANNED`. Every open category reopens a closed issue before selecting its option.
-//! A missing mapped option refuses the write before either representation changes. Reads
-//! give a closed issue's reason precedence over its option, while an open issue's option
-//! decides its category. The guarded [`GitHubProjectsSource::status_options`] operation is
-//! the one path here that calls `updateProjectV2Field`: GitHub replaces the whole option
-//! list, so it preserves every existing option id and verifies the field and item
-//! assignments immediately afterwards. It counts a terminal category's mapped option as
-//! configured, because a terminal write refuses without it. No ordinary source read or
+//! **Status.** `status_mapping` is per-instance configuration, in the shared grammar
+//! [`onetaskgraph_plugin_api::StatusMapping`] documents, from a status category to an
+//! option of the board's one `Status` field for a task and for a project: a bare name is
+//! the option for both kinds, `null` disables the category for both, and `{task, project}`
+//! names it per kind. A category the mapping does not mention keeps its shipped default for
+//! both kinds; one it mentions is exactly what it configures, so a per-kind object no longer
+//! gets the shipped default for the kind it leaves out. Two categories one kind would read
+//! back from one option are refused as the configuration is read, ignoring case, while one
+//! option may stand for different categories of the two kinds. Writes go by the kind of the
+//! item written: a status that kind has no option for, or whose option the board lacks, is
+//! refused before any mutation, naming the source, the kind, the category and the key
+//! `status_mapping.<category>.<kind>` — there is no fallback. `done` selects its mapped
+//! option and closes the issue as `COMPLETED`; `cancelled` selects its mapped option and
+//! closes it as `NOT_PLANNED`, for either kind. Every open category reopens a closed issue
+//! before selecting its option. Reads give a closed issue's reason precedence over its
+//! option, while an open issue's option decides its category through its own kind's
+//! mapping, and an option that mapping does not name reads as `unknown` under its own name.
+//! The guarded [`GitHubProjectsSource::status_options`] and
+//! [`GitHubProjectsSource::fields`] operations are the one path here that calls
+//! `updateProjectV2Field`: GitHub replaces the whole option list, so they preserve every
+//! existing option id and verify the field and item assignments immediately afterwards.
+//! They ask for both kinds' options, counting a terminal category's mapped option as
+//! configured because a terminal write refuses without it. No ordinary source read or
 //! write calls that mutation, whose
 //! `singleSelectOptions` *overwrites* a field's option set, so no addition is additive
 //! and a mistake destroys every item's status. A status this board cannot represent is a
 //! refusal naming the status and the instance instead.
 //!
-//! `unknown` is disabled by default because this source cannot preserve an open-ended
+//! `unknown` has no shipped option because this source cannot preserve an open-ended
 //! status word: it writes an existing board option and never
 //! creates an option. An operator may map `unknown` to one existing option, in which case
 //! every unknown word lands on that option and reads back as `unknown` under the option's
@@ -127,7 +139,7 @@
 //! | `filter_by_comment_activity` | **Supported, and exact** for comments created and for comments edited at or after `commented_since`, in every repository — of any owner — the board's items live in. Applied by asking a narrower question rather than by reading the board: GitHub's issue search scoped by `project:<owner>/<number>` alone, with an `updated:>=` qualifier, names the candidates, and each candidate's own comments confirm it, so neither `ProjectV2.items` nor any issue the search did not name is read. That rests on GitHub moving an issue's `updatedAt` when a comment on it is added **or edited**, which the credentialed journey `an_edited_comment_moves_its_issue_and_is_selected_since` re-takes on every run of this lane. The search is an index that lags a write by a second or two, so a caller asking again from its last instant should overlap the two by more than that. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
-//! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping`. |
+//! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping` for the item's kind — a task query by the task half, a project query by the project half, `unknown` included. |
 //! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. **A value with no letter or digit is refused** — the empty string, whitespace or punctuation alone — before any request, as a `SourceError::Refused` (wire kind `refused`) naming the value: GitHub's index holds words, so no bounded query can find such a value, and this source neither reads the whole board for it nor answers it as empty. |
 //! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
 //! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. **A text with no letter or digit that is not blank is refused** — `--` for one — before any request, as the same `refused` error naming the text, for the reason a metadata value like it is; a blank text is not refused, and keeps the board read it always had, confirmed by the same substring rule. A project query's text, and a document query's text when the query is scoped to no project, is that same board-scoped search for the same phrase in the same fields, refused on the same terms, every candidate confirmed by its kind and by the same substring rule, so it narrows exactly as a task's does; a document query scoped to one project sends no search, reads that project's sub-issues and confirms its text over them by the substring rule alone, so it is neither narrowed to whole words nor refused for a text with no letter or digit. A board draft is not an issue, so no text search lists one, a draft titled as a document included. |
@@ -575,9 +587,9 @@ use onetaskgraph_plugin_api::{
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
     Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
-    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
-    WriteSupport,
+    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UnmappedStatus, UpdatedField, WriteSupport,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -1625,17 +1637,6 @@ fn default_endpoint() -> String {
     "https://api.github.com/graphql".to_owned()
 }
 
-/// Where one status category lands on this board.
-///
-/// `null` — an absent value — disables the category for this instance, and using a
-/// disabled status is a refusal naming the status and the instance.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum StatusTargetConfig {
-    /// The name of a `Status` single-select option already on the board.
-    Column(ColumnName),
-}
-
 /// The name of a `Status` single-select option on the board.
 ///
 /// Validated on the way in rather than checked later, so a blank option name — which
@@ -1712,17 +1713,23 @@ pub struct GitHubProjectsConfig {
     /// GraphQL endpoint. GitHub Enterprise installations may override it.
     #[serde(default = "default_endpoint")]
     pub endpoint: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` converts it to the private validated `Url`.
-    /// Per-instance mapping from a status category to where it lands on this board.
+    /// Per-instance mapping from a status category to the option of the board's one
+    /// `Status` field it lands on, for a task and for a project.
     ///
-    /// A category this does not mention keeps its shipped default: `backlog` to
-    /// "Backlog", `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress",
-    /// `done` to "Done" plus closed as completed, `cancelled` to "Cancelled" plus closed
-    /// as not planned, and `draft` and `unknown` disabled. `unknown` may name one existing
-    /// board option; every unknown word then lands on that option and reads back as
-    /// `unknown` under its name. Unlike `local-md`, this source cannot keep each unknown
-    /// word because it never creates board options.
+    /// The shared `StatusMapping` grammar: each value is one option name for both kinds,
+    /// `null` to disable the category for both, or `{task, project}` naming it per kind,
+    /// where a kind left out leaves the category unmapped for that kind. A category this
+    /// does not mention keeps its shipped default for both kinds: `backlog` to "Backlog",
+    /// `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress", `done` to
+    /// "Done" plus closed as completed, `cancelled` to "Cancelled" plus closed as not
+    /// planned, and `draft` and `unknown` unmapped. A category it does mention gets no
+    /// shipped default for a kind it leaves out. `done` and `cancelled` close the issue for
+    /// either kind. No two categories may name one option for the same kind, ignoring case.
+    /// `unknown` may name one existing option; every unknown word then lands on it and
+    /// reads back as `unknown` under its name. Unlike `local-md`, this source cannot keep
+    /// each unknown word because it never creates board options.
     #[serde(default)]
-    pub status_mapping: BTreeMap<String, Option<StatusTargetConfig>>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` parses each key into a `StatusCategory` and reports an unknown one against this instance.
+    pub status_mapping: StatusMapping,
     /// Per-instance mapping from a task's priority to an option of this board's
     /// single-select field named `Priority`.
     ///
@@ -2020,10 +2027,15 @@ impl Plugin {
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
+        let prefix = format!("source {name}: ");
         let source = GitHubProjectsSource::recording_into(name, config, secrets, ledger).map_err(
             |error| match error {
+                // The shared `StatusMapping::distinct` names the source itself.
+                SourceError::Config { message } if message.starts_with(&prefix) => {
+                    SourceError::Config { message }
+                }
                 SourceError::Config { message } => SourceError::Config {
-                    message: format!("source {name}: {message}"),
+                    message: format!("{prefix}{message}"),
                 },
                 SourceError::Auth { message } => SourceError::Auth {
                     message: format!("source {name}: {message}"),
@@ -2038,12 +2050,12 @@ impl Plugin {
 /// Where a status category lands on this board, once configuration is resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StatusTarget {
-    /// Not usable against this instance.
-    Disabled,
+    /// Not usable against this instance for this kind, and why.
+    Disabled(UnmappedStatus),
     /// The board's `Status` option of this name.
     Column(ColumnName),
     /// A closed issue, with both its board option and the reason that says which closed it means.
-    // llmlint: ignore[invalid_states_unrepresentable] The reason is fixed by the category — `done` closes as completed, `cancelled` as not planned — and this private enum is built in one place, `StatusMapping::new`, which pairs each from the category's own slot. Carrying the reason on the target is what lets every write site that holds only a target derive its `stateInput` from that one resolved model rather than re-deriving it from a category and risking a disagreement with the mapping.
+    // llmlint: ignore[invalid_states_unrepresentable] The reason is fixed by the category — `done` closes as completed, `cancelled` as not planned — and this private enum is built in one place, `BoardStatuses::resolve`, which pairs each from the category's own slot. Carrying the reason on the target is what lets every write site that holds only a target derive its `stateInput` from that one resolved model rather than re-deriving it from a category and risking a disagreement with the mapping.
     Terminal(ColumnName, ClosedState),
 }
 
@@ -2104,7 +2116,8 @@ fn shipped_column(name: &'static str) -> ColumnName {
     ColumnName::try_from(name.to_owned()).expect("a shipped default names a board option")
 }
 
-/// The shipped default for one category, before this instance's configuration.
+/// The shipped default for one category this instance's `status_mapping` does not mention,
+/// for either kind.
 fn shipped_default(category: StatusCategory) -> StatusTarget {
     match category {
         StatusCategory::Backlog => StatusTarget::Column(shipped_column("Backlog")),
@@ -2117,106 +2130,138 @@ fn shipped_default(category: StatusCategory) -> StatusTarget {
         StatusCategory::Cancelled => {
             StatusTarget::Terminal(shipped_column("Cancelled"), ClosedState::NotPlanned)
         }
-        StatusCategory::Draft | StatusCategory::Unknown => StatusTarget::Disabled,
+        StatusCategory::Draft | StatusCategory::Unknown => {
+            StatusTarget::Disabled(UnmappedStatus::Unconfigured)
+        }
     }
 }
 
-/// This instance's complete category-to-target mapping, read in both directions.
+/// The two kinds a status is written and read for, each with its own half of the mapping.
+const STATUS_KINDS: [ItemKind; 2] = [ItemKind::Task, ItemKind::Project];
+
+/// This instance's complete category-to-target mapping for each kind, read in both
+/// directions.
 ///
-/// One target per category, held at that category's own [`category_position`], so a
-/// category missing from the mapping, named twice in it, or filed out of order is a
-/// state this type cannot hold rather than one [`Self::target`] has to defend against.
+/// One target per category per kind, held at that category's own [`category_position`], so
+/// a category missing from the mapping, named twice in it, or filed out of order is a state
+/// this type cannot hold rather than one [`Self::target`] has to defend against. Both kinds'
+/// targets are options of the board's one `Status` field.
 #[derive(Debug, Clone)]
-struct StatusMapping {
-    targets: [StatusTarget; CATEGORIES.len()],
+struct BoardStatuses {
+    tasks: [StatusTarget; CATEGORIES.len()],
+    projects: [StatusTarget; CATEGORIES.len()],
 }
 
-impl StatusMapping {
-    fn resolve(
-        configured: BTreeMap<String, Option<StatusTargetConfig>>,
-        instance: &SourceName,
-    ) -> Result<Self, SourceError> {
-        let mut overrides: BTreeMap<&'static str, Option<StatusTargetConfig>> = BTreeMap::new();
-        for (key, value) in configured {
-            let category = CATEGORIES
-                .iter()
-                .find(|category| category_name(**category) == key)
-                .ok_or_else(|| SourceError::Config {
-                    message: format!(
-                        "status_mapping names {key:?}, which is not a status category of source \
-                         {instance}; the categories are {}",
-                        CATEGORIES
-                            .iter()
-                            .map(|category| category_name(*category))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                })?;
-            overrides.insert(category_name(*category), value);
-        }
-        // `CATEGORIES[position] == category` for every category — the crate's suite
-        // asserts it — so mapping the list in order fills each category's own slot.
-        let targets = CATEGORIES.map(|category| match overrides.remove(category_name(category)) {
-            None => shipped_default(category),
-            Some(None) => StatusTarget::Disabled,
-            Some(Some(StatusTargetConfig::Column(option))) => match category {
-                StatusCategory::Done => StatusTarget::Terminal(option, ClosedState::Completed),
-                StatusCategory::Cancelled => {
-                    StatusTarget::Terminal(option, ClosedState::NotPlanned)
+impl BoardStatuses {
+    /// Resolve `configured` against the shipped defaults, refusing two categories one kind
+    /// would read back from one option.
+    ///
+    /// A category the mapping does not mention keeps its shipped default for both kinds; one
+    /// it does mention is exactly what it configures, so a per-kind object leaves the kind it
+    /// omits unmapped rather than defaulted.
+    fn resolve(configured: &StatusMapping, instance: &SourceName) -> Result<Self, SourceError> {
+        let resolve_kind =
+            |kind: ItemKind| -> Result<[StatusTarget; CATEGORIES.len()], SourceError> {
+                // `CATEGORIES[position] == category` for every category — the crate's suite
+                // asserts it — so mapping the list in order fills each category's own slot.
+                let mut targets = CATEGORIES.map(shipped_default);
+                for (slot, category) in targets.iter_mut().zip(CATEGORIES) {
+                    if !configured.mentions(category) {
+                        continue;
+                    }
+                    *slot = match configured.name_for(category, kind) {
+                        Err(why) => StatusTarget::Disabled(why),
+                        Ok(name) => {
+                            let option = ColumnName::try_from(name.as_str().to_owned())
+                                .map_err(|message| SourceError::Config { message })?;
+                            match category {
+                                StatusCategory::Done => {
+                                    StatusTarget::Terminal(option, ClosedState::Completed)
+                                }
+                                StatusCategory::Cancelled => {
+                                    StatusTarget::Terminal(option, ClosedState::NotPlanned)
+                                }
+                                _ => StatusTarget::Column(option),
+                            }
+                        }
+                    };
                 }
-                _ => StatusTarget::Column(option),
-            },
-        });
-        let mapping = Self { targets };
-        for (index, category) in CATEGORIES.into_iter().enumerate() {
-            let option = match mapping.target(category) {
-                StatusTarget::Column(option) | StatusTarget::Terminal(option, _) => option,
-                StatusTarget::Disabled => continue,
+                StatusMapping::distinct(
+                    instance,
+                    kind,
+                    CATEGORIES
+                        .iter()
+                        .zip(&targets)
+                        .filter_map(|(category, target)| target.option().map(|o| (*category, o))),
+                )?;
+                Ok(targets)
             };
-            if let Some(other) = CATEGORIES[..index].iter().find(|earlier| {
-                matches!(mapping.target(**earlier), StatusTarget::Column(name) | StatusTarget::Terminal(name, _)
-                    if name.as_str().eq_ignore_ascii_case(option.as_str()))
-            }) {
-                return Err(SourceError::Config {
-                    message: format!(
-                        "status_mapping of source {instance} sends both {} and {} to the board \
-                         option {:?}; one option cannot read back as two categories",
-                        category_name(*other),
-                        category_name(category),
-                        option.as_str()
-                    ),
-                });
-            }
-        }
-        Ok(mapping)
-    }
-
-    fn target(&self, category: StatusCategory) -> &StatusTarget {
-        &self.targets[category_position(category)]
-    }
-
-    /// The category a board option name reports, or `None` when nothing maps to it.
-    fn category_of(&self, option: &str) -> Option<StatusCategory> {
-        CATEGORIES.into_iter().find(|category| {
-            matches!(self.target(*category), StatusTarget::Column(name) | StatusTarget::Terminal(name, _)
-                if name.as_str().eq_ignore_ascii_case(option))
+        Ok(Self {
+            tasks: resolve_kind(ItemKind::Task)?,
+            projects: resolve_kind(ItemKind::Project)?,
         })
     }
 
-    /// The status an item reports, from the three things a read of it says: its board
-    /// `Status` option, whether its issue is closed, and the reason it was closed with.
+    /// Every category's target for `kind`, in category order.
+    const fn targets(&self, kind: ItemKind) -> &[StatusTarget; CATEGORIES.len()] {
+        match kind {
+            ItemKind::Task => &self.tasks,
+            ItemKind::Project => &self.projects,
+        }
+    }
+
+    fn target(&self, kind: ItemKind, category: StatusCategory) -> &StatusTarget {
+        &self.targets(kind)[category_position(category)]
+    }
+
+    /// The category a board option name reports for `kind`, or `None` when nothing of that
+    /// kind maps to it.
+    fn category_of(&self, kind: ItemKind, option: &str) -> Option<StatusCategory> {
+        CATEGORIES.into_iter().find(|category| {
+            self.target(kind, *category)
+                .option()
+                .is_some_and(|name| name.eq_ignore_ascii_case(option))
+        })
+    }
+
+    /// Every option name either kind maps a category to, each once ignoring case, in
+    /// category order with a task's name before a project's — what the guarded setup asks
+    /// the `Status` field to hold.
+    fn wanted(&self) -> Vec<String> {
+        let mut wanted: Vec<String> = Vec::new();
+        for category in CATEGORIES {
+            for kind in STATUS_KINDS {
+                if let Some(name) = self.target(kind, category).option()
+                    && !wanted.iter().any(|held| held.eq_ignore_ascii_case(name))
+                {
+                    wanted.push(name.to_owned());
+                }
+            }
+        }
+        wanted
+    }
+
+    /// The status an item of `kind` reports, from the three things a read of it says: its
+    /// board `Status` option, whether its issue is closed, and the reason it was closed with.
     ///
     /// The closed state decides the category and the `Status` option decides the name, so
-    /// a closed issue sitting in a "Shipped" column reports `done` named `Shipped`. A
-    /// closed issue whose reason is `DUPLICATE` or `REOPENED` reports `Unknown`: a
-    /// duplicate is not finished work, and calling it done is a lie the next copy would
+    /// a closed issue sitting in a "Shipped" column reports `done` named `Shipped`, whatever
+    /// its kind. A closed issue whose reason is `DUPLICATE` or `REOPENED` reports `Unknown`:
+    /// a duplicate is not finished work, and calling it done is a lie the next copy would
     /// write back. `REOPENED`-while-closed is a state this source can never produce, so
     /// it is read permissively rather than refused — reads are faithful, and refusals
-    /// belong on writes.
+    /// belong on writes. An open item's option reads through its own kind's mapping, and an
+    /// option that mapping does not name reads as `Unknown` under its own name.
     ///
     /// One function of those three rather than of a response, so a narrow status write can
     /// answer what a re-read would report by applying it to the state it has just written.
-    fn status(&self, option: Option<&str>, closed: bool, reason: Option<&str>) -> Status {
+    fn status(
+        &self,
+        kind: ItemKind,
+        option: Option<&str>,
+        closed: bool,
+        reason: Option<&str>,
+    ) -> Status {
         if closed {
             let category = match reason {
                 None | Some("COMPLETED") => StatusCategory::Done,
@@ -2235,8 +2280,44 @@ impl StatusMapping {
         }
         let name = option.unwrap_or("Open").to_owned();
         Status {
-            category: self.category_of(&name).unwrap_or(StatusCategory::Unknown),
+            category: self
+                .category_of(kind, &name)
+                .unwrap_or(StatusCategory::Unknown),
             name,
+        }
+    }
+}
+
+impl BoardStatuses {
+    /// For each kind, the option names it maps a category to that `existing` lacks, ignoring
+    /// case; a kind lacking none is left out.
+    fn missing_by_kind(&self, existing: &[StatusOption]) -> Vec<KindMissing> {
+        STATUS_KINDS
+            .into_iter()
+            .filter_map(|kind| {
+                let missing: Vec<String> = self
+                    .targets(kind)
+                    .iter()
+                    .filter_map(StatusTarget::option)
+                    .filter(|wanted| {
+                        !existing
+                            .iter()
+                            .any(|option| option.name.as_str().eq_ignore_ascii_case(wanted))
+                    })
+                    .map(str::to_owned)
+                    .collect();
+                (!missing.is_empty()).then_some(KindMissing { kind, missing })
+            })
+            .collect()
+    }
+}
+
+impl StatusTarget {
+    /// The board option this target selects, or `None` for an unmapped one.
+    fn option(&self) -> Option<&str> {
+        match self {
+            Self::Column(name) | Self::Terminal(name, _) => Some(name.as_str()),
+            Self::Disabled(_) => None,
         }
     }
 }
@@ -2318,7 +2399,7 @@ pub struct GitHubProjectsSource {
     endpoint: Url,
     token: SecretString,
     credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
-    statuses: StatusMapping,
+    statuses: BoardStatuses,
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
     client: Client,
@@ -2623,11 +2704,33 @@ pub struct FieldReport {
     // mapping name and has therefore already passed its nonblank validation; the serialized
     // string is the report's intentionally simple public contract, as `StatusOptionsReport`'s is.
     pub missing: Vec<String>,
+    /// For the `Status` field, which item kind each missing name is configured for: one
+    /// entry per kind `status_mapping` names a missing option for, task before project, each
+    /// listing that kind's missing names in category order. A name both kinds use is in
+    /// both. Empty — and left out of the JSON — when nothing is missing, and always for
+    /// `Priority`, which only a task holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although the JSON leaves an empty list out, so
+    // both SDKs model an absent `kinds` as an empty list rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub kinds: Vec<KindMissing>,
     /// What the requested operation did.
     pub outcome: FieldOutcome,
     /// The field's complete option list observed before any mutation; empty when the field
     /// was not there.
     pub existing: Vec<StatusOption>,
+}
+
+/// The `Status` option names one item kind's `status_mapping` names that the field lacked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct KindMissing {
+    /// The kind these names are configured for.
+    pub kind: ItemKind,
+    /// The names that kind maps a category to and the field lacked, in category order.
+    // llmlint: ignore[invalid_states_unrepresentable] Each value originates from a validated
+    // mapping name, as `FieldReport::missing`'s do, and the serialized string is the report's
+    // intentionally simple public contract.
+    pub missing: Vec<String>,
 }
 
 /// The plan and verified outcome of setting up every field a source's configuration names.
@@ -2705,19 +2808,13 @@ impl GitHubProjectsSource {
         mode: StatusOptionsMode,
     ) -> Result<StatusOptionsReport, SourceError> {
         let before = self.status_snapshot().await?;
-        let configured = self
+        // A terminal category's option is as configured as an open one's: a terminal
+        // write validates it before closing and refuses when the board lacks it. Both
+        // kinds' names are options of the one field, so both are asked for.
+        let missing = self
             .statuses
-            .targets
-            .iter()
-            // A terminal category's option is as configured as an open one's: a terminal
-            // write validates it before closing and refuses when the board lacks it.
-            .filter_map(|target| match target {
-                StatusTarget::Column(name) | StatusTarget::Terminal(name, _) => {
-                    Some(name.as_str().to_owned())
-                }
-                StatusTarget::Disabled => None,
-            });
-        let missing = configured
+            .wanted()
+            .into_iter()
             .filter(|wanted| {
                 !before
                     .options
@@ -3046,17 +3143,7 @@ impl GitHubProjectsSource {
         let before = self.board_snapshot(&owned).await?;
         let mut plans = vec![FieldPlan {
             field: BoardField::Status,
-            wanted: self
-                .statuses
-                .targets
-                .iter()
-                .filter_map(|target| match target {
-                    StatusTarget::Column(name) | StatusTarget::Terminal(name, _) => {
-                        Some(name.as_str().to_owned())
-                    }
-                    StatusTarget::Disabled => None,
-                })
-                .collect(),
+            wanted: self.statuses.wanted(),
         }];
         if !before.fields.contains_key(&BoardField::Status) {
             return Err(self.no_status_field());
@@ -3110,9 +3197,14 @@ impl GitHubProjectsSource {
                     missing.push(wanted.clone());
                 }
             }
+            let kinds = match plan.field {
+                BoardField::Status => self.statuses.missing_by_kind(&existing),
+                BoardField::Priority => Vec::new(),
+            };
             reports.push(FieldReport {
                 field: plan.field,
                 exists: held.is_some(),
+                kinds,
                 outcome: match (mode, held.is_some(), missing.is_empty()) {
                     (SetupMode::Plan, _, _) => FieldOutcome::Planned,
                     (SetupMode::Apply, true, true) => FieldOutcome::Unchanged,
@@ -3325,7 +3417,7 @@ impl GitHubProjectsSource {
             endpoint,
             token,
             credential_name: config.token_env,
-            statuses: StatusMapping::resolve(config.status_mapping, name)?,
+            statuses: BoardStatuses::resolve(&config.status_mapping, name)?,
             priorities: config
                 .priority_mapping
                 .map(|mapping| PriorityMapping::resolve(mapping, name))
@@ -5215,7 +5307,9 @@ impl GitHubProjectsSource {
             title,
             body: body.filter(|value| !value.is_empty()),
             raw_body,
-            status: self.statuses.status(option, closed, reason),
+            status: self
+                .statuses
+                .status(kind.status_kind(), option, closed, reason),
             option: option.map(str::to_owned),
             priority,
             closed,
@@ -5308,7 +5402,7 @@ impl GitHubProjectsSource {
     }
 
     /// What one board item's status is read from: its `Status` option, whether its issue
-    /// is closed, and the reason it was closed with. [`StatusMapping::status`] turns the
+    /// is closed, and the reason it was closed with. [`BoardStatuses::status`] turns the
     /// three into the status it reports.
     fn status_parts<'a>(
         field_values: &'a [Value],
@@ -5334,19 +5428,25 @@ impl GitHubProjectsSource {
     fn column_for(
         &self,
         fields: &Value,
-        status: &Status,
+        kind: ItemKind,
+        category: StatusCategory,
         target: &StatusTarget,
     ) -> Result<Option<(String, String, String)>, SourceError> {
-        let wanted = match target {
-            StatusTarget::Column(wanted) | StatusTarget::Terminal(wanted, _) => wanted.as_str(),
-            StatusTarget::Disabled => return Ok(None),
+        let Some(wanted) = target.option() else {
+            return Ok(None);
         };
         let missing = |detail: &str| SourceError::Refused {
             message: format!(
-                "status {} of source {} needs the board Status option {wanted:?}, and {detail};                  add that option to the board, or point status_mapping.{} of this source at one                  it has",
-                category_name(status.category),
+                "{} status {} of source {} needs the board Status option {wanted:?}, and \
+                 {detail}; next: add that option to the board, which `onetaskgraph sources \
+                 fields {} --apply` does, or point status_mapping.{}.{} of this source at one \
+                 it has",
+                kind.marker(),
+                category_name(category),
                 self.name,
-                category_name(status.category)
+                self.name,
+                category_name(category),
+                kind.marker()
             ),
         };
         let Some(field) = Board::field(fields, "Status")? else {
@@ -5419,7 +5519,7 @@ impl GitHubProjectsSource {
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         // Refused before anything is read, in the words a write of the same status is.
-        let target = self.resolved_target(category)?;
+        let target = self.resolved_target(ItemKind::Task, category)?;
         let Some(mut item) = self
             .bound_item(id)
             .await?
@@ -5428,12 +5528,8 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let board = self.status_board(&item).await?;
-        let wanted = Status {
-            category,
-            name: category_name(category).to_owned(),
-        };
         let (field, option, name) = self
-            .column_for(&board.fields, &wanted, &target)?
+            .column_for(&board.fields, ItemKind::Task, category, &target)?
             .ok_or_else(|| SourceError::Malformed {
                 message: format!(
                     "status {} of source {} names no board Status option",
@@ -5463,9 +5559,9 @@ impl GitHubProjectsSource {
                 )
                 .await?;
                 item.closed = true;
-                item.status = self
-                    .statuses
-                    .status(Some(&name), true, Some(reason.reason()));
+                item.status =
+                    self.statuses
+                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()));
                 item.option = Some(name);
             }
             StatusTarget::Column(_) => {
@@ -5488,10 +5584,14 @@ impl GitHubProjectsSource {
                     json!({"singleSelectOptionId": option}),
                 )
                 .await?;
-                item.status = self.statuses.status(Some(&name), false, None);
+                item.status = self
+                    .statuses
+                    .status(ItemKind::Task, Some(&name), false, None);
                 item.option = Some(name);
             }
-            StatusTarget::Disabled => unreachable!("resolved_target refused a disabled status"),
+            StatusTarget::Disabled(_) => {
+                unreachable!("resolved_target refused a disabled status")
+            }
         }
         let status = item.status.clone();
         self.remember_written(item, false)?;
@@ -5585,43 +5685,44 @@ impl GitHubProjectsSource {
         Ok(())
     }
 
-    /// This instance's target for a category, refusing one it has disabled.
+    /// This instance's target for a category written to an item of `kind`, refusing one
+    /// that kind has no option for — before anything is read or written.
     ///
     /// Nothing here mutates the board's option set to make room for a status. GitHub
     /// documents `UpdateProjectV2FieldInput.singleSelectOptions` as *"provided values
     /// overwrite existing options"*, so no addition is additive and a mistake destroys the
     /// field and every item's status.
-    fn resolved_target(&self, category: StatusCategory) -> Result<StatusTarget, SourceError> {
-        let target = self.statuses.target(category).clone();
-        if target != StatusTarget::Disabled {
+    fn resolved_target(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+    ) -> Result<StatusTarget, SourceError> {
+        let target = self.statuses.target(kind, category).clone();
+        let StatusTarget::Disabled(why) = target else {
             return Ok(target);
-        }
-        Err(SourceError::Refused {
-            message: if category == StatusCategory::Draft {
-                format!(
-                    "status draft is disabled for source {}: draft is incompatible with this \
-                     integration because GitHub draft issues cannot have sub-issues, and this \
-                     source stores a project's tasks as its issue's sub-issues",
-                    self.name
-                )
-            } else if category == StatusCategory::Unknown {
-                format!(
-                    "status {} is disabled for source {}; set status_mapping.{} of this source \
-                     to one board Status option name; every word classified unknown is written \
-                     to that one option",
-                    category_name(category),
-                    self.name,
-                    category_name(category)
-                )
-            } else {
-                format!(
-                    "status {} is disabled for source {}; set status_mapping.{} of this source \
-                     to a board Status option name",
-                    category_name(category),
-                    self.name,
-                    category_name(category)
-                )
-            },
+        };
+        let refusal = why.refusal(&self.name, category, kind);
+        // Why there is no shipped default, which is the question a person meeting this
+        // refusal on a source that never mentioned the category asks.
+        let shipped_none = match category {
+            StatusCategory::Draft => Some(
+                "draft has no shipped default because GitHub draft issues cannot have \
+                 sub-issues, and this source stores a project's tasks as its issue's sub-issues",
+            ),
+            StatusCategory::Unknown => Some(
+                "unknown has no shipped default because this board keeps no open-ended status \
+                 word: every word classified unknown is written to the one board Status option \
+                 status_mapping.unknown names",
+            ),
+            _ => None,
+        };
+        Err(match (refusal, shipped_none, why) {
+            (SourceError::Refused { message }, Some(note), UnmappedStatus::Unconfigured) => {
+                SourceError::Refused {
+                    message: format!("{message}; {note}"),
+                }
+            }
+            (refusal, _, _) => refusal,
         })
     }
 
@@ -5939,7 +6040,7 @@ impl GitHubProjectsSource {
         let target = update
             .status
             .as_ref()
-            .map(|status| self.resolved_target(status.category))
+            .map(|status| self.resolved_target(ItemKind::Task, status.category))
             .transpose()?;
         let Some(mut item) = self
             .bound_item(id)
@@ -5954,7 +6055,7 @@ impl GitHubProjectsSource {
         if let (Some(status), Some(target)) = (&update.status, target) {
             let board = self.status_board(&item).await?;
             let (field, option, name) = self
-                .column_for(&board.fields, status, &target)?
+                .column_for(&board.fields, ItemKind::Task, status.category, &target)?
                 .ok_or_else(|| SourceError::Malformed {
                     message: format!(
                         "status {} of source {} names no board Status option",
@@ -5969,9 +6070,11 @@ impl GitHubProjectsSource {
             let landed = match &target {
                 StatusTarget::Terminal(_, reason) => {
                     self.statuses
-                        .status(Some(&name), true, Some(reason.reason()))
+                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()))
                 }
-                _ => self.statuses.status(Some(&name), false, None),
+                _ => self
+                    .statuses
+                    .status(ItemKind::Task, Some(&name), false, None),
             };
             let option_moves = item
                 .option
@@ -6765,11 +6868,13 @@ impl GitHubProjectsSource {
             .await?;
         let status_target = incoming
             .written
-            .status()
-            .map(|status| self.resolved_target(status.category))
+            .work_status()
+            .map(|(kind, status)| self.resolved_target(kind, status.category))
             .transpose()?;
-        let column = match (incoming.written.status(), status_target.as_ref()) {
-            (Some(status), Some(target)) => self.column_for(&board.fields, status, target)?,
+        let column = match (incoming.written.work_status(), status_target.as_ref()) {
+            (Some((kind, status)), Some(target)) => {
+                self.column_for(&board.fields, kind, status.category, target)?
+            }
             _ => None,
         };
         // Resolved before anything is created, for the reason the column above is: a
@@ -6994,15 +7099,16 @@ impl GitHubProjectsSource {
             return Err(error);
         }
 
-        let written_status = match (incoming.written.status(), status_target.as_ref()) {
-            (Some(_), Some(StatusTarget::Terminal(_, reason))) => {
+        let written_status = match (incoming.written.work_status(), status_target.as_ref()) {
+            (Some((kind, _)), Some(StatusTarget::Terminal(_, reason))) => {
                 self.statuses
-                    .status(written_option.as_deref(), true, Some(reason.reason()))
+                    .status(kind, written_option.as_deref(), true, Some(reason.reason()))
             }
-            (Some(_), Some(StatusTarget::Column(_))) => {
-                self.statuses.status(written_option.as_deref(), false, None)
+            (Some((kind, _)), Some(StatusTarget::Column(_))) => {
+                self.statuses
+                    .status(kind, written_option.as_deref(), false, None)
             }
-            (Some(status), _) => status.clone(),
+            (Some((_, status)), _) => status.clone(),
             (None, _) => Status {
                 category: StatusCategory::Unknown,
                 name: "Open".to_owned(),
@@ -8483,6 +8589,15 @@ impl Written<'_> {
             Self::Work(_, status) => Some(status),
         }
     }
+
+    /// The status this write carries with the kind whose half of `status_mapping` it is
+    /// written through.
+    const fn work_status(&self) -> Option<(ItemKind, &Status)> {
+        match self {
+            Self::Document => None,
+            Self::Work(kind, status) => Some((*kind, status)),
+        }
+    }
 }
 
 /// The item being written, in the one shape all three write methods reach.
@@ -8556,6 +8671,16 @@ enum BoardKind {
 }
 
 impl BoardKind {
+    /// Whose half of `status_mapping` an item of this kind reads its status through. A
+    /// document has no status of its own, so the task half stands in for whatever the issue
+    /// holds; nothing reports it.
+    const fn status_kind(self) -> ItemKind {
+        match self {
+            Self::Document => ItemKind::Task,
+            Self::Work(kind) => kind,
+        }
+    }
+
     /// How a refusal names this kind to the person reading it.
     const fn describes(self) -> &'static str {
         match self {
@@ -8990,13 +9115,59 @@ impl TaskSource for GitHubProjectsSource {
         .await
     }
 
+    /// Refused exactly as the write refuses it, from what the write reads: the mapping first,
+    /// which reads nothing; then the board's `Status` option. Over an existing item that is
+    /// read off the item, as the write reads it, and the item is held among this command's
+    /// resolved records so the write that follows reuses that read rather than repeating it;
+    /// an item that does not carry the field takes the board's fields, which are held once
+    /// read. A create is checked against the board's fields only when this command already
+    /// holds them, because a create reads them together with its repository, in one request,
+    /// and refuses a missing option before it writes anything.
+    async fn check_status_write(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+        target: Option<&NativeId>,
+    ) -> Result<(), SourceError> {
+        let status = self.resolved_target(kind, category)?;
+        if status.option().is_none() {
+            return Ok(());
+        }
+        let fields = match target {
+            Some(target) => {
+                // A target this board does not hold is the write's own refusal to make.
+                let Some(item) = self.bound_item(target).await? else {
+                    return Ok(());
+                };
+                self.resolved_cache()?.insert(target.clone(), item.clone());
+                self.fields_for(Some(&item), true, false).await?.fields
+            }
+            None => {
+                let held = self
+                    .board_cache()?
+                    .as_ref()
+                    .map(|board| board.fields.clone());
+                match held.or_else(|| {
+                    self.fields_cache()
+                        .ok()
+                        .and_then(|cache| cache.as_ref().map(|board| board.fields.clone()))
+                }) {
+                    Some(fields) => fields,
+                    None => return Ok(()),
+                }
+            }
+        };
+        self.column_for(&fields, kind, category, &status)
+            .map(|_| ())
+    }
+
     /// Set one task's status alone.
     ///
     /// An open target reopens a closed issue with an `updateIssue` carrying only its
     /// `stateInput`, then selects the board option with `updateProjectV2ItemFieldValue`; a
     /// terminal target selects its mapped option, then closes with its fixed reason. No
     /// request carries a title, a body or a label. The status
-    /// answered is what [`StatusMapping::status`] reads off the state just written, which is
+    /// answered is what [`BoardStatuses::status`] reads off the state just written, which is
     /// what a re-read reports.
     async fn set_task_status(
         &self,
@@ -9470,7 +9641,7 @@ fn state_input(target: Option<&StatusTarget>) -> Value {
         Some(StatusTarget::Terminal(_, reason)) => {
             json!({"value":"CLOSED","stateReason":reason.reason()})
         }
-        Some(StatusTarget::Column(_) | StatusTarget::Disabled) => json!({"value":"OPEN"}),
+        Some(StatusTarget::Column(_) | StatusTarget::Disabled(_)) => json!({"value":"OPEN"}),
         // A document has no status, so a write of one says nothing about the issue's open
         // or closed state rather than forcing it open: `stateInput` is what carries that
         // instruction, and an explicit null asks for no change to it.

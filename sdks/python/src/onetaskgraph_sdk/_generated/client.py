@@ -30,6 +30,7 @@ from .models import (
     SourceName,
     SourceRoute,
     StatusCategory,
+    StatusNamesReport,
     StatusOptionsReport,
     TaskContentSet,
     TaskDetail,
@@ -39,7 +40,6 @@ from .models import (
     TaskUpdated,
     TemplateAnswers,
     TemplateVariables,
-    WorkflowStatesReport,
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -634,11 +634,11 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> FieldsReport | WorkflowStatesReport:
+    ) -> FieldsReport | StatusNamesReport:
         """Run ``onetaskgraph sources fields``."""
         return await self._invoke(
             ["sources", "fields"],
-            FieldsReport | WorkflowStatesReport,
+            FieldsReport | StatusNamesReport,
             source=source,
             apply=apply,
             default_sources=default_sources,

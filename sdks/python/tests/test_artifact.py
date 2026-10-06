@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pydantic
+
 if TYPE_CHECKING:
     from pydantic import JsonValue
 
@@ -269,7 +271,27 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 29
+    assert emitted_bundle["version"] == 30
+    # Version 30 published the one `status_mapping` grammar as a root of its own, and the
+    # generated package models it: a name for every kind, `null`, or a name per kind.
+    assert "StatusMapping" in bundle["roots"]
+    from onetaskgraph_sdk import StatusMapping
+
+    mapping = StatusMapping.model_validate(
+        {"todo": "Todo", "draft": None, "done": {"task": "Done", "project": "Completed"}}
+    )
+    assert mapping.model_dump(mode="json") == {
+        "todo": "Todo",
+        "draft": None,
+        "done": {"task": "Done", "project": "Completed"},
+    }
+    for refused in ({"done": {}}, {"done": {"task": None}}, {"done": {"epic": "Done"}}):
+        try:
+            StatusMapping.model_validate(refused)
+        except pydantic.ValidationError:
+            pass
+        else:
+            raise AssertionError(f"{refused} was accepted")
     # Version 29 published routing: what `sources route` answers with, and the placement it and
     # every outcome of a routed copy's report name.
     assert generate.RESPONSE_ROOTS["sources_route"] == "SourceRoute"
@@ -287,17 +309,20 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     from onetaskgraph_sdk import LinearConfig
 
     configured = LinearConfig.model_validate(
-        {"team": "ENG", "project": "P-1", "status_mapping": {"queued": "Queued", "draft": None}}
+        {
+            "team": "ENG",
+            "project": "P-1",
+            "status_mapping": {"queued": "Queued", "draft": None, "todo": {"project": "Planned"}},
+        }
     )
-    # Keyed by the status category itself, valued by a named workflow-state type.
-    assert {
-        key.value: None if name is None else name.root
-        for key, name in configured.status_mapping.items()
-    } == {"queued": "Queued", "draft": None}
+    # Keyed by the status category itself, valued by the shared grammar.
+    assert configured.model_dump(mode="json")["status_mapping"] == {
+        "queued": "Queued",
+        "draft": None,
+        "todo": {"project": "Planned"},
+    }
     assert configured.project is not None and configured.project.root == "P-1"
     # A key that names no status category is refused, as the binary refuses it.
-    import pydantic
-
     try:
         LinearConfig.model_validate({"status_mapping": {"shipped": "Done"}})
     except pydantic.ValidationError:

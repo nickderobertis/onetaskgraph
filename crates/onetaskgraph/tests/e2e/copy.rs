@@ -1528,7 +1528,10 @@ fn an_unknown_status_cannot_be_configured_as_a_closed_state() {
 
         let complaint = refused(&sandbox, &["task", "list", "--source", "board"], 1);
         assert!(complaint.contains("status_mapping.unknown"), "{complaint}");
-        assert!(complaint.contains("not valid"), "{complaint}");
+        assert!(
+            complaint.contains("\"closed\", which is not an item kind"),
+            "{complaint}"
+        );
     }
 }
 // llmlint: ignore-end[e2e_not_mocked, expensive_tests_stay_behind_their_own_edge]

@@ -81,6 +81,26 @@
 # every member of `ProjectUpdateInput` optional, which this file had carried as required for
 # `name`, `statusId` and `labelIds`: a narrow metadata write sends `description` alone, as
 # Linear's published schema allows. `IssueFilter.priority` therefore no longer stays out.
+#
+# Status by item kind carries a tenth date. `Team.states` with its `first`,
+# `Query.projectStatuses`'s `first`, the `pageInfo` of both their connections,
+# `ProjectStatus.position`,
+# `ProjectStatusFilter.name`, the two mutations `workflowStateCreate` and
+# `projectStatusCreate`, their inputs `WorkflowStateCreateInput` and
+# `ProjectStatusCreateInput`, their payloads `WorkflowStatePayload` and `ProjectStatusPayload`,
+# and the `ProjectStatusType` enum are pinned 2026-10-05 from Linear's published SDK schema,
+# `packages/sdk/src/schema.graphql` in the `linear/linear` repository at commit
+# b37823be308a42f837277671f3ded66d33d92e6c, with the nullability that file states — a
+# workflow state's `color` and a project status's `color` and `position` really are
+# required. The plugin no longer resolves a status by its own lookup — one document reads the
+# team's states and the workspace's project statuses together, and a status is matched by name
+# locally and filtered by name — so `Query.workflowStates` and the `type` and `team` members of
+# `WorkflowStateFilter`, and the `type` member of `ProjectStatusFilter`, which nothing sends any
+# more, are gone with the lookups that sent them. The corrections recorded above stand as the
+# record of what Linear refused.
+# `Query.teams` gains its `first: Int` argument on 2026-10-05, from the published schema,
+# where it is every connection's: the resolution document asks for two teams, because the
+# live journey sent it at Linear's default page and Linear refused it `Query too complex`.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -93,9 +113,8 @@ type Query {
   documents(first: Int, after: String, filter: DocumentFilter): DocumentConnection!
   issueLabels(first: Int, after: String, filter: IssueLabelFilter): IssueLabelConnection!
   projectLabels(filter: ProjectLabelFilter): ProjectLabelConnection!
-  teams(filter: TeamFilter): TeamConnection!
-  workflowStates(filter: WorkflowStateFilter): WorkflowStateConnection!
-  projectStatuses(after: String): ProjectStatusConnection!
+  teams(first: Int, filter: TeamFilter): TeamConnection!
+  projectStatuses(first: Int, after: String): ProjectStatusConnection!
 }
 type Mutation {
   issueCreate(input: IssueCreateInput!): IssuePayload!
@@ -114,6 +133,8 @@ type Mutation {
   commentCreate(input: CommentCreateInput!): CommentPayload!
   commentUpdate(id: String!, input: CommentUpdateInput!): CommentPayload!
   commentDelete(id: String!): DeletePayload!
+  workflowStateCreate(input: WorkflowStateCreateInput!): WorkflowStatePayload!
+  projectStatusCreate(input: ProjectStatusCreateInput!): ProjectStatusPayload!
 }
 
 type User {
@@ -185,6 +206,7 @@ type ProjectStatus {
   id: ID!
   name: String!
   type: String!
+  position: Float!
 }
 type IssueLabel {
   id: ID!
@@ -242,15 +264,26 @@ type ProjectRelation {
 }
 type Team {
   id: ID!
+  states(first: Int): WorkflowStateConnection!
 }
 type TeamConnection {
   nodes: [Team!]!
 }
 type WorkflowStateConnection {
   nodes: [WorkflowState!]!
+  pageInfo: PageInfo!
 }
 type ProjectStatusConnection {
   nodes: [ProjectStatus!]!
+  pageInfo: PageInfo!
+}
+type WorkflowStatePayload {
+  success: Boolean!
+  workflowState: WorkflowState!
+}
+type ProjectStatusPayload {
+  success: Boolean!
+  status: ProjectStatus!
 }
 type IssuePayload {
   success: Boolean!
@@ -396,18 +429,15 @@ input ProjectLabelCollectionFilter {
   some: ProjectLabelCollectionFilter
   every: ProjectLabelFilter
 }
+# An issue's status is narrowed by its workflow state's name, and a project's by its project
+# status's name: `status_mapping` names each kind's statuses by name, so the name is what reads
+# as a category and what a filter for that category asks for.
 input WorkflowStateFilter {
   name: StringComparator
-  type: StringComparator
-  team: NullableTeamFilter
 }
-# The project counterpart of `WorkflowStateFilter`, and its `type` is a `StringComparator`
-# although the `ProjectStatus.type` field it filters is the `ProjectStatusType` enum —
-# `backlog`, `planned`, `started`, `paused`, `completed`, `canceled`. Neither `planned` nor
-# `paused` is a workflow-state type and neither `unstarted` nor `triage` is a project-status
-# one, so the two vocabularies are not interchangeable however alike the two filters look.
+# The project counterpart of `WorkflowStateFilter`, over the workspace's project statuses.
 input ProjectStatusFilter {
-  type: StringComparator
+  name: StringComparator
 }
 input ProjectLabelFilter {
   name: StringComparator
@@ -432,14 +462,8 @@ input StringComparator {
   nin: [String!]
   containsIgnoreCase: String
 }
-input NullableTeamFilter {
-  id: IDComparator
-}
-input IDComparator {
-  eq: ID
-}
-# A project id is compared with this rather than with `IDComparator`; the member this
-# source sends is spelled the same in both, and the types are not.
+# A project id is compared with this; `NullableTeamFilter` and its `IDComparator`, which the
+# workflow-state lookup recorded above reached, went with that lookup.
 input EntityIdentifierIDComparator {
   eq: ID
 }
@@ -504,6 +528,28 @@ input IssueRelationCreateInput {
   issueId: String!
   relatedIssueId: String!
   type: String!
+}
+# `type` is a bare `String!` here, as published; its values are the workflow-state types
+# `backlog`, `unstarted`, `started`, `completed` and `canceled`.
+input WorkflowStateCreateInput {
+  teamId: String!
+  name: String!
+  type: String!
+  color: String!
+}
+input ProjectStatusCreateInput {
+  name: String!
+  type: ProjectStatusType!
+  color: String!
+  position: Float!
+}
+enum ProjectStatusType {
+  backlog
+  canceled
+  completed
+  paused
+  planned
+  started
 }
 input ProjectRelationCreateInput {
   projectId: String!

@@ -215,28 +215,36 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: SourcesCommand::Fields(args),
         } => {
             if let Some((name, config)) = linear_source(loaded, &args.source)? {
-                if args.apply {
+                let report =
+                    onetaskgraph_linear::status_names(&name, config, &loaded.secrets, args.apply)
+                        .await
+                        .map_err(|error| {
+                            Failure::decided("fields", format!("source {name}: {error}"))
+                        })?;
+                let rendered = match loaded.config.output() {
+                    OutputFormat::Json => json(&report, "the fields report")?,
+                    OutputFormat::Text => render::status_names(&report),
+                };
+                emit(out, rendered.trim_end(), "the fields report")?;
+                if let Some(refused) = &report.refused {
+                    let kind = match refused.kind {
+                        onetaskgraph_plugin_api::ItemKind::Task => "task",
+                        onetaskgraph_plugin_api::ItemKind::Project => "project",
+                    };
                     return Err(Failure::decided(
                         "fields",
                         format!(
-                            "source {name} uses plugin linear, and --apply is refused for it: \
-                             workflow states are team settings the people who own the team \
-                             decide, so this command reports them and never creates one.\n\
-                             next: run `onetaskgraph sources fields {name}` to see which mapped \
-                             states the team lacks, and add them in Linear's team settings."
+                            "source {name}: the create of the {kind} status {:?} failed: {}; \
+                             every name the report marks created was created before it.\n\
+                             next: fix what that names (a key without permission to change \
+                             team or workspace settings, say), then run `onetaskgraph sources \
+                             fields {name} --apply` again, which creates only what is still \
+                             missing.",
+                            refused.name.as_str(),
+                            refused.message
                         ),
                     ));
                 }
-                let report = onetaskgraph_linear::workflow_states(&name, config, &loaded.secrets)
-                    .await
-                    .map_err(|error| {
-                        Failure::decided("fields", format!("source {name}: {error}"))
-                    })?;
-                let rendered = match loaded.config.output() {
-                    OutputFormat::Json => json(&report, "the fields report")?,
-                    OutputFormat::Text => render::workflow_states(&report),
-                };
-                emit(out, rendered.trim_end(), "the fields report")?;
                 return Ok(EXIT_OK);
             }
             let (name, config) = github_projects_source(loaded, &args.source, "fields")?;
@@ -1306,10 +1314,10 @@ fn schema_bundle() -> Result<String, Failure> {
     )?;
     bundle["roots"]["FieldsReport"] =
         json_value(schemars::schema_for!(FieldsReport), "the fields schema")?;
-    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The schema is the Linear plugin's own `WorkflowStatesReport`, not restated here; what lives here is its registration as the root of what `sources fields` prints for a Linear source, beside the two GitHub Projects reports that verb already registers above. `sources fields` is this binary's verb, the engine crate names no binary output, and a plugin may not depend on the engine (AGENTS.md), so the binary is the one crate that can join a plugin's report to the bundle both SDKs are generated from.
-    bundle["roots"]["WorkflowStatesReport"] = json_value(
-        schemars::schema_for!(onetaskgraph_linear::WorkflowStatesReport),
-        "the workflow states schema",
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The schema is the Linear plugin's own `StatusNamesReport`, not restated here; what lives here is its registration as the root of what `sources fields` prints for a Linear source, beside the two GitHub Projects reports that verb already registers above. `sources fields` is this binary's verb, the engine crate names no binary output, and a plugin may not depend on the engine (AGENTS.md), so the binary is the one crate that can join a plugin's report to the bundle both SDKs are generated from.
+    bundle["roots"]["StatusNamesReport"] = json_value(
+        schemars::schema_for!(onetaskgraph_linear::StatusNamesReport),
+        "the status names schema",
     )?;
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     bundle["commands"] = json_value(public_commands()?, "the command surface")?;

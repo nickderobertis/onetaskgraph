@@ -25,12 +25,12 @@ from onetaskgraph_sdk import (
     Priority,
     SourceName,
     StatusCategory,
+    StatusNamesReport,
     TaskContentSet,
     TaskPrioritySet,
     TaskStatusSet,
     TaskUpdated,
     UpdatedField,
-    WorkflowStatesReport,
     __version__,
 )
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
@@ -956,25 +956,46 @@ def test_task_content_set_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     assert "--file" in str(refused.value)
 
 
-def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
+def test_sources_fields_method_decodes_a_linear_sources_status_names(
     binary: Path, tmp_path: Path
 ) -> None:
-    """Decode a Linear source's mapped workflow states through the generated SDK model."""
+    """Decode a Linear source's mapped status names, for both kinds, through the SDK model."""
+    created: list[dict[str, object]] = []
 
     class LinearHandler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
             length = int(self.headers["content-length"])
-            query = json.loads(self.rfile.read(length))["query"]
-            if "teams(" in query:
-                data: dict[str, object] = {"teams": {"nodes": [{"id": "TEAM-1"}]}}
+            request = json.loads(self.rfile.read(length))
+            query = request["query"]
+            data: dict[str, object]
+            if "workflowStateCreate" in query:
+                state = {"id": "S-NEW", "name": "Shipped", "type": "completed"}
+                created.append(request["variables"]["input"])
+                data = {"workflowStateCreate": {"success": True, "workflowState": state}}
+            elif "projectStatusCreate" in query:
+                status = {"id": "P-NEW", "name": "Shipped", "type": "completed", "position": 2.0}
+                created.append(request["variables"]["input"])
+                data = {"projectStatusCreate": {"success": True, "status": status}}
             else:
+                states = [
+                    {"id": "S-1", "name": "Todo", "type": "unstarted"},
+                    {"id": "S-2", "name": "Queued", "type": "unstarted"},
+                ]
                 data = {
-                    "workflowStates": {
+                    "teams": {
                         "nodes": [
-                            {"id": "S-1", "name": "Todo", "type": "unstarted"},
-                            {"id": "S-2", "name": "Queued", "type": "unstarted"},
+                            {
+                                "id": "TEAM-1",
+                                "states": {"nodes": states, "pageInfo": {"hasNextPage": False}},
+                            }
                         ]
-                    }
+                    },
+                    "projectStatuses": {
+                        "nodes": [
+                            {"id": "P-1", "name": "Planned", "type": "planned", "position": 1.0}
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    },
                 }
             response = json.dumps({"data": data}).encode()
             self.send_response(200)
@@ -998,7 +1019,10 @@ def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
                         "team": "FIX",
                         "api_key_env": "TEST_LINEAR_CREDENTIAL",
                         "endpoint": f"http://127.0.0.1:{server.server_port}/graphql",
-                        "status_mapping": {"queued": "Queued", "done": "Shipped"},
+                        "status_mapping": {
+                            "queued": {"task": "Queued", "project": "Planned"},
+                            "done": "Shipped",
+                        },
                     },
                 }
             }
@@ -1010,17 +1034,29 @@ def test_sources_fields_method_decodes_a_linear_teams_workflow_states(
             environment={**os.environ, "TEST_LINEAR_CREDENTIAL": "fixture-key"},
         )
         report = run(client.sources_fields("team"))
-        assert isinstance(report, WorkflowStatesReport)
+        assert isinstance(report, StatusNamesReport)
         assert (report.source.root, report.team.root) == ("team", "FIX")
-        assert [
-            (state.category.value, state.state.root, state.present, state.type)
-            for state in report.states
-        ] == [("queued", "Queued", True, "unstarted"), ("done", "Shipped", False, None)]
+        rows = [
+            (name.kind.value, name.category.value, name.name.root, name.present, name.type)
+            for name in report.names
+        ]
+        assert rows == [
+            ("task", "queued", "Queued", True, "unstarted"),
+            ("task", "done", "Shipped", False, None),
+            ("project", "queued", "Planned", True, "planned"),
+            ("project", "done", "Shipped", False, None),
+        ]
+        assert created == []
 
-        with pytest.raises(OnetaskgraphError) as refused:
-            run(client.sources_fields("team", apply=True))
-        assert refused.value.exit_code == 1
-        assert "workflow states are team settings" in str(refused.value)
+        applied = run(client.sources_fields("team", apply=True))
+        assert isinstance(applied, StatusNamesReport)
+        assert [(name.kind.value, name.name.root, name.created) for name in applied.names] == [
+            ("task", "Queued", False),
+            ("task", "Shipped", True),
+            ("project", "Planned", False),
+            ("project", "Shipped", True),
+        ]
+        assert [entry["type"] for entry in created] == ["completed", "completed"]
     finally:
         server.shutdown()
         server.server_close()

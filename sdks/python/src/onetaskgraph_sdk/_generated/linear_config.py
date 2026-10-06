@@ -24,16 +24,6 @@ class LinearTeam(RootModel[str]):
     root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
 
 
-class LinearWorkflowStateName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name of one workflow state of a Linear team.\n\nValidated on the way in rather than checked later, so a blank name — which no workflow\nstate can have — is a state this type cannot hold.",
-            min_length=1,
-        ),
-    ]
-
-
 class StatusCategory(StrEnum):
     StatusCategoryDraft = "draft"
     StatusCategoryBacklog = "backlog"
@@ -43,6 +33,57 @@ class StatusCategory(StrEnum):
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"
     StatusCategoryUnknown = "unknown"
+
+
+class StatusName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One status name a source's backend holds, matched ignoring case. Never blank.",
+            min_length=1,
+            pattern="\\S",
+        ),
+    ]
+
+
+class StatusNames1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    task: StatusName
+
+
+class StatusNames2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    project: StatusName
+
+
+class StatusNames3(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    project: StatusName
+    task: StatusName
+
+
+class StatusNames(RootModel[StatusName | StatusNames1 | StatusNames2 | StatusNames3]):
+    root: Annotated[
+        StatusName | StatusNames1 | StatusNames2 | StatusNames3,
+        Field(
+            description="What one category of a status_mapping names: one name for every item kind, or an object naming it for a task, for a project, or for each. A kind the object leaves out leaves the category unmapped for that kind."
+        ),
+    ]
+
+
+class StatusMapping(RootModel[dict[StatusCategory, StatusNames | None]]):
+    root: Annotated[
+        dict[StatusCategory, StatusNames | None],
+        Field(
+            description="Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each."
+        ),
+    ]
 
 
 class LinearConfig(BaseModel):
@@ -63,12 +104,12 @@ class LinearConfig(BaseModel):
         ),
     ] = None
     status_mapping: Annotated[
-        dict[StatusCategory, LinearWorkflowStateName | None],
+        StatusMapping,
         Field(
-            description="Per-instance mapping from a status category to the exact name of one workflow state\nof the configured team, or `null` to disable that category.\n\nThe keys are status categories: `draft`, `backlog`, `todo`, `queued`, `in-progress`,\n`done`, `cancelled` and `unknown`. A mapped category is written as the named state by\nevery write — never as the first state of that state's type — and an issue at a state\nthe mapping names reads as that category, under that state's name; any other state\nreads by its type, and `--status` returns exactly the issues that read as the\ncategories it names. A category this does not mention keeps the\nbehaviour of a source without the key: `backlog`, `todo`, `in-progress`, `done` and\n`cancelled` are written as the team's first state of the matching type, and `draft`,\n`queued` and `unknown` are disabled. A name the team lacks is refused before any\nwrite, and two categories mapped to one name are refused when this configuration is\nread.",
+            description="Which workflow state of the configured team a task's status category is, and which of\nthe workspace's project statuses a project's is — the shared `status_mapping` grammar.\n\nLinear has no built-in names, so this is the whole of what a status is written as and\nread by: a category is written as exactly the name its kind maps it to, and a status\nwrite it gives no name for is refused before any mutation, naming the key to set; an\nitem at a name its kind maps reads as that category under the name, and every other\nname reads as `unknown`. A source without it reads every item as `unknown` and refuses\nevery status write. Two categories mapped to one name of one kind are refused when this\nconfiguration is read.",
             validate_default=True,
         ),
-    ] = {}
+    ] = StatusMapping({})
     team: Annotated[
         LinearTeam | None,
         Field(description="Linear team key/id used to narrow reads and required for item writes."),

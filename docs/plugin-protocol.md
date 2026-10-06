@@ -773,6 +773,13 @@ source cannot represent, and a metadata key it cannot carry, are each a
 is refused the same way rather than created, because the engine established that id
 before asking.
 
+`TaskSource::check_status_write` — whether a write of an item of one kind at one status
+category would have a status to write, asked by a copy before it records what an item held
+and overwrites it — is not a message of this protocol. For a hosted source the engine answers
+it the way the trait's default does, admitting every status, so a status this plugin has no
+name for is refused by `write_task` or `write_project` itself, as above, and a plugin written
+against this document implements nothing more.
+
 ### 4.10 `delete_task` and `delete_project`
 
 Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
@@ -1071,6 +1078,12 @@ task to write it on.
 
 A plugin that cannot write one of these on its own refuses with `{"kind": "refused"}`, naming
 the field.
+
+`TaskSource::set_task_status_reading` — a status write answered with the whole task as the
+source now reads it — is not a message of this protocol. For a hosted source the engine answers
+it the way the trait's default does, with one `get_task` and then, for a task found, one
+`set_task_status`, so a plugin written against this document implements nothing more for the
+engine to keep delivered tasks in step after a status write.
 
 #### A task's `delivers` and `delivered_by`
 

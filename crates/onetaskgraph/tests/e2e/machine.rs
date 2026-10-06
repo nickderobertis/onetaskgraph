@@ -591,9 +591,9 @@ fn a_refusal_from_a_real_source_is_a_failure_document_classed_refused() {
     assert_eq!(failure["source"], "board", "{failure}");
     assert_eq!(failure["retry_after_seconds"], Value::Null, "{failure}");
     assert!(
-        failure["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("status todo is disabled for source board")),
+        failure["message"].as_str().is_some_and(
+            |message| message.contains("source board has no task status name for todo")
+        ),
         "the board's own reason is what the caller is told: {failure}"
     );
 
@@ -628,9 +628,9 @@ fn a_member_copy_refused_under_json_is_a_failure_document_too() {
         "{failure}"
     );
     assert!(
-        failure["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("status todo is disabled for source board")),
+        failure["message"].as_str().is_some_and(
+            |message| message.contains("source board has no task status name for todo")
+        ),
         "the board's own reason is what the caller is told: {failure}"
     );
     unchanged_as_text(&run(&sandbox, &copy), &machine, "project copy --member");

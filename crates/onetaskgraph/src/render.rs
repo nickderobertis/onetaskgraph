@@ -63,10 +63,19 @@ pub fn status_options(report: &StatusOptionsReport) -> String {
 pub fn fields(report: &FieldsReport) -> String {
     let mut rendered = String::new();
     for field in &report.fields {
+        // A Status name says which kind it is configured for — `task: Queued; project:
+        // Shipped` — because one field holds both kinds' options.
         let missing = if field.missing.is_empty() {
             "none".to_owned()
-        } else {
+        } else if field.kinds.is_empty() {
             field.missing.join(", ")
+        } else {
+            field
+                .kinds
+                .iter()
+                .map(|kind| format!("{}: {}", wire(&kind.kind), kind.missing.join(", ")))
+                .collect::<Vec<_>>()
+                .join("; ")
         };
         let name = field.field.name();
         let line = match (field.outcome, field.exists) {
@@ -86,32 +95,46 @@ pub fn fields(report: &FieldsReport) -> String {
     rendered
 }
 
-/// What `sources fields` reports for a `linear` source: one line per workflow state its
-/// `status_mapping` names, present on the team with its type or missing from it.
-pub fn workflow_states(report: &onetaskgraph_linear::WorkflowStatesReport) -> String {
-    if report.states.is_empty() {
-        return format!(
-            "{}: status_mapping names no workflow state of team {}\n",
-            report.source,
-            report.team()
-        );
+/// What `sources fields` reports for a `linear` source: one line per name its `status_mapping`
+/// gives a kind — a task's against the team's workflow states, a project's against the
+/// workspace's project statuses — present with its type, created by this run, or missing. A
+/// create Linear refused is the command's failure, which it reports on stderr.
+pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
+    let word = |value: serde_json::Value| value.as_str().map(str::to_owned).unwrap_or_default();
+    if report.names.is_empty() {
+        return format!("{}: status_mapping names no status\n", report.source);
     }
     let mut rendered = String::new();
-    for state in &report.states {
-        let category = serde_json::to_value(state.category())
-            .ok()
-            .and_then(|word| word.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        let found = match state.found() {
-            onetaskgraph_linear::Found::Present(kind) => {
-                format!("present on team {} ({kind})", report.team())
+    for mapped in &report.names {
+        let kind = word(serde_json::to_value(mapped.kind()).unwrap_or_default());
+        let category = word(serde_json::to_value(mapped.category()).unwrap_or_default());
+        let held_by = match mapped.kind() {
+            onetaskgraph_plugin_api::ItemKind::Task => {
+                format!("workflow state of team {}", report.team())
             }
-            onetaskgraph_linear::Found::Missing => format!("missing from team {}", report.team()),
+            onetaskgraph_plugin_api::ItemKind::Project => {
+                "project status of this workspace".to_owned()
+            }
+        };
+        let found = match mapped.found() {
+            onetaskgraph_linear::Found::Created(found) => {
+                format!("created as a {held_by} ({found})")
+            }
+            onetaskgraph_linear::Found::Present(found) if found == mapped.expected_type() => {
+                format!("present as a {held_by} ({found})")
+            }
+            onetaskgraph_linear::Found::Present(found) => format!(
+                "present as a {held_by} ({found}; {category} is created as {}, and this one is left as it is)",
+                mapped.expected_type()
+            ),
+            onetaskgraph_linear::Found::Missing => {
+                format!("missing: no {held_by} has that name")
+            }
         };
         rendered.push_str(&format!(
-            "{}: {category} -> {}: {found}\n",
+            "{}: {kind} {category} -> {}: {found}\n",
             report.source,
-            state.state()
+            mapped.name()
         ));
     }
     rendered

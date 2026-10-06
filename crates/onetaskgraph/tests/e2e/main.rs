@@ -58,6 +58,13 @@ mod failures;
 // into a plugin crate.
 mod fields;
 mod fixtures;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against the loopback GitHub board
+// and a folder of Markdown, with no credential and no network, in a few seconds. A copy, a
+// targeted update and the status verbs are the engine's, so they cannot sit behind the
+// GitHub Projects plugin crate's edge, which AGENTS.md forbids depending on the engine at any
+// depth; the plugin's own half is proven behind its own edge in its `tests/status_by_kind/`.
+mod github_status_by_kind;
 mod journeys;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against the loopback Linear
@@ -66,6 +73,16 @@ mod journeys;
 // Linear plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth; the
 // plugin's own half is proven behind its own edge in its `tests/plugin.rs`.
 mod linear;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: each measurement drives the binary, or the engine the binary links,
+// against the loopback Linear workspace with no credential and no network, in about a second;
+// it reaches the engine, which the Linear crate's own edge may not depend on (AGENTS.md).
+mod linear_budget;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it, for the reason given on `linear` above: every journey drives the binary
+// against the loopback Linear workspace and folders of Markdown, with no credential and no
+// network, and the copies, the status narrowings and `sources fields` are the binary's verbs.
+mod linear_status;
 mod machine;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and

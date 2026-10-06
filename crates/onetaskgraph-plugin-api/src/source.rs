@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
     PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
     Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
     commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
@@ -224,6 +224,35 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable(self.kind()))
     }
 
+    /// Whether a write of an item of `kind` at `category` — over the item `target` names, or
+    /// creating one when it is `None` — would have a status to write, asked before the write
+    /// and changing nothing.
+    ///
+    /// A caller that has to put an item back when a later write of it fails — a copy, whose
+    /// journal records what an item held before overwriting it — asks this first, so a status
+    /// this source has no name for is refused while nothing has been recorded or written, and
+    /// nothing has to be put back. It answers what the write itself would refuse a status
+    /// with, in the same words, and sends no request a write of that status would not have
+    /// sent anyway: what it reads to answer, it holds for the write that follows.
+    ///
+    /// Defaulted to `Ok(())`: a source that does not answer it in advance still refuses the
+    /// status in its write, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] naming the kind, the category and what is missing
+    /// when this source has no name for that status; and whatever else kept it from finding
+    /// out.
+    async fn check_status_write(
+        &self,
+        kind: ItemKind,
+        category: StatusCategory,
+        target: Option<&NativeId>,
+    ) -> Result<(), SourceError> {
+        let _ = (kind, category, target);
+        Ok(())
+    }
+
     /// Set the status of one task this source holds, and change nothing else about it,
     /// answering with the status as this source now reads it — or `None` when this source
     /// holds no such task.
@@ -252,6 +281,37 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<Status>, SourceError> {
         let _ = (id, category);
         Err(unwritable_field(self.kind(), "status"))
+    }
+
+    /// Set the status of one task this source holds, as [`set_task_status`](Self::set_task_status)
+    /// does, and answer with the whole task as this source now reads it — its
+    /// [`Task::delivers`] among what a caller keeping delivered tasks in step needs — or `None`
+    /// when this source holds no such task.
+    ///
+    /// Defaulted to exactly the two calls a caller would otherwise make: [`get_task`] first,
+    /// answering `None` with nothing written when it does, then `set_task_status`, the status
+    /// it answers put on the task read. A source whose status write answers the whole task in
+    /// the same round trip overrides it to save the read.
+    ///
+    /// [`Task::delivers`]: crate::Task::delivers
+    /// [`get_task`]: Self::get_task
+    ///
+    /// # Errors
+    ///
+    /// As [`get_task`](Self::get_task) and [`set_task_status`](Self::set_task_status).
+    async fn set_task_status_reading(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Task>, SourceError> {
+        let Some(mut task) = self.get_task(id).await? else {
+            return Ok(None);
+        };
+        let Some(status) = self.set_task_status(id, category).await? else {
+            return Ok(None);
+        };
+        task.status = status;
+        Ok(Some(task))
     }
 
     /// Set the priority of one task this source holds, and change nothing else about it,

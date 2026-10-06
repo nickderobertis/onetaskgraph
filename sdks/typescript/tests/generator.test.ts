@@ -100,6 +100,37 @@ test("generation, clean check, stale check, and invalid arguments use the real b
   }
 });
 
+test("a caller's own configuration does not reach the binary the contract is emitted with", () => {
+  // Half a source — a setting with no plugin — is what a host exporting one source's settings
+  // into every process hands the generator, and every verb refuses it, `schema` included.
+  const stray = { ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM: "ENG" };
+  const direct = spawnSync(binary, ["schema"], {
+    encoding: "utf8",
+    env: { ...process.env, ...stray },
+  });
+  expect(direct.status, "the stray setting no longer makes the binary refuse").not.toBe(0);
+  expect(direct.stderr).toContain("sources.stray");
+  const generated = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generated-"));
+  try {
+    const result = spawnSync("bun", ["scripts/generate.ts"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...stray,
+        NODE_ENV: "test",
+        ONETASKGRAPH_BIN: binary,
+        ONETASKGRAPH_GENERATED_DIR: generated,
+      },
+    });
+    expectExited(result);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(resolve(generated, "commands.ts"), "utf8").length).toBeGreaterThan(0);
+  } finally {
+    rmSync(generated, { recursive: true, force: true });
+  }
+});
+
 test("a description in several paragraphs generates without trailing whitespace", () => {
   // `json-schema-to-typescript` renders a paragraph break inside a JSDoc block as a line
   // that is exactly `" * "`. Committed, that is what `git diff --check` reports against

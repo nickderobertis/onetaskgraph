@@ -49,9 +49,14 @@ if (process.env.ONETASKGRAPH_BIN !== undefined && process.env.ONETASKGRAPH_BIN.t
   );
 }
 const binary = process.env.ONETASKGRAPH_BIN ?? resolve(workspaceRoot, "target/debug/onetaskgraph");
-const binaryEnvironment = { ...process.env };
-delete binaryEnvironment.ONETASKGRAPH_BIN;
-delete binaryEnvironment.ONETASKGRAPH_GENERATED_DIR;
+// Every verb validates the configuration it is handed, `schema` included, so a caller's own
+// `ONETASKGRAPH_` settings would decide whether the contract can be emitted at all: a host
+// exporting half a source makes the binary refuse. What is generated is the build's contract
+// and nothing of any configuration, so none of it reaches the binary — this generator's own
+// two variables among it.
+const binaryEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith("ONETASKGRAPH_")),
+);
 const emitted = spawnSync(binary, ["schema"], {
   cwd: workspaceRoot,
   encoding: "utf8",
