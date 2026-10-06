@@ -212,7 +212,8 @@ fn listing(filters: Filters, metadata: Vec<MetadataMatch>) -> TaskRequest {
     }
 }
 
-/// The ids of the tasks `request` answers.
+/// Refuses a source failure rather than reading it as an answer: a failed search lists nothing,
+/// which would pass the half of a journey that expects nothing to match.
 async fn listed(engine: &Engine, request: &TaskRequest) -> Vec<String> {
     let response = engine.tasks(request).await.expect("the listing runs");
     assert!(response.errors.is_empty(), "{:?}", response.errors);
