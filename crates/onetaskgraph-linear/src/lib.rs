@@ -1802,6 +1802,27 @@ impl LinearSource {
             .is_none_or(|scope| project.is_some_and(|project| project.0 == scope.0))
     }
 
+    /// The project a task or a document written with `project` is filed under: that one, or
+    /// the scope when it names none — and a refusal naming both when it names another.
+    fn filed_in(
+        &self,
+        project: Option<&NativeId>,
+        what: &str,
+    ) -> Result<Option<String>, SourceError> {
+        match (&self.project, project) {
+            (None, project) => Ok(project.map(|id| id.0.clone())),
+            (Some(scope), None) => Ok(Some(scope.0.clone())),
+            (Some(scope), Some(project)) if project.0 == scope.0 => Ok(Some(scope.0.clone())),
+            (Some(scope), Some(project)) => Err(SourceError::Refused {
+                message: format!(
+                    "source {} is scoped to the Linear project {} and cannot hold a {what} in                      the project {}; next: write it with no project, or with {}, or to a                      source scoped to {}",
+                    self.name, scope.0, project.0, scope.0, project.0
+                ),
+            }),
+        }
+    }
+    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
     /// The refusal of a project write to `target` — `None` for a new project — when this
     /// source is scoped to another: it holds that project and no other, so it writes no other,
     /// because a project it created would be one none of its reads could find. Asked before
@@ -1825,27 +1846,6 @@ impl LinearSource {
             ),
         })
     }
-
-    /// The project a task or a document written with `project` is filed under: that one, or
-    /// the scope when it names none — and a refusal naming both when it names another.
-    fn filed_in(
-        &self,
-        project: Option<&NativeId>,
-        what: &str,
-    ) -> Result<Option<String>, SourceError> {
-        match (&self.project, project) {
-            (None, project) => Ok(project.map(|id| id.0.clone())),
-            (Some(scope), None) => Ok(Some(scope.0.clone())),
-            (Some(scope), Some(project)) if project.0 == scope.0 => Ok(Some(scope.0.clone())),
-            (Some(scope), Some(project)) => Err(SourceError::Refused {
-                message: format!(
-                    "source {} is scoped to the Linear project {} and cannot hold a {what} in                      the project {}; next: write it with no project, or with {}, or to a                      source scoped to {}",
-                    self.name, scope.0, project.0, scope.0, project.0
-                ),
-            }),
-        }
-    }
-    // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
     async fn one_id(&self, lookup: Lookup<'_>) -> Result<NativeId, SourceError> {
         let data = self.send(lookup.query(), lookup.variables()).await?;
