@@ -22,18 +22,30 @@ fn report() {
     let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
         Ok(budget) => budget,
         Err(VarError::NotPresent) => return,
-        Err(VarError::NotUnicode(raw)) => {
-            panic!("ONEBUDGETSPEC_BUDGET_ID {raw:?} is not a budget id: it is not even Unicode")
-        }
+        Err(VarError::NotUnicode(raw)) => refuse(&format!(
+            "ONEBUDGETSPEC_BUDGET_ID {raw:?} is not a budget id: it is not even Unicode"
+        )),
     };
-    let (value, detail) = telemetry::recorded(&budget).unwrap_or_else(|reason| panic!("{reason}"));
-    let reported = onebudgetspec_core::report(value, detail.as_deref())
-        .unwrap_or_else(|error| panic!("{budget}'s figure could not be reported: {error}"));
-    assert!(
-        reported,
-        "ONEBUDGETSPEC_RESULT is not set, so {budget}'s figure has nowhere to go; run it through \
-         `onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml`"
-    );
+    let (value, detail) = telemetry::recorded(&budget).unwrap_or_else(|reason| refuse(&reason));
+    let reported = onebudgetspec_core::report(value, detail.as_deref()).unwrap_or_else(|error| {
+        refuse(&format!("{budget}'s figure could not be reported: {error}"))
+    });
+    if !reported {
+        refuse(&format!(
+            "ONEBUDGETSPEC_RESULT is not set, so {budget}'s figure has nowhere to go; run it \
+             through `onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml`"
+        ));
+    }
+}
+
+/// End the runner with `reason` as the last of its stderr, and nothing after it.
+///
+/// onebudgetspec keeps only the tail of a failed command's stderr, so a panic would not do: the
+/// backtrace `RUST_BACKTRACE` appends — set on every hosted lane — follows the reason and pushed
+/// it out of that tail on the Windows runner, whose paths are the longest.
+fn refuse(reason: &str) -> ! {
+    eprintln!("{reason}");
+    std::process::exit(1)
 }
 
 /// The argv that runs [`report`] alone, as each budget's command does.
@@ -119,6 +131,8 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
         .arg(&file)
         .current_dir(&workspace)
         .env(telemetry::DIRECTORY, &recorded)
+        // The longest stderr a refusal could carry, so the reason is proven to survive it.
+        .env("RUST_BACKTRACE", "full")
         .output()
         .expect(
             "bun runs the workspace's pinned onebudgetspec; run `just bootstrap` to install it",
