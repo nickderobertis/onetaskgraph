@@ -30,9 +30,10 @@ impl MetadataKey {
     /// `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`,
     /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind`, `onetaskgraph.template`
     /// ([`Self::TEMPLATE_KEY`]), `onetaskgraph.copies` ([`Self::COPIES_KEY`]),
-    /// `onetaskgraph.members` ([`Self::MEMBERS_KEY`]) and `onetaskgraph.member_of`
-    /// ([`Self::MEMBER_OF_KEY`]) — and so does any key it reserves later, which is why the
-    /// whole namespace is refused rather than a list.
+    /// `onetaskgraph.members` ([`Self::MEMBERS_KEY`]), `onetaskgraph.member_of`
+    /// ([`Self::MEMBER_OF_KEY`]) and `onetaskgraph.assets` ([`Self::ASSETS_KEY`]) — and so
+    /// does any key it reserves later, which is why the whole namespace is refused rather than
+    /// a list.
     pub const RESERVED_NAMESPACE: &'static str = "onetaskgraph";
 
     /// The reserved key a task or a document rendered from a template records where it came
@@ -71,6 +72,18 @@ impl MetadataKey {
     /// Written once, when a routed write — a copy or a `task create` — creates the member, and
     /// never by a caller.
     pub const MEMBER_OF_KEY: &'static str = "onetaskgraph.member_of";
+
+    /// The reserved key a hosted source records what it uploaded for a record's image assets
+    /// under: an [`AssetUploads`](crate::AssetUploads) — an object keyed by asset name, each
+    /// value `{"sha256": <lowercase hex>, "url": <string>}`.
+    ///
+    /// Written by the hosted plugin itself, in the same write that lands the record, through
+    /// [`serve_asset_references`](crate::serve_asset_references); handed back to it as
+    /// [`AssetWrite::recorded_assets`](crate::AssetWrite::recorded_assets) on the next copy onto
+    /// that record, so an asset whose SHA-256 is unchanged reuses its URL and is not uploaded
+    /// again. A copy never carries a source record's entry to its destination: the entry says
+    /// where *that* source serves the bytes.
+    pub const ASSETS_KEY: &'static str = "onetaskgraph.assets";
 
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
     ///

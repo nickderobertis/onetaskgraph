@@ -30,6 +30,9 @@ mod common;
 // second. The flag and the engine's narrowing are the binary's and the engine's, so they cannot
 // sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
 // depth.
+// The simulated clock: its coordinator driven by real client processes, and the binary
+// attaching to it. No source, no network, and no real waiting.
+mod clock;
 mod commented_since;
 mod comments;
 mod copy;

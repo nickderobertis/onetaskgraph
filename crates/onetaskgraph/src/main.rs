@@ -14,6 +14,7 @@ mod update;
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::str::FromStr as _;
+use std::sync::OnceLock;
 
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::{self, Layer};
@@ -24,8 +25,8 @@ use onetaskgraph_core::{
     ProjectSelector, QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
-    CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SourceName,
-    TextQuery,
+    CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
+    SourceName, TextQuery, system_clock,
 };
 use onetaskgraph_status_options::{
     FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
@@ -82,6 +83,15 @@ async fn main() -> ExitCode {
         Err(message) => return fail(&message, EXIT_USAGE),
     };
     let environment = Environment::from_process();
+    // Settled once, before any source is built: every in-process source this run builds paces
+    // and backs off on this one clock — the real one unless a test put this process on a
+    // simulated clock, which it attaches to here, as the client the variable names.
+    match onetaskgraph_core::process_clock(&environment) {
+        Ok(clock) => {
+            let _ = CLOCK.set(clock);
+        }
+        Err(message) => return fail(&message, EXIT_FAILURE),
+    }
     // Every verb validates the configuration it was handed, including the verbs that do
     // not read it. An unknown field, an unusable value, a plugin this build does not
     // have and a source name that breaks the pattern are mistakes wherever they were
@@ -665,8 +675,15 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
     }
 }
 
+/// The process's one clock, settled in `main` before any source is built.
+static CLOCK: OnceLock<SharedClock> = OnceLock::new();
+
 fn engine(loaded: &Loaded) -> Engine {
-    Engine::build(&loaded.config, &loaded.secrets)
+    Engine::build_with_clock(
+        &loaded.config,
+        &loaded.secrets,
+        CLOCK.get_or_init(system_clock),
+    )
 }
 
 /// Write one page, report the sources that could not contribute, and say what the run

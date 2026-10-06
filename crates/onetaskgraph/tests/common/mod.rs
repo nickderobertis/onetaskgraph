@@ -5,6 +5,19 @@
 //! sandbox does is put all of it somewhere this run owns, so a journey cannot read the
 //! developer's own `~/.config/onetaskgraph` and cannot be changed by it.
 
+// The simulated clock and the test images are for the journeys of the e2e target alone; the
+// other targets sharing this module use neither, and in them every item would read as dead.
+#[allow(
+    dead_code,
+    reason = "used by the e2e target; the other targets sharing this module do not"
+)]
+pub mod clock;
+#[allow(
+    dead_code,
+    reason = "used by the e2e target; the other targets sharing this module do not"
+)]
+pub mod images;
+
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -170,6 +183,8 @@ impl Sandbox {
         for name in AMBIENT_CREDENTIALS {
             command.env_remove(name);
         }
+        // A run is on the real clock unless a journey puts it on a simulated one.
+        command.env_remove(onetaskgraph_core::SIMULATED_CLOCK_VARIABLE);
         command
             .current_dir(self.project())
             .env("XDG_CONFIG_HOME", self.config_home())

@@ -69,7 +69,9 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
-  `StatusNames`, `StatusName` and `UnmappedStatus`; and `SourceError`.
+  `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
+  `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
+  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.

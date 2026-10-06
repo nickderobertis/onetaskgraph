@@ -30,6 +30,9 @@ onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", ver
 onetaskgraph-live = { path = "crates/onetaskgraph-live" }
 
 async-trait = "0.1.92"
+# An asset's bytes over the stdio plugin protocol. Already in this lockfile through reqwest, so
+# naming it adds no crate to the closure.
+base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
 clap = { version = "4.6.6", features = ["derive"] }
 # The binary's per-variable template prompts. Only the binary crate may name it: nothing below

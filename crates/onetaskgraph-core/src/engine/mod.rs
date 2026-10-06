@@ -35,8 +35,8 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
     MetadataMatch, MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, StatusCategory, Task,
-    TaskQuery, TextFields, TextQuery,
+    ProjectQuery, Repository, SecretResolver, SharedClock, SourceError, SourceName, StatusCategory,
+    Task, TaskQuery, TextFields, TextQuery, system_clock,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use crate::GlobalId;
 use crate::config::{Config, Placement, Routes};
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
-use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
+use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;
@@ -982,7 +982,19 @@ impl Engine {
     /// expired token gets the other two rather than nothing.
     #[must_use]
     pub fn build(config: &Config, secrets: &dyn SecretResolver) -> Self {
-        let (ready, unavailable) = resolve_available(config, secrets);
+        Self::build_with_clock(config, secrets, &system_clock())
+    }
+
+    /// [`build`](Self::build), handing every in-process source `clock` to pace and back off
+    /// on — the process's one clock, which the binary takes from
+    /// [`process_clock`](crate::process_clock).
+    #[must_use]
+    pub fn build_with_clock(
+        config: &Config,
+        secrets: &dyn SecretResolver,
+        clock: &SharedClock,
+    ) -> Self {
+        let (ready, unavailable) = resolve_available_with_clock(config, secrets, clock);
         Self::new(
             ready
                 .into_iter()

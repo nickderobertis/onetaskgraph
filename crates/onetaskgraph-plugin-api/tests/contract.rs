@@ -34,6 +34,7 @@ impl TaskSource for Silent {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            assets: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
