@@ -299,11 +299,10 @@
 //! filed in another project of the team. Linear has no update conditional on where an issue is
 //! filed, so holding a status write to the scope would cost the read the budget refuses; the
 //! item was named outright, and the scope is what this source reads, lists and creates rather
-//! than where a status it is asked to set may land. Reads, listings and creation stay scoped. A
-//! task or a document written with no
-//! project is placed in that one, and one naming another is refused naming both. A project
-//! write other than to that project itself is refused: a project this source created would be
-//! one none of its reads could find.
+//! than where a status it is asked to set may land. Reads, listings and creation stay scoped: a
+//! task or a document written with no project is placed in that one, and one naming another is
+//! refused naming both. A project write other than to that project itself is refused before any
+//! request: a project this source created would be one none of its reads could find.
 //!
 //! ## Ruling: a narrow metadata write moves only the slot, and a task carries delivery
 //!
