@@ -89,5 +89,15 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
             path.display()
         )
     })?;
-    Ok((value, recorded["detail"].as_str().map(str::to_owned)))
+    let detail = match &recorded["detail"] {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(detail) => Some(detail.clone()),
+        other => {
+            return Err(format!(
+                "{budget}: {} records a `detail` that is not a string: {other}",
+                path.display()
+            ));
+        }
+    };
+    Ok((value, detail))
 }

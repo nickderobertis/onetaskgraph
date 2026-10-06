@@ -64,7 +64,6 @@ const PROJECT_STATUSES: &[(&str, &str)] = &[
     ("Abandoned", "canceled"),
 ];
 
-/// The source every configuration here names the Linear workspace by.
 const LINEAR: &str = "linear";
 
 /// The documents a whole project write sends of its own: the resolution when it is the first

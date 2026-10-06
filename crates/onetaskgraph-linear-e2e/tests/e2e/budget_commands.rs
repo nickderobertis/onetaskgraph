@@ -162,7 +162,7 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
         "`budgets` is keyed on the telemetry it reads: {:#}",
         targets["budgets"]
     );
-    // And the journeys write there: the build's own directory, unless a test names another.
+    // Only the build's own directory is what `test` declares; a test's override is not.
     if std::env::var_os(telemetry::DIRECTORY).is_none() {
         let directory = telemetry::directory();
         assert!(

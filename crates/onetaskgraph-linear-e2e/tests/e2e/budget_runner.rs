@@ -76,6 +76,11 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
     )
     .expect("writable");
     std::fs::write(
+        telemetry::file_in(&recorded, "linear-requests-wordless"),
+        json!({"value": 1, "detail": 7}).to_string(),
+    )
+    .expect("writable");
+    std::fs::write(
         telemetry::file_in(&recorded, "linear-requests-valueless"),
         json!({"detail": "no figure"}).to_string(),
     )
@@ -85,6 +90,7 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
         "linear-requests-unrecorded",
         "linear-requests-malformed",
         "linear-requests-valueless",
+        "linear-requests-wordless",
     ];
     let budgets = ids
         .iter()
@@ -115,7 +121,7 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
     assert_eq!(
         output.status.code(),
         Some(3),
-        "three budgets errored: {stderr}"
+        "four budgets errored: {stderr}"
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
     let results = report["results"].as_array().expect("results");
@@ -138,6 +144,10 @@ fn onebudgetspec_check_reports_what_was_recorded_and_errors_on_what_it_cannot_re
         ("linear-requests-unrecorded", "no telemetry at "),
         ("linear-requests-malformed", "is not JSON"),
         ("linear-requests-valueless", "records no numeric `value`"),
+        (
+            "linear-requests-wordless",
+            "records a `detail` that is not a string",
+        ),
     ] {
         let errored = result(id);
         assert_eq!(errored["verdict"], "error", "{errored:#}");
