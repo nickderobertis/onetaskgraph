@@ -534,3 +534,172 @@ async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_stagin
         b"before"
     );
 }
+
+/// A task `native` in `source`, holding each of `assets`.
+async fn holding(source: &dyn TaskSource, native: &str, assets: &[(&str, &[u8])]) {
+    let content: String = assets
+        .iter()
+        .map(|(asset, _)| format!("![{asset}](./{asset})\n"))
+        .collect();
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task(native, &content),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(assets),
+        )
+        .await
+        .expect("lands");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_asset_directory_or_asset_linked_out_of_the_folder_is_refused_and_nothing_there_moves() {
+    use std::os::unix::fs::symlink;
+    let (root, source) = folder();
+    let outside = tempfile::tempdir().expect("a folder outside the notes");
+    fs::write(outside.path().join("a.png"), b"outside").expect("a file outside");
+    fs::write(outside.path().join("b.png"), b"also outside").expect("a file outside");
+    let escapes = |error: SourceError| {
+        assert!(
+            matches!(error, SourceError::Config { ref message } if message.contains("escapes")),
+            "{error}"
+        );
+    };
+    let untouched = |outside: &Path| {
+        assert_eq!(files_in(outside), vec!["a.png", "b.png"]);
+        assert_eq!(fs::read(outside.join("a.png")).unwrap(), b"outside");
+    };
+
+    // The record's whole asset directory is a link out of the folder.
+    holding(source.as_ref(), "linked", &[("a.png", b"inside")]).await;
+    let directory = root.path().join("tasks/linked.assets");
+    fs::remove_dir_all(&directory).expect("the asset directory goes");
+    symlink(outside.path(), &directory).expect("a link in its place");
+    escapes(source.task_assets(&id("linked")).await.unwrap_err());
+    escapes(
+        source
+            .task_asset(&id("linked"), &name("a.png"))
+            .await
+            .unwrap_err(),
+    );
+    let file = root.path().join("tasks/linked.md");
+    let text = fs::read_to_string(&file).expect("the record");
+    for assets in [&[("a.png", b"new" as &[u8])][..], &[]] {
+        let content = if assets.is_empty() {
+            "none"
+        } else {
+            "![a](./a.png)"
+        };
+        escapes(
+            source
+                .write_task_with_assets(
+                    &ItemWrite {
+                        target: Some(id("linked")),
+                        item: task("linked", content),
+                        depends_on: Vec::new(),
+                    },
+                    None,
+                    &carrying(assets),
+                )
+                .await
+                .unwrap_err(),
+        );
+        untouched(outside.path());
+    }
+    escapes(source.delete_task(&id("linked")).await.unwrap_err());
+    assert_eq!(fs::read_to_string(&file).expect("the record stays"), text);
+    untouched(outside.path());
+
+    // One asset of the record is a link out of the folder.
+    holding(
+        source.as_ref(),
+        "one",
+        &[("a.png", b"inside"), ("b.png", b"b")],
+    )
+    .await;
+    let asset = root.path().join("tasks/one.assets/a.png");
+    fs::remove_file(&asset).expect("the asset goes");
+    symlink(outside.path().join("a.png"), &asset).expect("a link in its place");
+    escapes(source.task_assets(&id("one")).await.unwrap_err());
+    escapes(
+        source
+            .task_asset(&id("one"), &name("a.png"))
+            .await
+            .unwrap_err(),
+    );
+    escapes(
+        source
+            .write_task_with_assets(
+                &ItemWrite {
+                    target: Some(id("one")),
+                    item: task("one", "![b](./b.png)"),
+                    depends_on: Vec::new(),
+                },
+                None,
+                &carrying(&[("b.png", b"b")]),
+            )
+            .await
+            .unwrap_err(),
+    );
+    escapes(source.delete_task(&id("one")).await.unwrap_err());
+    untouched(outside.path());
+    assert_eq!(
+        fs::read(root.path().join("tasks/one.assets/b.png")).unwrap(),
+        b"b"
+    );
+
+    // A link that stays inside the folder is a place like any other, as it is for a record.
+    let elsewhere = root.path().join("kept");
+    fs::create_dir_all(&elsewhere).expect("a folder inside the notes");
+    holding(source.as_ref(), "inside", &[("a.png", b"inside")]).await;
+    let directory = root.path().join("tasks/inside.assets");
+    fs::rename(&directory, elsewhere.join("inside.assets")).expect("moved");
+    symlink(elsewhere.join("inside.assets"), &directory).expect("a link inside");
+    assert_eq!(
+        source
+            .task_asset(&id("inside"), &name("a.png"))
+            .await
+            .unwrap(),
+        Some(b"inside".to_vec())
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_asset_that_cannot_be_removed_fails_the_write_and_puts_the_record_back() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (root, source) = folder();
+    holding(source.as_ref(), "kept", &[("a.png", b"a"), ("b.png", b"b")]).await;
+    let file = root.path().join("tasks/kept.md");
+    let text = fs::read_to_string(&file).expect("the record");
+    let directory = root.path().join("tasks/kept.assets");
+    let permissions = fs::metadata(&directory).unwrap().permissions();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    // `a.png` is kept with the bytes it holds, so nothing is written there; `b.png` is dropped,
+    // and the folder will not let it go.
+    let refused = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: Some(id("kept")),
+                item: task("kept", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"a")]),
+        )
+        .await;
+    fs::set_permissions(&directory, permissions).unwrap();
+    let refused = refused.expect_err("the asset cannot be removed");
+    assert!(
+        matches!(refused, SourceError::Unavailable { ref message } if message.contains("cannot remove")),
+        "{refused}"
+    );
+    assert_eq!(fs::read_to_string(&file).expect("the record"), text);
+    assert_eq!(files_in(&directory), vec!["a.png", "b.png"]);
+    assert_eq!(fs::read(directory.join("b.png")).unwrap(), b"b");
+    assert_eq!(source.task_assets(&id("kept")).await.unwrap().len(), 2);
+}

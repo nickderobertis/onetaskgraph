@@ -12,6 +12,10 @@
 //! write does not name — and removing the record removes it. Only files whose names are asset
 //! names are ever written or removed here, so anything else a person put in the directory is
 //! left where it is.
+//!
+//! The directory and every asset in it are held to the rule the rest of this source keeps: a
+//! link may stand for either, and one that leads outside the configured root is refused as a
+//! configuration error before anything is read, written or removed through it.
 
 use std::fs;
 use std::io::Write as _;
@@ -28,16 +32,51 @@ pub(crate) const DIRECTORY_EXTENSION: &str = "assets";
 /// Staging files written by this process so far, so two never share a name.
 static STAGED: AtomicU64 = AtomicU64::new(0);
 
-/// The directory holding the assets of the record whose file is `record`.
-pub(crate) fn directory_of(record: &Path) -> PathBuf {
-    record.with_extension(DIRECTORY_EXTENSION)
+/// The directory holding the assets of the record whose file is `record`, in the folder
+/// rooted at `root`: refused when it is a link leading outside that root.
+pub(crate) fn directory_of(root: &Path, record: &Path) -> Result<PathBuf, SourceError> {
+    let directory = record.with_extension(DIRECTORY_EXTENSION);
+    confined(root, &directory)?;
+    Ok(directory)
+}
+
+/// Refuse `path` when it is a link that leads outside `root`, or one that leads nowhere.
+///
+/// What is not there, and what is no link, is left to the operation that reaches it.
+fn confined(root: &Path, path: &Path) -> Result<(), SourceError> {
+    let linked = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            return Err(SourceError::Unavailable {
+                message: format!("cannot read {}: {e}", path.display()),
+            });
+        }
+    };
+    if !linked {
+        return Ok(());
+    }
+    let canonical = fs::canonicalize(path).map_err(|e| SourceError::Config {
+        message: format!("cannot resolve {}: {e}", path.display()),
+    })?;
+    if canonical.starts_with(root) {
+        return Ok(());
+    }
+    Err(SourceError::Config {
+        message: format!(
+            "{} escapes configured root {}; next: replace the link with the directory or file \
+             itself",
+            path.display(),
+            root.display()
+        ),
+    })
 }
 
 /// Every asset the record whose file is `record` holds, by name.
-pub(crate) fn listed(record: &Path) -> Result<Vec<Asset>, SourceError> {
-    let directory = directory_of(record);
+pub(crate) fn listed(root: &Path, record: &Path) -> Result<Vec<Asset>, SourceError> {
+    let directory = directory_of(root, record)?;
     let mut assets = Vec::new();
-    for (name, path) in held(&directory)? {
+    for (name, path) in held(root, &directory)? {
         let bytes = fs::read(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot read {}: {e}", path.display()),
         })?;
@@ -53,8 +92,8 @@ pub(crate) fn listed(record: &Path) -> Result<Vec<Asset>, SourceError> {
 
 /// Every asset the record whose file is `record` holds, with its bytes: what putting the
 /// record's assets back after a failed write restores.
-pub(crate) fn files(record: &Path) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
-    held(&directory_of(record))?
+pub(crate) fn files(root: &Path, record: &Path) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
+    held(root, &directory_of(root, record)?)?
         .into_iter()
         .map(|(name, path)| {
             fs::read(&path)
@@ -67,8 +106,13 @@ pub(crate) fn files(record: &Path) -> Result<Vec<(AssetName, Vec<u8>)>, SourceEr
 }
 
 /// The bytes of the asset `name` the record whose file is `record` holds, when it holds it.
-pub(crate) fn bytes(record: &Path, name: &AssetName) -> Result<Option<Vec<u8>>, SourceError> {
-    let path = directory_of(record).join(name.as_str());
+pub(crate) fn bytes(
+    root: &Path,
+    record: &Path,
+    name: &AssetName,
+) -> Result<Option<Vec<u8>>, SourceError> {
+    let path = directory_of(root, record)?.join(name.as_str());
+    confined(root, &path)?;
     if !path.is_file() {
         return Ok(None);
     }
@@ -85,6 +129,7 @@ pub(crate) fn bytes(record: &Path, name: &AssetName) -> Result<Option<Vec<u8>>, 
 /// accepted only when the record whose file is `existing` already holds that asset with that
 /// digest, because this source records no upload a write could stand on otherwise.
 pub(crate) fn resolved(
+    root: &Path,
     existing: Option<&Path>,
     write: &AssetWrite,
 ) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
@@ -101,7 +146,7 @@ pub(crate) fn resolved(
         }
         let bytes = match (&payload.bytes, existing) {
             (Some(bytes), _) => bytes.clone(),
-            (None, Some(record)) => bytes(record, &payload.name)?
+            (None, Some(record)) => bytes(root, record, &payload.name)?
                 .filter(|held| asset_sha256(held) == payload.sha256)
                 .ok_or_else(|| SourceError::Refused {
                     message: format!(
@@ -135,8 +180,16 @@ pub(crate) fn resolved(
 }
 
 /// Make the record whose file is `record` hold exactly `files` as its assets.
-pub(crate) fn replace(record: &Path, files: &[(AssetName, Vec<u8>)]) -> Result<(), SourceError> {
-    let directory = directory_of(record);
+///
+/// Every asset already there is confined before anything is written, so no write or removal
+/// reaches through a link out of the folder.
+pub(crate) fn replace(
+    root: &Path,
+    record: &Path,
+    files: &[(AssetName, Vec<u8>)],
+) -> Result<(), SourceError> {
+    let directory = directory_of(root, record)?;
+    let present = held(root, &directory)?;
     if !files.is_empty() {
         fs::create_dir_all(&directory).map_err(|e| SourceError::Unavailable {
             message: format!("cannot create {}: {e}", directory.display()),
@@ -149,7 +202,7 @@ pub(crate) fn replace(record: &Path, files: &[(AssetName, Vec<u8>)]) -> Result<(
         }
         staged(&path, bytes)?;
     }
-    for (name, path) in held(&directory)? {
+    for (name, path) in present {
         if !files.iter().any(|(kept, _)| kept == &name) {
             fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
                 message: format!("cannot remove {}: {e}", path.display()),
@@ -160,12 +213,13 @@ pub(crate) fn replace(record: &Path, files: &[(AssetName, Vec<u8>)]) -> Result<(
 }
 
 /// Remove every asset of the record whose file was `record`, and the directory once empty.
-pub(crate) fn remove(record: &Path) -> Result<(), SourceError> {
-    replace(record, &[])
+pub(crate) fn remove(root: &Path, record: &Path) -> Result<(), SourceError> {
+    replace(root, record, &[])
 }
 
-/// The assets in `directory`, by name: every file there whose name is an asset name.
-fn held(directory: &Path) -> Result<Vec<(AssetName, PathBuf)>, SourceError> {
+/// The assets in `directory`, by name: every file there whose name is an asset name, each
+/// refused when it is a link leading outside `root`.
+fn held(root: &Path, directory: &Path) -> Result<Vec<(AssetName, PathBuf)>, SourceError> {
     let entries = match fs::read_dir(directory) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         entries => entries.map_err(|e| SourceError::Unavailable {
@@ -185,6 +239,7 @@ fn held(directory: &Path) -> Result<Vec<(AssetName, PathBuf)>, SourceError> {
         else {
             continue;
         };
+        confined(root, &path)?;
         if path.is_file() {
             held.push((name, path));
         }
@@ -205,6 +260,12 @@ fn remove_if_empty(directory: &Path) -> Result<(), SourceError> {
             .is_none(),
     };
     if empty {
+        // llmlint: ignore[changed_behavior_has_e2e] Removing a directory just found empty fails
+        // only when its parent folder refuses the removal, and every path here has just written
+        // or removed the record's own file in that same folder — so the refusal reaches that
+        // write first, which the suite does prove. Failing here alone needs the folder's
+        // permissions to change between two calls, which no test can stage without a double of
+        // the filesystem, and the repository's test rules forbid one.
         fs::remove_dir(directory).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", directory.display()),
         })?;

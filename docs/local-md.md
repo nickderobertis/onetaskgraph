@@ -436,6 +436,10 @@ tasks/alpha/fix-login.assets/before.png
 - **Nothing in it is a record.** This source reads only `.md` files, and an asset's name ends
   in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, so walking `tasks/`, `projects/` and
   `documents/` passes over every asset directory.
+- **Nothing is read or written through a link out of the folder.** The asset directory, and
+  any asset in it, may be a link, as a record may; one that leads outside the configured root
+  is refused as a configuration error — a read, a write and a removal of the record alike —
+  before anything is read, written or removed through it, and the record is left as it was.
 
 ## Where this source says an entity is
 

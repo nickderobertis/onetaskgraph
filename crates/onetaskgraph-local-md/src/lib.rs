@@ -3160,11 +3160,13 @@ impl LocalMdSource {
             Err(SourceError::Refused { .. }) => return Ok(()),
             Err(other) => return Err(other),
         };
+        // An asset directory leading out of the folder is refused before the record goes.
+        assets::directory_of(&self.root, &path)?;
         fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", path.display()),
         })?;
         // The record's assets go with it: nothing is left of a removed record.
-        assets::remove(&path)
+        assets::remove(&self.root, &path)
     }
 
     /// The file and the assets of the item `target` names, as they are before a write over it:
@@ -3179,7 +3181,7 @@ impl LocalMdSource {
         };
         Ok(Some(Held {
             text: Self::read_text(&path)?,
-            assets: assets::files(&path)?,
+            assets: assets::files(&self.root, &path)?,
         }))
     }
 
@@ -3194,7 +3196,7 @@ impl LocalMdSource {
         before: Option<Held>,
     ) -> Result<(), SourceError> {
         let path = self.existing(kind, id)?;
-        let Err(failed) = assets::replace(&path, files) else {
+        let Err(failed) = assets::replace(&self.root, &path, files) else {
             return Ok(());
         };
         // Best effort, and the failure that started it is what is reported: a putting back that
@@ -3207,11 +3209,11 @@ impl LocalMdSource {
         match before {
             Some(held) => {
                 let _ = write_atomically(&path, &held.text);
-                let _ = assets::replace(&path, &held.assets);
+                let _ = assets::replace(&self.root, &path, &held.assets);
             }
             None => {
                 let _ = fs::remove_file(&path);
-                let _ = assets::remove(&path);
+                let _ = assets::remove(&self.root, &path);
             }
         }
         Err(failed)
@@ -3220,7 +3222,7 @@ impl LocalMdSource {
     /// The assets the item `id` names holds, or none when there is no such item.
     fn held_assets(&self, kind: Kind, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
         match self.locate(kind, id)? {
-            Some(path) => assets::listed(&path),
+            Some(path) => assets::listed(&self.root, &path),
             None => Ok(Vec::new()),
         }
     }
@@ -3233,7 +3235,7 @@ impl LocalMdSource {
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
         match self.locate(kind, id)? {
-            Some(path) => assets::bytes(&path, name),
+            Some(path) => assets::bytes(&self.root, &path, name),
             None => Ok(None),
         }
     }
@@ -3250,7 +3252,7 @@ impl LocalMdSource {
             Some(target) => self.locate(kind, target)?,
             None => None,
         };
-        assets::resolved(existing.as_deref(), write)
+        assets::resolved(&self.root, existing.as_deref(), write)
     }
 
     /// The path of the item `id` names in that folder, refusing when there is no such file.
