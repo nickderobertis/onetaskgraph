@@ -26,11 +26,3 @@ serde_json.workspace = true
 # Reads budgets.yaml in the test holding its commands to what every runner can start.
 serde_norway.workspace = true
 tokio.workspace = true
-
-# The runner every budget of budgets.yaml names: it reads the telemetry the `e2e` journeys
-# recorded and reports it. Not a test of its own, so `cargo test` of this package never runs it.
-[[test]]
-name = "budgets"
-path = "tests/budgets/main.rs"
-harness = false
-test = false

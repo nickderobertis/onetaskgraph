@@ -2,7 +2,7 @@
 //!
 //! Each `measure_*` journey here drives one write path and records what it counted as the
 //! telemetry of one budget in `crates/onetaskgraph-linear-e2e/budgets.yaml`, while this suite's
-//! ordinary `test` target runs; that file's runner, `tests/budgets/main.rs`, hands the figure to
+//! ordinary `test` target runs; that file's runner, `budget_runner::report`, hands the figure to
 //! `onebudgetspec check`, which alone compares it with the threshold. The cold figures go
 //! through the real binary, one invocation being one fresh source instance; the warm ones
 //! through `onetaskgraph-core`'s own `Engine`, which is what a long-lived caller links, and

@@ -78,8 +78,8 @@ fn every_budget_names_the_one_runner_and_no_shell() {
     let argv = first.as_array().expect("an argv");
     let runner = argv
         .windows(2)
-        .any(|pair| pair[0] == "--test" && pair[1] == "budgets");
-    assert!(runner, "the command runs the `budgets` runner: {argv:?}");
+        .any(|pair| pair[0] == "--" && pair[1] == "budget_runner::report");
+    assert!(runner, "the command runs `budget_runner::report`: {argv:?}");
 }
 
 #[test]
@@ -140,7 +140,8 @@ fn a_budget_id_that_is_not_one_names_no_file() {
     }
 }
 
-/// The version `text` gives after `prefix`, on the one line that starts with it.
+/// The version `text` pins after `prefix`. Both manifests spell a pin as one `name = value`
+/// line, so reading that line is enough and needs no parser of either format.
 fn pinned<'a>(text: &'a str, prefix: &str) -> &'a str {
     let line = text
         .lines()
@@ -160,4 +161,37 @@ fn the_reporter_is_the_release_of_the_onebudgetspec_that_judges_it() {
         "Cargo.toml's onebudgetspec-core and package.json's @onebudgetspec/cli are one release: \
          one release workflow publishes both, so move them together"
     );
+}
+
+#[test]
+fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
+    let project: Value = serde_json::from_str(&manifest("project.json")).expect("project.json");
+    let targets = &project["targets"];
+    assert_eq!(
+        targets["test"]["outputs"],
+        serde_json::json!([format!(
+            "{{workspaceRoot}}/target/debug/{}",
+            telemetry::BELOW_BUILD
+        )]),
+        "a cache hit of `test` restores the telemetry `budgets` reads"
+    );
+    let hashed = format!("**/{}/*.json", telemetry::BELOW_BUILD);
+    assert!(
+        targets["budgets"]["inputs"]
+            .as_array()
+            .expect("inputs")
+            .contains(&serde_json::json!({"dependentTasksOutputFiles": hashed})),
+        "`budgets` is keyed on the telemetry it reads: {:#}",
+        targets["budgets"]
+    );
+    // And the journeys write there: the build's own directory, unless a test names another.
+    if std::env::var_os(telemetry::DIRECTORY).is_none() {
+        let written = telemetry::file("linear-requests-anything");
+        let directory = written.parent().expect("a directory");
+        assert!(
+            directory.ends_with(telemetry::BELOW_BUILD),
+            "{}",
+            written.display()
+        );
+    }
 }

@@ -1,6 +1,6 @@
 # The requests a Linear status write sends, counted at the loopback Linear's endpoint by the
 # journeys of tests/e2e/linear_budget.rs while this project's `test` target runs. Each budget's
-# command is tests/budgets/main.rs, which reports what that run recorded.
+# command is tests/e2e/budget_runner.rs, which reports what that run recorded.
 schema_version: 1
 budgets:
   - id: linear-requests-per-status-write-cold
@@ -9,7 +9,7 @@ budgets:
       It protects headroom on the production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 2
@@ -19,7 +19,7 @@ budgets:
       It protects headroom on the production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 1
@@ -29,7 +29,7 @@ budgets:
       instance. It protects headroom on the production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 3
@@ -40,7 +40,7 @@ budgets:
       shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "budgets"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 2

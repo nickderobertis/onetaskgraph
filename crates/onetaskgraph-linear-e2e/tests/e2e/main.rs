@@ -13,6 +13,7 @@
 use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 
 mod budget_commands;
+mod budget_runner;
 mod linear;
 mod linear_budget;
 mod linear_status;

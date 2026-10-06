@@ -1,18 +1,30 @@
 //! Where the Linear request budgets' telemetry lives: one JSON file per budget,
 //! `{"value": <requests>, "detail": "<how they were counted>"}`, named after the budget's id.
 //!
-//! The `measure_*` journeys of the `e2e` target write it while that target runs, and
-//! `tests/budgets/main.rs` reads it back for `onebudgetspec check`. The directory is
+//! The `measure_*` journeys write it while the `e2e` target runs, and `budget_runner::report`
+//! reads it back for `onebudgetspec check`. The directory is
 //! `<target>/<profile>/telemetry/onetaskgraph-linear-e2e`, found from the running test
-//! executable the way `onetaskgraph_e2e_support::binary` finds the binary, so the writer and
-//! the reader — two test executables of one build — agree on it whatever the target directory
-//! is. It is never committed, and it is the `test` target's declared output, so a cache hit of
-//! that target restores what its last run recorded.
+//! executable the way `onetaskgraph_e2e_support::binary` finds the binary, so the writer and the
+//! reader agree on it whatever the target directory is. It is never committed, and it is the
+//! `test` target's declared output, so a cache hit of that target restores what its last run
+//! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
+//! own without touching what the journeys recorded.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The variable that, when set, names the telemetry directory in place of the build's.
+pub const DIRECTORY: &str = "LINEAR_BUDGET_TELEMETRY_DIR";
+
+/// The directory's path below the build directory: what the `test` target declares as its
+/// output and the `budgets` target hashes.
+pub const BELOW_BUILD: &str = "telemetry/onetaskgraph-linear-e2e";
 
 /// The file `budget`'s telemetry is recorded in.
 pub fn file(budget: &str) -> PathBuf {
+    let name = format!("{budget}.json");
+    if let Some(directory) = std::env::var_os(DIRECTORY) {
+        return PathBuf::from(directory).join(name);
+    }
     let executable = std::env::current_exe().expect("the running test executable has a path");
     let mut directory = executable
         .parent()
@@ -21,10 +33,7 @@ pub fn file(budget: &str) -> PathBuf {
     if directory.file_name().is_some_and(|leaf| leaf == "deps") {
         directory.pop();
     }
-    directory
-        .join("telemetry")
-        .join("onetaskgraph-linear-e2e")
-        .join(format!("{budget}.json"))
+    directory.join(Path::new(BELOW_BUILD)).join(name)
 }
 
 /// The figure and the detail `budget`'s journey recorded, or why there is none to read.
