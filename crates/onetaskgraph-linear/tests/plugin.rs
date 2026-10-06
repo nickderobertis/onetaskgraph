@@ -131,10 +131,10 @@ fn team_filtering_server(projects: bool) -> String {
             let second = if narrowed {
                 ""
             } else {
-                r#",{"id":"p2","name":"Other","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Started","type":"started"},"labels":{"nodes":[]}}"#
+                r#",{"id":"p2","name":"Other","content":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Started","type":"started"},"labels":{"nodes":[]}}"#
             };
             format!(
-                r#"{{"data":{{"projects":{{"nodes":[{{"id":"p1","name":"Team","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{{"name":"Started","type":"started"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
+                r#"{{"data":{{"projects":{{"nodes":[{{"id":"p1","name":"Team","content":null,"url":null,"createdAt":null,"updatedAt":null,"status":{{"name":"Started","type":"started"}},"labels":{{"nodes":[]}}}}{second}],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}"#
             )
         } else {
             let second = if narrowed {
@@ -203,11 +203,18 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         ),
         (
             "ProjectCreateInput",
-            &["teamIds", "name", "description", "statusId", "labelIds"][..],
+            &[
+                "teamIds",
+                "name",
+                "description",
+                "content",
+                "statusId",
+                "labelIds",
+            ][..],
         ),
         (
             "ProjectUpdateInput",
-            &["name", "description", "statusId", "labelIds"][..],
+            &["name", "description", "content", "statusId", "labelIds"][..],
         ),
         (
             "IssueRelationCreateInput",
@@ -641,7 +648,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
         "commentUpdate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
                           "createdAt":null,"updatedAt":null,"user":{"displayName":"ada"}}},
         "commentDelete": {"success":true},
-        "project": {"id":"P","name":"project","description":null,"url":null,"createdAt":null,
+        "project": {"id":"P","name":"project","content":null,"url":null,"createdAt":null,
                     "updatedAt":null,"status":{"name":"Todo","type":"planned"},
                     "labels":{"nodes":[]},
                     "relations":relations("dependency","relatedProject","project","PR"),
@@ -1289,7 +1296,7 @@ async fn an_archived_or_trashed_item_is_not_held_by_this_source_over_real_http()
         ),
         (
             "project",
-            serde_json::json!({"project":{"id":"P","name":"gone","description":null,"url":null,
+            serde_json::json!({"project":{"id":"P","name":"gone","content":null,"url":null,
                 "createdAt":null,"updatedAt":null,"archivedAt":"2026-09-04T18:55:13.746Z",
                 "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}}}),
         ),
@@ -1332,7 +1339,7 @@ async fn a_project_this_source_created_is_removed_again_over_real_http() {
     // and a project is one of the two things it can have written. An id naming nothing is
     // the state the caller asked for, so it is answered without a mutation — the same
     // reading `delete_task` gives it.
-    let project = |id: &str| serde_json::json!({"project":{"id":id,"name":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}});
+    let project = |id: &str| serde_json::json!({"project":{"id":id,"name":"One","content":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}});
     let (endpoint, wire) = response_server(vec![
         project("P-GONE"),
         serde_json::json!({"projectDelete":{"success":true}}),
@@ -1392,15 +1399,15 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         // A rewrite reads back the relations it replaces in its own answer.
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW","relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
-        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
-        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","description":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW","relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
-        serde_json::json!({"project":{"description":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
+        serde_json::json!({"project":{"content":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P2"}}}),
     ]);
@@ -2729,7 +2736,7 @@ async fn graphql_rate_limit_uses_http_hint_and_viewer_id_is_validated() {
             SourceError::Malformed { .. }
         ));
     }
-    let valid_project = serde_json::json!({"id":"p","name":"p","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"x","type":"started"},"labels":{"nodes":[]}});
+    let valid_project = serde_json::json!({"id":"p","name":"p","content":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"x","type":"started"},"labels":{"nodes":[]}});
     for field in ["status", "labels"] {
         let mut project = valid_project.clone();
         project.as_object_mut().unwrap().remove(field);
@@ -2878,14 +2885,20 @@ async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_level
     }
 }
 
-/// One Linear relations response for `root`, whose description records `recorded`.
+/// One Linear relations response for `root`, whose long form — an issue's `description`, a
+/// project's `content` — records `recorded`.
 fn relations_recording(root: &str, recorded: &serde_json::Value) -> String {
     let slot = format!(
         "body\n\n<!-- onetaskgraph.metadata\n{}\n-->",
         serde_json::json!({ "onetaskgraph.depends_on": recorded })
     );
+    let long_form = if root == "project" {
+        "content"
+    } else {
+        "description"
+    };
     serde_json::json!({"data":{(root):{
-        "description": slot,
+        (long_form): slot,
         "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
         "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
     }}})
@@ -3126,8 +3139,9 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         // Linear's two roots do not share a relation vocabulary: a project dependency is
         // typed `dependency` and an issue's is `blocks`.
         let ordering = if projects { "dependency" } else { "blocks" };
+        let long = if projects { "content" } else { "description" };
         let body = format!(
-            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[{{"type":"{ordering}","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"{long}":null,"relations":{{"nodes":[{{"type":"{ordering}","{related}":{{"id":"other"}}}}],"pageInfo":{{"hasNextPage":true,"endCursor":"next-edge"}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, _) = server("200 OK", "", body);
         let first = if projects {
@@ -3143,7 +3157,7 @@ async fn dependency_cursors_are_sent_on_second_task_and_project_requests() {
         };
         let cursor = first.next.unwrap();
         let body = format!(
-            r#"{{"data":{{"{root}":{{"description":null,"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
+            r#"{{"data":{{"{root}":{{"{long}":null,"relations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}},"inverseRelations":{{"nodes":[],"pageInfo":{{"hasNextPage":false,"endCursor":null}}}}}}}}}}"#
         );
         let (endpoint, wire) = server("200 OK", "", body);
         let second = PageRequest {
@@ -3241,7 +3255,7 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
     assert_eq!(one.key.as_deref(), Some("ENG-1"));
     assert_eq!(one.id.0, "i1");
     assert!(wire.recv().unwrap().contains("identifier"));
-    let project = r#"{"data":{"project":{"id":"p1","name":"One","description":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}}}"#;
+    let project = r#"{"data":{"project":{"id":"p1","name":"One","content":null,"url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Done","type":"completed"},"labels":{"nodes":[]}}}}"#;
     let (endpoint, _) = server("200 OK", "", project);
     // Through the project side of a mapping naming `Done`: what a project reads as is its
     // kind's mapping, never its `ProjectStatusType`.
@@ -4797,9 +4811,9 @@ async fn malformed_comment_shapes_are_rejected_rather_than_read_past() {
     }
 }
 
-/// What `project(id:)` answers for one project carrying `description`.
-fn held_project(id: &str, description: &str) -> serde_json::Value {
-    serde_json::json!({"project":{"id":id,"name":"Fixture project","description":description,
+/// What `project(id:)` answers for one project carrying `content`.
+fn held_project(id: &str, content: &str) -> serde_json::Value {
+    serde_json::json!({"project":{"id":id,"name":"Fixture project","content":content,
         "url":"https://linear.app/acme/project/p1","createdAt":null,"updatedAt":null,
         "archivedAt":null,"status":{"name":"Started","type":"started"},
         "labels":{"nodes":[{"id":"pl","name":"roadmap","color":null}]}}})
@@ -4813,7 +4827,7 @@ fn held_document(id: &str, content: &str) -> serde_json::Value {
 }
 
 /// One metadata key of a task, a project and a document is set by one read and one update
-/// carrying the long-form field alone — `description`, `description` and `content` — which
+/// carrying the long-form field alone — `description`, `content` and `content` — which
 /// differs from what Linear holds only inside the trailing slot: every byte above it, the
 /// person's own spacing included, goes back as it was, and so does every other key. The
 /// answer is the record read back, and a key already holding the value is the read alone.
@@ -4876,7 +4890,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     );
     assert_eq!(
         requests[1]["variables"],
-        serde_json::json!({"id":"p1","input":{"description":sent_back}})
+        serde_json::json!({"id":"p1","input":{"content":sent_back}})
     );
 
     let (endpoint, wire) = response_server(vec![
@@ -5138,7 +5152,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
         with_slot(
             include_str!("fixtures/projects.json"),
             "projects",
-            "description",
+            "content",
             "Project body",
             &slot,
         ),
@@ -6492,4 +6506,168 @@ async fn a_status_write_is_answered_only_by_the_issue_it_addressed() {
         sent[1]["variables"],
         serde_json::json!({"id": identifier("I-1"), "input": {"stateId": "STATE"}})
     );
+}
+
+/// About ten kilobytes of JSON under one caller key: a plan's budget answers, the size the
+/// first consumer of a project's metadata keeps there, with every character the slot's code
+/// span has to carry — quotes, backslashes, `<`, `>`, a backtick, `-->` and non-ASCII text.
+fn budget_answers() -> serde_json::Value {
+    let budgets = (0..60)
+        .map(|index| {
+            serde_json::json!({
+                "issue": format!("plan:T-{index}"),
+                "tokens": 120_000 + index,
+                "turns": index % 9,
+                "note": format!(
+                    "Budget {index}: \"quoted\", back\\slash, <tag> & `tick` --> naïve café — {}",
+                    "x".repeat(40)
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"version": 3, "budgets": budgets})
+}
+
+/// A stand-in for the one Linear workspace a project write lands in: it keeps the `content` a
+/// `projectCreate` or `projectUpdate` sends and answers `project(id:)` with it, and refuses a
+/// project write that sends a `description`. Each request is read whole, by its
+/// `Content-Length`, because a write of this size need not arrive in one read.
+fn project_workspace() -> (String, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let kept = held.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 8192];
+            let body = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                bytes.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break body.to_owned();
+                    }
+                }
+                assert!(n > 0, "the request ended before its body");
+            };
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let query = request["query"].as_str().unwrap_or_default();
+            let input = &request["variables"]["input"];
+            let data = if query.contains("projectCreate(") || query.contains("projectUpdate(") {
+                assert!(
+                    input.get("description").is_none(),
+                    "a project's long form is its content, never its description; sent {:?}",
+                    input
+                        .as_object()
+                        .map(|input| input.keys().collect::<Vec<_>>())
+                );
+                *kept.lock().unwrap() = input["content"].as_str().map(str::to_owned);
+                if query.contains("projectCreate(") {
+                    serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-BIG"}}})
+                } else {
+                    serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-BIG"}}})
+                }
+            } else if query.contains("project(id:$id)") {
+                serde_json::json!({"project":{"id":"P-BIG","name":"The plan",
+                    "content":*kept.lock().unwrap(),"url":null,"createdAt":null,
+                    "updatedAt":null,"archivedAt":null,
+                    "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}}})
+            } else {
+                writable_resolution()
+            };
+            let body = serde_json::to_string(&serde_json::json!({ "data": data })).unwrap();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        }
+    });
+    (format!("http://{addr}/graphql"), held)
+}
+
+/// A project carrying about ten kilobytes of JSON under one caller key — the size a plan's
+/// budget answers come to — lands in the project's `content`, which Linear documents as the
+/// project's Markdown body, and reads back with that value equal: it is never cut short, and
+/// never put in `description`, which Linear documents as the project's short description.
+#[tokio::test]
+async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_content_and_reads_back_equal()
+ {
+    let answers = budget_answers();
+    let encoded = serde_json::to_string(&answers).unwrap();
+    assert!(
+        (9_500..20_000).contains(&encoded.len()),
+        "about ten kilobytes of JSON: {}",
+        encoded.len()
+    );
+    let (endpoint, held) = project_workspace();
+    let source = writable_source(&endpoint);
+    let written = source
+        .write_project(&ItemWrite {
+            target: None,
+            item: Project {
+                id: "plan".into(),
+                title: "The plan".into(),
+                content: Some("The plan's description.".into()),
+                status: Status {
+                    category: StatusCategory::Todo,
+                    name: "todo".into(),
+                },
+                labels: Vec::new(),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata: [
+                    ("onepipeline.budgets".to_owned(), answers.clone()),
+                    (
+                        "onetaskgraph.template".to_owned(),
+                        serde_json::json!({"template":"plan-description","digest":format!("sha256:{}", "a".repeat(64)),"body_digest":format!("sha256:{}", "b".repeat(64)),"answers_digest":format!("sha256:{}", "c".repeat(64))}),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                repositories: Vec::new(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect("a project of this size is written");
+    assert_eq!(written, NativeId::from("P-BIG"));
+    let stored = held
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the content Linear holds");
+    assert!(
+        stored.len() > encoded.len(),
+        "the whole value is in the content"
+    );
+    assert!(stored.starts_with("The plan's description.\n\n<!-- onetaskgraph.metadata `"));
+
+    let project = source
+        .get_project(&"P-BIG".into())
+        .await
+        .unwrap()
+        .expect("the project reads back");
+    assert_eq!(project.content.as_deref(), Some("The plan's description."));
+    assert_eq!(project.metadata.get("onepipeline.budgets"), Some(&answers));
+    assert!(project.metadata.contains_key("onetaskgraph.template"));
+
+    // And a second key of the same size set later, through the narrow write, keeps the first.
+    let key = MetadataKey::new("onepipeline.budgets_previous").unwrap();
+    let after = source
+        .set_project_metadata(&"P-BIG".into(), &key, &answers)
+        .await
+        .unwrap()
+        .expect("the project is held");
+    assert_eq!(after.metadata.get(key.as_str()), Some(&answers));
+    assert_eq!(after.metadata.get("onepipeline.budgets"), Some(&answers));
 }

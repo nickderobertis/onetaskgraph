@@ -880,8 +880,9 @@ them do; this is the inventory of what is owed, not a status board.
     the provenance a task's records; `project create --id` over a held project replaces its
     rendering and keeps its status, labels, repositories, other metadata and dependencies; a
     folder of Markdown keeps its answers block through a metadata write and a copy over it; and
-    a copy into another folder or a board carries the content, the caller's keys and the entry,
-    and no answers.
+    a copy into another folder, a board or a Linear workspace carries the content, the caller's
+    keys and the entry, and no answers — with about ten kilobytes of JSON under one caller key
+    reading back whole on the board's body slot and in a Linear project's `content`.
 
 ## What a copied document's references are pointed at
 

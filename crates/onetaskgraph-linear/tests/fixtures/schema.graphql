@@ -101,6 +101,14 @@
 # `Query.teams` gains its `first: Int` argument on 2026-10-05, from the published schema,
 # where it is every connection's: the resolution document asks for two teams, because the
 # live journey sent it at Linear's default page and Linear refused it `Query too complex`.
+#
+# A project's long form carries an eleventh date. `Project.content`, documented there as "The
+# project's content in markdown format.", and the `content` member of `ProjectCreateInput` and
+# `ProjectUpdateInput`, "The project content as markdown.", are pinned 2026-10-06 from that same
+# published SDK schema file, still at commit b37823be308a42f837277671f3ded66d33d92e6c, where
+# `Project.description` is "The short description of the project." The plugin keeps a project's description and its metadata slot in `content` from
+# then on and neither selects nor sends a project's `description`, which stays here only as
+# the member Linear still publishes.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
   viewer: User!
@@ -162,6 +170,7 @@ type Project {
   id: ID!
   name: String!
   description: String
+  content: String
   url: String
   createdAt: DateTime
   updatedAt: DateTime
@@ -491,12 +500,14 @@ input ProjectCreateInput {
   teamIds: [String!]!
   name: String!
   description: String
+  content: String
   statusId: String!
   labelIds: [String!]!
 }
 input ProjectUpdateInput {
   name: String
   description: String
+  content: String
   statusId: String
   labelIds: [String!]
 }

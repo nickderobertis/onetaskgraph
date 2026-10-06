@@ -224,8 +224,8 @@ report the same edge with the waiting item as `from`, rather than two mirrored o
 ### Linear's slot, settled
 
 Linear gives a caller no field of their own, so the source owns a **trailing Markdown
-comment at the end of the item's `description`** (a document's `content`), on one line, with
-the canonical JSON inside a code span:
+comment at the end of the item's long form** — an issue's `description`, a project's or a
+document's `content` — on one line, with the canonical JSON inside a code span:
 
 ```text
 The description a person wrote.
@@ -238,6 +238,16 @@ content, its labels, its state — still round-trips unchanged beside the metada
 slot is inside a field Linear already treats as free text. And a person opening that issue in
 Linear's own interface still sees their issue rather than a payload, because Linear renders the
 description as Markdown and a Markdown comment does not render.
+
+**A project's long form is its `content`, and that is a breaking change from earlier
+releases.** Linear's schema documents `Project.description` as "the short description of the
+project" and `Project.content` as the project's Markdown body, and a project's description
+plus a slot holding a plan's budget answers — about ten kilobytes of JSON under one key — is
+a long form. Earlier releases kept a project's description and its slot in `description`; this
+source no longer reads that field at all, so a project written by one of them reads with no
+content and no metadata — no origin, no member keys, no recorded far ends — until it is copied
+again or migrated by moving its `description` into its `content`. Issues and documents are
+unchanged.
 
 The code span is Linear's doing. Linear normalizes the text *inside* an HTML comment in a
 description or a document as it normalizes prose — observed 2026-10-02: a domain-like key such
@@ -265,8 +275,8 @@ A task's `delivers` and `delivered_by` live in that same slot, under `onetaskgra
 and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape and the rules
 `github-projects` keeps in its body slot. A narrow write — `metadata set`, the store's
 `delivered_by`, a copy recording `onetaskgraph.copies`, a regenerated rendering — sends one
-update of the item's `description` (a document's `content`) that differs from what Linear
-holds only inside the slot.
+update of the item's long form — an issue's `description`, a project's or a document's
+`content` — that differs from what Linear holds only inside the slot.
 
 **So the slot is one slot in two spellings, and each source writes the one its host keeps byte
 for byte.** Linear writes the code span and reads both. `github-projects` writes and reads the
@@ -321,7 +331,7 @@ always the value it was handed, and the record's location when the source report
 | `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly |
 | `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label, status or field request, and nothing at all when the key already holds the value |
 | `in-memory` | holds the value for the life of its process |
-| `linear` | one update of the issue's or project's `description`, or the document's `content`, that changes only its trailing metadata slot — every byte above the slot as it was; nothing at all when the key already holds the value |
+| `linear` | one update of the issue's `description`, or the project's or the document's `content`, that changes only its trailing metadata slot — every byte above the slot as it was; nothing at all when the key already holds the value |
 | a stdio plugin | answers the three methods of `docs/plugin-protocol.md` §4.18 when its handshake declares `metadata_updates` (§3.7), and is refused, without being asked, when it does not: `the <kind> plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |
 
 A source with no write side is refused naming its plugin, a record the source does not hold is
@@ -422,7 +432,7 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `local-md` | an entry of the front matter's `metadata:` block, one line of compact JSON; a record whose `metadata:` is written on one line, or that this source otherwise cannot edit one key of narrowly, cannot hold it |
 | `in-memory` | beside its other metadata, for the life of its process |
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
-| `linear` | the trailing metadata slot of the issue's or project's `description`, or the document's `content`, beside the caller's keys |
+| `linear` | the trailing metadata slot of the issue's `description`, or the project's or the document's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
@@ -454,6 +464,6 @@ destination project keeps the ones it holds, which describe *its* plan. `task li
 | `local-md` | entries of the project file's front matter `metadata:` block |
 | `in-memory` | beside its other metadata, for the life of its process |
 | `github-projects` | the trailing metadata slot of the project issue's body, beside the caller's keys |
-| `linear` | the trailing metadata slot of the project's description, beside the caller's keys |
+| `linear` | the trailing metadata slot of the project's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps a project's metadata, through its project write |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
+use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board, linear_workspace};
 use crate::machine::{bundle, validates};
 
 /// A plan-description template: one required variable, one list with a default, and one
@@ -74,6 +74,12 @@ impl Plan {
     }
 
     fn with_board(board: bool) -> Self {
+        Self::with_hosts(board, false)
+    }
+
+    /// The plan, with the loopback board when `board` and a loopback Linear workspace called
+    /// `linear` when `linear`.
+    fn with_hosts(board: bool, linear: bool) -> Self {
         let sandbox = Sandbox::new();
         let notes = sandbox.subdirectory("notes");
         let back = sandbox.subdirectory("back");
@@ -91,6 +97,18 @@ impl Plan {
             sources["board"] = json!({"plugin": "github-projects", "config": config});
             fields
         });
+        if linear {
+            let (config, _) = linear_workspace(
+                &sandbox,
+                json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+                       "task_dependencies": [], "project_dependencies": []}),
+            );
+            sources["linear"] = json!({"plugin": "linear", "config": config});
+            // Each stand-in writes the one secrets file with its own credential alone.
+            sandbox.secrets_file(
+                "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n",
+            );
+        }
         sandbox.project_document(&document(&sources));
         Self {
             sandbox,
@@ -960,4 +978,75 @@ fn a_rendered_project_copies_with_its_content_metadata_and_provenance_and_no_ans
         after["metadata"]["onetaskgraph.template"]["body_digest"],
         json!(sha256(after["content"].as_str().unwrap()))
     );
+}
+
+/// About ten kilobytes of JSON under one caller key — a plan's budget answers — with every
+/// character a metadata slot has to carry.
+fn budget_answers() -> Value {
+    let budgets = (0..60)
+        .map(|index| {
+            json!({
+                "issue": format!("plan:T-{index}"),
+                "tokens": 120_000 + index,
+                "note": format!(
+                    "Budget {index}: \"quoted\", back\\slash, <tag> & `tick` --> naïve café — {}",
+                    "x".repeat(40)
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({"version": 3, "budgets": budgets})
+}
+
+#[test]
+fn a_rendered_project_with_ten_kilobytes_of_metadata_copies_into_a_board_and_linear_whole() {
+    let plan = Plan::with_hosts(true, true);
+    let answers = budget_answers();
+    let encoded = answers.to_string();
+    assert!(
+        (9_500..20_000).contains(&encoded.len()),
+        "about ten kilobytes of JSON: {}",
+        encoded.len()
+    );
+    let metadata = format!("onepipeline.budgets={encoded}");
+    let id = plan.create(
+        "notes",
+        "plan",
+        "The plan",
+        &["--var", "goal=Ship it", "--metadata", &metadata],
+    );
+    let authored = plan.project(&id);
+    assert_eq!(authored["metadata"]["onepipeline.budgets"], answers);
+
+    for destination in ["board", "linear"] {
+        let out = plan.json(&["project", "copy", &id, "--to", destination]);
+        let landed = out["items"][0]["destination"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a destination in {destination}: {out}"))
+            .to_owned();
+        let copy = plan.project(&landed);
+        assert_eq!(copy["content"], authored["content"], "{destination}");
+        assert_eq!(
+            copy["metadata"]["onepipeline.budgets"], answers,
+            "{destination} holds the whole value, never cut short"
+        );
+        assert_eq!(
+            copy["metadata"]["onetaskgraph.template"],
+            authored["metadata"]["onetaskgraph.template"],
+            "{destination} carries the provenance"
+        );
+        let refused = plan.exits(&["project", "answers", &landed], 1);
+        assert!(
+            stderr(&refused).contains("has no stored template answers"),
+            "{destination} keeps no answers: {}",
+            stderr(&refused)
+        );
+        // A second copy of the same project finds what the first wrote and updates it.
+        let again = plan.json(&["project", "copy", &id, "--to", destination]);
+        assert_eq!(again["items"][0]["destination"], json!(landed), "{again}");
+        assert_eq!(
+            plan.project(&landed)["metadata"]["onepipeline.budgets"],
+            answers
+        );
+    }
 }

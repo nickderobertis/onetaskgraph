@@ -142,7 +142,7 @@ impl Workspace {
             .map(|held| json!({"name":held["name"],"type":held["type"]}))
             .expect("a project status of the workspace");
         held.projects.push(
-            json!({"id":id,"name":format!("Project {id}"),"description":null,
+            json!({"id":id,"name":format!("Project {id}"),"content":null,
             "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,"status":status,
             "labels":{"nodes":[]}}),
         );
@@ -277,7 +277,12 @@ impl Workspace {
                     "project"
                 };
                 let empty = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
-                json!({(root): {"description":null,"relations":empty,"inverseRelations":empty}})
+                let long_form = if root == "project" {
+                    "content"
+                } else {
+                    "description"
+                };
+                json!({(root): {(long_form):null,"relations":empty,"inverseRelations":empty}})
             }
             graphql::ISSUE_UPDATE_READ | graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
                 let state = match input.get("stateId").and_then(Value::as_str) {
@@ -345,7 +350,7 @@ impl Workspace {
                 if query == graphql::PROJECT_CREATE {
                     let new = format!("P-NEW-{}", held.projects.len() + 1);
                     held.projects
-                        .push(json!({"id":new,"name":input["name"],"description":null,
+                        .push(json!({"id":new,"name":input["name"],"content":null,
                         "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
                         "status":status,"labels":{"nodes":[]}}));
                     json!({"projectCreate":{"success":true,"project":{"id":new}}})
