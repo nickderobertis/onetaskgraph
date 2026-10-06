@@ -344,3 +344,123 @@ async fn a_record_with_no_content_keeps_none_through_an_asset_write() {
         None
     );
 }
+
+/// A source seeded with one task and one document, each with an asset, whose writes are
+/// `writes`.
+fn seeded(writes: &str) -> InMemorySource {
+    let config: InMemoryConfig = serde_json::from_value(json!({
+        "capabilities": {"documents": "native", "assets": "native", "writes": writes},
+        "tasks": [task("![a](./a.png)")],
+        "documents": [{"id": "D-1", "title": "Design", "content": "![a](./a.png)", "labels": []}],
+    }))
+    .expect("a configuration");
+    InMemorySource::new(config).expect("a coherent source")
+}
+
+#[tokio::test]
+async fn a_rendering_with_assets_is_refused_by_a_read_only_source_and_changes_nothing() {
+    let source = seeded("unsupported");
+    let provenance = json!({"rendered": "afresh"});
+    let answers = std::collections::BTreeMap::new();
+    let assets = carrying(&[("a.png", b"aaa")]);
+    let task_id = NativeId::from("T-1");
+    let document_id = NativeId::from("D-1");
+    let refused = source
+        .set_task_rendering_with_assets(
+            &task_id,
+            "![a](./a.png) new",
+            &provenance,
+            &answers,
+            &assets,
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(refused, onetaskgraph_plugin_api::unwritable("in-memory"));
+    let refused = source
+        .set_document_rendering_with_assets(
+            &document_id,
+            "![a](./a.png) new",
+            &provenance,
+            &answers,
+            &assets,
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(refused, onetaskgraph_plugin_api::unwritable("in-memory"));
+
+    let held = source.get_task(&task_id).await.unwrap().expect("held");
+    assert_eq!(held.content.as_deref(), Some("![a](./a.png)"));
+    assert_ne!(held.metadata[MetadataKey::TEMPLATE_KEY], provenance);
+    let held = source
+        .get_document(&document_id)
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(held.content.as_deref(), Some("![a](./a.png)"));
+    assert!(source.task_assets(&task_id).await.unwrap().is_empty());
+    assert!(
+        source
+            .document_assets(&document_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_rendering_with_assets_of_a_record_this_source_does_not_hold_answers_none_and_stores_nothing()
+ {
+    let source = seeded("supported");
+    let provenance = json!({"rendered": "afresh"});
+    let answers = std::collections::BTreeMap::new();
+    let assets = carrying(&[("a.png", b"aaa")]);
+    let missing = NativeId::from("missing");
+    assert_eq!(
+        source
+            .set_task_rendering_with_assets(
+                &missing,
+                "![a](./a.png)",
+                &provenance,
+                &answers,
+                &assets
+            )
+            .await
+            .expect("answered"),
+        None
+    );
+    assert_eq!(
+        source
+            .set_document_rendering_with_assets(
+                &missing,
+                "![a](./a.png)",
+                &provenance,
+                &answers,
+                &assets,
+            )
+            .await
+            .expect("answered"),
+        None
+    );
+    assert!(source.get_task(&missing).await.unwrap().is_none());
+    assert!(source.get_document(&missing).await.unwrap().is_none());
+    assert!(source.task_assets(&missing).await.unwrap().is_empty());
+    assert!(source.document_assets(&missing).await.unwrap().is_empty());
+    // The records it does hold are as they were, with no asset of the refused rendering.
+    for id in ["T-1", "D-1"] {
+        let id = NativeId::from(id);
+        assert!(source.task_assets(&id).await.unwrap().is_empty());
+        assert!(source.document_assets(&id).await.unwrap().is_empty());
+    }
+    let held = source
+        .get_task(&NativeId::from("T-1"))
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(held.content.as_deref(), Some("![a](./a.png)"));
+    let held = source
+        .get_document(&NativeId::from("D-1"))
+        .await
+        .unwrap()
+        .expect("held");
+    assert_eq!(held.content.as_deref(), Some("![a](./a.png)"));
+}

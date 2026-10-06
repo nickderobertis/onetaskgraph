@@ -510,6 +510,10 @@ fn a_client_whose_coordinator_goes_away_or_answers_no_time_stops_saying_so() {
         // A time nobody asked for, and one earlier than a time already answered.
         (Some("now 99 5"), "compute:1"),
         (Some("now {seq} {down}"), "compute:1,compute:1"),
+        // A verb the protocol does not have, and a known verb in the wrong shape.
+        (Some("tick {seq}"), "compute:1"),
+        (Some("now {seq}"), "compute:1"),
+        (Some("wake"), "sleep:5"),
     ] {
         let mut child = Command::new(std::env::current_exe().expect("this test binary"))
             .args([
