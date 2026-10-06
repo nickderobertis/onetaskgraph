@@ -1092,7 +1092,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "onetaskgraph"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-in-memory"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1191,11 +1191,11 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-live"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "onetaskgraph-local-md"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-plugin-api"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
