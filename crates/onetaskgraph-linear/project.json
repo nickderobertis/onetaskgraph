@@ -14,7 +14,8 @@
       "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage", "budget-check"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -47,19 +48,15 @@
       "options": {
         "commands": [
           "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
-          "bash scripts/check-live-decline.sh onetaskgraph-linear",
-          "bash scripts/check-linear-budgets.sh"
+          "bash scripts/check-live-decline.sh onetaskgraph-linear"
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session. The third checks the Linear request budgets in this crate's budgets.yaml, each measured by a journey of the binary crate against the loopback Linear workspace with no credential; it depends on onetaskgraph:build because those journeys spawn the binary and run the engine it links, and its cargo invocation is that build's own unit, so it relinks nothing.",
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/scripts/check-live-decline.sh",
-        "{workspaceRoot}/scripts/check-linear-budgets.sh",
-        "{workspaceRoot}/scripts/linear-budget.sh",
-        "{workspaceRoot}/crates/onetaskgraph/tests/e2e/linear_budget.rs",
         {
           "env": "LINEAR_API_KEY"
         },
@@ -69,8 +66,7 @@
         {
           "env": "ONETASKGRAPH_LIVE_REQUIRED"
         }
-      ],
-      "dependsOn": ["onetaskgraph:build"]
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -81,6 +77,22 @@
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
+    },
+    "budget-check": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build"],
+      "options": {
+        "command": "bash scripts/check-linear-budgets.sh"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/scripts/check-linear-budgets.sh",
+        "{workspaceRoot}/scripts/linear-budget.sh",
+        "{workspaceRoot}/crates/onetaskgraph/tests/e2e/linear_budget.rs"
+      ],
+      "cache": false,
+      "//": "Separate from test so the hosted Linear journey does not depend on unrelated plugins in the full binary build. Both check and just test run this affected-only target, including the pre-push gate. Uncached: each budget reports requests served by a fresh loopback fixture."
     }
   }
 }

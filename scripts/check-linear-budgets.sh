@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check the Linear request budgets in crates/onetaskgraph-linear/budgets.yaml.
 #
-# A step of the Linear crate's own `test` target, so it runs whenever affected selection
+# The Linear crate's `budget-check` target, run by `check` and `just test` whenever affected selection
 # selects that crate. onebudgetspec is this workspace's own pinned devDependency, from the
 # locked install `just bootstrap` makes.
 #

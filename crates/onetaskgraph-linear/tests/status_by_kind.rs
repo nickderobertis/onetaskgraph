@@ -295,13 +295,13 @@ impl Workspace {
                 let missing = held.missing;
                 let Some(issue) = held.issues.iter_mut().find(|issue| issue["id"] == id) else {
                     return json!({"errors":[match missing {
-                        Missing::MessageOnly => json!({"message":"Entity not found: Issue"}),
+                        Missing::MessageOnly => json!({"message":graphql::ISSUE_NOT_FOUND_MESSAGE}),
                         Missing::SentenceOnly => json!({"message":"Argument Validation Error",
                             "extensions":{"code":"INVALID_INPUT",
-                                "userPresentableMessage":"Could not find referenced Issue."}}),
-                        Missing::Both | Missing::Http400 => json!({"message":"Entity not found: Issue",
+                                "userPresentableMessage":graphql::ISSUE_NOT_FOUND_PRESENTABLE}}),
+                        Missing::Both | Missing::Http400 => json!({"message":graphql::ISSUE_NOT_FOUND_MESSAGE,
                             "extensions":{"code":"INVALID_INPUT",
-                                "userPresentableMessage":"Could not find referenced Issue."}}),
+                                "userPresentableMessage":graphql::ISSUE_NOT_FOUND_PRESENTABLE}}),
                     }]});
                 };
                 if let Some(state) = state {

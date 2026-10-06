@@ -398,6 +398,11 @@ const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 /// Fixture servers consume these constants so their recognized contract cannot drift
 /// from the production requests.
 pub mod graphql {
+    /// Linear's missing-issue error, reconciled with the service by the live status journey.
+    pub const ISSUE_NOT_FOUND_MESSAGE: &str = "Entity not found: Issue";
+    /// Its user-facing alternative; the loopback fixture shares this contract.
+    pub const ISSUE_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Issue.";
+
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
     /// Fetch one issue.
@@ -1396,13 +1401,17 @@ impl Refusal {
     /// `Entity not found: Issue`, whose `userPresentableMessage` reads `Could not find
     /// referenced Issue.` — rather than a null payload. Both spellings are recognised, so a
     /// rewording of either one alone still reads as what it is; an entity of any other kind,
-    /// and anything else, is a refusal.
+    /// and anything else, is a refusal. The live capability journey sends this mutation
+    /// to a nonexistent issue and requires `None`, so changed service wording fails the lane.
     fn entity_missing(&self) -> bool {
         let lowered = self.0.message.to_ascii_lowercase();
         // The Issue the mutation addressed, and nothing it merely refers to: a state the input
         // names that Linear does not hold is a refusal of the write, never no such task.
-        lowered.trim_end() == "entity not found: issue"
-            || lowered.starts_with("entity not found: issue ")
+        lowered.trim_end() == graphql::ISSUE_NOT_FOUND_MESSAGE.to_ascii_lowercase()
+            || lowered.starts_with(&format!(
+                "{} ",
+                graphql::ISSUE_NOT_FOUND_MESSAGE.to_ascii_lowercase()
+            ))
             || self
                 .0
                 .extensions
@@ -1410,8 +1419,11 @@ impl Refusal {
                 .and_then(|extensions| extensions.get("userPresentableMessage"))
                 .and_then(Value::as_str)
                 .is_some_and(|said| {
-                    said.to_ascii_lowercase()
-                        .starts_with("could not find referenced issue")
+                    said.to_ascii_lowercase().starts_with(
+                        &graphql::ISSUE_NOT_FOUND_PRESENTABLE
+                            .trim_end_matches('.')
+                            .to_ascii_lowercase(),
+                    )
                 })
     }
 

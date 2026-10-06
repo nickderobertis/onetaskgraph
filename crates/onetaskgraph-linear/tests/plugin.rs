@@ -2101,8 +2101,8 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
     );
     drop(wire);
 
-    // Refused after one read and no second: the name is absent from an answer just read, so a
-    // refresh could tell nothing new.
+    // Refused after one read: two statuses match the name case-insensitively, so choosing
+    // either id would guess which status the operator intended.
     let (endpoint, wire) = response_server(vec![statuses(serde_json::json!([
         {"id":"S-ONE","name":"Todo","type":"planned","position":1.0},
         {"id":"S-TWO","name":"TODO","type":"planned","position":2.0}

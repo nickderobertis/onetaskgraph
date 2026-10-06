@@ -253,6 +253,20 @@ async fn drive_every_declared_capability(
         category: StatusCategory::Todo,
         name: run.project_status.clone(),
     };
+    // A syntactically valid nil UUID names no issue in the nominated test workspace.
+    // Exercise the actual mutation error through the public source boundary: if Linear
+    // rewords both recognised messages, this lane fails rather than trusting the fixture.
+    let missing = source
+        .set_task_status(
+            &NativeId("00000000-0000-0000-0000-000000000000".into()),
+            StatusCategory::Todo,
+        )
+        .await
+        .map_err(|error| format!("the live missing-issue status contract drifted: {error}"))?;
+    ensure!(
+        missing.is_none(),
+        "a status mutation to a nonexistent issue was not not-found"
+    );
     // Every listing below is scoped by the label all three issues carry, because Linear's
     // `issues` connection is the whole workspace: without it these would be containments
     // rather than the exact sets that tell an honoured predicate from an ignored one.

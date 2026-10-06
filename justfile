@@ -71,7 +71,7 @@ distribution-test:
 # llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] `affected` is the edge these suites sit behind: a plugin's live tests run only when that plugin's own diff selects it, and the exclusion below is the second half of that edge — a version bump selects every project through Cargo.lock and reaches no plugin behaviour.
 # Tests only, for the affected projects.
 test:
-    @{{nx}} affected -t test $(bash scripts/live-lane-selection.sh --nx-exclusions)
+    @{{nx}} affected -t test budget-check $(bash scripts/live-lane-selection.sh --nx-exclusions)
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
 # Every crate's coverage target runs its tests instrumented into the one shared profile
