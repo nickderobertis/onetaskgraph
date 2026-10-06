@@ -915,7 +915,10 @@ test("task status set answers when a delivered task could not be kept in step", 
     const observed = spawnSync(
       binary,
       ["task", "status", "set", "work:P", "in-progress", "--json", "--no-interactive"],
-      { cwd: statusRoot, encoding: "utf8" },
+      // Named rather than defaulted: Bun hands a child the environment it started with, not
+      // `process.env` as `ambient.ts` left it, so a default would carry the shell's own
+      // configuration back in.
+      { cwd: statusRoot, encoding: "utf8", env: process.env },
     );
     expect(observed.status).toBe(4);
     expect(observed.stderr).toContain("nowhere:T-9 could not be kept in step with work:P");
