@@ -494,3 +494,54 @@ async fn a_rendering_with_assets_of_a_record_this_source_does_not_hold_answers_n
         .expect("held");
     assert_eq!(held.content.as_deref(), Some("![a](./a.png)"));
 }
+
+#[tokio::test]
+async fn a_reuse_backed_by_another_asset_of_the_same_write_is_accepted_and_holds_those_bytes() {
+    let source = source("native");
+    // `b.gif` is sent without bytes under a record of an upload of exactly the bytes `a.png`
+    // carries in this very write, to a source that never held them before.
+    let mut write = carrying(&[("a.png", b"same"), ("b.gif", b"same")]);
+    let recorded = "in-memory://assets/recorded-b";
+    write.recorded_assets = Some(AssetUploads(std::collections::BTreeMap::from([(
+        name("b.gif"),
+        onetaskgraph_plugin_api::AssetUpload {
+            sha256: write.assets[1].sha256.clone(),
+            url: recorded.to_owned(),
+        },
+    )])));
+    write.assets[1].bytes = None;
+    let written = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("![a](./a.png) ![b](./b.gif)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &write,
+        )
+        .await
+        .expect("the reuse is backed by the bytes the write carries");
+    let held = source.get_task(&written.id).await.unwrap().expect("held");
+    let uploads = AssetUploads::read(&held.metadata).unwrap().unwrap();
+    assert_eq!(
+        uploads.0[&name("b.gif")].url,
+        recorded,
+        "the recorded URL is kept"
+    );
+    assert!(
+        held.content
+            .as_deref()
+            .unwrap_or_default()
+            .contains(recorded),
+        "{:?}",
+        held.content
+    );
+    for asset in ["a.png", "b.gif"] {
+        assert_eq!(
+            source.task_asset(&written.id, &name(asset)).await.unwrap(),
+            Some(b"same".to_vec()),
+            "{asset}"
+        );
+    }
+}

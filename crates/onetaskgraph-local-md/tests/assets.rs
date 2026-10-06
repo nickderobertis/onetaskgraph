@@ -646,6 +646,10 @@ async fn an_asset_directory_or_asset_linked_out_of_the_folder_is_refused_and_not
             .unwrap_err(),
     );
     escapes(source.delete_task(&id("one")).await.unwrap_err());
+    assert!(
+        root.path().join("tasks/one.md").is_file(),
+        "a refused removal leaves the record where it was"
+    );
     untouched(outside.path());
     assert_eq!(
         fs::read(root.path().join("tasks/one.assets/b.png")).unwrap(),
@@ -702,4 +706,36 @@ async fn an_asset_that_cannot_be_removed_fails_the_write_and_puts_the_record_bac
     assert_eq!(files_in(&directory), vec!["a.png", "b.png"]);
     assert_eq!(fs::read(directory.join("b.png")).unwrap(), b"b");
     assert_eq!(source.task_assets(&id("kept")).await.unwrap().len(), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_removal_whose_assets_will_not_go_names_them_and_a_second_removal_clears_them() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (root, source) = folder();
+    holding(source.as_ref(), "going", &[("a.png", b"a")]).await;
+    let directory = root.path().join("tasks/going.assets");
+    let permissions = fs::metadata(&directory).unwrap().permissions();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let refused = source.delete_task(&id("going")).await;
+    fs::set_permissions(&directory, permissions).unwrap();
+    let refused = refused.expect_err("the asset will not go");
+    assert!(
+        matches!(refused, SourceError::Unavailable { ref message }
+            if message.contains("cannot remove") && message.contains("a.png")),
+        "{refused}"
+    );
+    assert!(
+        !root.path().join("tasks/going.md").exists(),
+        "the record went"
+    );
+    assert_eq!(files_in(&directory), vec!["a.png"], "its asset did not");
+
+    // Asked again, the removal finds no record and takes what the first one left.
+    source.delete_task(&id("going")).await.expect("removed");
+    assert!(!directory.exists(), "nothing of the record is left");
+    source
+        .delete_task(&id("going"))
+        .await
+        .expect("a record already gone is not an error");
 }

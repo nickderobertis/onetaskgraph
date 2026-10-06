@@ -432,7 +432,8 @@ tasks/alpha/fix-login.assets/before.png
   that could not finish takes back loses its directory with its file, and `document create
   --id` over a document leaves it holding exactly that call's assets. A write that carries no
   assets — a status, a priority, a metadata key, a content set, an update — never touches the
-  directory.
+  directory. A removal whose assets will not go removes the file, fails naming the asset that
+  stayed, and removing the record again clears what it left.
 - **Nothing in it is a record.** This source reads only `.md` files, and an asset's name ends
   in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, so walking `tasks/`, `projects/` and
   `documents/` passes over every asset directory.

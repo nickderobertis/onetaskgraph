@@ -149,12 +149,9 @@ def columns(text, column=0):
     the next multiple of 4, and how many characters that indentation is."""
     start = column
     for index, character in enumerate(text):
-        if character == " ":
-            column += 1
-        elif character == "\t":
-            column += 4 - column % 4
-        else:
+        if character not in " \t":
             return column - start, index
+        column += 1 if character == " " else 4 - column % 4
     return column - start, len(text)
 
 
@@ -310,6 +307,9 @@ def code(content):
             elif rest.startswith("#"):
                 kind = "block"
             break
+        # llmlint: ignore-block[structural_pattern_matching] `match`/`case` is a syntax error
+        # before Python 3.10, and this peer runs on whichever `python3` or `python` the host
+        # has, as the note on `dispatch` below says; these are the line's three outcomes.
         if kind in ("code", "fence") or opened_item or kind == "block" or previous != "text":
             paragraph = flush(line_start)
         if kind in ("code", "fence"):
@@ -321,6 +321,7 @@ def code(content):
                 code_spans(content, at, line_end, ranges)
             previous = "block" if rest else "start"
             continue
+        # llmlint: ignore-end[structural_pattern_matching]
         if paragraph is None:
             paragraph = at
         previous = "text"

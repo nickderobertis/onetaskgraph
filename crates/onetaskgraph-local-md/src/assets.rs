@@ -72,6 +72,12 @@ fn confined(root: &Path, path: &Path) -> Result<(), SourceError> {
     })
 }
 
+/// Refuse the record whose file is `record` when its asset directory, or any asset in it, is a
+/// link leading outside `root`: what a removal checks before the record's file goes.
+pub(crate) fn checked(root: &Path, record: &Path) -> Result<(), SourceError> {
+    held(root, &directory_of(root, record)?).map(drop)
+}
+
 /// Every asset the record whose file is `record` holds, by name.
 pub(crate) fn listed(root: &Path, record: &Path) -> Result<Vec<Asset>, SourceError> {
     let directory = directory_of(root, record)?;

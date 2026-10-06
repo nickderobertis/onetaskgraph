@@ -3154,19 +3154,42 @@ impl LocalMdSource {
     /// An id naming no file is not an error: it is already gone, which is the state this
     /// asks for. `existing` refuses that case because an *update* of a missing item is a
     /// caller mistake, and this is not one.
+    ///
+    /// The record's assets go after its file, so an asset that will not go leaves the record
+    /// removed and the failure naming the asset; asked again, the delete finds no record and
+    /// removes what that one left.
     fn delete_entry(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
         let path = match self.existing(kind, id) {
             Ok(path) => path,
-            Err(SourceError::Refused { .. }) => return Ok(()),
+            Err(SourceError::Refused { .. }) => return self.delete_leftover_assets(kind, id),
             Err(other) => return Err(other),
         };
-        // An asset directory leading out of the folder is refused before the record goes.
-        assets::directory_of(&self.root, &path)?;
+        // An asset leading out of the folder is refused before the record goes.
+        assets::checked(&self.root, &path)?;
         fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", path.display()),
         })?;
         // The record's assets go with it: nothing is left of a removed record.
         assets::remove(&self.root, &path)
+    }
+
+    /// Remove the assets a record `id` names left behind when its file is already gone.
+    ///
+    /// Reached only through the folder the record's file was in, resolved and confined to this
+    /// source's own, so an id can name no directory outside it.
+    fn delete_leftover_assets(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
+        let base = self.directory(kind)?;
+        let candidate = base.join(&id.0).with_extension("md");
+        let (Some(parent), Some(file)) = (candidate.parent(), candidate.file_name()) else {
+            return Ok(());
+        };
+        let Ok(parent) = fs::canonicalize(parent) else {
+            return Ok(());
+        };
+        if !parent.starts_with(&base) {
+            return Ok(());
+        }
+        assets::remove(&self.root, &parent.join(file))
     }
 
     /// The file and the assets of the item `target` names, as they are before a write over it:
