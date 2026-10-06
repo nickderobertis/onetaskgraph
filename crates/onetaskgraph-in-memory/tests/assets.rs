@@ -288,3 +288,59 @@ async fn deleting_a_document_takes_its_assets_with_it() {
         None
     );
 }
+
+#[tokio::test]
+async fn a_record_with_no_content_keeps_none_through_an_asset_write() {
+    let source = source("native");
+    let mut bare = task("x");
+    bare.content = None;
+    let written = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: bare,
+                depends_on: Vec::new(),
+            },
+            None,
+            &AssetWrite::default(),
+        )
+        .await
+        .expect("lands");
+    assert_eq!(written.content, None);
+    assert_eq!(
+        source
+            .get_task(&written.id)
+            .await
+            .unwrap()
+            .expect("held")
+            .content,
+        None
+    );
+    let mut document = serde_json::from_value::<Document>(
+        json!({"id": "D-1", "title": "Design", "content": null, "labels": []}),
+    )
+    .unwrap();
+    document.content = None;
+    let written = source
+        .write_document_with_assets(
+            &ItemWrite {
+                target: None,
+                item: document,
+                depends_on: Vec::new(),
+            },
+            None,
+            &AssetWrite::default(),
+        )
+        .await
+        .expect("lands");
+    assert_eq!(written.content, None);
+    assert_eq!(
+        source
+            .get_document(&written.id)
+            .await
+            .unwrap()
+            .expect("held")
+            .content,
+        None
+    );
+}

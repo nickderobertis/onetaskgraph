@@ -671,12 +671,12 @@ impl TaskSource for InMemorySource {
         let _ = answers;
         let uploads = self.uploads(assets)?;
         let mut item = write.item.clone();
-        let content = item.content.take().unwrap_or_default();
-        item.content = Some(serve_asset_references(
-            &content,
-            &mut item.metadata,
-            &uploads,
-        ));
+        // Absent content stays absent: there is nothing in it to point at an upload.
+        let served = item
+            .content
+            .as_deref()
+            .map(|content| serve_asset_references(content, &mut item.metadata, &uploads));
+        item.content = served;
         let id = self
             .write_task(&ItemWrite {
                 target: write.target.clone(),
@@ -702,12 +702,12 @@ impl TaskSource for InMemorySource {
         let _ = answers;
         let uploads = self.uploads(assets)?;
         let mut item = write.item.clone();
-        let content = item.content.take().unwrap_or_default();
-        item.content = Some(serve_asset_references(
-            &content,
-            &mut item.metadata,
-            &uploads,
-        ));
+        // Absent content stays absent: there is nothing in it to point at an upload.
+        let served = item
+            .content
+            .as_deref()
+            .map(|content| serve_asset_references(content, &mut item.metadata, &uploads));
+        item.content = served;
         let id = self
             .write_document(&ItemWrite {
                 target: write.target.clone(),
