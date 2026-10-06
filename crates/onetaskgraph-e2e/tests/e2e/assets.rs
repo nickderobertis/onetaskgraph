@@ -1952,61 +1952,75 @@ fn a_source_over_the_protocol_refuses_a_regenerate_storing_assets_before_sending
     assert!(Folders::files(&root).is_empty(), "nothing was written");
 }
 
-/// What the Python peer's own reading of the convention answers for `inputs`: each name's
-/// acceptance, and each content rewritten with every reference pointed at `https://h/<name>`.
-fn peer_reading(names: &[&str], contents: &[&str]) -> Value {
-    let script = r#"
-import importlib.util, json, sys
-spec = importlib.util.spec_from_file_location("peer", sys.argv[1])
-peer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(peer)
-asked = json.loads(sys.stdin.read())
-def rewrite(content):
-    rewritten = content
-    for name in asked["names"]:
-        if peer.ASSET_NAME.fullmatch(name):
-            rewritten = peer.reference(name).sub(
-                lambda found, name=name: found.group(1) + "https://h/" + name, rewritten
-            )
-    return rewritten
-print(json.dumps({
-    "names": [bool(peer.ASSET_NAME.fullmatch(name)) for name in asked["names"]],
-    "contents": [rewrite(content) for content in asked["contents"]],
-}))
-"#;
-    let mut child = std::process::Command::new(interpreter())
-        .args([
-            "-c",
-            script,
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/e2e/asset_store.py")
-                .to_string_lossy(),
-        ])
+/// What the asset store over its real pipe makes of each of `names` and `contents`: whether a
+/// `write_document` carrying an asset under each name is accepted, and the content each of
+/// `contents` lands as when a write carries an asset under every name the contract accepts.
+fn peer_reading(folders: &Folders, names: &[&str], contents: &[&str]) -> (Vec<bool>, Vec<Value>) {
+    use onetaskgraph_plugin_api::AssetName;
+    let mut peer = std::process::Command::new(interpreter())
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/asset_store.py"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("python runs");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("its input")
-            .write_all(
-                json!({"names": names, "contents": contents})
-                    .to_string()
-                    .as_bytes(),
-            )
-            .expect("the inputs are written");
-    }
-    let output = child.wait_with_output().expect("python finishes");
-    assert!(output.status.success(), "{}", stderr(&output));
-    serde_json::from_slice(&output.stdout).expect("JSON")
+        .expect("the peer starts");
+    let mut reader = std::io::BufReader::new(peer.stdout.take().expect("its output"));
+    let initialized = exchange(
+        &mut peer,
+        &mut reader,
+        &json!({"id": "0", "method": "initialize", "params": {
+            "protocol_version": 2,
+            "config": {"store": folders.inputs.join("reading.json"), "assets": "native"},
+        }}),
+    );
+    assert_eq!(
+        initialized["result"]["capabilities"]["assets"],
+        json!("native")
+    );
+    // One byte, `x`, under every name: what each name is served at depends only on the name.
+    let payload = |name: &str| {
+        let content_type =
+            AssetName::new(name).map_or("image/png", |name| name.content_type().as_str());
+        json!({"name": name, "sha256": sha256(b"x"), "content_type": content_type, "bytes": "eA=="})
+    };
+    let mut write = |assets: Vec<Value>, content: &str| {
+        exchange(
+            &mut peer,
+            &mut reader,
+            &json!({"id": "1", "method": "write_document", "params": {
+                "write": {"target": null, "item": {"id": "d", "title": "D", "content": content}},
+                "assets": assets,
+            }}),
+        )
+    };
+    let accepted = names
+        .iter()
+        .map(|name| {
+            let answered = write(vec![payload(name)], "");
+            assert!(
+                answered.get("result").is_some() || answered["error"]["kind"] == json!("malformed"),
+                "{name}: {answered}"
+            );
+            answered.get("result").is_some()
+        })
+        .collect();
+    let served: Vec<Value> = names
+        .iter()
+        .filter(|name| AssetName::new(**name).is_ok())
+        .map(|name| payload(name))
+        .collect();
+    let landed = contents
+        .iter()
+        .map(|content| write(served.clone(), content)["result"]["content"].clone())
+        .collect();
+    drop(peer.stdin.take());
+    assert!(peer.wait().expect("the peer exits").success());
+    (accepted, landed)
 }
 
 #[test]
 fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
     use onetaskgraph_plugin_api::{AssetName, rewrite_asset_references};
+    let folders = Folders::new();
     let names = [
         "a.png",
         "Scan.JpEg",
@@ -2034,22 +2048,25 @@ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
         "![spaced](./a.png \n![title](./a.png \"t\")\n![dangling](./a.png ",
         "![newline](./a.png\n)",
     ];
-    let peer = peer_reading(&names, &contents);
+    let (peer_names, peer_contents) = peer_reading(&folders, &names, &contents);
     let accepted: Vec<bool> = names
         .iter()
         .map(|name| AssetName::new(*name).is_ok())
         .collect();
-    assert_eq!(peer["names"], json!(accepted));
+    assert_eq!(peer_names, accepted);
     let served: std::collections::BTreeMap<AssetName, String> = names
         .iter()
         .filter_map(|name| AssetName::new(*name).ok())
-        .map(|name| (name.clone(), format!("https://h/{name}")))
+        .map(|name| {
+            let url = format!("https://assets.example.invalid/{}/{name}", sha256(b"x"));
+            (name, url)
+        })
         .collect();
-    let rewritten: Vec<String> = contents
+    let rewritten: Vec<Value> = contents
         .iter()
-        .map(|content| rewrite_asset_references(content, &served))
+        .map(|content| json!(rewrite_asset_references(content, &served)))
         .collect();
-    assert_eq!(peer["contents"], json!(rewritten));
+    assert_eq!(peer_contents, rewritten);
 }
 
 /// The first-column names of the table headed `header` inside `section`.
