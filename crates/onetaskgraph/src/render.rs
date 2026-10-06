@@ -772,6 +772,12 @@ fn assets_held(assets: Option<&[Asset]>) -> String {
                     format!("  {}", asset.name),
                     asset.content_type.as_str().to_owned(),
                     asset.sha256.clone(),
+                    // llmlint: ignore[changed_behavior_has_e2e] No source this binary can
+                    // show through holds an asset without a path today: the stdio protocol
+                    // carries no asset read and the hosted plugins declare assets unsupported,
+                    // so the one source answering `null` is an in-memory one, whose writes die
+                    // with the process before a later `show` could read them. The rendering of
+                    // that answer is held by `a_hosted_asset_is_shown_as_hosted` below.
                     asset.path.clone().unwrap_or_else(|| "(hosted)".to_owned()),
                 ]
             })
@@ -967,4 +973,25 @@ pub fn plan(plan: &QueryPlan) -> String {
 /// Predicate names, in the wire spelling `--json` publishes.
 fn predicate_list(predicates: &[Predicate]) -> String {
     predicates.iter().map(wire).collect::<Vec<_>>().join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use onetaskgraph_plugin_api::{Asset, AssetName};
+
+    #[test]
+    fn a_hosted_asset_is_shown_as_hosted() {
+        let name = AssetName::new("a.png").expect("a name");
+        let rendered = super::assets_held(Some(&[Asset {
+            content_type: name.content_type(),
+            name,
+            sha256: "ab".repeat(32),
+            path: None,
+        }]));
+        assert!(
+            rendered.contains("assets: 1") && rendered.contains("(hosted)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains(&"ab".repeat(32)) && rendered.contains("image/png"));
+    }
 }

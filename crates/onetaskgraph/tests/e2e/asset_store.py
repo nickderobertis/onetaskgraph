@@ -36,8 +36,10 @@ KINDS = {"task": "tasks", "project": "projects", "document": "documents"}
 ASSETS_KEY = "onetaskgraph.assets"
 # An asset name (§4.9a): a bare file name with an accepted image extension, in any case.
 ASSET_NAME = re.compile(
-    r"(?!.*\.\.)[^/\\\s()<>]+\.(?i:png|jpe?g|gif|webp)"
+    r"(?!.*\.\.)[^/\\\s()<>\x00-\x1f\x7f-\x9f]+\.(?i:png|jpe?g|gif|webp)"
 )
+# A SHA-256 as the contract spells one: 64 lowercase hex digits.
+SHA256 = re.compile(r"[0-9a-f]{64}")
 CONTENT_TYPES = {
     "png": "image/png",
     "jpg": "image/jpeg",
@@ -165,7 +167,7 @@ def store_assets(item, payloads, recorded):
             except (binascii.Error, TypeError, ValueError):
                 raise malformed("the asset %s's bytes are not base64" % name)
             digest = sha256(data)
-            if digest != payload["sha256"]:
+            if not SHA256.fullmatch(payload["sha256"]) or digest != payload["sha256"]:
                 raise refused(
                     "the asset %s's bytes do not hash to the sha256 %s it carries"
                     % (name, payload["sha256"])
@@ -183,7 +185,9 @@ def store_assets(item, payloads, recorded):
             if (
                 not isinstance(held, dict)
                 or held.get("sha256") != payload["sha256"]
+                or not SHA256.fullmatch(payload["sha256"])
                 or not isinstance(held.get("url"), str)
+                or not held["url"]
             ):
                 raise refused(
                     "the asset %s carries no bytes and nothing records an upload of it with "
@@ -293,7 +297,7 @@ def page_of(items, page):
         raise malformed("a paged method needs a `page` object")
     cursor = page.get("cursor")
     limit = page.get("limit")
-    if cursor is not None and not (isinstance(cursor, str) and cursor.isdigit()):
+    if cursor is not None and not (isinstance(cursor, str) and re.fullmatch("[0-9]+", cursor)):
         raise malformed("cursor %r was not issued by this source" % (cursor,))
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
         raise malformed("a page limit is a positive integer")
@@ -309,9 +313,11 @@ def dispatch(settings, method, params):
     store = settings["store"]
     if method == "health":
         return {"reachable": True, "detail": "a file-backed asset store"}
+    wanted = params.get("id")
+    if method.startswith(("get_", "delete_")) and not (isinstance(wanted, str) and wanted):
+        raise malformed("%s needs a native id, a non-empty string, under `id`" % method)
     for kind in KINDS:
         if method == "get_" + kind:
-            wanted = params.get("id")
             found = [item for item in read_store(store)[KINDS[kind]] if item["id"] == wanted]
             return {kind: found[0] if found else None}
     if method == "query_tasks":
@@ -327,11 +333,9 @@ def dispatch(settings, method, params):
             return write(settings, kind, params)
         if method == "delete_" + kind:
             held = read_store(store)
-            held[KINDS[kind]] = [
-                item for item in held[KINDS[kind]] if item["id"] != params.get("id")
-            ]
+            held[KINDS[kind]] = [item for item in held[KINDS[kind]] if item["id"] != wanted]
             write_store(store, held)
-            log(settings, {"method": method, "target": params.get("id")})
+            log(settings, {"method": method, "target": wanted})
             return {}
     raise malformed("protocol version %d has no method called %r" % (PROTOCOL_VERSION, method))
 

@@ -450,3 +450,47 @@ async fn a_payload_sent_as_a_content_type_its_name_does_not_give_is_refused() {
     );
     assert!(!root.path().join("tasks").exists());
 }
+
+#[tokio::test]
+async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_staging_file() {
+    let (root, source) = folder();
+    let mut malformed = carrying(&[("a.png", b"png")]);
+    malformed.assets[0].sha256 = "NOT-HEX".to_owned();
+    malformed.assets[0].bytes = None;
+    let refused = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("digest", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &malformed,
+        )
+        .await
+        .expect_err("refused");
+    assert!(refused.to_string().contains("NOT-HEX"), "{refused}");
+    assert!(!root.path().join("tasks").exists());
+
+    // A directory standing where the asset's file belongs: the rename over it fails.
+    let blocked = root.path().join("tasks/blocked.assets/a.png");
+    std::fs::create_dir_all(&blocked).expect("a directory in the asset's place");
+    std::fs::write(blocked.join("inside"), "keeps the directory non-empty").expect("a file");
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("blocked", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"png")]),
+        )
+        .await
+        .expect_err("the asset cannot be written");
+    assert_eq!(
+        files_in(&root.path().join("tasks/blocked.assets")),
+        vec!["a.png"],
+        "no staging file is left beside it"
+    );
+}

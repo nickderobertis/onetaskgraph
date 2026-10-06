@@ -1286,6 +1286,117 @@ fn a_record_whose_assets_cannot_be_read_is_shown_without_them_and_the_failure_na
 }
 
 #[test]
+fn every_way_of_showing_a_record_lists_its_assets_and_says_where_each_is() {
+    let folders = Folders::new();
+    let body = folders.text("shown.md", "![b](./b.png) ![a](./a.gif)\n");
+    let b = images::png(150, 50_000);
+    let a = images::gif(151);
+    let (b_path, a_path) = (
+        folders.image("s", "b.png", &b),
+        folders.image("s", "a.gif", &a),
+    );
+    let task = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Shown",
+        "--body-file",
+        &body,
+        "--asset",
+        &b_path,
+        "--asset",
+        &a_path,
+    ]);
+    let document = folders.created(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Shown",
+        "--body-file",
+        &body,
+        "--asset",
+        &b_path,
+        "--asset",
+        &a_path,
+    ]);
+    // An asset a person put beside the record that its content does not reference is listed
+    // after those it does, by name.
+    std::fs::write(
+        folders.notes.join("tasks/shown.assets/0-extra.webp"),
+        images::webp(152),
+    )
+    .expect("an extra asset");
+    let names = |shown: &Value| -> Vec<String> {
+        listed(shown).into_iter().map(|(name, ..)| name).collect()
+    };
+    assert_eq!(
+        names(&folders.show("task", &task)),
+        ["b.png", "a.gif", "0-extra.webp"]
+    );
+
+    // Each detail `task show-many` answers carries its task's assets, as `task show` does.
+    let plain = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Bare",
+        "--body-file",
+        &folders.text("bare.md", "nothing\n"),
+    ]);
+    let many: Value = serde_json::from_str(&stdout(
+        &folders.exits(&["task", "show-many", &task, &plain, "--json"], 0),
+    ))
+    .expect("details");
+    assert_eq!(
+        many["details"][0]["assets"],
+        folders.show("task", &task)["assets"]
+    );
+    assert_eq!(many["details"][1]["assets"], json!([]));
+
+    // The human renderings list each asset after the body: name, type, digest and path.
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let shown = folders.show(verb, id);
+        let text = stdout(&folders.exits(&[verb, "show", id], 0));
+        let expected = listed(&shown).len();
+        assert!(
+            text.contains(&format!("assets: {expected}")),
+            "{verb}: {text}"
+        );
+        for asset in shown["assets"].as_array().expect("assets") {
+            for field in ["name", "content_type", "sha256", "path"] {
+                let value = asset[field].as_str().expect("a field");
+                assert!(text.contains(value), "{verb} names {field} {value}: {text}");
+            }
+        }
+    }
+    // And a record holding none says nothing about assets.
+    assert!(!stdout(&folders.exits(&["task", "show", &plain], 0)).contains("assets:"));
+
+    // A detail whose assets cannot be read carries the failure, and the others are whole.
+    let directory = folders.notes.join("tasks/shown.assets");
+    std::fs::remove_dir_all(&directory).expect("the asset directory");
+    std::fs::write(&directory, "not a directory").expect("a file in its place");
+    let output = folders.exits(&["task", "show-many", &task, &plain, "--json"], 4);
+    let many: Value = serde_json::from_str(&stdout(&output)).expect("details");
+    assert!(many["details"][0].get("assets").is_none());
+    assert!(
+        many["details"][0]["errors"][0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("shown.assets"))
+    );
+    assert_eq!(many["details"][1]["assets"], json!([]));
+}
+
+#[test]
 fn a_render_dry_run_reports_an_asset_change_and_writes_nothing() {
     let folders = Folders::new();
     let template = folders.text("pictures.md", PICTURES);

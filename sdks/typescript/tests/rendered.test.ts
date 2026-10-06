@@ -207,6 +207,8 @@ test("asset options that are not a list of paths are refused before the binary r
   await expect(
     client.taskCreate("notes", "P-1", "Refused", {
       body: "x",
+      // Typed past the option's own type on purpose: a JavaScript caller has no compiler to
+      // stop it, and this is the refusal such a caller gets instead of a malformed command.
       assets: "pixel.gif" as unknown as string[],
     }),
   ).rejects.toThrow("taskCreate: assets");

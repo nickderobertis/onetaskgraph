@@ -510,3 +510,90 @@ async fn a_copy_of_a_record_that_dropped_its_assets_takes_them_away_and_an_undo_
         "a record holding no asset records nothing about assets"
     );
 }
+
+#[tokio::test]
+async fn a_record_holding_a_malformed_upload_record_is_refused_and_left_as_it_was() {
+    let root = tempfile::tempdir().expect("a folder");
+    // The copy's destination already holds the task's counterpart, whose record of what it
+    // serves is not one.
+    let engine = engine(
+        root.path(),
+        json!({
+            "capabilities": {"assets": "native", "documents": "native"},
+            "tasks": [{
+                "id": "landed", "title": "Pictured", "content": "old",
+                "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                "metadata": {
+                    "onetaskgraph.origin": "notes:pictured",
+                    "onetaskgraph.assets": "not a record",
+                },
+            }],
+        }),
+    );
+    let task = create(&engine, "Pictured", &[1; 8]).await;
+    let refused = engine
+        .copy(&copy_of(std::slice::from_ref(&task), CopyScope::Tasks))
+        .await
+        .expect_err("refused");
+    assert!(
+        refused.to_string().contains("onetaskgraph.assets"),
+        "{refused}"
+    );
+    let held = engine
+        .task(&"into:landed".parse().expect("an id"))
+        .await
+        .expect("read")
+        .items
+        .remove(0)
+        .item;
+    assert_eq!(held.content.as_deref(), Some("old"));
+
+    // A document of the folder holding one is refused by a replacement and by a render.
+    std::fs::create_dir_all(root.path().join("documents")).expect("a documents folder");
+    let file = root.path().join("documents/held.md");
+    let text = "---\ntitle: Held\nmetadata:\n  onetaskgraph.assets: 3\n  \
+                onetaskgraph.template: {template: /nowhere.md, digest: \"sha256:00\", \
+                body_digest: \"sha256:00\", answers_digest: \"sha256:00\"}\n---\nkept\n";
+    std::fs::write(&file, text).expect("a document");
+    let replaced = engine
+        .create_document(&DocumentCreate {
+            source: SourceName::new("notes").expect("a name"),
+            project: NativeId::from("launch"),
+            title: "Held".to_owned(),
+            id: Some(NativeId::from("held")),
+            body: Body::plain("replaced\n"),
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            metadata: Default::default(),
+            assets: Vec::new(),
+        })
+        .await
+        .expect_err("refused");
+    assert!(
+        replaced.to_string().contains("onetaskgraph.assets"),
+        "{replaced}"
+    );
+    let template = root.path().join("template.md");
+    std::fs::write(&template, "---\nonetaskgraph_template: 1\n---\nrendered\n")
+        .expect("a template");
+    let rendered = engine
+        .render_document(
+            &"notes:held".parse().expect("an id"),
+            &onetaskgraph_core::RenderRequest {
+                template: onetaskgraph_core::RenderTemplate::Given(
+                    onetaskgraph_core::TemplateInput::File {
+                        path: template,
+                        search_path: Vec::new(),
+                    },
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("refused");
+    assert!(
+        rendered.to_string().contains("onetaskgraph.assets"),
+        "{rendered}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).expect("the document"), text);
+}
