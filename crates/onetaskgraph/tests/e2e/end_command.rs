@@ -12,8 +12,15 @@
 //! source answers the second write from what it held, which is the hazard the call removes;
 //! a journey asserting only the first half would pass whether or not the call did anything.
 
-use onetaskgraph_core::{ConfiguredSource, Engine, GlobalId, ResolvedSource, Secrets};
-use onetaskgraph_plugin_api::{MetadataKey, SourceName, Status, StatusCategory, TaskUpdate};
+use std::num::NonZeroU32;
+
+use onetaskgraph_core::{
+    ConfiguredSource, Engine, Filters, GlobalId, Paging, ProjectSelector, ResolvedSource, Secrets,
+    TaskRequest,
+};
+use onetaskgraph_plugin_api::{
+    MetadataKey, MetadataMatch, SourceName, Status, StatusCategory, TaskUpdate,
+};
 use serde_json::{Value, json};
 
 use crate::common::Sandbox;
@@ -29,7 +36,6 @@ fn secrets() -> Secrets {
     .expect("an environment with no credentials file")
 }
 
-/// An engine over one source called `work`, of plugin `kind` configured by `config`.
 fn engine(kind: &str, config: &Value) -> Engine {
     let name = SourceName::new("work").unwrap();
     let source = onetaskgraph_core::plugin_for(kind)
@@ -94,7 +100,6 @@ const PERSONS_WORDS: &str = "the engine core, reworded by a person between two s
 /// Which of the two ways a caller drives one engine across two units of work.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Between {
-    /// It calls `Engine::end_command` between them.
     EndsTheCommand,
     /// It does not, which is the hazard.
     Nothing,
@@ -134,7 +139,8 @@ fn two_settlements(
     (body, board.status("T-1"))
 }
 
-/// The whole settlement journey over the board `config` reaches through `kind`.
+/// `config` turns the loopback board's block into `kind`'s configuration, so one journey
+/// drives the plugin in process and again behind the stdio host.
 fn the_second_settlement_reads_the_item_as_a_person_left_it(
     kind: &str,
     config: impl Fn(&Value) -> Value,
@@ -186,6 +192,142 @@ fn a_github_board_settlement_after_the_call_keeps_a_persons_edit_and_moves_the_c
 #[test]
 fn the_call_crosses_the_stdio_protocol_to_a_hosted_github_board() {
     the_second_settlement_reads_the_item_as_a_person_left_it("subprocess", hosted_github);
+}
+
+/// A page of every task on the board narrowed by `filters` and `metadata`.
+fn listing(filters: Filters, metadata: Vec<MetadataMatch>) -> TaskRequest {
+    TaskRequest {
+        sources: Vec::new(),
+        filters,
+        project: ProjectSelector::Any,
+        priorities: Vec::new(),
+        commented_since: None,
+        metadata,
+        origin: None,
+        include_members: false,
+        paging: Paging {
+            limit: NonZeroU32::new(100).expect("not zero"),
+            token: None,
+        },
+    }
+}
+
+/// The ids of the tasks `request` answers.
+async fn listed(engine: &Engine, request: &TaskRequest) -> Vec<String> {
+    let response = engine.tasks(request).await.expect("the listing runs");
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    response
+        .items
+        .iter()
+        .map(|task| task.item.id.0.clone())
+        .collect()
+}
+
+/// The in-progress tasks of one board listed twice through one engine, with T-1's card dragged
+/// to `Doing` by a person between the two listings. Answers the second listing.
+fn two_listings(kind: &str, config: impl Fn(&Value) -> Value, between: Between) -> Vec<String> {
+    let sandbox = Sandbox::new();
+    let (block, board) = github_projects_with_board(&sandbox);
+    let engine = engine(kind, &config(&block));
+    let doing = listing(
+        Filters {
+            statuses: vec![StatusCategory::InProgress],
+            ..Filters::default()
+        },
+        Vec::new(),
+    );
+    runtime().block_on(async {
+        assert_eq!(listed(&engine, &doing).await, ["T-4"]);
+        board.move_card("T-1", "Doing");
+        if between == Between::EndsTheCommand {
+            engine.end_command().await.expect("the command ends");
+        }
+        listed(&engine, &doing).await
+    })
+}
+
+/// The tasks one board holds at `onepipeline.settlement.run = "a"`, asked twice through one
+/// engine: T-1 is written there, then a person rewrites that value in the issue's body to
+/// `"b"`. Answers the second answer.
+fn two_metadata_searches(
+    kind: &str,
+    config: impl Fn(&Value) -> Value,
+    between: Between,
+) -> Vec<String> {
+    let sandbox = Sandbox::new();
+    let (block, board) = github_projects_with_board(&sandbox);
+    let engine = engine(kind, &config(&block));
+    let at_a = listing(
+        Filters::default(),
+        vec![
+            MetadataMatch::new("onepipeline.settlement", vec!["run".into()], "a")
+                .expect("a location"),
+        ],
+    );
+    let mut written = TaskUpdate::default();
+    written.metadata_set.insert(
+        MetadataKey::new("onepipeline.settlement").unwrap(),
+        json!({"run": "a"}),
+    );
+    runtime().block_on(async {
+        engine
+            .update_task(&global("work:T-1"), &written)
+            .await
+            .expect("the key lands");
+        assert_eq!(listed(&engine, &at_a).await, ["T-1"]);
+        let body = board.body("T-1");
+        let body = body.as_str().expect("a body");
+        assert!(body.contains(r#""run":"a""#), "{body}");
+        board.edit_body("T-1", &body.replace(r#""run":"a""#, r#""run":"b""#));
+        if between == Between::EndsTheCommand {
+            engine.end_command().await.expect("the command ends");
+        }
+        listed(&engine, &at_a).await
+    })
+}
+
+/// A listing after the call reads the board and its search afresh; without it the same
+/// listing answers from the board and search it read before.
+fn a_board_listing_reads_a_moved_card_only_after_the_call(kind: &str, config: fn(&Value) -> Value) {
+    assert_eq!(
+        two_listings(kind, config, Between::EndsTheCommand),
+        ["T-1", "T-4"],
+        "the card the person moved is read where they left it"
+    );
+    assert_eq!(
+        two_listings(kind, config, Between::Nothing),
+        ["T-4"],
+        "without the call the held board still has the card where it was"
+    );
+}
+
+/// A narrowed search after the call asks GitHub again and reads the item as a person left
+/// it; without it the answer comes from the search held and the record this source wrote.
+fn a_metadata_search_reads_an_edited_slot_only_after_the_call(
+    kind: &str,
+    config: fn(&Value) -> Value,
+) {
+    assert!(
+        two_metadata_searches(kind, config, Between::EndsTheCommand).is_empty(),
+        "the value the person rewrote no longer matches"
+    );
+    assert_eq!(
+        two_metadata_searches(kind, config, Between::Nothing),
+        ["T-1"],
+        "without the call the held answer still matches"
+    );
+}
+
+#[test]
+fn a_github_board_listing_after_the_call_reads_a_card_a_person_moved() {
+    a_board_listing_reads_a_moved_card_only_after_the_call("github-projects", Value::clone);
+    a_board_listing_reads_a_moved_card_only_after_the_call("subprocess", hosted_github);
+}
+
+#[test]
+fn a_github_metadata_search_after_the_call_reads_a_value_a_person_rewrote() {
+    a_metadata_search_reads_an_edited_slot_only_after_the_call("github-projects", Value::clone);
+    a_metadata_search_reads_an_edited_slot_only_after_the_call("subprocess", hosted_github);
 }
 
 /// Hello Patient's workspace over two issues in `Todo`, and the source configuration that

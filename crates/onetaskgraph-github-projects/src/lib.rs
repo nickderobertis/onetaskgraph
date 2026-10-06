@@ -10284,9 +10284,16 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
 }
 
 /// What [`TaskSource::end_command`] leaves of this source's held state, asserted on the state
-/// itself: the journeys in `crates/onetaskgraph/tests/e2e/end_command.rs` prove a settlement
-/// reads afresh after it, and these prove every holder is emptied — including those no single
-/// journey fills at once — and that a lock an earlier failure poisoned works again after it.
+/// itself, for the two things no journey can observe.
+///
+/// The journeys in `crates/onetaskgraph/tests/e2e/end_command.rs` prove through the engine,
+/// with and without the call, that a settlement, a board listing and a metadata search each
+/// read afresh after it — the resolved records, the written-item overlay, the board and its
+/// search, and the narrowed searches. What they cannot reach is the held field definitions,
+/// because a status write naming an option a person deleted is refused the same whether or
+/// not the list is held, and a poisoned lock, because nothing outside the source can panic
+/// while one of its locks is held. So these assert those directly, and every other holder
+/// beside them so a holder added later without a clear in the call fails here.
 #[cfg(test)]
 mod end_command_tests {
     use super::*;
