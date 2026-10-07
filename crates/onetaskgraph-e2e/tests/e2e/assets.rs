@@ -976,7 +976,10 @@ fn a_project_copy_carries_its_tasks_assets_and_its_document_follows_with_its_own
         let record = item(copy)["location"]["path"]
             .as_str()
             .expect("a local record");
-        assert!(Path::new(record).starts_with(&folders.back), "{record}");
+        // `local-md` reports the location under its canonicalized root, which on Windows is
+        // a `\\?\` verbatim path, so the folder is compared in that same spelling.
+        let back = std::fs::canonicalize(&folders.back).expect("the destination folder resolves");
+        assert!(Path::new(record).starts_with(&back), "{record}");
         let own = Path::new(record).with_extension("assets");
         let content = item(copy)["content"].as_str().expect("content");
         for asset in copy["assets"].as_array().expect("assets") {
