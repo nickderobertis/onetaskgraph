@@ -246,7 +246,7 @@ if behind or not inheriting:
   failures=$((failures + 1))
 fi
 (cd "$ROOT" && git ls-files -z -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' pyproject.toml sdks npm bun.lock) \
-  | while IFS= read -r -d '' tracked; do cp "$ROOT/$tracked" "$scratch/$tracked"; done \
+  | while IFS= read -r -d '' tracked; do cp "$ROOT/$tracked" "$scratch/$tracked" || exit 1; done \
   || fatal "could not restore the manifests the bump case rewrote in $scratch" \
     "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
