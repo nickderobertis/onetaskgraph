@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph-core"
 description = "The onetaskgraph engine: the plugin registry, global-id qualification, and the plan every response carries."
-version = "0.3.2"
+version = "0.3.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -41,10 +41,12 @@ serde_norway.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# The simulated clock's client: a wait completes on a `oneshot` its listening thread fires.
+# No runtime is started here; the waits run on whichever runtime the caller started.
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio.workspace = true
 
 # A suite that configures or hosts a network plugin names the feature that compiles it, and
 # cargo skips it in a build without; `engine` holds the plugin list and the schema the

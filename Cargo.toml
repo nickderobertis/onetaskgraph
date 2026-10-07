@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -17,13 +17,13 @@ authors = ["Nick DeRobertis"]
 # another's newer patch and compile nothing. release-plz rewrites these in step, keeping the
 # `=`; scripts/set-version.sh --check refuses one without it, and the release job refuses to
 # publish a crate whose siblings resolve elsewhere (scripts/crate-sibling-resolution.sh).
-onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.3.2" }
-onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.3.2" }
-onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.3.2" }
-onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.3.2" }
-onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.3.2" }
-onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "=0.3.2" }
-onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "=0.3.2" }
+onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.3.3" }
+onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.3.3" }
+onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.3.3" }
+onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.3.3" }
+onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.3.3" }
+onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "=0.3.3" }
+onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "=0.3.3" }
 # The workspace's own test-support crate: the gate every live session opens. Path-only
 # and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
 # the crates that name it, so nothing a consumer installs can reach it.
@@ -34,6 +34,9 @@ onetaskgraph-live = { path = "crates/onetaskgraph-live" }
 onetaskgraph-e2e-support = { path = "crates/onetaskgraph-e2e-support" }
 
 async-trait = "0.1.92"
+# An asset's bytes over the stdio plugin protocol. Already in this lockfile through reqwest, so
+# naming it adds no crate to the closure.
+base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
 clap = { version = "4.6.6", features = ["derive"] }
 # The binary's per-variable template prompts. Only the binary crate may name it: nothing below
@@ -61,6 +64,9 @@ github-graphql-node-count = "0.0.1"
 # because it is the release of the `onebudgetspec` package.json pins to judge it; that crate's
 # tests/e2e/budget_commands.rs fails when the two pins part.
 onebudgetspec-core = "=0.1.3"
+# Which image syntax in a content is inside code, and so is no asset reference: CommonMark's
+# code spans and code blocks, read by a parser rather than restated.
+pulldown-cmark = { version = "0.13.4", default-features = false }
 # The Linear budgets' runner checks a budget id against onebudgetspec's own exported pattern.
 regex = "1.13.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }

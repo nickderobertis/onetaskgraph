@@ -356,13 +356,15 @@ pub enum TaskCommand {
     ///
     /// Rendered from a template, it records where it came from under the reserved
     /// `onetaskgraph.template` metadata key, and a source that keeps an authoring file
-    /// (local-md) stores the answers beside it for a later `task render`.
+    /// (local-md) stores the answers beside it for a later `task render`. An image its body
+    /// references as `![alt](./<name>)` is stored with it from --asset.
     Create(TaskCreateArgs),
     /// Regenerate one task's content from its template in place, and nothing else about it.
     ///
     /// The answers start from the ones stored beside it when they are in step with its
-    /// provenance; --var, --answers and --unset are laid over them.
-    Render(RenderArgs),
+    /// provenance; --var, --answers and --unset are laid over them. It keeps every stored
+    /// image asset the new content still references, --asset replacing one by name.
+    Render(ItemRenderArgs),
     /// Print the template answers stored beside one task.
     Answers(AnswersArgs),
 }
@@ -475,6 +477,30 @@ pub struct TaskCreateArgs {
     /// llmlint: ignore[invalid_states_unrepresentable] — as `ShowArgs::id`.
     #[arg(long = "delivers", value_name = "ID")]
     pub delivers: Vec<String>,
+
+    #[command(flatten)]
+    pub assets: AssetArgs,
+}
+
+/// The image assets a create or a render stores with a task or a document.
+#[derive(Debug, Args)]
+pub struct AssetArgs {
+    /// Store this image with it, under the file's base name, which its content references as
+    /// `![alt](./<name>)`. Repeat for several; each must end in .png, .jpg, .jpeg, .gif or
+    /// .webp, and be referenced.
+    #[arg(long = "asset", value_name = "PATH")]
+    pub asset: Vec<std::path::PathBuf>,
+}
+
+/// `onetaskgraph task render` and `onetaskgraph document render`: what every render names, and
+/// the image assets to store with the item.
+#[derive(Debug, Args)]
+pub struct ItemRenderArgs {
+    #[command(flatten)]
+    pub render: RenderArgs,
+
+    #[command(flatten)]
+    pub assets: AssetArgs,
 }
 
 /// `onetaskgraph document create`.
@@ -488,6 +514,9 @@ pub struct DocumentCreateArgs {
     /// one is created under it.
     #[arg(long = "id", value_name = "DOC", value_parser = native_id)]
     pub id: Option<NativeId>,
+
+    #[command(flatten)]
+    pub assets: AssetArgs,
 }
 
 /// `onetaskgraph project create`.
@@ -943,10 +972,16 @@ pub enum DocumentCommand {
     },
     /// Create — or, with --id naming one it holds, replace — a project document, its body
     /// rendered from a template or given as it is.
+    ///
+    /// An image its body references as `![alt](./<name>)` is stored with it from --asset; a
+    /// document replaced holds exactly the assets this names.
     Create(DocumentCreateArgs),
     /// Regenerate one document's content from its template in place, and nothing else about
     /// it.
-    Render(RenderArgs),
+    ///
+    /// It keeps every stored image asset the new content still references, --asset replacing
+    /// one by name.
+    Render(ItemRenderArgs),
     /// Print the template answers stored beside one document.
     Answers(AnswersArgs),
 }

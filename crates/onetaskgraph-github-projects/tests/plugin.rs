@@ -959,7 +959,7 @@ impl Fixture {
     }
     /// Put a comment on `issue` written at `created_at` and last edited at `updated_at`, the
     /// way somebody writing on GitHub earlier would have left it.
-    fn commented_at(&self, issue: &str, created_at: &str, updated_at: &str) {
+    fn commented_at(&self, issue: &str, created_at: &str, updated_at: &str) -> String {
         let mut state = self.state.lock().unwrap();
         let held = state.comment(issue, Some("someone"), "a word\n");
         let held = state
@@ -969,6 +969,7 @@ impl Fixture {
             .expect("just added");
         held.created_at = created_at.to_owned();
         held.updated_at = updated_at.to_owned();
+        held.id.clone()
     }
     /// Which of the documents this board received selected its own item connection.
     ///
@@ -1068,6 +1069,11 @@ impl Fixture {
             .expect("this board holds the item")
             .clone();
         state.indexed_as.insert(content_id.to_owned(), held);
+    }
+    /// Let this board's indexes answer `content_id` as it now is, as GitHub's do once they
+    /// catch up with a write.
+    fn index_catches_up(&self, content_id: &str) {
+        self.state.lock().unwrap().indexed_as.remove(content_id);
     }
     /// The field filter of every origin lookup this board answered, in order.
     fn origin_filters(&self) -> Vec<String> {
@@ -7821,6 +7827,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            assets: Support::Unsupported,
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
@@ -14349,6 +14356,252 @@ async fn comment_activity_within_one_project_asks_that_project_and_reads_only_up
         ["I_lively"],
         "a task whose issue was not updated since has no comments read"
     );
+}
+
+/// The credentialed journey's failure, on a board whose issue search has not caught up with
+/// any of the comment writes below: GitHub's index lags a write, and a comment-activity read
+/// taken in that window used to rule out an issue this process had just commented on.
+///
+/// - `I_edited` — written by this source, with a comment from long before the instant that
+///   this source then edits.
+/// - `I_new` — written by this source, then newly commented on by it.
+/// - `I_theirs` — never written by this source, newly commented on by it.
+/// - `I_quiet` — nobody touches it.
+///
+/// What this source wrote leaves its own record of each item holding the `updatedAt` the item
+/// had before, and the search still answers that same instant, so the only evidence of the
+/// comment activity is that this process wrote it. Each read is asked twice — once by comment
+/// activity alone and once narrowed by title too, as the journey asks it.
+#[tokio::test]
+async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_catches_up() {
+    let fixture = board(vec![
+        Item::issue("I_edited", "widget edited")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_new", "widget new")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_theirs", "widget theirs")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_quiet", "widget quiet")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+    ]);
+    let old = fixture.commented_at("I_edited", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    let source = source(&fixture);
+    for id in ["I_edited", "I_new"] {
+        source
+            .write_task(&ItemWrite {
+                target: Some(native(id)),
+                item: task(
+                    id,
+                    &format!("widget {id}"),
+                    status(StatusCategory::Todo, "Todo"),
+                ),
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    for id in ["I_edited", "I_new", "I_theirs", "I_quiet"] {
+        fixture.indexes_behind(id);
+    }
+    // Every comment write below is stamped by this board's clock, which reads 2026-09-01.
+    let since: chrono::DateTime<chrono::Utc> = "2026-08-01T00:00:00Z".parse().unwrap();
+    let commented_since = |text: Option<TextQuery>| TaskQuery {
+        text,
+        commented_since: Some(since),
+        ..TaskQuery::default()
+    };
+    let by_title = || text("widget", TextFields::Title);
+    for query in [commented_since(None), commented_since(by_title())] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "before any comment activity after the instant"
+        );
+    }
+
+    source
+        .edit_comment(&native("I_edited"), &native(&old), &comment_body("edited"))
+        .await
+        .unwrap()
+        .expect("a comment of that task");
+    source
+        .add_comment(&native("I_new"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    source
+        .add_comment(&native("I_theirs"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+
+    for query in [commented_since(None), commented_since(by_title())] {
+        let mut selected = selected_tasks(source.as_ref(), &query).await;
+        selected.sort();
+        assert_eq!(
+            selected,
+            ["I_edited", "I_new", "I_theirs"],
+            "the edited comment's issue and both newly commented on, though the search \
+             still answers each as it was before; never the quiet one ({query:?})"
+        );
+    }
+    assert!(
+        !fixture.comment_reads().iter().any(|read| read == "I_quiet"),
+        "an issue nobody commented on is still ruled out by its own updatedAt: {:?}",
+        fixture.comment_reads()
+    );
+
+    // Once the index has caught up with `I_theirs`, the search names it and its copy there is
+    // what the read confirms: it is not read again by its own node.
+    fixture.index_catches_up("I_theirs");
+    let node_reads = fixture.requests("issue");
+    let mut selected = selected_tasks(source.as_ref(), &commented_since(None)).await;
+    selected.sort();
+    assert_eq!(selected, ["I_edited", "I_new", "I_theirs"]);
+    assert_eq!(
+        fixture.requests("issue"),
+        node_reads,
+        "an issue the search named was read again by its own node"
+    );
+
+    // An issue this source deleted is no longer one it commented on: it is neither selected
+    // nor looked for by its own node.
+    source.delete_task(&native("I_theirs")).await.unwrap();
+    let node_reads = fixture.requests("issue");
+    let mut selected = selected_tasks(source.as_ref(), &commented_since(None)).await;
+    selected.sort();
+    assert_eq!(selected, ["I_edited", "I_new"]);
+    assert_eq!(
+        fixture.requests("issue"),
+        node_reads,
+        "a deleted issue was still looked for as one this source commented on"
+    );
+
+    // What this process wrote is held for one command, like every other record of its own
+    // writes: the next command answers from the search alone, which is still behind.
+    source.end_command().await.unwrap();
+    assert_eq!(
+        selected_tasks(source.as_ref(), &commented_since(None)).await,
+        Vec::<String>::new()
+    );
+}
+
+/// A read narrowed to one project asks that project for its children by their own nodes, not
+/// the lagging search, so a child this source commented on carries a current `updatedAt`. The
+/// record that it was commented on still exempts it from being ruled out by that `updatedAt`.
+/// This proves the exemption keeps the read exact. A child commented on after the instant is
+/// selected. Asked from an instant after that comment, the same child has its comments read,
+/// which is what the exemption costs, and is not selected. A sibling nobody commented on is
+/// never selected and never has its comments read.
+#[tokio::test]
+async fn a_project_read_after_this_source_commented_selects_exactly_the_children_commented_since() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "the plan").sub_issues(2),
+        Item::issue("I_commented", "commented on")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_quiet", "quiet")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+    ]);
+    let source = source(&fixture);
+    let in_plan_since = |since: &str| TaskQuery {
+        project: ProjectFilter::Is(native("I_plan")),
+        commented_since: Some(since.parse().unwrap()),
+        ..TaskQuery::default()
+    };
+    // The comment written below is stamped by this board's clock, which reads 2026-09-01.
+    let before = in_plan_since("2026-08-01T00:00:00Z");
+    let after = in_plan_since("2026-09-02T00:00:00Z");
+    assert_eq!(
+        selected_tasks(source.as_ref(), &before).await,
+        Vec::<String>::new(),
+        "before any comment activity after the instant"
+    );
+
+    source
+        .add_comment(&native("I_commented"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+
+    assert_eq!(
+        selected_tasks(source.as_ref(), &before).await,
+        ["I_commented"],
+        "the child commented on after the instant, and not its quiet sibling"
+    );
+    assert_eq!(
+        selected_tasks(source.as_ref(), &after).await,
+        Vec::<String>::new(),
+        "a child whose only comment predates the instant, though this source wrote it"
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_commented", "I_commented"],
+        "the commented child's comments are what decide both reads, and a child nobody \
+         commented on had its comments read"
+    );
+}
+
+/// A comment write GitHub refuses wrote nothing, so it makes no issue a candidate: the next
+/// comment-activity read selects nothing, sends no node read of that issue and reads none of
+/// its comments — exactly what it would have done had the write never been attempted.
+#[tokio::test]
+async fn a_comment_write_github_refuses_leaves_the_next_comment_activity_read_as_it_was() {
+    for operation in ["addComment", "updateIssueComment"] {
+        let fixture = board(vec![
+            Item::issue("I_task", "a step")
+                .status("Todo")
+                .updated("2026-06-02T09:00:00Z"),
+        ]);
+        let old = fixture.commented_at("I_task", LONG_BEFORE, "2026-06-02T09:00:00Z");
+        fixture.indexes_behind("I_task");
+        fixture.refuse(operation);
+        let source = source(&fixture);
+        let task = native("I_task");
+        let outcome = match operation {
+            "addComment" => source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .map(|_| ()),
+            _ => source
+                .edit_comment(&task, &native(&old), &comment_body("changed"))
+                .await
+                .map(|_| ()),
+        };
+        assert!(
+            matches!(outcome, Err(SourceError::Refused { .. })),
+            "{operation} refused by GitHub answered {outcome:?}"
+        );
+
+        let node_reads = fixture.requests("issue");
+        let query = TaskQuery {
+            commented_since: Some("2026-08-01T00:00:00Z".parse().unwrap()),
+            ..TaskQuery::default()
+        };
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "an issue whose {operation} was refused was selected"
+        );
+        assert_eq!(
+            fixture.requests("issue"),
+            node_reads,
+            "an issue whose {operation} was refused was read by its own node"
+        );
+        assert_eq!(
+            fixture.comment_reads(),
+            Vec::<String>::new(),
+            "an issue whose {operation} was refused had its comments read"
+        );
+    }
 }
 
 /// The metadata slot at the end of `body`, parsed, or an empty object when it has none.

@@ -20,6 +20,7 @@
 //! | `projects` | **Supported and proven.** `projects/` is a folder of its own, and a task's `project:` key is what files it under one. |
 //! | `documents` | **Supported and proven.** `documents/` is a folder of its own beside the other two, read on the same terms: recursively, with a file's path under it and without `.md` as its identifier. A document's front matter is a task's minus the two things a document is not — no `status` and no `depends_on` — and both are refused rather than ignored. |
 //! | `comments` | **Supported and proven.** A task's comments are an optional trailing `## Comments` section of the task's own file — human-readable, full fidelity, never JSON — in exactly the shape [`COMMENTS_HEADING`] documents. The section is not the task's content, and nothing a copy writes into the file adds, changes or removes it. |
+//! | `assets` | **Supported and proven.** A record's image assets are files in a directory of their own beside the record's file — `<id>.assets/` — under the names its content references them by; written with the record, replaced and removed with it, and never touched for a record whose content references none. See `docs/local-md.md`. |
 //! | `priority` | **Supported,** and proven by this crate's `tests/priority.rs`. A task's optional `priority:` front-matter key holds `none`, `urgent`, `high`, `medium` or `low`; an absent key is `none`, `none` is never written, and any other value makes the file malformed naming the key. A project has no priority, so the key there is refused rather than ignored. |
 //! | `filter_by_priority` | **Supported,** and proven by this crate's `tests/priority.rs`, over that `priority:` key: a task is kept when its priority is any value asked for. |
 //! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
@@ -80,18 +81,22 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, Cursor,
+    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
+    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
 
+mod assets;
 #[cfg(windows)]
 mod probe;
+#[cfg(any(windows, test))]
+mod unlinking;
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
@@ -1086,6 +1091,7 @@ impl TaskSource for LocalMdSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            assets: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
@@ -1528,6 +1534,113 @@ impl TaskSource for LocalMdSource {
             |path, text| self.parse_document_text(path, text),
             |document| &mut document.metadata,
         )
+    }
+    /// The files in the task's own asset directory; see `docs/local-md.md`.
+    async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.held_assets(Kind::Task, id)
+    }
+    /// The files in the document's own asset directory; see `docs/local-md.md`.
+    async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.held_assets(Kind::Document, id)
+    }
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Kind::Task, id, name)
+    }
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Kind::Document, id, name)
+    }
+    /// The task's file, written as [`write_task`](TaskSource::write_task) writes it, and then
+    /// its asset directory made to hold exactly `assets`; the content is stored unchanged,
+    /// because a reference to `./<name>` already names the file beside it.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
+        let before = self.snapshot(Kind::Task, write.target.as_ref())?;
+        let id = self.write_task_with(write, answers)?;
+        self.install(Kind::Task, &id, &files, before)?;
+        Ok(AssetsWritten {
+            id,
+            content: write.item.content.clone(),
+        })
+    }
+    /// The document's file and its asset directory, on the terms of
+    /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let files = self.asset_files(Kind::Document, write.target.as_ref(), assets)?;
+        let before = self.snapshot(Kind::Document, write.target.as_ref())?;
+        let id = self.write_document_with(write, answers)?;
+        self.install(Kind::Document, &id, &files, before)?;
+        Ok(AssetsWritten {
+            id,
+            content: write.item.content.clone(),
+        })
+    }
+    /// The task's rendering, replaced as [`set_task_rendering`](TaskSource::set_task_rendering)
+    /// replaces it, and then its asset directory made to hold exactly `assets`.
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let files = self.asset_files(Kind::Task, Some(id), assets)?;
+        let before = self.snapshot(Kind::Task, Some(id))?;
+        if self
+            .set_task_rendering(id, content, provenance, answers)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.install(Kind::Task, id, &files, before)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: (!content.is_empty()).then(|| content.to_owned()),
+        }))
+    }
+    /// The document's rendering and its asset directory, on the terms of
+    /// [`set_task_rendering_with_assets`](TaskSource::set_task_rendering_with_assets).
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let files = self.asset_files(Kind::Document, Some(id), assets)?;
+        let before = self.snapshot(Kind::Document, Some(id))?;
+        if self
+            .set_document_rendering(id, content, provenance, answers)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.install(Kind::Document, id, &files, before)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: (!content.is_empty()).then(|| content.to_owned()),
+        }))
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_entry(Kind::Task, id)
@@ -3043,15 +3156,127 @@ impl LocalMdSource {
     /// An id naming no file is not an error: it is already gone, which is the state this
     /// asks for. `existing` refuses that case because an *update* of a missing item is a
     /// caller mistake, and this is not one.
+    ///
+    /// The record's assets go after its file, so an asset that will not go leaves the record
+    /// removed and the failure naming the asset; asked again, the delete finds no record and
+    /// removes what that one left.
     fn delete_entry(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
         let path = match self.existing(kind, id) {
             Ok(path) => path,
-            Err(SourceError::Refused { .. }) => return Ok(()),
+            Err(SourceError::Refused { .. }) => return self.delete_leftover_assets(kind, id),
             Err(other) => return Err(other),
         };
+        // An asset leading out of the folder is refused before the record goes.
+        assets::checked(&self.root, &path)?;
         fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", path.display()),
-        })
+        })?;
+        assets::remove(&self.root, &path)
+    }
+
+    /// Remove the assets a record `id` names left behind when its file is already gone.
+    ///
+    /// Reached only through the folder the record's file was in, resolved and confined to this
+    /// source's own, so an id can name no directory outside it.
+    fn delete_leftover_assets(&self, kind: Kind, id: &NativeId) -> Result<(), SourceError> {
+        let base = self.directory(kind)?;
+        let candidate = base.join(&id.0).with_extension("md");
+        let (Some(parent), Some(file)) = (candidate.parent(), candidate.file_name()) else {
+            return Ok(());
+        };
+        let Ok(parent) = fs::canonicalize(parent) else {
+            return Ok(());
+        };
+        if !parent.starts_with(&base) {
+            return Ok(());
+        }
+        assets::remove(&self.root, &parent.join(file))
+    }
+
+    /// The file and the assets of the item `target` names, as they are before a write over it:
+    /// `None` for a create, or a target this folder does not hold.
+    fn snapshot(&self, kind: Kind, target: Option<&NativeId>) -> Result<Option<Held>, SourceError> {
+        let Some(path) = target
+            .map(|target| self.locate(kind, target))
+            .transpose()?
+            .flatten()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Held {
+            text: Self::read_text(&path)?,
+            assets: assets::files(&self.root, &path)?,
+        }))
+    }
+
+    /// Make the item `id` hold exactly `files` as its assets, its file just written; and when
+    /// that fails, take the write back — the file and the assets as `before` held them, or
+    /// neither for a create — so the write lands whole or not at all.
+    fn install(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        files: &[(AssetName, Vec<u8>)],
+        before: Option<Held>,
+    ) -> Result<(), SourceError> {
+        let path = self.existing(kind, id)?;
+        let Err(failed) = assets::replace(&self.root, &path, files) else {
+            return Ok(());
+        };
+        // Best effort, and the failure that started it is what is reported: a putting back that
+        // itself fails would only hide why the write did not land.
+        // llmlint: ignore[changed_behavior_has_e2e] A putting back that itself fails needs a
+        // second filesystem failure staged between the first and this — the same folder refusing
+        // one write and then another — which no journey can arrange without a double of the
+        // filesystem, which the repository's test rules forbid. Its result is deliberately
+        // discarded for the reason above; the restoration that succeeds is proven.
+        match before {
+            Some(held) => {
+                let _ = write_atomically(&path, &held.text);
+                let _ = assets::replace(&self.root, &path, &held.assets);
+            }
+            None => {
+                let _ = fs::remove_file(&path);
+                let _ = assets::remove(&self.root, &path);
+            }
+        }
+        Err(failed)
+    }
+
+    /// The assets the item `id` names holds, or none when there is no such item.
+    fn held_assets(&self, kind: Kind, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        match self.locate(kind, id)? {
+            Some(path) => assets::listed(&self.root, &path),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The bytes of the asset `name` the item `id` names holds, when it holds it.
+    fn asset_bytes(
+        &self,
+        kind: Kind,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        match self.locate(kind, id)? {
+            Some(path) => assets::bytes(&self.root, &path, name),
+            None => Ok(None),
+        }
+    }
+
+    /// Every asset `write` carries with its bytes, checked against what the item `target`
+    /// names already holds before anything is written.
+    fn asset_files(
+        &self,
+        kind: Kind,
+        target: Option<&NativeId>,
+        write: &AssetWrite,
+    ) -> Result<Vec<(AssetName, Vec<u8>)>, SourceError> {
+        let existing = match target {
+            Some(target) => self.locate(kind, target)?,
+            None => None,
+        };
+        assets::resolved(&self.root, existing.as_deref(), write)
     }
 
     /// The path of the item `id` names in that folder, refusing when there is no such file.
@@ -3613,6 +3838,12 @@ impl LocalMdSource {
 fn compact(value: &serde_json::Value) -> String {
     // A `serde_json::Value` always serializes: its map keys are strings.
     serde_json::to_string(value).expect("a JSON value renders")
+}
+
+/// One item's file and its assets, as they were before a write that may have to be taken back.
+struct Held {
+    text: String,
+    assets: Vec<(AssetName, Vec<u8>)>,
 }
 
 /// Write `text` at `path` — replacing the file there, or creating one where there is none —
@@ -4362,5 +4593,78 @@ mod tests {
         // The mark is lifted by the last handle closing, which is what leaves the folder
         // clearable when this test is done with it.
         drop(held);
+    }
+
+    /// The real probe on a record that will not open (onetaskgraph#3044): one whose folder
+    /// has gone, one whose folder Windows is part-way through removing, and one in a folder that
+    /// opens which an access-control entry denies. All three refuse to be opened; only the first
+    /// two are the record having left.
+    #[cfg(windows)]
+    #[test]
+    fn the_probe_calls_a_record_unlinked_when_its_folder_has_gone_or_is_going_and_not_when_denied()
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, SetFileInformationByHandle,
+        };
+
+        let root = tempfile::tempdir().expect("temporary notes");
+
+        // Gone: neither the record's folder nor the one above it is there.
+        assert!(super::probe::unlinked(
+            &root.path().join("tasks/theirs/deep-2/39.md")
+        ));
+
+        // Going: an empty folder marked for deletion through a handle that still holds it, by
+        // the classic disposition for the reason the test above gives for a file.
+        let going = root.path().join("going");
+        fs::create_dir(&going).expect("a folder");
+        let held = fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&going)
+            .expect("the folder opens");
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: `held` is an open handle carrying DELETE access, and `disposition` is one
+        // whole `FILE_DISPOSITION_INFO` whose length is passed with it; both outlive the call.
+        assert!(
+            unsafe {
+                SetFileInformationByHandle(
+                    held.as_raw_handle() as HANDLE,
+                    FileDispositionInfo,
+                    (&raw const disposition).cast(),
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } != 0,
+            "SetFileInformationByHandle: {}",
+            std::io::Error::last_os_error()
+        );
+        // The state this case is for: still named by its parent, and refusing to be opened.
+        assert!(
+            going.symlink_metadata().is_ok(),
+            "the folder left its parent instead of being marked"
+        );
+        assert!(
+            fs::read_dir(&going).is_err(),
+            "a marked folder refuses a listing"
+        );
+        assert!(super::probe::unlinked(&going.join("39.md")));
+        drop(held);
+
+        // Denied: a record that is there, in a folder that opens, which this reader may not
+        // open. The record rather than its folder carries the entry, because a folder's denied
+        // listing does not bind the hosted Windows runner's user and a file's does.
+        let sealed = root.path().join("sealed");
+        fs::create_dir(&sealed).expect("a folder");
+        let record = sealed.join("39.md");
+        fs::write(&record, "---\ntitle: Sealed\n---\n").expect("a record");
+        assert!(deny_file(&record), "the record refuses to be read");
+        assert!(!super::probe::unlinked(&record));
+        permit(&record);
     }
 }

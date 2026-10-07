@@ -25,3 +25,5 @@ onetaskgraph-plugin-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+# The simulated clock's coordinator: a handler's hold completes on a `oneshot`.
+tokio.workspace = true

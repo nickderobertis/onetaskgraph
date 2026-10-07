@@ -15,6 +15,20 @@
 
 use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 
+// Image assets on tasks and documents: stored, listed, rendered and copied through the
+// binary against folders of Markdown and the Python asset store over a real pipe.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
+// every journey drives the binary against folders of Markdown and a Python peer over a pipe,
+// and the module finishes in seconds. Nothing in it exercises a hosted plugin; what it proves —
+// the reference convention in `onetaskgraph-plugin-api`, the copy that carries assets in
+// `onetaskgraph-core`, the binary's `--asset` — is the engine's and the binary's, so there is
+// no plugin crate's edge narrower than this suite's for it to sit behind, and the task that
+// added it places it here, as the suite for journeys not specific to one plugin.
+mod assets;
+// The simulated clock: its coordinator driven by real client processes over loopback, and the
+// binary attaching to it. No source and no third party; nothing waits in real time but the
+// deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.
+mod clock;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against two folders of Markdown,
 // in process and over the stdio plugin protocol, with no credential and no network, in about a

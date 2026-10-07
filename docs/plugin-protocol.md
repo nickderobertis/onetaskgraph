@@ -427,11 +427,19 @@ before sending anything, naming the source and the operation:
 - `write_task_rendered`, `write_project_rendered` and `write_document_rendered`, a create from
   a template;
 - `set_task_rendering`, `set_project_rendering` and `set_document_rendering`, a regenerate in
-  place.
+  place, and `set_task_rendering_with_assets` and `set_document_rendering_with_assets`, the
+  same regenerate storing the item's image assets with it.
 
 The engine never stands `write_task` in for a create from a template, which would land the
 content and its provenance without the answers a regenerate needs. A plain-body create is
 `write_task`, `write_project` or `write_document` and crosses as it always has.
+
+The image-asset methods are not methods of their own either. `write_task_with_assets` and
+`write_document_with_assets` cross as `write_task` and `write_document` carrying the `assets`
+member §4.9a specifies. `task_assets`, `document_assets`, `task_asset` and `document_asset` — a
+read of the assets a record holds — are not carried at all: a source hosted over this protocol
+reports every record as holding none, so a copy *out of* one whose content references an asset
+is refused naming the record and the asset, as it is for any source that does not hold it.
 
 ### 4.1 Common parameter shapes
 
@@ -459,7 +467,7 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `documents`, `comments`, `priority`, `filter_by_priority`,
+`projects`, `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
 `filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `orphan_tasks`,
 `filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
 `"native"` or `"unsupported"`.
@@ -467,13 +475,13 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents`, `comments`, `priority`, `filter_by_priority`, `filter_by_comment_activity`,
-`filter_by_metadata` and `filter_by_origin` are the seven members of this object that are
-**optional**, and an absent one means `"unsupported"`. That is §2.1 doing its job, exactly as
-it does for the write-support member §3.3 specifies: a plugin written before there were
-documents, comments, priorities, a comment-activity filter or a metadata or origin filter says
-nothing here and is read as the source without them it is, with no version bump on either
-side.
+`documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
+`filter_by_comment_activity`, `filter_by_metadata` and `filter_by_origin` are the eight members
+of this object that are **optional**, and an absent one means `"unsupported"`. That is §2.1
+doing its job, exactly as it does for the write-support member §3.3 specifies: a plugin written
+before there were documents, comments, image assets, priorities, a comment-activity filter or a
+metadata or origin filter says nothing here and is read as the source without them it is, with
+no version bump on either side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
 this source has documents at all, in the shape `projects` uses, so there is no wider result
@@ -486,6 +494,13 @@ one arrives anyway.
 tasks have comments at all. The engine never sends a comment method to a plugin that
 answered `"unsupported"` — see §4.15 — and sends the three that write (§4.16) only to a
 plugin whose write-support member (§3.3) also says it can be written.
+
+`assets` is not a predicate either: it says whether this source stores the image assets a
+task's or a document's content references (§4.9a). Only a plugin that answered `"native"`, and
+that §3.3 says can be written, is ever sent a write carrying one. A create or a copy of a record whose
+content references an asset into a plugin that answered `"unsupported"`, or said nothing, is
+refused by the engine before anything is written for that record, naming the source, the record
+and the asset; a record whose content references none is written to it exactly as before.
 
 `priority` is not a predicate either: it says whether this source's tasks hold a priority
 (§4.13b) at all. A plugin that answered `"unsupported"` reports every task's priority as none,
@@ -534,7 +549,7 @@ all three hold:
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
 3. This reaches the ten `"native"`/`"unsupported"` predicates alone — not `documents`,
-   `comments` or `priority`, which are not among them. A dependency read is never ignored
+   `comments`, `assets` or `priority`, which are not among them. A dependency read is never ignored
    and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
@@ -793,6 +808,91 @@ and overwrites it — is not a message of this protocol. For a hosted source the
 it the way the trait's default does, admitting every status, so a status this plugin has no
 name for is refused by `write_task` or `write_project` itself, as above, and a plugin written
 against this document implements nothing more.
+
+### 4.9a Image assets on `write_task` and `write_document`
+
+A task's or a document's content references an image **asset** as a Markdown image whose
+target is `./<name>` — `![<alt>](./<name>)` — where `<name>` is a bare file name, with no `/`,
+no `\` and no `..`, ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`.
+Only an image outside code is one: an image whose `!` is escaped with a backslash, and image
+syntax inside an inline code span or a fenced or indented code block — as CommonMark decides
+what is code, in a list item or a block quote too — is not, and a plugin rewriting references
+leaves it byte for byte. Nothing else is a reference, and every other link is content like any
+other.
+
+Only a plugin that declared `assets` `"native"` (§4.2) is ever sent a write carrying assets.
+Such a write is a `write_task` or a `write_document` whose `params` carry, beside `write`, the
+members below. Their names are the members of the `AssetWrite` root `onetaskgraph schema`
+emits, and each asset is its `AssetPayload`:
+
+```json
+{
+  "id": "12",
+  "method": "write_document",
+  "params": {
+    "write": { "target": "D-1", "item": { "id": "notes:design", "…": "…" }, "depends_on": [] },
+    "assets": [
+      { "name": "before.png", "sha256": "9f86d0…", "content_type": "image/png", "bytes": "iVBORw0KGgo…" },
+      { "name": "after.png", "sha256": "60303a…", "content_type": "image/png" }
+    ],
+    "recorded_assets": {
+      "after.png": { "sha256": "60303a…", "url": "https://example.invalid/a/60303a.png" }
+    }
+  }
+}
+```
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `assets` | array | One entry per asset the content references, in the order it first references them: the record's **whole** asset set once the write lands, so an asset the record held and this does not name is removed. Present, even empty, on every write that carries assets, and **never** present on any other write — which is what keeps every write a plugin unaware of assets is sent exactly as it was. |
+| `recorded_assets` | object | The destination record's existing `onetaskgraph.assets` (below), exactly as the record holds it. Absent when it holds none, and always absent on a create. |
+
+| Asset member | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | The asset's name, which the content references as `./<name>`. |
+| `sha256` | string | The lowercase hex SHA-256 of its bytes. |
+| `content_type` | string | `"image/png"`, `"image/jpeg"`, `"image/gif"` or `"image/webp"`, decided by the name's extension alone. |
+| `bytes` | string | The bytes, base64 (RFC 4648, with padding). **Absent** exactly when `recorded_assets` records this name with this `sha256`: the destination already serves those bytes, so they are not sent again. |
+
+The plugin stores each asset, and answers with the record and the content it stored:
+
+```json
+{ "id": "12", "result": { "id": "D-1", "content": "![before](https://example.invalid/a/9f86d0.png) …" } }
+```
+
+| Result member | Type | Meaning |
+| --- | --- | --- |
+| `id` | string | The `NativeId` this source now holds the record under, as §4.9's `result` says. |
+| `content` | string or `null` | The content as stored. |
+
+A plugin keeps the assets one of two ways:
+
+- **Beside the record**, as `local-md` does in a directory beside the record's file. It stores
+  each asset's bytes under its name, removes every asset the record held that `assets` does not
+  name, and stores — and answers — the content exactly as it was given: `./<name>` already
+  names the file beside it. An entry without `bytes` reuses the bytes the record already holds
+  under that name, which it refuses when they do not hash to `sha256`.
+- **At a URL it serves**, as a hosted backend does. It uploads each entry carrying `bytes`, and
+  for each entry without them reuses the `url` `recorded_assets` records. It then writes the
+  record with every `./<name>` target replaced by that asset's URL, with **`onetaskgraph.assets`**
+  in the record's `metadata` holding what it served — an object keyed by asset name, each value
+  `{"sha256": <lowercase hex>, "url": <string>}`, the shape the `AssetUploads` root describes —
+  and, when the record's `onetaskgraph.template` entry records a `body_digest` that is still the
+  SHA-256 (`sha256:<hex>`) of the content it was given, with that `body_digest` re-recorded as
+  the digest of the content as rewritten and the entry's `template`, `digest` and
+  `answers_digest` carried as they were. It answers the content it wrote. A Rust plugin does all
+  three through `onetaskgraph_plugin_api::serve_asset_references`.
+
+The engine sends a write carrying assets when the record's content references an asset, and
+when the record it overwrites holds one — so a copy whose source record no longer references an
+asset takes it away at the destination too. Before it sends one, it has already refused, naming
+the record and the asset, a reference the source record does not hold, and — naming the source,
+the record and the asset — a destination that declared `assets` `"unsupported"`. A plugin must
+still refuse, with `{"kind": "refused"}` naming the asset, an entry whose `bytes` are absent
+with nothing recorded to reuse, and one whose `bytes` do not hash to its `sha256`.
+
+A create from a template, and a regenerate, carrying assets are template operations, and are
+not carried (§4).
 
 ### 4.10 `delete_task` and `delete_project`
 
@@ -1445,6 +1545,13 @@ is refused by name before anything is sent.
 that answered `metadata_updates: true`, and one written when §4.18 let a plugin refuse every
 key in that namespace as malformed may go on doing so — the engine reads either refusal of
 that one key as the plugin not holding the link, and the copy completes without it.
+
+The `assets` member of §4.2 and the `assets` and `recorded_assets` members of §4.9a were added
+**without** a bump, for the reason the documents were: the engine sends a write carrying them
+only to a plugin that declared `assets` `"native"`, which a plugin written before assets cannot
+have done. Such a plugin is sent every write exactly as before — a write of a record whose
+content references no asset never carries either member — and a create or a copy of a record
+whose content does reference one is refused by name before that plugin is sent anything.
 
 `end_command` (§4.22) and the `ends_commands` member of §3.11 were added **without** a bump,
 for the reason `metering` was: the engine sends the method only to a plugin that answered

@@ -351,6 +351,16 @@ pub struct CapabilityConfig {
     /// and the refusal against the same plugin. Whether they can be added to, edited and
     /// removed is [`Self::writes`], the one write declaration every write here reads.
     pub comments: Support,
+    /// Whether this source stores the image assets its tasks' and documents' content
+    /// references.
+    ///
+    /// Not a predicate, for the reason [`Self::documents`] is not. Defaults to `Unsupported`,
+    /// so a source configured without the key is the plugin that never heard of assets and
+    /// refuses a copy carrying one; declared `Native`, this source holds each record's assets
+    /// in memory and serves each at an `in-memory://` URL naming its source, record, name and
+    /// SHA-256 — the shape a hosted destination's write takes, so a copy's rewrite of the
+    /// references and its reuse of an unchanged upload can be driven in process.
+    pub assets: Support,
     /// Whether this source's tasks hold a priority at all.
     ///
     /// Not a predicate, for the reason [`Self::documents`] is not: it says what this source
@@ -467,6 +477,7 @@ impl Default for CapabilityConfig {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            assets: Support::Unsupported,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
@@ -495,6 +506,7 @@ impl From<&CapabilityConfig> for Capabilities {
             projects: value.projects,
             documents: value.documents,
             comments: value.comments,
+            assets: value.assets,
             priority: value.priority,
             filter_by_priority: value.filter_by_priority,
             filter_by_comment_activity: value.filter_by_comment_activity,

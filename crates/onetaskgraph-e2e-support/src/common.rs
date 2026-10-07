@@ -178,6 +178,8 @@ impl Sandbox {
         for name in AMBIENT_CREDENTIALS {
             command.env_remove(name);
         }
+        // A run is on the real clock unless a journey puts it on a simulated one.
+        command.env_remove(onetaskgraph_plugin_api::SIMULATED_CLOCK_VARIABLE);
         command
             .current_dir(self.project())
             .env("XDG_CONFIG_HOME", self.config_home())

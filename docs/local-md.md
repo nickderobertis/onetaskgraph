@@ -401,6 +401,47 @@ steps:
   over a project recording no entry — a plain body replacing a rendering — keeps no block,
   because nothing it records says which answers are its.
 
+## Image assets
+
+A task's or a document's image assets — the pictures its content references as
+`![alt](./<name>)` — are kept in **a directory of their own beside the record's file**, named
+after that file with `.assets` in place of `.md`, each under the name the content references it
+by:
+
+```text
+documents/design/settings-redesign.md
+documents/design/settings-redesign.assets/before.png
+documents/design/settings-redesign.assets/after.png
+tasks/alpha/fix-login.md
+tasks/alpha/fix-login.assets/before.png
+```
+
+- **Two records' assets never collide.** The directory is named after the record's own file,
+  and no two records share a file, so two records may each hold an asset called `before.png`
+  and keep their own bytes. A record with no asset has no directory.
+- **Each reference already names its file.** `./before.png` in
+  `documents/design/settings-redesign.md` is not the file beside it — it is the one in the
+  record's own directory — and `document show --json` reports that file's absolute path as the
+  asset's `path`. The content is stored exactly as written; nothing here rewrites a reference.
+- **A write carrying assets replaces the set whole.** `task create`, `document create`, `task
+  render`, `document render` and a copy into this folder write the record's file, then write
+  each asset through a staging file and a rename and remove every asset the write does not
+  name. Only files whose names are asset names are ever written or removed there, so anything
+  else a person put in the directory stays where it is.
+- **Removing or replacing the record removes or replaces its assets with it.** A record a copy
+  that could not finish takes back loses its directory with its file, and `document create
+  --id` over a document leaves it holding exactly that call's assets. A write that carries no
+  assets — a status, a priority, a metadata key, a content set, an update — never touches the
+  directory. A removal whose assets will not go removes the file, fails naming the asset that
+  stayed, and removing the record again clears what it left.
+- **Nothing in it is a record.** This source reads only `.md` files, and an asset's name ends
+  in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, so walking `tasks/`, `projects/` and
+  `documents/` passes over every asset directory.
+- **Nothing is read or written through a link out of the folder.** The asset directory, and
+  any asset in it, may be a link, as a record may; one that leads outside the configured root
+  is refused as a configuration error — a read, a write and a removal of the record alike —
+  before anything is read, written or removed through it, and the record is left as it was.
+
 ## Where this source says an entity is
 
 Every task, project and document this source reports carries a **location**: the

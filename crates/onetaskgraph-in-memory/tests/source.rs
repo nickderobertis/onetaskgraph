@@ -1108,6 +1108,7 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
             projects: Support::Native,
             documents: Support::Unsupported,
             comments: Support::Unsupported,
+            assets: Support::Unsupported,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,

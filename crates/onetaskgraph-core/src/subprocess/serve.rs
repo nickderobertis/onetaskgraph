@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
+    Document, Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
     TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
@@ -25,11 +25,11 @@ use serde_json::{Value, json};
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
     AddCommentParams, CommentsParams, ContentParams, DeleteCommentParams, DeleteParams,
-    DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams, DocumentWriteParams,
-    EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
-    LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
-    ProjectWriteParams, Request, Response, StatusParams, TaskQueryParams, TaskWriteParams,
-    UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
+    DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams, EditCommentParams,
+    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
+    PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
+    ServedWriteParams, StatusParams, TaskQueryParams, UpdateParams, after_the_first_vocabulary,
+    knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -520,8 +520,15 @@ async fn dispatch(
             )
         }
         "write_task" => {
-            let params: TaskWriteParams = decode(method, params)?;
-            encode(json!({ "id": source.write_task(&params.write).await? }))
+            let params: ServedWriteParams<Task> = decode(method, params)?;
+            match params.assets {
+                Some(assets) => encode(
+                    source
+                        .write_task_with_assets(&params.write, None, &assets)
+                        .await?,
+                ),
+                None => encode(json!({ "id": source.write_task(&params.write).await? })),
+            }
         }
         "write_project" => {
             let params: ProjectWriteParams = decode(method, params)?;
@@ -546,8 +553,15 @@ async fn dispatch(
             encode(source.query_documents(&params.query, &params.page).await?)
         }
         "write_document" => {
-            let params: DocumentWriteParams = decode(method, params)?;
-            encode(json!({ "id": source.write_document(&params.write).await? }))
+            let params: ServedWriteParams<Document> = decode(method, params)?;
+            match params.assets {
+                Some(assets) => encode(
+                    source
+                        .write_document_with_assets(&params.write, None, &assets)
+                        .await?,
+                ),
+                None => encode(json!({ "id": source.write_document(&params.write).await? })),
+            }
         }
         "delete_document" => {
             let params: DeleteParams = decode(method, params)?;

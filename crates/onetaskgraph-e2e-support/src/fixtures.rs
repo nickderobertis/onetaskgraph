@@ -152,6 +152,11 @@ pub struct Declared {
     /// Not a predicate either, on exactly the terms [`Self::documents`] is not: it says what
     /// the source holds, and a source declaring it unsupported is never sent a comment call.
     pub comments: Support,
+    /// Whether the source stores the image assets its records' content references.
+    ///
+    /// Not a predicate either, on the terms [`Self::documents`] is not: it says what the
+    /// source holds, and a source declaring it unsupported is never handed an asset.
+    pub assets: Support,
     /// Whether the source's tasks hold a priority at all.
     ///
     /// Not a predicate either, on the terms [`Self::documents`] is not: it says what the
@@ -197,6 +202,7 @@ impl Declared {
             projects: self.projects,
             documents: self.documents,
             comments: self.comments,
+            assets: self.assets,
             priority: self.priority,
             filter_by_priority: self.filter_by_priority,
             filter_by_comment_activity: self.filter_by_comment_activity,
@@ -458,6 +464,7 @@ pub const ROWS: &[Row] = &[
                 // compensation with no coverage, not less of it.
                 documents: Support::Native,
                 comments: Support::Native,
+                assets: Support::Unsupported,
                 // Held for the reason `documents` is: a task's priority is what the priority
                 // filter this row leaves to the engine compares against.
                 priority: Support::Native,
@@ -514,6 +521,8 @@ pub const ROWS: &[Row] = &[
                 comments: Support::Native,
                 // A `priority:` key in a task's front matter.
                 priority: Support::Native,
+                // A folder of its own beside each record's file.
+                assets: Support::Native,
                 max_page_size: 200,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -629,6 +638,9 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     // native" says nothing about whether a source's tasks have comments. The rows whose
     // source really does hold them override it.
     comments: Support::Unsupported,
+    // Unsupported here for the reason `documents` is: whether a source stores image assets is
+    // not a predicate. The row whose source really does keep them overrides it.
+    assets: Support::Unsupported,
     // Unsupported here for the reason `documents` is: whether a source's tasks hold a
     // priority is not a predicate. Every row whose source holds one overrides it.
     priority: Support::Unsupported,
