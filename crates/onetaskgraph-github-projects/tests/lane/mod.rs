@@ -8,12 +8,17 @@
 //! whether the journey passed or failed — and reaches no network at all, which is why it
 //! can assert them without a credential.
 
+use std::collections::BTreeSet;
 use std::future::Future;
+use std::sync::Mutex;
 
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
-use onetaskgraph_live::artifact::{Run, Stamp, Sweep};
-use onetaskgraph_live::{Credential, missing, required};
+use onetaskgraph_live::artifact::{
+    CORE_REPOSITORY, CiRun, CiStamp, GITHUB_ACTIONS_VARIABLE, RUN_ATTEMPT_VARIABLE,
+    RUN_ID_VARIABLE, Run, SCRATCH_REPOSITORY, Stamp, Sweep, labelled_stamp, titled_stamp,
+};
+use onetaskgraph_live::{Credential, REQUIRED_VARIABLE, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -61,29 +66,101 @@ pub fn live_write_config(
                              "in-progress":null}})
 }
 
-/// The prefix of every board item this lane writes.
+/// The prefix of every issue this lane writes, and of the one label each run creates.
 ///
-/// The rest of a title is an [`onetaskgraph_live::artifact::Stamp`] — the machine and
-/// process that wrote it, and a microsecond timestamp — which is what makes one run's
-/// artifact unique, what makes it recognisable to that run's own cleanup, and what a later
-/// run looks the writing run up by before deciding whether anything still owns it. The
-/// grammar of that half is not spelled here: it is one contract shared with the Linear lane,
-/// because both have to answer the same question about an artifact with the same answer.
-pub const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
+/// Declared once, in `onetaskgraph_live::artifact`, because the scheduled janitor
+/// (`crates/onetaskgraph-live-janitor`) recognises exactly these names and non-test code
+/// cannot import anything from here. The rest of a title is a stamp in one of two forms —
+/// see [`Writer`] — and the label prefix is short because GitHub holds a label name to fifty
+/// characters.
+pub use onetaskgraph_live::artifact::{ARTIFACT_PREFIX, LABEL_PREFIX};
 
-pub fn artifact_title(run: Run, stamp_micros: u64) -> String {
-    format!("{ARTIFACT_PREFIX}{}", Stamp::new(run, stamp_micros))
+/// Which form of stamp this lane process writes, and so how its artifacts name it.
+///
+/// **A machine stamp outside GitHub Actions, unchanged**: the machine and process that
+/// wrote it, which the lock sweep in `onetaskgraph_live::artifact` decides on. **A CI stamp
+/// inside it**, `ci-<run id>-<attempt>-<micros>`: a hosted runner is a fresh machine every
+/// time, so a lock there is evidence nobody can read afterwards, and what can answer for the
+/// artifact later is the run it names — the janitor removes a CI-stamped artifact only once
+/// GitHub reports that run `completed`. [`admit`] decides which, from `GITHUB_ACTIONS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writer {
+    /// A run outside GitHub Actions, named by its machine and process.
+    Machine(Run),
+    /// A run inside GitHub Actions, named by its run id and attempt.
+    Ci(CiRun),
 }
 
-/// The artifact title inside one board issue's own title.
+impl From<Run> for Writer {
+    fn from(run: Run) -> Self {
+        Self::Machine(run)
+    }
+}
+
+impl Writer {
+    /// This process, outside GitHub Actions: the machine stamp it has always written.
+    pub fn this_machine() -> Self {
+        Self::Machine(Run::current())
+    }
+
+    /// The stamp this writer puts on an artifact it writes at `micros`.
+    ///
+    /// A CI stamp's time is at least 1 and at most sixteen digits, which every clock reading
+    /// after 1970 and before the year 2286 is; [`check_clock`](Self::check_clock) is what a
+    /// run asks before it writes anything, so this never refuses a stamp half-way through.
+    pub fn stamp(self, micros: u64) -> String {
+        match self {
+            Self::Machine(run) => Stamp::new(run, micros).to_string(),
+            Self::Ci(run) => CiStamp::new(run, micros)
+                .map(|stamp| stamp.to_string())
+                .unwrap_or_else(|| {
+                    panic!("{micros} is not a time a CI stamp can carry; see Writer::check_clock")
+                }),
+        }
+    }
+
+    /// Whether every stamp from `micros` to `micros + span` can be written, asked once
+    /// before a run writes anything.
+    pub fn check_clock(self, micros: u64, span: u64) -> Result<(), String> {
+        match self {
+            Self::Machine(_) => Ok(()),
+            Self::Ci(run) => [micros, micros.saturating_add(span)]
+                .into_iter()
+                .all(|at| CiStamp::new(run, at).is_some())
+                .then_some(())
+                .ok_or_else(|| {
+                    format!(
+                        "the clock reads {micros} microseconds since the epoch, which a CI \
+                         stamp cannot carry; fix this machine's clock"
+                    )
+                }),
+        }
+    }
+
+    /// Everything a stamp of this writer spells before its time: the part of a title a title
+    /// search for this run's own artifacts names.
+    pub fn stamp_prefix(self) -> String {
+        match self {
+            Self::Machine(run) => format!("{run}-"),
+            Self::Ci(run) => format!("ci-{}-{}-", run.run_id(), run.attempt()),
+        }
+    }
+}
+
+pub fn artifact_title(writer: impl Into<Writer>, stamp_micros: u64) -> String {
+    format!("{ARTIFACT_PREFIX}{}", writer.into().stamp(stamp_micros))
+}
+
+/// The stamp inside one board issue's own title, when it is spelled the way this lane
+/// spells one.
 ///
 /// A *document* this lane writes carries [`DESIGN_TITLE_PREFIX`] in front of the title it
 /// was given, because that is how this source spells a document and the source puts it
-/// there rather than the caller. Cleanup reads the board's raw titles, so recognition has
-/// to take that prefix off first: without this, a document a run created would be residue
-/// no sweep could ever name, on somebody's real board.
-fn artifact_part(title: &str) -> &str {
-    title.strip_prefix(DESIGN_TITLE_PREFIX).unwrap_or(title)
+/// there rather than the caller. Cleanup reads the board's raw titles, so recognition takes
+/// that prefix off first — `onetaskgraph_live::artifact::titled_stamp` is that grammar,
+/// shared with the janitor.
+fn artifact_stamp(title: &str) -> Option<&str> {
+    titled_stamp(title, DESIGN_TITLE_PREFIX)
 }
 
 /// Whether a board item is an artifact `sweep` may remove.
@@ -92,40 +169,27 @@ fn artifact_part(title: &str) -> &str {
 /// permits a removal is positive evidence that the run which wrote the artifact has ended —
 /// its registration lock, which the kernel releases when that process does — and never how
 /// old the artifact is. The rule and the window are `onetaskgraph_live::artifact`'s, so this
-/// lane and Linear's cannot come to sweep on two different ones.
+/// lane and Linear's cannot come to sweep on two different ones. A CI stamp is never one:
+/// the machine reader refuses it, so a hosted run's residue is the janitor's alone.
 pub fn is_orphan_title(sweep: &Sweep, title: &str) -> bool {
-    sweep.names_an_orphan(ARTIFACT_PREFIX, artifact_part(title))
+    artifact_stamp(title)
+        .and_then(Stamp::read)
+        .is_some_and(|stamp| sweep.is_orphan(stamp))
 }
 
-/// Whether a board item is one *this* run wrote.
+/// Whether a board item is one the machine run `run` wrote.
 ///
 /// Every artifact of one run carries that run, so a run names its own for cleanup without
 /// touching one another run is still using or one an interrupted earlier run left for
 /// [`is_orphan_title`] to sweep.
 pub fn is_run_artifact_title(run: Run, title: &str) -> bool {
-    Stamp::read(
-        artifact_part(title)
-            .strip_prefix(ARTIFACT_PREFIX)
-            .unwrap_or(""),
-    )
-    .is_some_and(|stamp| stamp.run() == run)
+    artifact_stamp(title)
+        .and_then(Stamp::read)
+        .is_some_and(|stamp| stamp.run() == run)
 }
 
-/// The prefix of the one repository label this lane creates.
-///
-/// A label this lane created is residue exactly as an issue is, so it is named the way board
-/// items are — the writing run and a timestamp — and removed the same way. The grammar a
-/// stamp accepts is digits and hyphens, which is what lets the cleanup below name a label in
-/// a URL path unescaped.
-///
-/// **Short on purpose**, where the board item's prefix is a readable sentence: GitHub holds a
-/// label name to fifty characters, and a stamp now names the machine as well as the process.
-/// `otg-live-` plus the widest stamp either can write leaves room to spare; the eighteen
-/// characters this used to be did not.
-pub const LABEL_PREFIX: &str = "otg-live-";
-
-pub fn artifact_label(run: Run, stamp_micros: u64) -> String {
-    format!("{LABEL_PREFIX}{}", Stamp::new(run, stamp_micros))
+pub fn artifact_label(writer: impl Into<Writer>, stamp_micros: u64) -> String {
+    format!("{LABEL_PREFIX}{}", writer.into().stamp(stamp_micros))
 }
 
 /// Whether a repository label is an artifact `sweep` may remove. See [`is_orphan_title`].
@@ -133,10 +197,82 @@ pub fn is_orphan_label(sweep: &Sweep, name: &str) -> bool {
     sweep.names_an_orphan(LABEL_PREFIX, name)
 }
 
-/// Whether a repository label is one *this* run created.
+/// Whether a repository label is one the machine run `run` created.
 pub fn is_run_artifact_label(run: Run, name: &str) -> bool {
-    Stamp::read(name.strip_prefix(LABEL_PREFIX).unwrap_or(""))
+    labelled_stamp(name)
+        .and_then(Stamp::read)
         .is_some_and(|stamp| stamp.run() == run)
+}
+
+/// What one lane process has written, which is what its own end-of-run cleanup removes.
+///
+/// **By its whole stamp, so two processes of one attempt never remove each other's.** A
+/// machine stamp names the process, so a machine writer recognises every stamp carrying its
+/// run, exactly as it always has. A CI stamp names only the run and the attempt, which two
+/// processes of one attempt share, so a CI writer recognises only the stamps it issued
+/// itself: every title and label is named through [`Own::title`] and [`Own::label`], which
+/// record the stamp before anything carrying it is written.
+#[derive(Debug)]
+pub struct Own {
+    writer: Writer,
+    issued: Mutex<BTreeSet<u64>>,
+}
+
+impl Own {
+    pub fn new(writer: impl Into<Writer>) -> Self {
+        Self {
+            writer: writer.into(),
+            issued: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    /// Which form of stamp this process writes.
+    pub fn writer(&self) -> Writer {
+        self.writer
+    }
+
+    fn issue(&self, micros: u64) {
+        self.issued
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(micros);
+    }
+
+    /// The title of an artifact this process writes at `micros`, recorded as its own.
+    pub fn title(&self, micros: u64) -> String {
+        self.issue(micros);
+        artifact_title(self.writer, micros)
+    }
+
+    /// The name of a label this process creates at `micros`, recorded as its own.
+    pub fn label(&self, micros: u64) -> String {
+        self.issue(micros);
+        artifact_label(self.writer, micros)
+    }
+
+    fn owns_stamp(&self, spelled: &str) -> bool {
+        match self.writer {
+            Writer::Machine(run) => Stamp::read(spelled).is_some_and(|stamp| stamp.run() == run),
+            Writer::Ci(run) => CiStamp::read(spelled).is_some_and(|stamp| {
+                stamp.run() == run
+                    && self
+                        .issued
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .contains(&stamp.micros())
+            }),
+        }
+    }
+
+    /// Whether a board issue's title is one this process wrote.
+    pub fn owns_title(&self, title: &str) -> bool {
+        artifact_stamp(title).is_some_and(|stamp| self.owns_stamp(stamp))
+    }
+
+    /// Whether a repository label is one this process created.
+    pub fn owns_label(&self, name: &str) -> bool {
+        labelled_stamp(name).is_some_and(|stamp| self.owns_stamp(stamp))
+    }
 }
 
 pub async fn run_then_cleanup<J, JF, C, CF>(journey: J, cleanup: C) -> Result<(), String>
@@ -231,6 +367,13 @@ fn is_repository_name(name: &str) -> bool {
 /// `GH_PROJECTS_NUMBER` are bound as GraphQL variables, and the production boundary this
 /// lane drives validates them.
 ///
+/// **The core repository is refused outright.** The lane's issues go into
+/// `nickderobertis/onetaskgraph-live-scratch`, a repository that exists for them; a value
+/// naming `nickderobertis/onetaskgraph` — however it is cased or padded — is a machine that
+/// was never repointed, and it fails here, before a session is opened or a request sent,
+/// naming what to change and where, rather than writing test residue into the tracker real
+/// work is filed in. See [`refuse_the_core_repository`].
+///
 /// `ONETASKGRAPH_LIVE_REQUIRED=1` turns a skip into
 /// a failure, the same pairing an absent credential already has. `Err` is a misconfiguration,
 /// which fails whether or not the lane is required.
@@ -247,6 +390,7 @@ pub fn live_lane(
     live_required: Option<&str>,
 ) -> Result<LiveLane, String> {
     let live_required = required(live_required)?;
+    refuse_the_core_repository(repository)?;
     let skip = |reason: &str| -> Result<LiveLane, String> {
         Ok(LiveLane::Skip(missing(
             live_required,
@@ -322,5 +466,98 @@ pub fn live_lane(
         owner: owner.to_owned(),
         project_number: number,
         repository: repository.to_owned(),
+    })
+}
+
+/// Refuses a nomination of the core repository, which this lane no longer writes to.
+///
+/// Trimmed and compared without regard to case, because GitHub resolves an owner and a
+/// repository name that way: `  NickDeRobertis/OneTaskGraph ` addresses the same tracker.
+/// The message names the variable, the value refused, the repository to nominate instead,
+/// and the two places a machine sets it — which is how a development machine that was never
+/// repointed announces itself on its next run instead of quietly writing to the core
+/// repository.
+///
+/// # Errors
+///
+/// When `repository` names [`CORE_REPOSITORY`].
+pub fn refuse_the_core_repository(repository: Option<&str>) -> Result<(), String> {
+    match repository {
+        Some(named) if named.trim().eq_ignore_ascii_case(CORE_REPOSITORY) => Err(format!(
+            "GH_PROJECTS_REPOSITORY is {named:?}, which names the core repository \
+             {CORE_REPOSITORY}, where real work is filed: this lane no longer writes there. \
+             Nominate {SCRATCH_REPOSITORY}, the repository that exists for this lane's \
+             issues — set GH_PROJECTS_REPOSITORY={SCRATCH_REPOSITORY} in this machine's \
+             onetaskgraph secrets.env (~/.config/onetaskgraph/secrets.env), or in the \
+             environment it runs or pushes from (on an orchestration host, that host's \
+             ai-orchestrator .env)"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the lane may run, against which board, and under which stamp — every variable it
+/// reads, read through `read` by name.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// Run, writing under `writer`.
+    Run {
+        token: Credential,
+        owner: String,
+        project_number: u32,
+        repository: String,
+        writer: Writer,
+    },
+    /// Skip, for the reason given.
+    Skip(String),
+}
+
+/// The lane's whole decision before it opens a session: [`live_lane`] over the nominations,
+/// then which stamp it writes.
+///
+/// One function rather than the steps spelled again in each caller, because `tests/live.rs`
+/// drives it against GitHub and `tests/lane_entry.rs` drives the same entry against a
+/// loopback stand-in that counts what reaches it. Nothing here sends a request.
+///
+/// The stamp is decided only once the lane will run: a CI stamp under `GITHUB_ACTIONS=true`,
+/// carrying `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`, and the machine stamp otherwise. A run
+/// in GitHub Actions that cannot name its run is refused naming the variable, because a CI
+/// artifact that does not name its run is residue nothing may ever remove.
+///
+/// # Errors
+///
+/// A misconfiguration, as [`live_lane`] and `CiRun::from_environment` report one.
+pub fn admit(read: &dyn Fn(&str) -> Option<String>) -> Result<Admission, String> {
+    let lane = live_lane(
+        read("GH_PROJECTS_TOKEN").as_deref(),
+        // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] .github/workflows/ci.yml spells these three names too, and the drift gate is the lane's own refusal: that workflow sets ONETASKGRAPH_LIVE_REQUIRED=1 on the lane it hands the credential to, so a name spelled differently on either side fails the required check naming the variable rather than skipping green.
+        read("GH_PROJECTS_OWNER").as_deref(),
+        read("GH_PROJECTS_NUMBER").as_deref(),
+        read("GH_PROJECTS_REPOSITORY").as_deref(),
+        read(REQUIRED_VARIABLE).as_deref(),
+    )?;
+    let (token, owner, project_number, repository) = match lane {
+        LiveLane::Run {
+            token,
+            owner,
+            project_number,
+            repository,
+        } => (token, owner, project_number, repository),
+        LiveLane::Skip(reason) => return Ok(Admission::Skip(reason)),
+    };
+    let writer = match CiRun::from_environment(
+        read(GITHUB_ACTIONS_VARIABLE).as_deref(),
+        read(RUN_ID_VARIABLE).as_deref(),
+        read(RUN_ATTEMPT_VARIABLE).as_deref(),
+    )? {
+        Some(run) => Writer::Ci(run),
+        None => Writer::this_machine(),
+    };
+    Ok(Admission::Run {
+        token,
+        owner,
+        project_number,
+        repository,
+        writer,
     })
 }

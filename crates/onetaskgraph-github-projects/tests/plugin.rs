@@ -12718,6 +12718,7 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         owner: "octo-org".to_owned(),
         project_number: 7,
         repository: "acme/work".to_owned(),
+        writer: lane::Writer::this_machine(),
     })
     .await;
     let measured = session_cost(&journey::SESSION.snapshot());

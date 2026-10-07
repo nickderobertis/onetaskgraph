@@ -228,6 +228,7 @@ fn drive(first_call: FirstCall) -> (Drive, MutexGuard<'static, ()>) {
             owner: "octo-org".to_owned(),
             project_number: 7,
             repository: "acme/work".to_owned(),
+            writer: lane::Writer::this_machine(),
         }));
     })
     .join()

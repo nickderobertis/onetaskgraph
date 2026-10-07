@@ -41,11 +41,11 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
+use onetaskgraph_live::{Credential, Session};
 
 use crate::lane::{
-    ARTIFACT_PREFIX, LiveSecret, artifact_label, artifact_title, is_orphan_label, is_orphan_title,
-    is_run_artifact_label, is_run_artifact_title, live_write_config, rest_outcome,
-    run_then_cleanup,
+    ARTIFACT_PREFIX, Admission, LiveSecret, Own, Writer, admit, is_orphan_label, is_orphan_title,
+    live_write_config, rest_outcome, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -1174,9 +1174,11 @@ async fn remove_artifact_labels(
 /// failure is reported rather than the first, because residue left in one is residue the
 /// next run has to heal.
 ///
-/// **Scoped to this run and nothing wider.** This is what leaves a concurrent session's
-/// in-flight items where they are; what recovers an *interrupted* run's is [`sweep_orphans`],
-/// which is a different decision made on a different piece of evidence.
+/// **Scoped to this process and nothing wider** — by its whole stamp, which [`Own`] records
+/// as each title and label is named. This is what leaves a concurrent session's in-flight
+/// items where they are, a second process of the same CI attempt's included; what recovers an
+/// *interrupted* run's is [`sweep_orphans`] for a machine stamp and the scheduled janitor for
+/// a CI one, each a different decision made on a different piece of evidence.
 ///
 /// # The origin field, which this scoping does not reach
 ///
@@ -1192,15 +1194,13 @@ pub async fn remove_live_state(
     token: &str,
     project_id: &str,
     repository: &str,
-    run: Run,
+    own: &Own,
     remove_origin_field: bool,
 ) -> Result<(), String> {
-    let item_result = remove_live_artifacts(token, project_id, &|title| {
-        is_run_artifact_title(run, title)
-    })
-    .await;
+    let item_result =
+        remove_live_artifacts(token, project_id, &|title| own.owns_title(title)).await;
     let label_result =
-        remove_artifact_labels(token, repository, &|name| is_run_artifact_label(run, name)).await;
+        remove_artifact_labels(token, repository, &|name| own.owns_label(name)).await;
     let field_result = if remove_origin_field {
         remove_live_origin_field(token, project_id).await
     } else {
@@ -1229,6 +1229,9 @@ pub async fn remove_live_state(
 /// that no live run owns the artifact — the registration lock of the run that wrote it,
 /// released by the kernel when that process ended. An artifact of a run that is still going
 /// is never taken, whatever its age, and neither is one whose machine this sweep cannot ask.
+/// A CI-stamped artifact is never taken here at all — the machine reader refuses that form —
+/// because no lock on a hosted runner outlives it; the scheduled janitor removes those once
+/// GitHub reports the run that wrote them `completed`.
 ///
 /// **It runs after the journey rather than before it, and that ordering is the point.**
 /// A sweep at startup was what deleted a concurrent session's in-flight board items, and
@@ -1707,10 +1710,10 @@ struct LiveRun {
     token: String,
     repository: String,
     project_id: String,
-    /// Which run this is: the machine that can vouch for it and the process on it. Every
-    /// artifact below carries it, which is what its own cleanup finds them by and what a
-    /// later run's sweep looks this run up by before deciding anything about them.
-    id: Run,
+    /// What this process writes under and what it has written: every artifact below is named
+    /// through it, which is what its own cleanup finds them by — and, for a machine stamp,
+    /// what a later run's sweep looks this run up by before deciding anything about them.
+    own: Own,
     stamp_micros: u64,
     status_option: String,
 }
@@ -1719,16 +1722,15 @@ impl LiveRun {
     /// The title of this run's `offset`-th artifact.
     ///
     /// One stamp per artifact, so every title this run writes is unique and every one of
-    /// them still reads as this run's to [`is_run_artifact_title`] and as the lane's own
-    /// to the sweep the next run does.
+    /// them reads as this process's own to [`Own::owns_title`].
     fn title(&self, offset: u64) -> String {
-        artifact_title(self.id, self.stamp_micros + offset)
+        self.own.title(self.stamp_micros + offset)
     }
 
     /// The prefix no other item on the board carries, which is what lets the listings
     /// below assert an exact set rather than a containment.
     fn prefix(&self) -> String {
-        format!("{ARTIFACT_PREFIX}{}-", self.id)
+        format!("{ARTIFACT_PREFIX}{}", self.own.writer().stamp_prefix())
     }
 }
 
@@ -2158,12 +2160,13 @@ async fn drive_every_declared_capability(
     // Letters and digits alone: this goes into a full-text search below, and a hyphen or a
     // separator of any other kind is a term boundary rather than part of one term.
     let body_marker = format!(
-        "livebodymarker{}x{}x{}",
-        run.id.host().map_or(0, std::num::NonZeroU32::get),
-        run.id.process(),
-        run.stamp_micros
+        "livebodymarker{}",
+        run.own
+            .writer()
+            .stamp(run.stamp_micros)
+            .replace('-', "x")
     );
-    let label_name = artifact_label(run.id, run.stamp_micros);
+    let label_name = run.own.label(run.stamp_micros);
     let open = Status {
         category: StatusCategory::Todo,
         name: run.status_option.clone(),
@@ -2841,6 +2844,68 @@ pub struct Nomination {
     pub owner: String,
     pub project_number: u32,
     pub repository: String,
+    /// Which form of stamp the run's artifacts carry — decided by [`admit`] for the
+    /// credentialed lane, and the machine stamp for every fixture drive.
+    pub writer: Writer,
+}
+
+/// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
+/// anything that every stamp it will write can be spelled.
+const LAST_TITLE_OFFSET: u64 = 5;
+
+/// The credentialed lane's whole entry: admit it, open its one session, and run it.
+///
+/// `read` answers every variable the lane reads, by name, and `open` opens the session —
+/// `tests/live.rs` passes the process environment and `Session::open`, and
+/// `tests/lane_entry.rs` passes a table and the same call against a loopback stand-in. A
+/// skip prints why and returns `Ok`; a misconfiguration is `Err`, returned before the session
+/// is opened and before anything is sent.
+///
+/// # Errors
+///
+/// A misconfiguration of the lane, as [`admit`] reports one.
+pub async fn enter(
+    read: &dyn Fn(&str) -> Option<String>,
+    open: impl FnOnce(Credential) -> Session,
+) -> Result<(), String> {
+    // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] An absent credential
+    // skips only where none was expected — a contributor with no keys, and a fork pull
+    // request, which the host gives no secrets. `ONETASKGRAPH_LIVE_REQUIRED=1`, which
+    // .github/workflows/ci.yml sets on the one lane the credentials reach, turns every skip
+    // below into the failure this rule asks for. The skip branch asserting nothing about
+    // GitHub is the point rather than a gap: there was no run to assert about, and a
+    // stand-in asserted against instead would be a green result for a journey that never
+    // reached the API. What that branch owes is a printed reason, and it prints one.
+    let (token, owner, project_number, repository, writer) = match admit(read)? {
+        Admission::Run {
+            token,
+            owner,
+            project_number,
+            repository,
+            writer,
+        } => (token, owner, project_number, repository, writer),
+        Admission::Skip(reason) => {
+            // Straight to the process's stderr, the way the session report is: the test
+            // harness captures `eprintln!` and discards it for every test that passed, and
+            // a skip is a pass. So a reader of this target's ordinary output can see that
+            // the live session did not run, and why, without knowing to go looking.
+            say(&format!("skipped live GitHub Projects journey: {reason}"));
+            return Ok(());
+        }
+    };
+    // llmlint: ignore-end[live_tier_compiles_and_requires_credential,tests_assert_real_behavior]
+    // The one gate: nothing below may reach GitHub until the session is open, because the
+    // token below is the one this returns rather than the one the lane read.
+    let session = open(token);
+    run(Nomination {
+        token: session.credential().expose().to_owned(),
+        owner,
+        project_number,
+        repository,
+        writer,
+    })
+    .await;
+    Ok(())
 }
 
 /// Drives the whole session — schema verification, board and field lookups, every declared
@@ -2857,8 +2922,15 @@ pub async fn run(nomination: Nomination) {
         owner,
         project_number,
         repository,
+        writer,
     } = nomination;
     let _report = ReportWhateverHappens;
+    // Every stamp this run will write is checked before it writes anything, so naming an
+    // artifact half-way through the journey can never be what stops it short of its cleanup.
+    let stamp_micros = now_micros();
+    writer
+        .check_clock(stamp_micros, LAST_TITLE_OFFSET)
+        .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot stamp: {error}"));
     // The session's first request, and its only one before this decides: whether the
     // account can pay for this session and still keep the share it may never touch. A
     // session that cannot is DECLINED — it did not run, so it is neither a pass nor a
@@ -3032,8 +3104,8 @@ pub async fn run(nomination: Nomination) {
         token: token.clone(),
         repository: repository.clone(),
         project_id: project_id.clone(),
-        id: Run::current(),
-        stamp_micros: now_micros(),
+        own: Own::new(writer),
+        stamp_micros,
         status_option: status_name.clone(),
     };
     let rebuild = || {
@@ -3066,15 +3138,18 @@ pub async fn run(nomination: Nomination) {
                 &token,
                 &project_id,
                 &repository,
-                run.id,
+                &run.own,
                 origin_field_created,
             )
             .await;
+            // Made as this process's machine run whichever stamp it wrote: what it can
+            // recover is a machine-stamped orphan of THIS machine, and on a fresh hosted
+            // runner that is none.
             let orphans = sweep_orphans(
                 &token,
                 &project_id,
                 &repository,
-                &Sweep::of(run.id, now_micros()),
+                &Sweep::of(Run::current(), now_micros()),
             )
             .await;
             match (mine, orphans) {

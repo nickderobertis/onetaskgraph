@@ -42,7 +42,7 @@ mod journey;
 #[allow(dead_code)]
 mod lane;
 
-use lane::{SESSION_NAME, artifact_label, artifact_title};
+use lane::{Own, SESSION_NAME, artifact_label, artifact_title};
 
 /// The board, the repository and the credential every drive below is pointed at.
 const BOARD: &str = "PVT_board";
@@ -790,7 +790,7 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     );
     let _in_flight = session_in_flight();
 
-    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect("this run's own cleanup over a board it can read succeeds");
 
@@ -861,7 +861,7 @@ async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failin
     }
     let _in_flight = session_in_flight();
 
-    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect("a delete GitHub never answered is asked again, and the repository settles it");
 
@@ -915,7 +915,7 @@ async fn an_issue_delete_github_never_answers_fails_the_cleanup_after_its_attemp
     }
     let _in_flight = session_in_flight();
 
-    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect_err("an issue still there after every attempt fails the cleanup");
 
@@ -944,7 +944,7 @@ async fn an_issue_delete_refused_after_an_unanswered_attempt_fails_naming_both()
     drive.leave_issue_delete_unanswered("I_mine", NoAnswer::GatewayTimeout, false);
     let _in_flight = session_in_flight();
 
-    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect_err("an issue a delete was refused for, still there, fails the cleanup");
 
@@ -977,7 +977,7 @@ async fn an_issue_delete_refused_outright_still_fails_the_cleanup() {
         .clear();
     let _in_flight = session_in_flight();
 
-    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+    let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect_err("a delete GitHub refused on its first answer fails the cleanup");
     assert!(refusal.contains("NOT_FOUND"), "{refusal}");
@@ -1000,7 +1000,7 @@ async fn an_issue_delete_answered_without_confirmation_is_settled_by_the_reposit
         drive.leave_issue_delete_unconfirmed("I_mine", payload.clone());
         let _in_flight = session_in_flight();
 
-        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
             .await
             .expect_err("an unconfirmed delete of an issue still there fails the cleanup");
 
@@ -1055,7 +1055,7 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
         drive.fault_presence_read(fault);
         let _in_flight = session_in_flight();
 
-        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, RUNS.mine, false)
+        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
             .await
             .expect_err("a presence read that settles nothing fails the cleanup");
         assert!(refusal.contains(said), "{fault:?}: {refusal}");
