@@ -57,6 +57,9 @@ producer | ${x} -C "\$1"
 producer | ${x}f - -C "\$1" # a trailing comment
   # producer | ${x}f - -C "\$1"
 EOF
+[ -s "$scratch/plant/scripts/planted.sh" ] || fatal \
+  "could not write the planted extractions to $scratch/plant/scripts/planted.sh" \
+  "check 'df -h' for free space and that \$TMPDIR is writable, then rerun"
 status=0
 output="$(bash "$GUARD" "$scratch/plant" 2>&1)" || status=$?
 [ "$status" -eq 1 ] || fatal \
@@ -99,18 +102,23 @@ output="$(bash "$GUARD" "$scratch/crlf" 2>&1)" || fatal \
 # Case 4: the drain leaves no byte of its stream unread, where a bare extraction does.
 mkdir -p "$scratch/src" "$scratch/bare" "$scratch/drained" || fatal \
   "could not create the extraction directories" "check \$TMPDIR, then rerun"
-printf 'payload\n' >"$scratch/src/file.txt"
+printf 'payload\n' >"$scratch/src/file.txt" || fatal \
+  "could not write the payload $scratch/src/file.txt" "check 'df -h' for free space, then rerun"
 { tar -cf - -C "$scratch/src" file.txt && head -c 1048576 /dev/zero; } >"$scratch/stream" || fatal \
   "could not build the archive stream with a trailer" "check that tar and head are on PATH, then rerun"
 left() { tr -d ' \r' <"$1"; }
 # The bare extraction is spelled from $x for the reason the planted ones are: the guard
 # would read it as a site, and here its leaving the stream unread is the point.
 # shellcheck disable=SC2086 # $x is split on purpose, into the command and its flag
-( ${x}f - -C "$scratch/bare" && cat ) <"$scratch/stream" | wc -c >"$scratch/bare.left"
+( ${x}f - -C "$scratch/bare" && cat ) <"$scratch/stream" | wc -c >"$scratch/bare.left" || fatal \
+  "a bare 'tar -xf -' of $scratch/stream, or counting what it left, failed; tar said why above" \
+  "check that tar, cat and wc are on PATH and 'df -h' for free space, then rerun"
 [ "$(left "$scratch/bare.left")" -gt 0 ] || fatal \
   "a bare 'tar -xf -' read its whole stream here, so this host cannot show what the drain is for" \
   "report this; the case needs a tar that stops at its end-of-archive marker, as GNU tar and bsdtar both do on a file"
-( extract_tar_stream "$scratch/drained" && cat ) <"$scratch/stream" | wc -c >"$scratch/drained.left"
+( extract_tar_stream "$scratch/drained" && cat ) <"$scratch/stream" | wc -c >"$scratch/drained.left" || fatal \
+  "extract_tar_stream of $scratch/stream, or counting what it left, failed; scratch-clone said why above" \
+  "check that tar, cat and wc are on PATH and 'df -h' for free space, then rerun"
 [ "$(left "$scratch/drained.left")" -eq 0 ] || fatal \
   "extract_tar_stream left $(left "$scratch/drained.left") bytes of its stream unread, which a macOS producer writes into a closed pipe" \
   "restore the 'cat >/dev/null' after the extraction in scripts/scratch-clone.sh"
