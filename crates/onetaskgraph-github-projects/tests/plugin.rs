@@ -14489,6 +14489,120 @@ async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_c
     );
 }
 
+/// A read narrowed to one project asks that project for its children by their own nodes, not
+/// the lagging search, so a child this source commented on carries a current `updatedAt`. The
+/// record that it was commented on still exempts it from being ruled out by that `updatedAt`.
+/// This proves the exemption keeps the read exact. A child commented on after the instant is
+/// selected. Asked from an instant after that comment, the same child has its comments read,
+/// which is what the exemption costs, and is not selected. A sibling nobody commented on is
+/// never selected and never has its comments read.
+#[tokio::test]
+async fn a_project_read_after_this_source_commented_selects_exactly_the_children_commented_since() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "the plan").sub_issues(2),
+        Item::issue("I_commented", "commented on")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_quiet", "quiet")
+            .parent("I_plan")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+    ]);
+    let source = source(&fixture);
+    let in_plan_since = |since: &str| TaskQuery {
+        project: ProjectFilter::Is(native("I_plan")),
+        commented_since: Some(since.parse().unwrap()),
+        ..TaskQuery::default()
+    };
+    // The comment written below is stamped by this board's clock, which reads 2026-09-01.
+    let before = in_plan_since("2026-08-01T00:00:00Z");
+    let after = in_plan_since("2026-09-02T00:00:00Z");
+    assert_eq!(
+        selected_tasks(source.as_ref(), &before).await,
+        Vec::<String>::new(),
+        "before any comment activity after the instant"
+    );
+
+    source
+        .add_comment(&native("I_commented"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+
+    assert_eq!(
+        selected_tasks(source.as_ref(), &before).await,
+        ["I_commented"],
+        "the child commented on after the instant, and not its quiet sibling"
+    );
+    assert_eq!(
+        selected_tasks(source.as_ref(), &after).await,
+        Vec::<String>::new(),
+        "a child whose only comment predates the instant, though this source wrote it"
+    );
+    assert_eq!(fixture.searches(), Vec::<String>::new());
+    assert_eq!(
+        fixture.comment_reads(),
+        ["I_commented", "I_commented"],
+        "the commented child's comments are what decide both reads, and a child nobody \
+         commented on had its comments read"
+    );
+}
+
+/// A comment write GitHub refuses wrote nothing, so it makes no issue a candidate: the next
+/// comment-activity read selects nothing, sends no node read of that issue and reads none of
+/// its comments — exactly what it would have done had the write never been attempted.
+#[tokio::test]
+async fn a_comment_write_github_refuses_leaves_the_next_comment_activity_read_as_it_was() {
+    for operation in ["addComment", "updateIssueComment"] {
+        let fixture = board(vec![
+            Item::issue("I_task", "a step")
+                .status("Todo")
+                .updated("2026-06-02T09:00:00Z"),
+        ]);
+        let old = fixture.commented_at("I_task", LONG_BEFORE, "2026-06-02T09:00:00Z");
+        fixture.indexes_behind("I_task");
+        fixture.refuse(operation);
+        let source = source(&fixture);
+        let task = native("I_task");
+        let outcome = match operation {
+            "addComment" => source
+                .add_comment(&task, &commenting("hello"))
+                .await
+                .map(|_| ()),
+            _ => source
+                .edit_comment(&task, &native(&old), &comment_body("changed"))
+                .await
+                .map(|_| ()),
+        };
+        assert!(
+            matches!(outcome, Err(SourceError::Refused { .. })),
+            "{operation} refused by GitHub answered {outcome:?}"
+        );
+
+        let node_reads = fixture.requests("issue");
+        let query = TaskQuery {
+            commented_since: Some("2026-08-01T00:00:00Z".parse().unwrap()),
+            ..TaskQuery::default()
+        };
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "an issue whose {operation} was refused was selected"
+        );
+        assert_eq!(
+            fixture.requests("issue"),
+            node_reads,
+            "an issue whose {operation} was refused was read by its own node"
+        );
+        assert_eq!(
+            fixture.comment_reads(),
+            Vec::<String>::new(),
+            "an issue whose {operation} was refused had its comments read"
+        );
+    }
+}
+
 /// The metadata slot at the end of `body`, parsed, or an empty object when it has none.
 fn raw_slot(body: &str) -> Value {
     let Some(start) = body.rfind("<!-- onetaskgraph.metadata\n") else {
