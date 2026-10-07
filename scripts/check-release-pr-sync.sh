@@ -71,7 +71,7 @@ repo="$scratch/repo"
 mkdir -p "$repo" || fatal \
   "could not create the scratch tree at $repo" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$repo" || fatal \
+copy_tracked_files "$ROOT" "$repo" || fatal \
   "could not copy $ROOT's tracked files into $repo (see the tar or git output above)" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

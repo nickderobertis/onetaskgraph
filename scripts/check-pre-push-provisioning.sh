@@ -67,7 +67,7 @@ scratch_clone "$ROOT" "$CLONE" || fatal \
 # The clone carries HEAD, and what is under test is the hook as it is right now — so the
 # WORKING tree's tracked files go over the top of it. The clone is still what supplies the
 # `.git` directory the hook's own `git rev-parse --show-toplevel` needs to find its root.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$CLONE" || fatal \
+copy_tracked_files "$ROOT" "$CLONE" || fatal \
   "could not copy $ROOT's tracked files over the clone at $CLONE" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

@@ -559,7 +559,7 @@ readonly CLONE="$scratch/repo"
 scratch_clone "$ROOT" "$CLONE" || fatal \
   "could not clone this repository into $CLONE" \
   "check 'git status' here and the free space on \$TMPDIR, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$CLONE" || fatal \
+copy_tracked_files "$ROOT" "$CLONE" || fatal \
   "could not copy $ROOT's tracked files over the clone at $CLONE" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

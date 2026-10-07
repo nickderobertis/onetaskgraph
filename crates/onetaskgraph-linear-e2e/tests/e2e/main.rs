@@ -7,11 +7,14 @@
 //! it exercises, so a change to that plugin selects them and a change to a sibling plugin does
 //! not. The plugin's own half is proven behind the same edge in its `tests/plugin.rs`.
 //!
-//! [`linear_budget`] is where `crates/onetaskgraph-linear/budgets.yaml` measures each Linear
-//! request budget: `scripts/linear-budget.sh` runs one of its `measure_*` journeys by name.
+//! [`linear_budget`]'s `measure_*` journeys record the telemetry each Linear request budget of
+//! `crates/onetaskgraph-linear-e2e/budgets.yaml` takes its figure from, as this target runs.
 
 use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 
+mod budget_commands;
+mod budget_runner;
 mod linear;
 mod linear_budget;
 mod linear_status;
+mod telemetry;

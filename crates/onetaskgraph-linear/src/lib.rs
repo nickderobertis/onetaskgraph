@@ -239,7 +239,7 @@
 //! ## Ruling: the resolution is read once per source instance, and a status write reads nothing
 //!
 //! A Linear key is shared by every manager of a host, so what a status write costs is counted at
-//! Linear's endpoint, and `crates/onetaskgraph-linear/budgets.yaml` holds it. A source resolves
+//! Linear's endpoint, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds it. A source resolves
 //! the configured team's id, its workflow states and the workspace's project statuses in one
 //! request — [`graphql::RESOLUTION`] — the first time a write or `sources fields` needs them, and
 //! holds the answer for its own lifetime: per instance, never per process, never shared between
