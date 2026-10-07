@@ -105,6 +105,12 @@ class SourceListingUnavailable(BaseModel):
 
 
 class Capabilities(BaseModel):
+    assets: Annotated[
+        Support,
+        Field(
+            description="Whether the source stores the image assets a task's or a document's content references.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*, not\nwhich predicate it applies, so the second capability rule does not reach it. A source\ndeclaring `Native` is handed a record's assets beside the record's own write — through\n[`TaskSource::write_task_with_assets`](crate::TaskSource::write_task_with_assets) and its\nsiblings — and either keeps them beside the record or serves each at a URL it chooses,\nrewriting the record's references to point there. A source declaring `Unsupported` is\nnever handed one: a create or a copy of a record carrying an asset into it is refused,\nnaming the source, the record and the asset, before anything is written for that record.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates assets says nothing here and is never handed bytes it would drop."
+        ),
+    ] = Support.SupportUnsupported
     comments: Annotated[
         Support,
         Field(

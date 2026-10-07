@@ -34,6 +34,9 @@ onetaskgraph-live = { path = "crates/onetaskgraph-live" }
 onetaskgraph-e2e-support = { path = "crates/onetaskgraph-e2e-support" }
 
 async-trait = "0.1.92"
+# An asset's bytes over the stdio plugin protocol. Already in this lockfile through reqwest, so
+# naming it adds no crate to the closure.
+base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
 clap = { version = "4.6.6", features = ["derive"] }
 # The binary's per-variable template prompts. Only the binary crate may name it: nothing below
@@ -57,6 +60,9 @@ minijinja = { version = "2.24.0", features = ["loader", "loop_controls", "json",
 # decides whether GitHub will execute a query at all is one arithmetic, and a second
 # spelling of it here would be a second answer nobody reconciles.
 github-graphql-node-count = "0.0.1"
+# Which image syntax in a content is inside code, and so is no asset reference: CommonMark's
+# code spans and code blocks, read by a parser rather than restated.
+pulldown-cmark = { version = "0.13.4", default-features = false }
 schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 # A template's digest: `sha256:` over every file of its chain.

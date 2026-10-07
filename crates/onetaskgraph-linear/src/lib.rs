@@ -29,6 +29,7 @@
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `comments` | **Supported and proven,** as the issue's own comments: read oldest first through `issue(id:){comments(last:,before:)}`, added with `commentCreate`, edited with `commentUpdate` and removed with `commentDelete` — each of the last two only once `comment(id:)` has placed the comment on that very issue. See the ruling below on the order and on the author. |
+//! | `assets` | **Unsupported — unimplemented.** A copy of a record carrying an image asset into a Linear workspace is refused, naming the source, the record and the asset, before anything is written for that record. Uploading the bytes to Linear's own file storage is tracked in `docs/follow-ups.md`. |
 //! | `priority` | **Supported,** as Linear's own `Issue.priority`: read on every issue, written by `issueCreate`/`issueUpdate` through `IssueCreateInput.priority`/`IssueUpdateInput.priority`, and set on its own by an `issueUpdate` carrying nothing else. See the ruling below on the scale. |
 //! | `filter_by_priority` | **Supported and proven.** `issues(filter:{priority:{in:[…]}})` over Linear's own `0`–`4` scale, confirmed against each issue read. |
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
@@ -2678,6 +2679,7 @@ impl TaskSource for LinearSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
+            assets: Support::Unsupported,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,

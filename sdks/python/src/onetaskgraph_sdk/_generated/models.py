@@ -6,6 +6,7 @@ from .deleted_comment import DeletedComment as DeletedComment
 from .delivered import Delivered as Delivered
 from .delivery_outcome import DeliveryOutcome as DeliveryOutcome
 from .document import Document as Document
+from .document_detail import DocumentDetail as DocumentDetail
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
 from .failure_document import FailureDocument as FailureDocument
@@ -62,6 +63,7 @@ __all__ = [
     "Delivered",
     "DeliveryOutcome",
     "Document",
+    "DocumentDetail",
     "DocumentQuery",
     "EffectiveConfig",
     "FailureDocument",
