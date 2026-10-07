@@ -200,6 +200,7 @@ class Github:
         self.delete_failure: Deletion | None = None
         self.allowance_record = None
         self.origin_field: OriginField = copy.deepcopy(ORIGIN_FIELD)
+        self.origin_values: dict[ItemId, str] = {}
         # Every way a request or a served body departed from GitHub's description.
         self.unpinned: list[str] = []
 
@@ -355,6 +356,22 @@ class Github:
                         state.board_transform(value)
                     self.reply(value)
                     return
+                # Model field writes too: preserving a field and its values must not be
+                # an assertion about state this peer cannot change through its interface.
+                if 'deleteProjectV2Field' in query:
+                    state.origin_field.clear()
+                    state.origin_values.clear()
+                    self.reply({'data': {'deleteProjectV2Field': {'deletedFieldId': 'origin'}}})
+                    return
+                if 'updateProjectV2ItemFieldValue' in query or 'clearProjectV2ItemFieldValue' in query:
+                    item = ItemId(variables['input']['itemId'])
+                    field_operation = 'clearProjectV2ItemFieldValue' if 'clearProjectV2ItemFieldValue' in query else 'updateProjectV2ItemFieldValue'
+                    if field_operation == 'clearProjectV2ItemFieldValue':
+                        state.origin_values.pop(item, None)
+                    else:
+                        state.origin_values[item] = variables['input']['value']['text']
+                    self.reply({'data': {field_operation: {'projectV2Item': {'id': item}}}})
+                    return
                 operation = Deletion.ISSUE if 'deleteIssue' in query else Deletion.ITEM
                 deletion = variables['input']
                 identity = deletion['issueId'] if operation is Deletion.ISSUE else deletion['itemId']
@@ -372,9 +389,11 @@ class Github:
                     owner = next(repository for repository, issues in state.issues.items() if any(v['node_id'] == identity for v in issues))
                     state.issues[owner] = [v for v in state.issues[owner] if v['node_id'] != identity]
                     state.items = [v for v in state.items if v['id'] != 'item:' + identity]
+                    state.origin_values.pop(ItemId('item:' + identity), None)
                     self.reply({'data': {'deleteIssue': {'repository': {'nameWithOwner': owner}}}})
                 else:
                     state.items = [v for v in state.items if v['id'] != identity]
+                    state.origin_values.pop(ItemId(identity), None)
                     self.reply({'data': {'deleteProjectV2Item': {'deletedItemId': identity}}})
 
             def do_DELETE(self):
@@ -885,6 +904,23 @@ class Journeys(unittest.TestCase):
         self.assertFalse(state.writes)
         self.assertFalse(state.status_reads)
         self.assertIn('pull', [issue['node_id'] for issue in state.issues[SCRATCH]])
+
+    def test_both_passes_preserve_origin_field_and_retained_item_values(self):
+        state = workload()
+        # Populate values on every board item, including the running CI run, machine
+        # artifacts and drafts which both passes must leave. Values belong to items,
+        # so values on items actually deleted are not part of the preservation claim.
+        state.origin_values = {item['id']: f"source:{item['id']}" for item in state.items}
+        before_field = copy.deepcopy(state.origin_field)
+        before_values = copy.deepcopy(state.origin_values)
+        self.assert_success(state.run())
+        self.assertTrue(any(isinstance(write.target, IssueDelete) and write.target.id.startswith(SCRATCH) for write in state.writes))
+        self.assertTrue(any(isinstance(write.target, IssueDelete) and write.target.id.startswith(CORE) for write in state.writes))
+        self.assertEqual(state.origin_field, before_field)
+        retained = {item['id'] for item in state.items}
+        self.assertTrue(retained)
+        self.assertEqual({item: state.origin_values[item] for item in retained},
+                         {item: before_values[item] for item in retained})
 
     def test_realistic_budget_and_tenfold_drain(self):
         state = workload()
