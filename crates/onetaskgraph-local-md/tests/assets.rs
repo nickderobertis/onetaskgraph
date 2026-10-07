@@ -538,6 +538,109 @@ async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_stagin
 /// A task `native` in `source`, holding each of `assets`. Only the tests that link and lock
 /// files, which are Unix's alone, need one.
 #[cfg(unix)]
+#[tokio::test]
+async fn an_asset_given_twice_is_refused_naming_it_before_anything_is_written() {
+    let (root, source) = folder();
+    let refused = source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("twice", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"first"), ("a.png", b"second")]),
+        )
+        .await
+        .expect_err("refused");
+    let SourceError::Refused { message } = refused else {
+        panic!("a refusal, got {refused:?}")
+    };
+    assert!(
+        message.contains("a.png") && message.contains("given twice"),
+        "{message}"
+    );
+    assert!(!root.path().join("tasks").exists());
+}
+
+#[tokio::test]
+async fn an_update_reusing_an_asset_the_record_does_not_hold_at_that_digest_is_refused() {
+    let (root, source) = folder();
+    source
+        .write_task_with_assets(
+            &ItemWrite {
+                target: None,
+                item: task("kept", "![a](./a.png)"),
+                depends_on: Vec::new(),
+            },
+            None,
+            &carrying(&[("a.png", b"png")]),
+        )
+        .await
+        .expect("lands");
+    let record = root.path().join("tasks/kept.md");
+    let before = fs::read(&record).unwrap();
+
+    // One payload names an asset the record never held; the other names the one it holds,
+    // under a digest its bytes do not have.
+    let mut missing = carrying(&[("b.png", b"b")]);
+    missing.assets[0].bytes = None;
+    let mut misdigested = carrying(&[("a.png", b"other")]);
+    misdigested.assets[0].bytes = None;
+    for (write, asset, content) in [
+        (missing, "b.png", "![b](./b.png)"),
+        (misdigested, "a.png", "![a](./a.png) again"),
+    ] {
+        let refused = source
+            .write_task_with_assets(
+                &ItemWrite {
+                    target: Some(id("kept")),
+                    item: task("kept", content),
+                    depends_on: Vec::new(),
+                },
+                None,
+                &write,
+            )
+            .await
+            .expect_err("refused");
+        let SourceError::Refused { message } = refused else {
+            panic!("a refusal, got {refused:?}")
+        };
+        assert!(
+            message.contains(asset) && message.contains("holds no asset of that name"),
+            "{message}"
+        );
+        assert_eq!(fs::read(&record).unwrap(), before, "{asset}");
+        assert_eq!(
+            files_in(&root.path().join("tasks/kept.assets")),
+            vec!["a.png"]
+        );
+        assert_eq!(
+            fs::read(root.path().join("tasks/kept.assets/a.png")).unwrap(),
+            b"png"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_document_rendering_with_assets_for_a_missing_document_answers_none_and_stores_nothing() {
+    let (root, source) = folder();
+    let answered = source
+        .set_document_rendering_with_assets(
+            &id("absent"),
+            "![a](./a.png)",
+            &json!({"template": "t", "digest": "sha256:00", "body_digest": "sha256:00",
+                    "answers_digest": "sha256:00"}),
+            &BTreeMap::new(),
+            &carrying(&[("a.png", b"png")]),
+        )
+        .await
+        .expect("answers");
+    assert_eq!(answered, None);
+    assert!(!root.path().join("documents/absent.md").exists());
+    assert!(!root.path().join("documents/absent.assets").exists());
+}
+
 async fn holding(source: &dyn TaskSource, native: &str, assets: &[(&str, &[u8])]) {
     let content: String = assets
         .iter()
