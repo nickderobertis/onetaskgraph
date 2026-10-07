@@ -535,9 +535,6 @@ async fn a_malformed_digest_is_refused_and_a_failed_asset_write_leaves_no_stagin
     );
 }
 
-/// A task `native` in `source`, holding each of `assets`. Only the tests that link and lock
-/// files, which are Unix's alone, need one.
-#[cfg(unix)]
 #[tokio::test]
 async fn an_asset_given_twice_is_refused_naming_it_before_anything_is_written() {
     let (root, source) = folder();
@@ -641,6 +638,9 @@ async fn a_document_rendering_with_assets_for_a_missing_document_answers_none_an
     assert!(!root.path().join("documents/absent.assets").exists());
 }
 
+/// A task `native` in `source`, holding each of `assets`. Only the tests that link and lock
+/// files, which are Unix's alone, need one.
+#[cfg(unix)]
 async fn holding(source: &dyn TaskSource, native: &str, assets: &[(&str, &[u8])]) {
     let content: String = assets
         .iter()
