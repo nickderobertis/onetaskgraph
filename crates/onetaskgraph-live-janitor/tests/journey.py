@@ -209,6 +209,7 @@ class Github:
         self.board_transform = None
         self.delete_response: dict[Deletion, object] = {}
         self.boards: set[Board] = set()
+        self.label_delete_status: int | None = None
         self.delete_failure: Deletion | None = None
         self.allowance_record = None
         self.origin_field: OriginField = copy.deepcopy(ORIGIN_FIELD)
@@ -413,6 +414,9 @@ class Github:
                 operation = state.pin('DELETE', self.path)
                 state.authentication.append(Authentication(self.path, Token(self.headers.get('Authorization', ''))))
                 state.writes.append(Write('DELETE', LabelDelete(self.path)))
+                if state.label_delete_status is not None:
+                    self.reply(None, state.label_delete_status)
+                    return
                 if state.delete_failure is Deletion.LABEL:
                     self.reply({}, 500)
                     return
@@ -862,6 +866,18 @@ class Journeys(unittest.TestCase):
                 self.assertEqual(len(issue_writes), operation is Deletion.ISSUE, response)
                 self.assertEqual(state.writes[-1].method, 'POST', response)
                 self.assertEqual(isinstance(state.writes[-1].target, IssueDelete), operation is Deletion.ISSUE, response)
+
+    def test_label_delete_redirect_is_a_failure(self):
+        for status in (302, 200):
+            state = Github()
+            state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
+            labels = copy.deepcopy(state.labels[SCRATCH])
+            state.label_delete_status = status
+            result = state.run()
+            self.assert_failed(result)
+            self.assertIn('delete label', result.stderr)
+            self.assertEqual(state.labels[SCRATCH], labels)
+            self.assertIsInstance(state.writes[-1].target, LabelDelete)
 
     def test_invalid_allowances_are_write_free(self):
         for record in ({}, {'limit': '5000', 'remaining': 5000, 'reset': 2000000000},

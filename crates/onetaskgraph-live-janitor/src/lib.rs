@@ -663,7 +663,8 @@ impl Janitor {
             Delete::Label(name) => {
                 self.pace().await?;
                 let path = format!("/repos/{}/labels/{}", target.repository(), name.0);
-                self.client
+                let response = self
+                    .client
                     .delete(self.config.rest.join(&path).map_err(|e| e.to_string())?)
                     .bearer_auth(self.config.write_token.expose())
                     .send()
@@ -671,6 +672,12 @@ impl Janitor {
                     .map_err(|e| format!("delete label: {e}"))?
                     .error_for_status()
                     .map_err(|e| format!("delete label: {e}"))?;
+                if response.status() != reqwest::StatusCode::NO_CONTENT {
+                    return Err(format!(
+                        "delete label: expected HTTP 204, received {}",
+                        response.status()
+                    ));
+                }
             }
         }
         Ok(())
