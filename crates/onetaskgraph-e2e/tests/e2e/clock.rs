@@ -403,14 +403,18 @@ fn the_binary_given_a_clients_environment_attaches_as_that_client_and_without_it
     assert!(unattached.attached().is_empty());
 }
 
+/// A value it cannot read, an address off this machine — refused before anything connects to
+/// it, so the documentation address below is never reached — and a coordinator that is not
+/// there are each refused naming the variable.
 #[test]
-fn the_binary_refuses_a_simulated_clock_it_cannot_read_or_reach_naming_the_variable() {
+fn the_binary_refuses_a_simulated_clock_it_cannot_read_trust_or_reach_naming_the_variable() {
     let sandbox = Sandbox::new();
     sandbox.project_document(&one_source(SourceBoundary::Direct));
     let clock = SimulatedClock::start(1);
     let (variable, _) = clock.client_env(0).remove(0);
     for (value, problem) in [
         ("not-an-address", "is not `<address>/<client>`"),
+        ("192.0.2.1:1/0", "which is not a loopback address"),
         ("127.0.0.1:1/0", "could not be reached"),
     ] {
         let output = sandbox
