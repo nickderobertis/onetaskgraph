@@ -159,6 +159,7 @@ def discover_product_version_files() -> Tuple[Path, ...]:
         if path == Path("Cargo.toml"):
             discovered.append(path)
         elif path.parent.parent == Path("crates") and not INHERITED_VERSION_RE.search(
+            # llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the ordered release inventory, which is synchronous and has no concurrent work.
             path.read_text()
         ):
             # A crate that inherits `[workspace.package] version` holds no number of its own
