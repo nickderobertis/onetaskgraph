@@ -52,10 +52,8 @@ fn report() {
         serde_json::Value::String(detail) => Some(detail.as_str()),
         _ => refuse("telemetry detail must be a string"),
     };
-    match onebudgetspec_core::report(value as f64, detail) {
-        Ok(true) => {}
-        Ok(false) => refuse("ONEBUDGETSPEC_RESULT is absent; run through onebudgetspec check"),
-        Err(error) => refuse(&format!("cannot report telemetry: {error}")),
+    if let Err(error) = onebudgetspec_core::report(value as f64, detail) {
+        refuse(&format!("cannot report telemetry: {error}"));
     }
 }
 
@@ -99,4 +97,25 @@ fn budget_judge_accepts_counts_and_refuses_excess_or_missing_telemetry() {
         assert_eq!(result["results"][0]["verdict"], verdict, "{result:#}");
         assert_eq!(output.status.success(), verdict == "within");
     }
+    // A successful command which reports no figure must be refused by the judge itself.
+    let mut specification: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&budgets).expect("budget file"))
+            .expect("budget JSON");
+    specification["budgets"][0]["command"] = serde_json::json!([executable, "--list"]);
+    std::fs::write(&budgets, specification.to_string()).expect("budget file");
+    let output = Command::new("bun")
+        .args(["run", "onebudgetspec", "check", "--json"])
+        .arg(&budgets)
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+        .output()
+        .expect("workspace onebudgetspec starts");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).expect("judge report");
+    assert!(!output.status.success());
+    assert_eq!(result["results"][0]["verdict"], "error");
+    assert!(
+        result["results"][0]["error"]
+            .as_str()
+            .expect("reason")
+            .contains("empty")
+    );
 }
