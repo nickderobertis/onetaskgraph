@@ -204,10 +204,10 @@ jobs:
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"
           # A board has no repository, and this lane's artifact is a real issue.
-          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
           # A repository variable rather than a secret: a nomination has to stay readable.
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the only place credentials enter this build.
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the place test credentials enter this build.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}
           NX_HEAD: HEAD
@@ -235,7 +235,7 @@ jobs:
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"
-          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
           # Demanded unconditionally, which the step above cannot be: this one runs on a
           # push to the default branch, and a push is never a fork pull request, so there is

@@ -354,6 +354,36 @@ run_guard
 expect_passed "the fork exception, spelled whole"
 reset_fixture
 
+# The janitor must agree with BOTH credentialed CI nominations, and never touch board 2.
+substitute '.github/workflows/live-janitor.yml' 'GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch' 'GH_PROJECTS_REPOSITORY: other/scratch'
+run_guard
+expect_refused "the janitor nomination drifted from CI" \
+  '.github/workflows/live-janitor.yml' 'GH_PROJECTS_REPOSITORY differs'
+reset_fixture
+
+substitute '.github/workflows/live-janitor.yml' 'GH_PROJECTS_NUMBER: "1"' 'GH_PROJECTS_NUMBER: "2"'
+run_guard
+expect_refused "the janitor pointed at another board" \
+  '.github/workflows/live-janitor.yml' 'GH_PROJECTS_NUMBER must name board 1 only'
+reset_fixture
+
+# Exercise the diagnostic on a Windows path even when this check runs on Unix.
+# The guard still reads the real workflow; only the path constructor is foreign.
+substitute 'scripts/check-live-janitor.sh' \
+  "janitor = Path(" "janitor = __import__('pathlib').PureWindowsPath("
+substitute '.github/workflows/live-janitor.yml' 'GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch' 'GH_PROJECTS_REPOSITORY: other/scratch'
+run_guard
+expect_refused "the janitor nomination drifted on a Windows path" \
+  '.github/workflows/live-janitor.yml' 'GH_PROJECTS_REPOSITORY differs'
+reset_fixture
+
+# The board the janitor's query reads is declared in code; it must be the workflow's.
+substitute 'crates/onetaskgraph-github-live/src/lib.rs' 'pub const BOARD_NUMBER: u32 = 1;' 'pub const BOARD_NUMBER: u32 = 2;'
+run_guard
+expect_refused "the janitor's query named another board than its workflow" \
+  '.github/workflows/live-janitor.yml' 'GH_PROJECTS_NUMBER differs from BOARD_NUMBER'
+reset_fixture
+
 if [ "$failures" -ne 0 ]; then
   echo "check-live-lane-enforced: $failures case(s) above did not go the way they must." >&2
   echo "check-live-lane-enforced: next: fix scripts/check-live-lane.sh so it refuses each" >&2

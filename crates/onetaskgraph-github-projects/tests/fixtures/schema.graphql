@@ -78,12 +78,20 @@ type Mutation {
   addBlockedBy(input: AddBlockedByInput!): AddBlockedByPayload
   removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
   deleteIssue(input: DeleteIssueInput!): DeleteIssuePayload
+  deleteProjectV2Item(input: DeleteProjectV2ItemInput!): DeleteProjectV2ItemPayload
   addComment(input: AddCommentInput!): AddCommentPayload
   updateIssueComment(input: UpdateIssueCommentInput!): UpdateIssueCommentPayload
   deleteIssueComment(input: DeleteIssueCommentInput!): DeleteIssueCommentPayload
 }
 input DeleteIssueInput {
   issueId: ID!
+}
+input DeleteProjectV2ItemInput {
+  projectId: ID!
+  itemId: ID!
+}
+type DeleteProjectV2ItemPayload {
+  deletedItemId: ID
 }
 input AddCommentInput {
   subjectId: ID!

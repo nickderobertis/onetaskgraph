@@ -205,7 +205,20 @@ for relative, session in sorted(SESSIONS.items()):
         for entry in test.get("inputs", [])
         if isinstance(entry, dict) and isinstance(entry.get("env"), str)
     }
-    for variable in (session["credential"], *session["nominations"], DEMAND):
+    stamp_variables = ()
+    if session["credential"] == "GH_PROJECTS_TOKEN":
+        stamp_source = read(Path("crates/onetaskgraph-github-live/src/lib.rs"), "the CI stamp's environment contract")
+        declared_stamp_variables = dict(re.findall(r'(?m)^pub const (\w+): &str = "([^"]+)";$', stamp_source))
+        stamp_names = ("GITHUB_ACTIONS_VARIABLE", "RUN_ID_VARIABLE", "RUN_ATTEMPT_VARIABLE")
+        undeclared = [name for name in stamp_names if name not in declared_stamp_variables]
+        if undeclared:
+            problems.append(
+                "crates/onetaskgraph-github-live/src/lib.rs: declares no "
+                f"{', '.join(undeclared)} as `pub const NAME: &str = \"...\";`, so the CI "
+                "stamp's variables cannot be held to this lane's cache key; restore the declaration"
+            )
+        stamp_variables = tuple(declared_stamp_variables[name] for name in stamp_names if name not in undeclared)
+    for variable in (session["credential"], *session["nominations"], DEMAND, *stamp_variables):
         if variable not in keyed:
             problems.append(
                 f"{project_file.as_posix()}: its `test` target does not name {variable} as an `env` "
@@ -347,7 +360,7 @@ def demands_a_credential(value):
         return False
     guarded, _, fallback = expression.group(1).rpartition("||")
     condition, _, off = guarded.partition("&&")
-    # llmlint: ignore[live_tier_compiles_and_requires_credential] Whether the fork case is exempt is the repository's decision rather than this function's: AGENTS.md and .github/workflows/ci.yml, the only place credentials enter this build, record it and carry this same directive. What is here is the narrowing — the exception holds for that one condition and those two values, and nothing else.
+    # llmlint: ignore[live_tier_compiles_and_requires_credential] Whether the fork case is exempt is the repository's decision rather than this function's: AGENTS.md and .github/workflows/ci.yml, the place test credentials enter this build, record it and carry this same directive. What is here is the narrowing — the exception holds for that one condition and those two values, and nothing else.
     return (
         condition.strip() == FORK
         and off.strip().strip("\"'") == NOT_DEMANDED
@@ -537,3 +550,6 @@ if problems:
     )
     sys.exit(1)
 PY
+
+# The janitor is a separate credential boundary, never a live test lane.
+bash scripts/check-live-janitor.sh

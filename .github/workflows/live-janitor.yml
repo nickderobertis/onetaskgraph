@@ -1,0 +1,30 @@
+# Residue cleanup, never a test lane. Ownership is checked again before each delete batch.
+name: live janitor
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: live-janitor
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Remove abandoned live artifacts
+        env:
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
+          GH_PROJECTS_LEGACY_REPOSITORY: nickderobertis/onetaskgraph
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo run --locked -p onetaskgraph-live-janitor

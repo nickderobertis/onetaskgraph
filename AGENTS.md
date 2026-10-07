@@ -269,6 +269,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `budgets` target, which `check` depends on and `just test` runs affected, analyses that
   through the one runner every budget names. No measuring code reads a threshold, and no
   command names a shell or a script, because the Windows lane runs them too.
+  The janitor follows the same rule: its offline journey records every request of the
+  realistic workload; its portable runner reports that telemetry to onebudgetspec on
+  Linux, macOS and Windows, through `budgets` (`budget-check` is an alias).
 - **The copy verb is proven twice, deliberately.** The journeys drive the binary the way a
   user does, and `crates/onetaskgraph-core/tests/copy.rs` drives the engine's own
   `Engine::copy` as a library call. The second is not a duplicate: this product is exposed
@@ -339,7 +342,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   **That arrangement is what let a query GitHub refuses outright merge:** the advisory lane
   failed on the pull request that introduced it, with GitHub's own node-limit error, and
   auto-merge squashed it anyway, because auto-merge waits only on *required* checks and
-  nobody was there to read a red advisory one. So there is now no live workflow, no live
+  nobody was there to read a red advisory one. So there is now no separate live-test workflow, no live-test
   job, no live target, no live recipe and no `#[ignore]`: change the GitHub Projects plugin
   and its GitHub tests run in the required check and can fail it, change the Linear plugin
   and its Linear tests do, change the engine or another plugin and neither runs, because
@@ -446,29 +449,48 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   target, follows a decline on each reading through to the conclusion the required check
   reads, because a test that asserts a panic passes and the half worth proving is that the
   check goes red.
-- **A run of one of these journeys deletes another run's work only on positive evidence
-  that no live run owns it, and never because the work is old.** Both lanes stamp every
-  item, project, document and label they write with the machine and process that wrote it
-  and a microsecond timestamp, and `onetaskgraph_live::artifact` — one contract both derive
-  from — is where that stamp is turned into an answer. **A live run holds an exclusive
-  operating-system lock on its own registration for the whole of its life, and the kernel
-  releases that lock when the process ends, killed or not.** So a lock a sweep can take is
-  the kernel saying the run that wrote the artifact is over, and that — not a clock — is
-  what authorises a removal. A run's own artifacts are its own; an artifact whose owning
-  run still holds its registration is left alone however old it is; an artifact stamped by
-  another machine is left alone for ever, because nothing local is evidence about a foreign
-  process.
-  **`STALE_AFTER` is a waiting period and never an authorisation.** It is a fourth
-  condition on top of the three above, so choosing it wrong delays an abandoned artifact's
-  removal and cannot take a live run's work — which is the property the whole arrangement
-  is for. It is declared in one place with the reasoning for its length beside it, and what
-  it is really left for is the day locking stops being evidence, on a filesystem that
-  quietly makes `flock` a no-op.
-  **What this costs is stated rather than discovered: residue an interrupted run on another
-  machine left is never swept**, and the hosted check's runners are a fresh machine each
-  time. A leak a person or a janitor can clear is the direction to fail in; deleting a live
-  run's work is not recoverable, and telling a hung foreign run from a dead one needs either
-  a channel this has no budget for or the age rule this replaces.
+- **Artifact ownership has two forms, declared in `onetaskgraph_live::artifact`.**
+  Machine stamps are `<host>-<process>-<micros>`; an exclusive operating-system
+  registration lock proves when that process is over. Machine-stamped residue stays the
+  lock sweep's on the machine that wrote it; a foreign machine's residue is never swept.
+  `STALE_AFTER` is an extra margin, never the authorisation. Linear keeps writing machine
+  stamps everywhere, with its lock sweep unchanged; the janitor never reads Linear.
+  GitHub Projects writes `ci-<run id>-<attempt>-<micros>` under `GITHUB_ACTIONS=true`,
+  naming the run that wrote it, and refuses missing or invalid run id or attempt before
+  writing. Outside Actions its machine stamp is unchanged. Each process's own cleanup
+  recognises its whole stamp, keeping another process of the same attempt's artifacts.
+  **One bound:** a CI stamp has no process field, so two credentialed processes of one
+  attempt stamping in the same microsecond spell identical artifacts and each cleanup
+  would take the other's. It cannot happen while the lane runs in exactly one process per
+  attempt — the other steps clear the credential — so a change that runs a second
+  credentialed process per attempt must revisit it; `tests/sweep_gate.rs` pins it.
+  **The scheduled janitor is cleanup, not a test lane.**
+  `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
+  project's `test` or `coverage` target. It enumerates issues, their board #1 items and
+  labels in the scratch repository, and removes only exact CI-stamped artifacts whose
+  run in this repository reads back as `completed` immediately before each delete batch.
+  A re-run in progress protects every attempt; failed, missing or undecodable reads
+  protect the artifacts. A batch contains only artifacts listed before that read.
+  Its separate **legacy pass** targets the core repository's machine-stamped residue
+  strictly before its committed cutover. Fully paginated `ci.yml` listings for `queued`,
+  `in_progress`, `waiting`, `requested` and `pending`, read after enumeration and again
+  immediately before each batch, must show every run created strictly after each stamp
+  plus the single ten-minute clock-skew margin. Failure or incomplete pagination
+  authorises nothing. The cutover constant equals its introducing commit's author
+  second in microseconds; the CI repoint and core refusal land with it.
+  **One 24-hour waiting period applies to both janitor passes**, and the legacy pass
+  starts no earlier than cutover plus that period. It is a generous cheap margin,
+  never what protects a running test: the Actions ownership reads do that.
+  **Remaining limitation:** there is no evidence about development machines; a
+  development-machine run stamped before cutover and still alive a day later could lose
+  its artifacts in the legacy pass. This limitation does not change the scratch pass's
+  refusal to touch machine stamps. Neither pass touches `onetaskgraph.origin`, draft
+  items, other repositories' items, or anything outside the exact artifact grammar.
+  The janitor reads `/rate_limit` first and writes nothing when `affordable` refuses.
+  Across both passes it caps writes at 150, at least one second apart, and reads at
+  250 REST and 50 GraphQL queries; incomplete enumeration fails closed and red. Its exit
+  statuses, stated once in `crates/onetaskgraph-live-janitor/src/main.rs`, tell a decline
+  from a failure, and a decline is red too, because the allowance is shared.
   **Both lanes used to sweep at startup with a predicate that recognised any run's
   artifacts,** which is what made two concurrent runs delete each other's in-flight items
   and made a seat the only thing between them; the rule that replaced it recognised any
@@ -536,8 +558,18 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   the fix belongs to that field's own lifecycle.
 - **A live lane that writes names what it writes to.** The GitHub Projects lane takes its
   board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` and the repository it creates its
-  issues in from `GH_PROJECTS_REPOSITORY` — a project there is an issue and a board has no
-  repository of its own — all three being required inputs of it alongside
+  issues in from `GH_PROJECTS_REPOSITORY`, nominated as
+  `nickderobertis/onetaskgraph-live-scratch` in both credentialed CI steps. The scratch
+  and refused core repositories, the board the janitor reads and the lane's two artifact
+  prefixes are declared once in `crates/onetaskgraph-github-live` — the GitHub lane's own
+  policy, kept out of `onetaskgraph-live` so a GitHub nomination never selects Linear —
+  and the lane and janitor import those declarations. The lane refuses the core repository
+  before opening a session or making a request, regardless of the live demand. A machine
+  fixes `GH_PROJECTS_REPOSITORY` in its onetaskgraph `secrets.env`, or in the environment
+  it pushes from (for example this host's ai-orchestrator `.env`). A repository's spelling
+  is trimmed and compared case-insensitively for that refusal. A project there is an
+  issue and a board has no repository of its own. All three nominations are required
+  alongside
   `GH_PROJECTS_TOKEN`, and skips with a printed reason when any is absent —
   `ONETASKGRAPH_LIVE_REQUIRED=1` turning that skip into a failure, the same pairing the
   credential has. It never asks GitHub which project was updated most recently: that rule once
