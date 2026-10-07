@@ -4,7 +4,11 @@
   "projectType": "library",
   "tags": ["lang:rust", "layer:plugin", "live:github-projects"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, whose live tests reach a real API; affected selection is the edge they sit behind, so they run only when this crate changed. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
-  "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
+  "implicitDependencies": [
+    "onetaskgraph-github-live",
+    "onetaskgraph-live",
+    "onetaskgraph-plugin-api"
+  ],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
@@ -52,7 +56,7 @@
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential, and the third follows a budget decline through to the check going red, which a test asserting a panic cannot show. Serial: both re-run the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential, and the third follows a budget decline through to the check going red, which a test asserting a panic cannot show. Serial: both re-run the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
       "inputs": [
         "default",
         "^default",
@@ -72,6 +76,15 @@
         },
         {
           "env": "ONETASKGRAPH_LIVE_REQUIRED"
+        },
+        {
+          "env": "GITHUB_ACTIONS"
+        },
+        {
+          "env": "GITHUB_RUN_ID"
+        },
+        {
+          "env": "GITHUB_RUN_ATTEMPT"
         }
       ]
     },

@@ -1168,6 +1168,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "onetaskgraph-github-live"
+version = "0.3.5"
+dependencies = [
+ "onetaskgraph-live",
+]
+
+[[package]]
 name = "onetaskgraph-github-projects"
 version = "0.3.5"
 dependencies = [
@@ -1175,6 +1182,7 @@ dependencies = [
  "chrono",
  "github-graphql-node-count",
  "graphql-parser",
+ "onetaskgraph-github-live",
  "onetaskgraph-live",
  "onetaskgraph-plugin-api",
  "reqwest",
@@ -1240,6 +1248,20 @@ dependencies = [
 [[package]]
 name = "onetaskgraph-live"
 version = "0.3.5"
+
+[[package]]
+name = "onetaskgraph-live-janitor"
+version = "0.3.5"
+dependencies = [
+ "chrono",
+ "graphql-parser",
+ "onetaskgraph-github-live",
+ "onetaskgraph-github-projects",
+ "onetaskgraph-live",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "onetaskgraph-local-md"

@@ -1,0 +1,13 @@
+schema_version: 1
+budgets:
+  - id: live-janitor-requests-per-run
+    description: >-
+      Every REST and GraphQL request, under either token, sent by the scheduled
+      executable to a loopback GitHub at the realistic legacy and scratch workload.
+    labels: [github]
+    measure: reported
+    command: [python3, tests/journey.py, --budget]
+    unit: requests
+    direction: max
+    threshold: 250
+    timeout_seconds: 1800

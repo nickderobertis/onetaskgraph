@@ -506,14 +506,27 @@
 //! source applies it, which is exactly how the defect above went unseen.
 //!
 //! That lane writes only to the board `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` name,
-//! and only into the repository `GH_PROJECTS_REPOSITORY` names, and skips — as it does
-//! without `GH_PROJECTS_TOKEN` — when any of them is absent. Requiring both to be
-//! nominated is what keeps a credentialed write lane off a board and a repository nobody
-//! nominated; it never asks GitHub which project was updated most recently. Before it
-//! starts, the lane also clears any item titled — and any repository label named — the way
-//! it titles and names its own artifacts, which is self-healing after an interrupted run:
-//! a process killed between its writes and its cleanup leaves artifacts the next run
-//! removes.
+//! and the scratch repository `GH_PROJECTS_REPOSITORY` names:
+//! `nickderobertis/onetaskgraph-live-scratch`. It refuses the core repository before any
+//! session or request, independently of the live demand. Fix that variable in the machine's
+//! onetaskgraph `secrets.env` or the environment it pushes from, such as ai-orchestrator's
+//! `.env`. The targets are declared once in `onetaskgraph_github_live`, the lane's own
+//! policy crate; absent credentials or nominations otherwise skip.
+//!
+//! GitHub Actions artifacts carry `ci-<run id>-<attempt>-<micros>`, naming their writing
+//! run and attempt; invalid Actions identity refuses before writing. Other runs retain
+//! `<host>-<process>-<micros>`. Own cleanup matches the whole stamp. Machine residue stays
+//! the owning machine's lock sweep's; Linear always keeps that form and is unaffected.
+//! The hourly janitor is cleanup, never a test lane: scratch CI residue is removed only
+//! after its run reads back as `completed`, immediately before the listed-artifact batch.
+//! Its separate legacy pass reaches only pre-cutover machine residue in the core
+//! repository, after fully paginated non-completed `ci.yml` listings prove every run was
+//! created strictly after the stamp plus ten minutes, refreshed before each batch.
+//! Failed or incomplete ownership reads preserve residue. One 24-hour waiting period
+//! applies to both passes and delays legacy startup until cutover plus that period;
+//! it is a margin, never the ownership authorisation. The legacy limitation is that no
+//! evidence covers a development-machine run that remains alive a day after its stamp.
+//! Neither pass removes the board's `onetaskgraph.origin` field.
 //!
 //! # What a session of requests costs, and where the report is
 //!

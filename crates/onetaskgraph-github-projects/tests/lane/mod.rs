@@ -12,12 +12,13 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Mutex;
 
+use onetaskgraph_github_live::{
+    CORE_REPOSITORY, GITHUB_ACTIONS_VARIABLE, RUN_ATTEMPT_VARIABLE, RUN_ID_VARIABLE,
+    SCRATCH_REPOSITORY, ci_run, labelled_stamp, titled_stamp,
+};
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::{Outcome, StatusCode};
-use onetaskgraph_live::artifact::{
-    CORE_REPOSITORY, CiRun, CiStamp, GITHUB_ACTIONS_VARIABLE, RUN_ATTEMPT_VARIABLE,
-    RUN_ID_VARIABLE, Run, SCRATCH_REPOSITORY, Stamp, Sweep, labelled_stamp, titled_stamp,
-};
+use onetaskgraph_live::artifact::{CiRun, CiStamp, Run, Stamp, Sweep};
 use onetaskgraph_live::{Credential, REQUIRED_VARIABLE, missing, required};
 use onetaskgraph_plugin_api::SecretResolver;
 use secrecy::SecretString;
@@ -68,12 +69,12 @@ pub fn live_write_config(
 
 /// The prefix of every issue this lane writes, and of the one label each run creates.
 ///
-/// Declared once, in `onetaskgraph_live::artifact`, because the scheduled janitor
+/// Declared once, in `onetaskgraph_github_live`, because the scheduled janitor
 /// (`crates/onetaskgraph-live-janitor`) recognises exactly these names and non-test code
 /// cannot import anything from here. The rest of a title is a stamp in one of two forms —
 /// see [`Writer`] — and the label prefix is short because GitHub holds a label name to fifty
 /// characters.
-pub use onetaskgraph_live::artifact::{ARTIFACT_PREFIX, LABEL_PREFIX};
+pub use onetaskgraph_github_live::{ARTIFACT_PREFIX, LABEL_PREFIX};
 
 /// Which form of stamp this lane process writes, and so how its artifacts name it.
 ///
@@ -142,7 +143,12 @@ impl Writer {
     pub fn stamp_prefix(self) -> String {
         match self {
             Self::Machine(run) => format!("{run}-"),
-            Self::Ci(run) => format!("ci-{}-{}-", run.run_id(), run.attempt()),
+            Self::Ci(run) => {
+                let stamp = CiStamp::new(run, 1)
+                    .expect("one microsecond is a valid CI stamp time")
+                    .to_string();
+                stamp[..stamp.len() - 1].to_owned()
+            }
         }
     }
 }
@@ -157,7 +163,7 @@ pub fn artifact_title(writer: impl Into<Writer>, stamp_micros: u64) -> String {
 /// A *document* this lane writes carries [`DESIGN_TITLE_PREFIX`] in front of the title it
 /// was given, because that is how this source spells a document and the source puts it
 /// there rather than the caller. Cleanup reads the board's raw titles, so recognition takes
-/// that prefix off first — `onetaskgraph_live::artifact::titled_stamp` is that grammar,
+/// that prefix off first — `onetaskgraph_github_live::titled_stamp` is that grammar,
 /// shared with the janitor.
 fn artifact_stamp(title: &str) -> Option<&str> {
     titled_stamp(title, DESIGN_TITLE_PREFIX)
@@ -212,6 +218,13 @@ pub fn is_run_artifact_label(run: Run, name: &str) -> bool {
 /// processes of one attempt share, so a CI writer recognises only the stamps it issued
 /// itself: every title and label is named through [`Own::title`] and [`Own::label`], which
 /// record the stamp before anything carrying it is written.
+///
+/// **The bound, stated once here and in `AGENTS.md`:** a CI stamp has no process field, so
+/// two credentialed processes of one CI attempt that stamp in the same microsecond spell
+/// identical artifacts, and each one's cleanup would recognise the other's. That cannot
+/// happen today, because the credentialed lane runs in exactly one process per attempt —
+/// every other step that re-runs this package clears the credential. A change that runs a
+/// second credentialed process per attempt must revisit this; `tests/sweep_gate.rs` pins it.
 #[derive(Debug)]
 pub struct Own {
     writer: Writer,
@@ -250,7 +263,9 @@ impl Own {
         artifact_label(self.writer, micros)
     }
 
-    fn owns_stamp(&self, spelled: &str) -> bool {
+    /// Whether `spelled` is a stamp this process issued: its machine run's, or this CI
+    /// attempt's at a microsecond it issued.
+    fn carries_issued_stamp(&self, spelled: &str) -> bool {
         match self.writer {
             Writer::Machine(run) => Stamp::read(spelled).is_some_and(|stamp| stamp.run() == run),
             Writer::Ci(run) => CiStamp::read(spelled).is_some_and(|stamp| {
@@ -264,14 +279,14 @@ impl Own {
         }
     }
 
-    /// Whether a board issue's title is one this process wrote.
-    pub fn owns_title(&self, title: &str) -> bool {
-        artifact_stamp(title).is_some_and(|stamp| self.owns_stamp(stamp))
+    /// Whether a board issue's title carries a stamp this process issued.
+    pub fn title_carries_issued_stamp(&self, title: &str) -> bool {
+        artifact_stamp(title).is_some_and(|stamp| self.carries_issued_stamp(stamp))
     }
 
-    /// Whether a repository label is one this process created.
-    pub fn owns_label(&self, name: &str) -> bool {
-        labelled_stamp(name).is_some_and(|stamp| self.owns_stamp(stamp))
+    /// Whether a repository label carries a stamp this process issued.
+    pub fn label_carries_issued_stamp(&self, name: &str) -> bool {
+        labelled_stamp(name).is_some_and(|stamp| self.carries_issued_stamp(stamp))
     }
 }
 
@@ -526,7 +541,7 @@ pub enum Admission {
 ///
 /// # Errors
 ///
-/// A misconfiguration, as [`live_lane`] and `CiRun::from_environment` report one.
+/// A misconfiguration, as [`live_lane`] and `onetaskgraph_github_live::ci_run` report one.
 pub fn admit(read: &dyn Fn(&str) -> Option<String>) -> Result<Admission, String> {
     let lane = live_lane(
         read("GH_PROJECTS_TOKEN").as_deref(),
@@ -545,7 +560,7 @@ pub fn admit(read: &dyn Fn(&str) -> Option<String>) -> Result<Admission, String>
         } => (token, owner, project_number, repository),
         LiveLane::Skip(reason) => return Ok(Admission::Skip(reason)),
     };
-    let writer = match CiRun::from_environment(
+    let writer = match ci_run(
         read(GITHUB_ACTIONS_VARIABLE).as_deref(),
         read(RUN_ID_VARIABLE).as_deref(),
         read(RUN_ATTEMPT_VARIABLE).as_deref(),

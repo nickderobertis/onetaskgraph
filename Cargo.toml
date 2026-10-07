@@ -28,6 +28,9 @@ onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", ver
 # and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
 # the crates that name it, so nothing a consumer installs can reach it.
 onetaskgraph-live = { path = "crates/onetaskgraph-live" }
+# The GitHub Projects lane's own names, read by its tests and the scheduled janitor.
+# Path-only and unpublished for the reason `onetaskgraph-live` is.
+onetaskgraph-github-live = { path = "crates/onetaskgraph-github-live" }
 # The harness every binary end-to-end suite shares — the sandbox, the binary runner, the
 # loopback servers and the journey-matrix table. Path-only and unpublished for the reason
 # `onetaskgraph-live` is: only the test-only e2e members name it.

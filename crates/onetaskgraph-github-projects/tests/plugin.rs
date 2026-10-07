@@ -12612,6 +12612,7 @@ fn answer_a_label_call(
                 .expect("a label name")
                 .to_owned();
             let node_id = format!("LA_{}", state.labels.len() + 1);
+            state.seen.push(json!(["createLiveLabel", {"name":name}]));
             state.labels.push((name.clone(), node_id.clone()));
             (
                 "201 Created",
@@ -12693,6 +12694,86 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
     );
 }
 
+/// The two delete mutations the pinned schema carries are exactly what the credentialed lane
+/// introspects from GitHub on every run, so the janitor's documents, which
+/// `crates/onetaskgraph-live-janitor/tests/schema.rs` validates against that pinned copy, are
+/// held to GitHub's own answer rather than to a copy nothing re-reads.
+#[test]
+fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
+    use graphql_parser::schema::{Definition, TypeDefinition, parse_schema};
+    let pinned = parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let fields = |name: &str| -> Vec<(String, String)> {
+        let mut found: Vec<(String, String)> = pinned
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                Definition::TypeDefinition(TypeDefinition::Object(object))
+                    if object.name == name =>
+                {
+                    Some(
+                        object
+                            .fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.field_type.to_string()))
+                            .collect(),
+                    )
+                }
+                Definition::TypeDefinition(TypeDefinition::InputObject(input))
+                    if input.name == name =>
+                {
+                    Some(
+                        input
+                            .fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.value_type.to_string()))
+                            .collect(),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the pinned schema declares no {name}"));
+        found.sort();
+        found
+    };
+    let mutation = pinned
+        .definitions
+        .iter()
+        .find_map(|definition| match definition {
+            Definition::TypeDefinition(TypeDefinition::Object(object))
+                if object.name == "Mutation" =>
+            {
+                Some(object)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for name in ["deleteIssue", "deleteProjectV2Item"] {
+        let (_, input, payload) = journey::MUTATION_CONTRACT
+            .iter()
+            .find(|(mutation, _, _)| *mutation == name)
+            .unwrap_or_else(|| panic!("the live lane does not introspect {name}"));
+        let field = mutation.fields.iter().find(|f| f.name == name).unwrap();
+        assert_eq!(field.field_type.to_string(), *payload, "{name}'s payload");
+        assert_eq!(
+            field
+                .arguments
+                .iter()
+                .map(|a| (a.name.as_str(), a.value_type.to_string()))
+                .collect::<Vec<_>>(),
+            [("input", format!("{input}!"))],
+            "{name}'s argument"
+        );
+        for type_name in [*input, *payload] {
+            let mut live = journey::mutation_field_types(type_name)
+                .iter()
+                .map(|(field, kind)| ((*field).to_owned(), (*kind).to_owned()))
+                .collect::<Vec<_>>();
+            live.sort();
+            assert_eq!(fields(type_name), live, "{type_name}");
+        }
+    }
+}
+
 /// The record beside it is a golden: a change to the journey or to what the source asks for
 /// moves these numbers, and this fails naming both so the move is a decision rather than a
 /// drift. `crates/onetaskgraph-github-projects/session-cost.md` is where the before and after
@@ -12718,9 +12799,50 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         owner: "octo-org".to_owned(),
         project_number: 7,
         repository: "acme/work".to_owned(),
-        writer: lane::Writer::this_machine(),
+        writer: match lane::admit(&|name| match name {
+            "GH_PROJECTS_TOKEN" => Some("test-token".to_owned()),
+            "GH_PROJECTS_OWNER" => Some("octo-org".to_owned()),
+            "GH_PROJECTS_NUMBER" => Some("7".to_owned()),
+            "GH_PROJECTS_REPOSITORY" => Some("acme/work".to_owned()),
+            "GITHUB_ACTIONS" => Some("true".to_owned()),
+            "GITHUB_RUN_ID" => Some("37616803489".to_owned()),
+            "GITHUB_RUN_ATTEMPT" => Some("2".to_owned()),
+            _ => None,
+        })
+        .unwrap()
+        {
+            lane::Admission::Run { writer, .. } => writer,
+            lane::Admission::Skip(reason) => panic!("fixture lane skipped: {reason}"),
+        },
     })
     .await;
+    let sent = fixture.seen();
+    let issues: Vec<_> = sent
+        .iter()
+        .filter(|call| call[0] == "createIssue")
+        .collect();
+    assert!(!issues.is_empty(), "the journey wrote its issues");
+    for issue in issues {
+        let title = issue[1]["title"].as_str().unwrap();
+        let suffix = onetaskgraph_github_live::titled_stamp(
+            title,
+            onetaskgraph_github_projects::DESIGN_TITLE_PREFIX,
+        )
+        .unwrap();
+        let stamp = onetaskgraph_live::artifact::CiStamp::read(suffix).unwrap();
+        assert_eq!(stamp.run().run_id(), 37616803489);
+        assert_eq!(stamp.run().attempt(), 2);
+    }
+    let label = sent
+        .iter()
+        .find(|call| call[0] == "createLiveLabel")
+        .expect("journey created its label");
+    let stamp = onetaskgraph_live::artifact::CiStamp::read(
+        onetaskgraph_github_live::labelled_stamp(label[1]["name"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stamp.run().run_id(), 37616803489);
+    assert_eq!(stamp.run().attempt(), 2);
     let measured = session_cost(&journey::SESSION.snapshot());
     let recorded = include_str!("fixtures/session-cost.txt");
     assert_eq!(

@@ -1,0 +1,23 @@
+[package]
+name = "onetaskgraph-live-janitor"
+# llmlint: ignore[crates_stay_in_one_cargo_workspace] A literal rather than `version.workspace = true` because that is what every crate manifest of this workspace spells, and `scripts/product_versions.py` writes and checks this line, so the two cannot drift.
+version = "0.3.5"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+onetaskgraph-live.workspace = true
+onetaskgraph-github-live.workspace = true
+onetaskgraph-github-projects.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# Parses the janitor's GraphQL documents and the pinned schema they are validated against.
+graphql-parser.workspace = true

@@ -22,7 +22,9 @@
     "screenshots",
     "scripts",
     "sdk-python",
-    "sdk-typescript"
+    "sdk-typescript",
+    "onetaskgraph-live-janitor",
+    "onetaskgraph-github-live"
   ],
   "targets": {
     "bootstrap": {
@@ -189,7 +191,9 @@
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
             "onetaskgraph-status-options",
-            "onetaskgraph-status-options-e2e"
+            "onetaskgraph-status-options-e2e",
+            "onetaskgraph-live-janitor",
+            "onetaskgraph-github-live"
           ],
           "target": "coverage"
         }

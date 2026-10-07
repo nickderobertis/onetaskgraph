@@ -329,10 +329,10 @@ assert_version_error 'unexpected extra arguments after --check' --check ignored
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
-# Exercise the working tree's version inventory and gate integration. The scratch clone
-# supplies a real repository for mutation, but HEAD may not contain the repair being tested.
-cp "$root/scripts/product_versions.py" "$tmp/version-repo/scripts/product_versions.py"
-cp "$root/scripts/check-workspace-config.sh" "$tmp/version-repo/scripts/check-workspace-config.sh"
+# The inventory and its manifests must describe the same tree, including a newly added
+# workspace crate not yet in HEAD. Stage the overlay so each recovery restores that tree.
+(cd "$root" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$tmp/version-repo" || { echo "could not copy the working tree into $tmp/version-repo; next: check 'df -h' for free space and rerun scripts/test-distribution.sh" >&2; exit 1; }
+git -C "$tmp/version-repo" add -A || { echo "could not stage the copied tree in $tmp/version-repo; next: check 'df -h' and that no other git process holds its index, then rerun scripts/test-distribution.sh" >&2; exit 1; }
 cp "$tmp/version-repo/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json.valid"
 printf '{\n' > "$tmp/version-repo/crates/onetaskgraph/project.json"
 # llmlint: ignore[work_goes_through_command_surface] This failure journey must run the workspace validator against its deliberately malformed scratch project.

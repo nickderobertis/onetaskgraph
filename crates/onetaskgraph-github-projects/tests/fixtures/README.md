@@ -103,7 +103,17 @@ observation the credentialed live lane's mutation-freshness check reads: `live.r
 `DeleteIssueInput{issueId}` and `DeleteIssuePayload{repository}` and introspects the real
 API for them on every credentialed run. The source sends it in one situation only — undoing
 a copy that could not finish, over the items that same copy created — and deleting the
-issue takes its board item with it, which is why no `deleteProjectV2Item` is here beside it.
+issue takes its board item with it, which is why this source never sends a
+`deleteProjectV2Item`.
+
+`deleteProjectV2Item`, `DeleteProjectV2ItemInput{projectId, itemId}` and
+`DeleteProjectV2ItemPayload{deletedItemId}` are here for the scheduled janitor in
+`crates/onetaskgraph-live-janitor`, whose `tests/schema.rs` validates its three documents
+against this file: it removes a leaked lane issue's board item before the issue itself.
+They were read from GitHub's published GraphQL reference
+(<https://docs.github.com/en/graphql/reference/mutations#deleteprojectv2item>, the input
+object and the payload object it links) on 2026-10-07, reduced to the members the janitor
+sends and selects.
 
 The comment surface — `Issue.comments(first:, after:, orderBy:)`, `IssueCommentConnection`,
 `IssueCommentEdge`, `IssueComment` reduced to `id`, `author`, `body`, `createdAt`,

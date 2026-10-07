@@ -1197,10 +1197,14 @@ pub async fn remove_live_state(
     own: &Own,
     remove_origin_field: bool,
 ) -> Result<(), String> {
-    let item_result =
-        remove_live_artifacts(token, project_id, &|title| own.owns_title(title)).await;
-    let label_result =
-        remove_artifact_labels(token, repository, &|name| own.owns_label(name)).await;
+    let item_result = remove_live_artifacts(token, project_id, &|title| {
+        own.title_carries_issued_stamp(title)
+    })
+    .await;
+    let label_result = remove_artifact_labels(token, repository, &|name| {
+        own.label_carries_issued_stamp(name)
+    })
+    .await;
     let field_result = if remove_origin_field {
         remove_live_origin_field(token, project_id).await
     } else {
@@ -1722,7 +1726,7 @@ impl LiveRun {
     /// The title of this run's `offset`-th artifact.
     ///
     /// One stamp per artifact, so every title this run writes is unique and every one of
-    /// them reads as this process's own to [`Own::owns_title`].
+    /// them reads as this process's own to [`Own::title_carries_issued_stamp`].
     fn title(&self, offset: u64) -> String {
         self.own.title(self.stamp_micros + offset)
     }
@@ -2161,10 +2165,7 @@ async fn drive_every_declared_capability(
     // separator of any other kind is a term boundary rather than part of one term.
     let body_marker = format!(
         "livebodymarker{}",
-        run.own
-            .writer()
-            .stamp(run.stamp_micros)
-            .replace('-', "x")
+        run.own.writer().stamp(run.stamp_micros).replace('-', "x")
     );
     let label_name = run.own.label(run.stamp_micros);
     let open = Status {
@@ -2845,7 +2846,7 @@ pub struct Nomination {
     pub project_number: u32,
     pub repository: String,
     /// Which form of stamp the run's artifacts carry — decided by [`admit`] for the
-    /// credentialed lane, and the machine stamp for every fixture drive.
+    /// credentialed lane, and named by each fixture drive.
     pub writer: Writer,
 }
 

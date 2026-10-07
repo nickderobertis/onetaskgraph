@@ -1,0 +1,81 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph-live-janitor",
+  "projectType": "library",
+  "tags": ["lang:rust", "layer:testing"],
+  "//": "Unpublished scheduled cleanup executable. Test and coverage invoke offline tests only; neither runs the janitor against GitHub.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-live-janitor"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-live-janitor -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-live-janitor --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-live-janitor --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-live-janitor --all-features --locked"
+      }
+    },
+    "coverage": {
+      "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The required coverage union runs every crate's instrumented tests, including this offline suite, even on unrelated changes. scripts/check-coverage-enforced.sh reconciles every crate against that union; functional tests still select by the project graph.",
+      "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-live-janitor"
+      },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "cache": false,
+      "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]"
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build --quiet -p onetaskgraph-live-janitor --locked"
+      },
+      "outputs": ["{workspaceRoot}/target/debug/onetaskgraph-live-janitor"]
+    },
+    "budget-check": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node_modules/.bin/onebudgetspec check crates/onetaskgraph-live-janitor/budgets.yaml"
+      }
+    }
+  },
+  "implicitDependencies": [
+    "onetaskgraph-live",
+    "onetaskgraph-github-live",
+    "onetaskgraph-github-projects"
+  ]
+}

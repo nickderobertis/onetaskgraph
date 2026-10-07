@@ -1000,9 +1000,10 @@ async fn an_issue_delete_answered_without_confirmation_is_settled_by_the_reposit
         drive.leave_issue_delete_unconfirmed("I_mine", payload.clone());
         let _in_flight = session_in_flight();
 
-        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
-            .await
-            .expect_err("an unconfirmed delete of an issue still there fails the cleanup");
+        let refusal =
+            journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
+                .await
+                .expect_err("an unconfirmed delete of an issue still there fails the cleanup");
 
         assert!(
             refusal.contains("issue I_mine is still in the repository")
@@ -1055,9 +1056,10 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
         drive.fault_presence_read(fault);
         let _in_flight = session_in_flight();
 
-        let refusal = journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
-            .await
-            .expect_err("a presence read that settles nothing fails the cleanup");
+        let refusal =
+            journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
+                .await
+                .expect_err("a presence read that settles nothing fails the cleanup");
         assert!(refusal.contains(said), "{fault:?}: {refusal}");
     }
 }
@@ -1356,4 +1358,76 @@ fn read_request(stream: &mut impl Read) -> (String, String, Option<Value>) {
         serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
     });
     (method, path, body)
+}
+
+#[tokio::test]
+async fn ci_cleanup_leaves_another_process_of_the_same_attempt_alone() {
+    use lane::Writer;
+    use onetaskgraph_live::artifact::CiRun;
+    let writer = Writer::Ci(CiRun::new(37616803489, 1).unwrap());
+    let own = Own::new(writer);
+    let mine = own.title(NOW);
+    let my_label = own.label(NOW);
+    let another = Own::new(writer);
+    let theirs = another.title(NOW + 1);
+    let their_label = another.label(NOW + 1);
+    let drive = Drive::plant(
+        vec![
+            ("PVTI_mine", Some("I_mine"), mine),
+            (
+                "PVTI_design",
+                Some("I_design"),
+                format!(
+                    "{}{}",
+                    onetaskgraph_github_projects::DESIGN_TITLE_PREFIX,
+                    own.title(NOW + 2)
+                ),
+            ),
+            ("PVTI_theirs", Some("I_theirs"), theirs.clone()),
+        ],
+        vec![my_label, their_label.clone()],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let _in_flight = session_in_flight();
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &own, false)
+        .await
+        .unwrap();
+    assert_eq!(drive.left(), (vec![theirs], vec![their_label]));
+    assert!(!drive.holds_issue("I_mine"));
+    assert!(drive.holds_issue("I_theirs"));
+}
+
+/// The bound `Own` documents, pinned so a change that would make it reachable meets it: two
+/// processes of one CI attempt asked for the same microsecond spell the same stamp, and the
+/// real cleanup of either then recognises — and removes — the other's artifacts too. It is
+/// unreachable today only because the credentialed lane runs in one process per attempt.
+#[tokio::test]
+async fn two_processes_of_one_attempt_stamping_one_microsecond_spell_one_stamp() {
+    use lane::Writer;
+    use onetaskgraph_live::artifact::CiRun;
+    let writer = Writer::Ci(CiRun::new(37616803489, 1).unwrap());
+    let own = Own::new(writer);
+    let another = Own::new(writer);
+    let (mine, theirs) = (own.title(NOW), another.title(NOW));
+    let (my_label, their_label) = (own.label(NOW), another.label(NOW));
+    assert_eq!((&mine, &my_label), (&theirs, &their_label));
+    assert!(own.title_carries_issued_stamp(&theirs));
+    let drive = Drive::plant(
+        vec![
+            ("PVTI_mine", Some("I_mine"), mine),
+            ("PVTI_theirs", Some("I_theirs"), theirs),
+        ],
+        vec![my_label],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let _in_flight = session_in_flight();
+    journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &own, false)
+        .await
+        .unwrap();
+    assert_eq!(drive.left(), (vec![], vec![]));
+    assert!(!drive.holds_issue("I_theirs"), "the documented bound");
 }
