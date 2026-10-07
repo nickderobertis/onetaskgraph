@@ -1070,6 +1070,11 @@ impl Fixture {
             .clone();
         state.indexed_as.insert(content_id.to_owned(), held);
     }
+    /// Let this board's indexes answer `content_id` as it now is, as GitHub's do once they
+    /// catch up with a write.
+    fn index_catches_up(&self, content_id: &str) {
+        self.state.lock().unwrap().indexed_as.remove(content_id);
+    }
     /// The field filter of every origin lookup this board answered, in order.
     fn origin_filters(&self) -> Vec<String> {
         self.state.lock().unwrap().origin_filters.clone()
@@ -14447,6 +14452,32 @@ async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_c
         !fixture.comment_reads().iter().any(|read| read == "I_quiet"),
         "an issue nobody commented on is still ruled out by its own updatedAt: {:?}",
         fixture.comment_reads()
+    );
+
+    // Once the index has caught up with `I_theirs`, the search names it and its copy there is
+    // what the read confirms: it is not read again by its own node.
+    fixture.index_catches_up("I_theirs");
+    let node_reads = fixture.requests("issue");
+    let mut selected = selected_tasks(source.as_ref(), &commented_since(None)).await;
+    selected.sort();
+    assert_eq!(selected, ["I_edited", "I_new", "I_theirs"]);
+    assert_eq!(
+        fixture.requests("issue"),
+        node_reads,
+        "an issue the search named was read again by its own node"
+    );
+
+    // An issue this source deleted is no longer one it commented on: it is neither selected
+    // nor looked for by its own node.
+    source.delete_task(&native("I_theirs")).await.unwrap();
+    let node_reads = fixture.requests("issue");
+    let mut selected = selected_tasks(source.as_ref(), &commented_since(None)).await;
+    selected.sort();
+    assert_eq!(selected, ["I_edited", "I_new"]);
+    assert_eq!(
+        fixture.requests("issue"),
+        node_reads,
+        "a deleted issue was still looked for as one this source commented on"
     );
 
     // What this process wrote is held for one command, like every other record of its own

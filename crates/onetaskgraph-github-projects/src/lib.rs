@@ -5231,7 +5231,8 @@ impl GitHubProjectsSource {
         })
     }
 
-    /// Remember that this process wrote comment activity on `issue`.
+    /// Called only once GitHub has answered the comment write, so an issue whose comment
+    /// failed is never made a candidate a later read would pay a node read for.
     fn remember_commented(&self, issue: &NativeId) -> Result<(), SourceError> {
         let mut commented = self.commented()?;
         if !commented.contains(issue) {
