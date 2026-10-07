@@ -2,7 +2,10 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-live-janitor",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:testing"],
+  "tags": [
+    "lang:rust",
+    "layer:testing"
+  ],
   "//": "Unpublished scheduled cleanup executable. Test and coverage invoke offline tests only; neither runs the janitor against GitHub.",
   "targets": {
     "bootstrap": {
@@ -13,7 +16,15 @@
       "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": [
+        "format-check",
+        "lint",
+        "typecheck",
+        "test",
+        "coverage",
+        "budgets"
+      ]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -45,16 +56,23 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "cargo test --quiet -p onetaskgraph-live-janitor --all-features --locked"
-      }
+      },
+      "outputs": [
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-live-janitor/*.json"
+      ]
     },
     "coverage": {
       "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The required coverage union runs every crate's instrumented tests, including this offline suite, even on unrelated changes. scripts/check-coverage-enforced.sh reconciles every crate against that union; functional tests still select by the project graph.",
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear"],
+      "dependsOn": [
+        "workspace:coverage-clear"
+      ],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-live-janitor"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target/*.profraw"
+      ],
       "cache": false,
       "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]"
     },
@@ -63,14 +81,33 @@
       "options": {
         "command": "cargo build --quiet -p onetaskgraph-live-janitor --locked"
       },
-      "outputs": ["{workspaceRoot}/target/debug/onetaskgraph-live-janitor"]
+      "outputs": [
+        "{workspaceRoot}/target/debug/onetaskgraph-live-janitor"
+      ]
     },
     "budget-check": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        "budgets"
+      ]
+    },
+    "budgets": {
       "executor": "nx:run-commands",
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "test"
+      ],
       "options": {
-        "command": "bash scripts/check-live-janitor-budgets.sh"
-      }
+        "command": "bun run onebudgetspec check crates/onetaskgraph-live-janitor/budgets.yaml"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-live-janitor/*.json"
+        }
+      ],
+      "//": "Judges the request count recorded by the offline test, on every platform. The cache includes the measured code, telemetry and onebudgetspec pins."
     }
   },
   "implicitDependencies": [

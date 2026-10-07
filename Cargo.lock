@@ -1331,11 +1331,13 @@ version = "0.3.6"
 dependencies = [
  "chrono",
  "graphql-parser",
+ "onebudgetspec-core",
  "onetaskgraph-github-live",
  "onetaskgraph-github-projects",
  "onetaskgraph-live",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

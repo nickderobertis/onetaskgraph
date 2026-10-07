@@ -4,9 +4,10 @@ budgets:
     description: >-
       Every REST and GraphQL request, under either token, sent by the scheduled
       executable to a loopback GitHub at the realistic legacy and scratch workload.
+      Protects headroom on the shared GitHub credential while hourly cleanup drains residue.
     labels: [github]
     measure: reported
-    command: [python3, tests/journey.py, --budget]
+    command: [cargo, test, --quiet, -p, onetaskgraph-live-janitor, --all-features, --locked, --test, journeys, --, budget_runner::report, --exact, --nocapture]
     unit: requests
     direction: max
     threshold: 250

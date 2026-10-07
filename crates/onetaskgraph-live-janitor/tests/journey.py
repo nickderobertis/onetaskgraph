@@ -975,6 +975,13 @@ class Journeys(unittest.TestCase):
         self.assertEqual(state.boards, {Board(BOARD_OWNER, 1)})
         self.assertTrue(all('deleteIssue' in path or 'deleteProjectV2Item' in path for method, path in state.requests if method == 'POST' and path.startswith('mutation')))
         self.assertEqual(state.origin_field, ORIGIN_FIELD)
+        telemetry = os.environ.get('JANITOR_BUDGET_TELEMETRY')
+        if telemetry:
+            Path(telemetry).parent.mkdir(parents=True, exist_ok=True)
+            Path(telemetry).write_text(json.dumps({
+                'value': len(state.requests),
+                'detail': 'Every REST and GraphQL request under both tokens at the realistic workload',
+            }))
         state = workload(10)
         protected = copy.deepcopy(state.issues[SCRATCH][-3:])
         ordinary = copy.deepcopy([v for v in state.issues[CORE] if v['title'].startswith('Feature')])
@@ -1019,15 +1026,4 @@ class Journeys(unittest.TestCase):
         self.assertTrue(any(v['id'] == 'draft' for v in state.items))
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--budget']:
-        state = workload()
-        result = state.run()
-        if result.returncode:
-            sys.exit(result.stderr)
-        measurement = {'value': len(state.requests)}
-        destination = os.environ.get('ONEBUDGETSPEC_RESULT')
-        if destination:
-            Path(destination).write_text(json.dumps(measurement))
-        print(len(state.requests))
-    else:
-        unittest.main()
+    unittest.main()

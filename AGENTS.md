@@ -269,6 +269,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `budgets` target, which `check` depends on and `just test` runs affected, analyses that
   through the one runner every budget names. No measuring code reads a threshold, and no
   command names a shell or a script, because the Windows lane runs them too.
+  The janitor follows the same rule: its offline journey records every request of the
+  realistic workload; its portable runner reports that telemetry to onebudgetspec on
+  Linux, macOS and Windows, through `budgets` (`budget-check` is an alias).
 - **The copy verb is proven twice, deliberately.** The journeys drive the binary the way a
   user does, and `crates/onetaskgraph-core/tests/copy.rs` drives the engine's own
   `Engine::copy` as a library call. The second is not a duplicate: this product is exposed

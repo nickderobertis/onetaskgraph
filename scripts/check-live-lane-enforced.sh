@@ -384,16 +384,6 @@ expect_refused "the janitor's query named another board than its workflow" \
   '.github/workflows/live-janitor.yml' 'GH_PROJECTS_NUMBER differs from BOARD_NUMBER'
 reset_fixture
 
-# The unsupported Windows budget tool must be skipped before a journey is started.
-GUARD_OUTPUT="$(OS=Windows_NT bash "$ROOT/scripts/check-live-janitor-budgets.sh" 2>&1)" \
-  && GUARD_STATUS=0 || GUARD_STATUS=$?
-expect_passed "the janitor budget wrapper on Windows"
-if ! grep -qF 'no win32-x64 build' <<<"$GUARD_OUTPUT" ||
-   ! grep -qF 'Linux and macOS lanes gate' <<<"$GUARD_OUTPUT"; then
-  echo "check-live-lane-enforced: the janitor budget wrapper did not explain its Windows skip: $GUARD_OUTPUT" >&2
-  failures=$((failures + 1))
-fi
-
 if [ "$failures" -ne 0 ]; then
   echo "check-live-lane-enforced: $failures case(s) above did not go the way they must." >&2
   echo "check-live-lane-enforced: next: fix scripts/check-live-lane.sh so it refuses each" >&2
