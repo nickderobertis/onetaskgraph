@@ -251,7 +251,8 @@ class Github:
                 next_url = path + '?' + urlencode(query, doseq=True)
                 link = f'<http://127.0.0.1:{self.server.server_port}{next_url}>; rel="next"' if page * state.page_size < count else None
                 if state.link_override is not None:
-                    link = state.link_override.format(origin=f'http://127.0.0.1:{self.server.server_port}', path=path)
+                    filters = urlencode({k: v for k, v in query.items() if k != 'page'}, doseq=True)
+                    link = state.link_override.format(origin=f'http://127.0.0.1:{self.server.server_port}', path=path, filters=filters)
                 value = {field: nodes} if field else nodes
                 # GitHub states a run listing's whole size on every page.
                 if field and not state.omit_total_count:
@@ -632,6 +633,25 @@ class Journeys(unittest.TestCase):
                 state = workload()
                 state.link_override = link
                 self.assertNotEqual(state.run().returncode, 0)
+                self.assertFalse(state.writes)
+
+    def test_each_pagination_refusal_is_reached_with_the_real_filters(self):
+        # Every link keeps the request's own filters, so only the named defect differs.
+        for link, refusal in (
+                ('<{origin}{path}?{filters}&page=2&page=2>; rel="next"', 'duplicate pagination query parameter'),
+                ('<{origin}{path}?{filters}>; rel="next"', 'pagination page missing'),
+                ('<{origin}{path}?{filters}&page=02>; rel="next"', 'invalid pagination page'),
+                ('<{origin}{path}?{filters}&page=two>; rel="next"', 'invalid pagination page'),
+                ('<{origin}{path}?{filters}&page=99999999999999999999999>; rel="next"', 'invalid pagination page'),
+                ('<{origin}{path}?{filters}&page=3>; rel="next"', 'did not advance'),
+                ('<{origin}{path}?{filters}&page=2>; rel="next", <{origin}{path}?{filters}&page=2>; rel="next"',
+                 'multiple next pagination Links')):
+            with self.subTest(link=link):
+                state = workload()
+                state.link_override = link
+                result = state.run()
+                self.assert_failed(result)
+                self.assertIn(refusal, result.stderr)
                 self.assertFalse(state.writes)
 
     def test_incomplete_run_total_count_fails_closed(self):

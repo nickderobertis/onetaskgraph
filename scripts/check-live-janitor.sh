@@ -64,7 +64,6 @@ if values(source, 'GH_PROJECTS_REPOSITORY') != [constant('SCRATCH_REPOSITORY')]:
     refuse('GH_PROJECTS_REPOSITORY differs from SCRATCH_REPOSITORY')
 if values(source, 'GH_PROJECTS_LEGACY_REPOSITORY') != [constant('CORE_REPOSITORY')]:
     refuse('GH_PROJECTS_LEGACY_REPOSITORY differs from CORE_REPOSITORY')
-# The board the janitor's own GraphQL query names comes from these two declarations.
 if values(source, 'GH_PROJECTS_OWNER') != [constant('BOARD_OWNER')]:
     refuse('GH_PROJECTS_OWNER differs from BOARD_OWNER')
 if values(source, 'GH_PROJECTS_NUMBER') != [constant('BOARD_NUMBER', r'u32 = ([0-9]+)')]:
