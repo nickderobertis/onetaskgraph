@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.3.4...onetaskgraph-local-md-v0.3.5) - 2026-10-07
+
+### Fixed
+
+- *(local-md)* read a folder removed while its entries are iterated as gone ([#3489](https://github.com/nickderobertis/onetaskgraph/pull/3489))
+
 ## [0.3.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.3.2...onetaskgraph-local-md-v0.3.3) - 2026-10-07
 
 ### Added
