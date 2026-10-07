@@ -4,7 +4,7 @@ description = "The GitHub Projects live lane's own policy: its artifact names an
 # Not published, for the reason `onetaskgraph-live` is not: the GitHub Projects plugin names
 # it as a path-only dev-dependency, which cargo strips when it packages that crate.
 # llmlint: ignore[crates_stay_in_one_cargo_workspace] A literal rather than `version.workspace = true` because that is what every crate manifest of this workspace spells, and `scripts/product_versions.py` writes and checks this line, so the two cannot drift.
-version = "0.3.5"
+version = "0.3.6"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
