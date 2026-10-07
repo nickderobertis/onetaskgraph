@@ -961,3 +961,25 @@ unqualified pages at 20,400 nodes each give way to two narrowed ones at 4,080 an
 unqualified one, so one request more and 12,240 nodes fewer. On the one-page loopback board
 the narrowed search shows as a request more; on a board of hundreds of items each walk it
 replaces was one page per hundred items, paid again by every fresh source.
+
+## A comment this source wrote makes its issue a candidate, and what that moved
+
+A comment-activity read used to depend on GitHub's issue search alone to report an issue whose
+`updatedAt` a comment had moved. That index lags. The credentialed journey watched it leave
+out a newly commented issue for thirty seconds, while the record this source kept of its own
+write still held the `updatedAt` from before the comment. So an issue this source commented on
+in the same command is now a candidate whatever the search says. It is read by its own node
+when the search did not name it, and its comments are read rather than ruled out by that
+older `updatedAt`.
+`an_issue_this_source_commented_on_is_selected_before_the_search_index_catches_up` in
+`tests/plugin.rs` holds it.
+
+**`session-cost.txt`** moves only on its `reading one issue` and `reading a task's comments`
+lines, and both come from one poll. Its figures are not restated here: the checked-in fixture
+is their one source, and
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` in
+`tests/plugin.rs` fails whenever it and the loopback journey disagree. The journey's
+first comment-activity read, taken before any activity after the instant, now reads the
+issue it commented on before the instant by its node and walks that issue's comments. That
+walk is what confirms the comment is older than the instant, and the poll still selects
+nothing. The estimate in `tests/journey/budget.rs` moves with the record, as it is built to.

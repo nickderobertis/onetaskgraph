@@ -2811,8 +2811,10 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
         .map_err(|error| format!("live comment write failed: {error}"))?
         .ok_or_else(|| "the second task to comment on was not there".to_owned())?;
 
-    // The search is an index that lags a write by a second or two, so the answer is waited
-    // for — and what is waited for is exactly the two issues, never a superset.
+    // Both issues were commented on by this very source, so the read finds them whether or
+    // not GitHub's search index has caught up with either write. It is still asked
+    // repeatedly, as it always was, and what it waits for is exactly the two issues, never a
+    // superset.
     let expected = sorted(vec![first.to_owned(), second.to_owned()]);
     let mut selected = Vec::new();
     for _ in 0..30 {
