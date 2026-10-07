@@ -11,7 +11,8 @@ import sys
 import threading
 import unittest
 from enum import StrEnum
-from typing import NamedTuple, NewType, TypedDict
+from typing import NamedTuple, NewType, TypedDict, cast
+
 from urllib.parse import parse_qs, urlparse, urlencode
 
 Repository = NewType('Repository', str)
@@ -117,11 +118,21 @@ TITLE = declaration('ARTIFACT_PREFIX')
 LABEL = declaration('LABEL_PREFIX')
 CUTOVER = int(re.search(r'pub const CUTOVER_MICROS: u64 = ([\d_]+)', (ROOT / 'crates/onetaskgraph-live-janitor/src/lib.rs').read_text())[1].replace('_', ''))
 DAY = 86_400_000_000
+RestShape = dict[str, 'RestShape | None']
+
+class RestOperation(TypedDict):
+    operation_id: str
+    method: str
+    path: str
+    query: dict[str, list[str] | None]
+    status: int
+    response: RestShape | None
+
 # GitHub's REST contract for every operation the janitor sends, reduced from GitHub's
 # published description; fixtures/rest-operations.json says from which commit and when.
-REST = json.loads((Path(__file__).resolve().parent / 'fixtures/rest-operations.json').read_text())['operations']
+REST: list[RestOperation] = cast(list[RestOperation], json.loads((Path(__file__).resolve().parent / 'fixtures/rest-operations.json').read_text())['operations'])
 
-def rest_operation(method, path):
+def rest_operation(method: str, path: str) -> RestOperation | None:
     for operation in REST:
         if operation['method'] == method and re.fullmatch(re.sub(r'\{[^/]+\}', '[^/]+', operation['path']), path):
             return operation
@@ -141,25 +152,26 @@ def unpinned_request(method, target):
             return f'{method} {parsed.path} sends {name}={values}, outside {allowed}'
     return None
 
-def unpinned_fields(shape, value, where='response'):
+def unpinned_fields(shape: RestShape | None, value: object, where: str = 'response') -> str | None:
     """Why GitHub's description has no such field in this body, or None when it has every one."""
-    if isinstance(value, list):
-        if shape is None or '[]' not in shape:
-            return f'{where} is an array GitHub does not describe'
-        if shape['[]'] is not None:
-            return next(filter(None, (unpinned_fields(shape['[]'], member, f'{where}[{n}]') for n, member in enumerate(value))), None)
-        return None
-    if isinstance(value, dict):
-        if shape is None or '[]' in shape:
-            return f'{where} is an object GitHub does not describe'
-        for name, member in value.items():
-            if name not in shape:
-                return f'{where}.{name} is no field GitHub describes'
-            if shape[name] is not None:
-                found = unpinned_fields(shape[name], member, f'{where}.{name}')
-                if found:
-                    return found
+    match value:
+        case list():
+            if shape is None or '[]' not in shape:
+                return f'{where} is an array GitHub does not describe'
+            if shape['[]'] is not None:
+                return next(filter(None, (unpinned_fields(shape['[]'], member, f'{where}[{n}]') for n, member in enumerate(value))), None)
+        case dict():
+            if shape is None or '[]' in shape:
+                return f'{where} is an object GitHub does not describe'
+            for name, member in value.items():
+                if name not in shape:
+                    return f'{where}.{name} is no field GitHub describes'
+                if shape[name] is not None:
+                    found = unpinned_fields(shape[name], member, f'{where}.{name}')
+                    if found:
+                        return found
     return None
+
 NOW = CUTOVER + 2 * DAY
 
 class Github:
@@ -331,70 +343,70 @@ class Github:
                 query, variables = payload['query'], payload['variables']
                 state.requests.append(Request('POST', query))
                 state.authentication.append(Authentication('/graphql', Token(self.headers.get('Authorization', ''))))
-                if query.startswith('query'):
-                    board = Board(variables.get('owner'), variables.get('number'))
-                    state.boards.add(board)
-                    # The stand-in serves the nominated board alone.
-                    if board != Board(BOARD_OWNER, BOARD_NUMBER):
-                        self.reply({'errors': [{'message': 'Could not resolve to a ProjectV2'}]})
+                match query:
+                    case str() if query.startswith('query'):
+                        board = Board(variables.get('owner'), variables.get('number'))
+                        state.boards.add(board)
+                        # The stand-in serves the nominated board alone.
+                        if board != Board(BOARD_OWNER, BOARD_NUMBER):
+                            self.reply({'errors': [{'message': 'Could not resolve to a ProjectV2'}]})
+                            return
+                        page = int(variables['after'] or 0)
+                        state.board_reads += 1
+                        if state.board_invalid_json:
+                            self.send_response(200)
+                            self.send_header('Content-Length', '1')
+                            self.end_headers()
+                            self.wfile.write(b'{')
+                            return
+                        if state.fail == 'board' or (state.board_fail_after and state.board_reads > state.board_fail_after):
+                            self.reply({})
+                            return
+                        nodes = copy.deepcopy(state.items[page:page + 100])
+                        end = str(page + 100) if state.repeat != 'board' else '100'
+                        value = {'data': {'board': {'projectV2': {'id': 'board1', 'items': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.items), 'endCursor': end}}}}}}
+                        if state.board_transform:
+                            state.board_transform(value)
+                        self.reply(value)
                         return
-                    page = int(variables['after'] or 0)
-                    state.board_reads += 1
-                    if state.board_invalid_json:
-                        self.send_response(200)
-                        self.send_header('Content-Length', '1')
-                        self.end_headers()
-                        self.wfile.write(b'{')
+                    case str() if 'deleteProjectV2Field' in query:
+                        state.origin_field.clear()
+                        state.origin_values.clear()
+                        self.reply({'data': {'deleteProjectV2Field': {'deletedFieldId': 'origin'}}})
                         return
-                    if state.fail == 'board' or (state.board_fail_after and state.board_reads > state.board_fail_after):
-                        self.reply({})
+                    case str() if 'updateProjectV2ItemFieldValue' in query or 'clearProjectV2ItemFieldValue' in query:
+                        item = ItemId(variables['input']['itemId'])
+                        field_operation = 'clearProjectV2ItemFieldValue' if 'clearProjectV2ItemFieldValue' in query else 'updateProjectV2ItemFieldValue'
+                        if field_operation == 'clearProjectV2ItemFieldValue':
+                            state.origin_values.pop(item, None)
+                        else:
+                            state.origin_values[item] = variables['input']['value']['text']
+                        self.reply({'data': {field_operation: {'projectV2Item': {'id': item}}}})
                         return
-                    nodes = copy.deepcopy(state.items[page:page + 100])
-                    end = str(page + 100) if state.repeat != 'board' else '100'
-                    value = {'data': {'board': {'projectV2': {'id': 'board1', 'items': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.items), 'endCursor': end}}}}}}
-                    if state.board_transform:
-                        state.board_transform(value)
-                    self.reply(value)
-                    return
-                # Model field writes too: preserving a field and its values must not be
-                # an assertion about state this peer cannot change through its interface.
-                if 'deleteProjectV2Field' in query:
-                    state.origin_field.clear()
-                    state.origin_values.clear()
-                    self.reply({'data': {'deleteProjectV2Field': {'deletedFieldId': 'origin'}}})
-                    return
-                if 'updateProjectV2ItemFieldValue' in query or 'clearProjectV2ItemFieldValue' in query:
-                    item = ItemId(variables['input']['itemId'])
-                    field_operation = 'clearProjectV2ItemFieldValue' if 'clearProjectV2ItemFieldValue' in query else 'updateProjectV2ItemFieldValue'
-                    if field_operation == 'clearProjectV2ItemFieldValue':
-                        state.origin_values.pop(item, None)
-                    else:
-                        state.origin_values[item] = variables['input']['value']['text']
-                    self.reply({'data': {field_operation: {'projectV2Item': {'id': item}}}})
-                    return
-                operation = Deletion.ISSUE if 'deleteIssue' in query else Deletion.ITEM
-                deletion = variables['input']
-                identity = deletion['issueId'] if operation is Deletion.ISSUE else deletion['itemId']
-                state.writes.append(Write('POST', IssueDelete(IssueId(identity)) if operation is Deletion.ISSUE else ItemDelete(deletion['projectId'], ItemId(identity))))
-                if state.write_inject:
-                    callback, state.write_inject = state.write_inject, None
-                    callback()
-                if state.delete_failure == operation:
-                    self.reply({}, 500)
-                    return
-                if operation in state.delete_response:
-                    self.reply(state.delete_response[operation])
-                    return
-                if operation is Deletion.ISSUE:
-                    owner = next(repository for repository, issues in state.issues.items() if any(v['node_id'] == identity for v in issues))
-                    state.issues[owner] = [v for v in state.issues[owner] if v['node_id'] != identity]
-                    state.items = [v for v in state.items if v['id'] != 'item:' + identity]
-                    state.origin_values.pop(ItemId('item:' + identity), None)
-                    self.reply({'data': {'deleteIssue': {'repository': {'nameWithOwner': owner}}}})
-                else:
-                    state.items = [v for v in state.items if v['id'] != identity]
-                    state.origin_values.pop(ItemId(identity), None)
-                    self.reply({'data': {'deleteProjectV2Item': {'deletedItemId': identity}}})
+                    case _:
+                        operation = Deletion.ISSUE if 'deleteIssue' in query else Deletion.ITEM
+                        deletion = variables['input']
+                        identity = deletion['issueId'] if operation is Deletion.ISSUE else deletion['itemId']
+                        state.writes.append(Write('POST', IssueDelete(IssueId(identity)) if operation is Deletion.ISSUE else ItemDelete(deletion['projectId'], ItemId(identity))))
+                        if state.write_inject:
+                            callback, state.write_inject = state.write_inject, None
+                            callback()
+                        if state.delete_failure == operation:
+                            self.reply({}, 500)
+                            return
+                        if operation in state.delete_response:
+                            self.reply(state.delete_response[operation])
+                            return
+                        if operation is Deletion.ISSUE:
+                            owner = next(repository for repository, issues in state.issues.items() if any(v['node_id'] == identity for v in issues))
+                            state.issues[owner] = [v for v in state.issues[owner] if v['node_id'] != identity]
+                            state.items = [v for v in state.items if v['id'] != 'item:' + identity]
+                            state.origin_values.pop(ItemId('item:' + identity), None)
+                            self.reply({'data': {'deleteIssue': {'repository': {'nameWithOwner': owner}}}})
+                        else:
+                            state.items = [v for v in state.items if v['id'] != identity]
+                            state.origin_values.pop(ItemId(identity), None)
+                            self.reply({'data': {'deleteProjectV2Item': {'deletedItemId': identity}}})
 
             def do_DELETE(self):
                 state.requests.append(Request('DELETE', self.path))

@@ -13,7 +13,11 @@ janitor sends must be an operation it names with parameters it admits, and every
 loopback stand-in serves on success may carry only fields it names. One journey also
 asserts the janitor sends every operation the pin names, so a stale entry fails as well.
 
-To re-observe, download that description at a newer commit and run
-`python3 -I reduce_rest_description.py <api.github.com.json> <commit> <date> >
-rest-operations.json`, then `just format`; the journeys then say what moved. GraphQL is held separately, by
-`tests/schema.rs` against the GitHub Projects plugin's pinned `schema.graphql`.
+The upstream source is immutable commit `734bc9c1030b774eb3fc909cce477aceea21cf77` of
+`github/rest-api-description`, file `descriptions/api.github.com/api.github.com.json`, read
+on 2026-10-07. Moving the pin is the moment to regenerate the reduction from that source:
+retain the six operations above, their query parameters and enumerations, their success
+status and body fields. Descend into the allowance resources and workflow-run arrays; a
+null leaf names a field without constraining its value. The journeys then say what moved.
+GraphQL is held separately, by `tests/schema.rs` against the GitHub Projects plugin's
+pinned `schema.graphql`.
