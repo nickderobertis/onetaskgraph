@@ -9,8 +9,12 @@
 # which names each budget's actual figure, its threshold and its headroom.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
+  echo "check-live-janitor-budgets: cannot enter the repository root from ${BASH_SOURCE[0]}" >&2
+  echo "check-live-janitor-budgets: next: run it as 'bash scripts/check-live-janitor-budgets.sh' from a checkout" >&2
+  exit 1
+}
+readonly ROOT
 
 # onebudgetspec publishes no build for win32-x64: its launcher there stops with "no build for
 # win32-x64", which would read as a budget having failed. So the check is skipped there with a

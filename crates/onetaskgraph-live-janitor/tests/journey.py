@@ -871,6 +871,15 @@ class Journeys(unittest.TestCase):
             self.assert_failed(state.run())
             self.assertFalse(state.writes)
 
+    def test_inconsistent_allowance_stops_before_enumeration(self):
+        state = workload()
+        state.allowance_record = {'limit': 5000, 'remaining': 5001, 'reset': 2000000000}
+        result = state.run()
+        self.assert_failed(result)
+        self.assertIn('rate_limit allowance invalid', result.stderr)
+        self.assertEqual(state.requests, [Request('GET', '/rate_limit')])
+        self.assertFalse(state.writes)
+
     def test_rest_limit_during_later_refresh_stops_all_writes(self):
         state = Github()
         for n in range(50):
