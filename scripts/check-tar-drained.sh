@@ -38,8 +38,11 @@ readonly FROM_STDIN='(-[A-Za-z]*f[[:space:]]+-([[:space:]]|$)|--file[= ]-([[:spa
 readonly DRAIN='^  [t]ar -xf - -C "\$1" && cat >/dev/null$'
 
 # grep exits 1 for no match and 2 for a scan it could not make; only the first is a pass.
+# It scans from inside the root, so every hit starts `scripts/` whatever the root is: a
+# Windows root can carry a drive letter's colon, which splitting the hit on its first two
+# colons would otherwise take for the file's end and refuse the drain itself.
 status=0
-hits="$(grep -rnE -- "$EXTRACT" "$ROOT/scripts")" || status=$?
+hits="$(cd "$ROOT" && grep -rnE -- "$EXTRACT" scripts)" || status=$?
 [ "$status" -le 1 ] || fatal \
   "grep could not scan $ROOT/scripts (exit $status), so no script under it is cleared" \
   "fix what grep reported above — usually an unreadable file under scripts/ — then rerun"
@@ -48,13 +51,15 @@ found=""
 while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   line="${hit#*:*:}"
+  # A carriage return a CRLF checkout leaves is not part of the line the drain is matched by.
+  line="${line%$'\r'}"
   trimmed="${line#"${line%%[![:space:]]*}"}"
   case "$trimmed" in
     '#'*) continue ;;
   esac
   [[ $line =~ $FROM_STDIN ]] || continue
-  [ "${hit%%:*}" = "$ROOT/scripts/scratch-clone.sh" ] && [[ $line =~ $DRAIN ]] && continue
-  found="$found${hit#"$ROOT"/}"$'\n'
+  [ "${hit%%:*}" = scripts/scratch-clone.sh ] && [[ $line =~ $DRAIN ]] && continue
+  found="$found$hit"$'\n'
 done <<EOF
 $hits
 EOF

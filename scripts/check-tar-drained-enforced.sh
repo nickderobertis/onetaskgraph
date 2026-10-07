@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Watch scripts/check-tar-drained.sh refuse, and watch the drain it sends every site to work.
 #
-# Three cases. The guard clears this tree. It refuses an undrained extraction planted in a
+# Four cases. The guard clears this tree, and clears the drain under a root holding a colon
+# and in a CRLF copy. It refuses an undrained extraction planted in a
 # copy of scripts/ in each spelling it reads — `-xf -`, a bare `-x` fed by a pipe, and one
 # with a trailing comment — while passing over a commented-out one. And extract_tar_stream
 # reads its stream to the end where a bare `tar -xf -` does not: a stream left unread is
@@ -71,7 +72,31 @@ if printf '%s\n' "$output" | grep -qF "scripts/planted.sh:5:"; then
     "check how scripts/check-tar-drained.sh skips a full-line comment"
 fi
 
-# Case 3: the drain leaves no byte of its stream unread, where a bare extraction does.
+# Case 3: the drain itself stays cleared under a root whose path holds a colon, as a
+# Windows drive letter's does, and with the carriage return a CRLF checkout leaves on it —
+# the two shapes in which the guard once refused its own helper on the Windows runner.
+# NTFS has no colon in a name; MSYS writes one under another code point, and a host that
+# cannot create one at all is told so rather than passed in silence.
+colon_root="$scratch/D:/a"
+if mkdir -p "$colon_root" 2>/dev/null; then
+  cp -R "$ROOT/scripts" "$colon_root/scripts" || fatal \
+    "could not copy scripts/ into $colon_root" "check 'df -h' for free space, then rerun"
+  output="$(bash "$GUARD" "$colon_root" 2>&1)" || fatal \
+    "the guard refused the drain under a root holding a colon: $output" \
+    "check that scripts/check-tar-drained.sh splits each hit on a path relative to the root"
+else
+  echo "check-tar-drained-enforced: this host cannot create a path holding a colon; the colon root was not checked here"
+fi
+mkdir -p "$scratch/crlf" || fatal "could not create $scratch/crlf" "check \$TMPDIR, then rerun"
+cp -R "$ROOT/scripts" "$scratch/crlf/scripts" || fatal \
+  "could not copy scripts/ into $scratch/crlf" "check 'df -h' for free space, then rerun"
+awk '{ printf "%s\r\n", $0 }' "$ROOT/scripts/scratch-clone.sh" >"$scratch/crlf/scripts/scratch-clone.sh" || fatal \
+  "could not write a CRLF copy of scripts/scratch-clone.sh" "check that awk is on PATH, then rerun"
+output="$(bash "$GUARD" "$scratch/crlf" 2>&1)" || fatal \
+  "the guard refused the drain in a CRLF copy of scripts/scratch-clone.sh: $output" \
+  "check that scripts/check-tar-drained.sh drops a trailing carriage return before matching"
+
+# Case 4: the drain leaves no byte of its stream unread, where a bare extraction does.
 mkdir -p "$scratch/src" "$scratch/bare" "$scratch/drained" || fatal \
   "could not create the extraction directories" "check \$TMPDIR, then rerun"
 printf 'payload\n' >"$scratch/src/file.txt"
