@@ -950,7 +950,11 @@ them).
 A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
 `String` inside `Location::Path` or `Location::Url` — and it becomes the location string
-the *destination* reports for that record's counterpart. Both ends come from the plugins'
+the *destination* reports for that record's counterpart. A reference may carry a fragment
+— a `#` straight after the location, as in `[budgets](<location>#budgets)` — and the
+fragment is carried through the rewrite unchanged, appended to the destination's location;
+a location followed directly by any other character that can continue a path or a link, a
+full stop included, is still not recognised at all. Both ends come from the plugins'
 own reported `Location`; nothing composes an address from a name, an id or a root. It is
 deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
 paths inside backticks in a table cell, which `[text](target)` matching would have left

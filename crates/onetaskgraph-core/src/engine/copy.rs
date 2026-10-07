@@ -4179,14 +4179,26 @@ fn holds(content: &str, location: &str) -> bool {
 /// `https://example.invalid/1` must not be rewritten inside `https://example.invalid/12`,
 /// and a project's location that is a directory prefix of a task's must not be rewritten
 /// inside that task's. What deciding it this way costs is stated on [`stops_a_location`].
+///
+/// A `#` straight after the location also stops it, and only on that side: it opens a
+/// fragment — `[budgets](/…/t.md#budgets)`, `https://…/issues/1#budgets` — which names a
+/// place *inside* the record rather than another record. The location before it is
+/// rewritten like any other, and the fragment, never part of the match, is carried through
+/// [`substitute`]'s walk byte-for-byte. Read this way, a file whose own name holds a `#`
+/// beside a referent's — `t.md#2` beside `t.md` — would be taken for that referent with a
+/// fragment; a *referent* so named is still matched whole, because the table is tried
+/// longest first.
 fn delimited_at(content: &str, at: usize, location: &str) -> bool {
     if !content.is_char_boundary(at) || !content[at..].starts_with(location) {
         return false;
     }
     let before = content[..at].chars().next_back();
     let after = content[at + location.len()..].chars().next();
-    stops_a_location(before) && stops_a_location(after)
+    stops_a_location(before) && (stops_a_location(after) || after == Some(FRAGMENT))
 }
+
+/// What opens a fragment after a location: see [`delimited_at`].
+const FRAGMENT: char = '#';
 
 /// Whether a character cannot continue a path or a link, so a location string beside one
 /// ends there.
