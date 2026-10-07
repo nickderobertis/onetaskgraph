@@ -450,7 +450,7 @@ mod tests {
     fn a_malformed_pattern_is_refused() {
         for bad in [
             "github.com/example-org",
-            "github.com/pets*/api",
+            "github.com/example*/api",
             "https://github.com/a/b",
             "github.com//b",
             "github.com/a/b.git",
