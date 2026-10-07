@@ -435,8 +435,8 @@ fn document_name(query: &str) -> &'static str {
     .map_or("OTHER", |(name, _)| name)
 }
 
-/// The `hellopatient` mapping, exactly as ai-orchestrator configures it.
-fn hellopatient() -> Value {
+/// An example mapping with distinct task and project vocabulary.
+fn example_mapping() -> Value {
     json!({
         "backlog":     {"task": "Proposed",        "project": "Proposal"},
         "draft":       {"task": "Backlog",         "project": "Idea"},
@@ -449,8 +449,8 @@ fn hellopatient() -> Value {
     })
 }
 
-/// The `hellopatient-followups` mapping, scoped to one project and never writing a project.
-fn hellopatient_followups() -> Value {
+/// The `example-followups` mapping, scoped to one project and never writing a project.
+fn example_followups_mapping() -> Value {
     json!({
         "backlog": "Proposed", "draft": "Backlog", "todo": "Todo", "queued": "Queued",
         "in-progress": "In Progress", "unknown": "Needs Attention", "done": "Done",
@@ -458,8 +458,8 @@ fn hellopatient_followups() -> Value {
     })
 }
 
-/// Hello Patient's team states and project statuses, under ids of `prefix`.
-fn hello_patient(prefix: &str) -> Workspace {
+/// Example team states and project statuses, under ids of `prefix`.
+fn example_workspace(prefix: &str) -> Workspace {
     let state = |name: &str| format!("{prefix}-state-{name}");
     let status = |name: &str| format!("{prefix}-status-{name}");
     let states = [
@@ -532,8 +532,8 @@ fn every_form_of_the_grammar_loads_and_every_malformed_one_is_refused_naming_the
         json!({"done": {"task": "Done", "project": "Completed"}}),
         // One name, two categories, two kinds.
         json!({"todo": {"task": "Todo"}, "queued": {"project": "Todo"}}),
-        hellopatient(),
-        hellopatient_followups(),
+        example_mapping(),
+        example_followups_mapping(),
     ] {
         build(
             "http://127.0.0.1:1",
@@ -543,9 +543,9 @@ fn every_form_of_the_grammar_loads_and_every_malformed_one_is_refused_naming_the
     }
     build(
         "http://127.0.0.1:1",
-        json!({"project": "P-ONE", "status_mapping": hellopatient_followups()}),
+        json!({"project": "P-ONE", "status_mapping": example_followups_mapping()}),
     )
-    .expect("hellopatient-followups, scoped to one project, loads");
+    .expect("example-followups, scoped to one project, loads");
     for (mapping, said) in [
         (
             json!({"doing": "Doing"}),
@@ -597,10 +597,10 @@ fn every_form_of_the_grammar_loads_and_every_malformed_one_is_refused_naming_the
 
 #[tokio::test]
 async fn building_a_source_sends_nothing_and_its_first_status_write_reads_the_resolution_once() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
     workspace.project("P-1", "Planned");
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     assert_eq!(
         workspace.count(),
         0,
@@ -654,18 +654,18 @@ async fn building_a_source_sends_nothing_and_its_first_status_write_reads_the_re
 
 /// Another source over the same server, as a second process would build one.
 fn source_on(workspace: &Workspace) -> Box<dyn TaskSource> {
-    source(workspace, hellopatient())
+    source(workspace, example_mapping())
 }
 
 #[tokio::test]
 async fn two_sources_in_one_process_each_resolve_against_their_own_workspace() {
-    let (first, second) = (hello_patient("A"), hello_patient("B"));
+    let (first, second) = (example_workspace("A"), example_workspace("B"));
     for workspace in [&first, &second] {
         workspace.issue("I-1", "Todo", None);
     }
     let (one, two) = (
-        source(&first, hellopatient()),
-        source(&second, hellopatient()),
+        source(&first, example_mapping()),
+        source(&second, example_mapping()),
     );
     for _ in 0..2 {
         one.set_task_status(&"I-1".into(), StatusCategory::Queued)
@@ -746,7 +746,7 @@ async fn a_name_added_after_the_resolution_is_found_by_one_fresh_read_and_an_abs
 
 #[tokio::test]
 async fn a_failed_write_leaves_the_next_one_on_the_same_source_resolving_and_landing() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
     let source = source(
         &workspace,
@@ -806,10 +806,10 @@ async fn a_failed_write_leaves_the_next_one_on_the_same_source_resolving_and_lan
 
 #[tokio::test]
 async fn a_status_write_reads_nothing_before_its_mutation() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-TODO", "Todo", None);
     workspace.issue("I-REVIEW", "In Review", None);
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
 
     // Already in the category: the same state, sent again.
     let answered = source
@@ -894,11 +894,11 @@ async fn a_status_write_reads_nothing_before_its_mutation() {
 #[tokio::test]
 async fn a_status_only_update_reads_nothing_and_a_settlement_reads_the_issue_once_to_merge_its_slot()
  {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     let held =
         "A person's own words.\n\n<!-- onetaskgraph.metadata `{\"caller.unrelated\":\"kept\"}` -->";
     workspace.issue("I-1", "Todo", Some(held));
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     let status = |category| TaskUpdate {
         status: Some(Status {
             category,
@@ -949,7 +949,7 @@ async fn a_status_only_update_reads_nothing_and_a_settlement_reads_the_issue_onc
 
 #[tokio::test]
 async fn a_project_write_its_mapping_names_no_status_for_sends_no_mutation() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.project("P-1", "Planned");
     let source = source(
         &workspace,
@@ -999,10 +999,10 @@ async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_othe
         Missing::SentenceOnly,
         Missing::Http400,
     ] {
-        let workspace = hello_patient("A");
+        let workspace = example_workspace("A");
         workspace.issue("I-1", "Todo", None);
         workspace.held().missing = missing;
-        let source = source(&workspace, hellopatient());
+        let source = source(&workspace, example_mapping());
         assert_eq!(
             source
                 .set_task_status(&"I-NOPE".into(), StatusCategory::Done)
@@ -1014,9 +1014,9 @@ async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_othe
     }
     // A referenced entity Linear does not hold — the state the write names — is a refusal of
     // the write, never no such task.
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
-    let held = source(&workspace, hellopatient());
+    let held = source(&workspace, example_mapping());
     held.set_task_status(&"I-1".into(), StatusCategory::Todo)
         .await
         .unwrap();
@@ -1039,9 +1039,9 @@ async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_othe
         "{refused:?}"
     );
     // Any other refusal of the same mutation is a refusal, never no such task.
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     source
         .set_task_status(&"I-1".into(), StatusCategory::Todo)
         .await
@@ -1059,9 +1059,9 @@ async fn each_spelling_of_linears_not_found_refusal_is_no_such_task_and_any_othe
 
 #[tokio::test]
 async fn a_malformed_resolution_is_not_held_and_the_next_write_reads_it_again() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     workspace.held().malformed_next_resolution = true;
     let failed = source
         .set_task_status(&"I-1".into(), StatusCategory::Queued)
@@ -1129,11 +1129,11 @@ async fn a_failed_refresh_of_a_warm_vocabulary_is_retried_on_the_same_source() {
 #[tokio::test]
 async fn refused_settlement_task_and_project_writes_resolve_again_before_their_retry() {
     for operation in ["settlement", "task", "project"] {
-        let workspace = hello_patient("A");
+        let workspace = example_workspace("A");
         let description = "A person's own words.\n\n<!-- onetaskgraph.metadata `{\"caller.unrelated\":\"kept\"}` -->";
         workspace.issue("I-1", "Todo", Some(description));
         workspace.project("P-1", "Planned");
-        let source = source(&workspace, hellopatient());
+        let source = source(&workspace, example_mapping());
         source
             .set_task_status(&"I-1".into(), StatusCategory::Todo)
             .await
@@ -1227,12 +1227,12 @@ async fn refused_settlement_task_and_project_writes_resolve_again_before_their_r
 
 #[tokio::test]
 async fn a_scoped_source_writes_a_status_to_the_issue_it_names_wherever_it_is_filed() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue_in("I-IN", "Todo", "P-SCOPE");
     workspace.issue_in("I-OUT", "Todo", "P-OTHER");
     let source = build(
         &workspace.serve(),
-        json!({"project": "P-SCOPE", "status_mapping": hellopatient()}),
+        json!({"project": "P-SCOPE", "status_mapping": example_mapping()}),
     )
     .unwrap();
     let in_progress = Some(Status {
@@ -1318,10 +1318,10 @@ async fn a_scoped_source_writes_a_status_to_the_issue_it_names_wherever_it_is_fi
 
 #[tokio::test]
 async fn a_status_write_to_a_trashed_issue_answers_no_such_task() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-GONE", "Todo", None);
     workspace.trash("I-GONE");
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     // No read before it, so the mutation reaches the trashed issue — Linear takes it — and what
     // its answer reports is an issue this source does not hold.
     assert_eq!(
@@ -1346,10 +1346,10 @@ async fn a_status_write_to_a_trashed_issue_answers_no_such_task() {
 
 #[tokio::test]
 async fn a_resolution_that_does_not_fit_one_page_is_refused_rather_than_read_short() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
     workspace.held().more_states = true;
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     let refused = source
         .set_task_status(&"I-1".into(), StatusCategory::Done)
         .await
@@ -1370,11 +1370,11 @@ async fn a_resolution_that_does_not_fit_one_page_is_refused_rather_than_read_sho
 
 #[tokio::test]
 async fn project_statuses_that_do_not_fit_one_page_are_refused_rather_than_read_short() {
-    let workspace = hello_patient("A");
+    let workspace = example_workspace("A");
     workspace.issue("I-1", "Todo", None);
     workspace.project("P-1", "Planned");
     workspace.held().more_statuses = true;
-    let source = source(&workspace, hellopatient());
+    let source = source(&workspace, example_mapping());
     for refused in [
         source
             .write_project(&project_write(StatusCategory::Done, Some("P-1")))

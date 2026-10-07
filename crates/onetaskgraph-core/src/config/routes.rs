@@ -296,7 +296,7 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
             return Err(ConfigError::setting(
                 format!("{key}.repositories"),
                 "a route names the repositories it matches, and this one names none",
-                "list at least one pattern, such as `github.com/petsinc/*`.",
+                "list at least one pattern, such as `github.com/example-org/*`.",
             ));
         }
         Some(Value::String(one)) => vec![one.clone()],
@@ -350,7 +350,7 @@ fn patterns_of(key: &str, patterns: Vec<String>) -> Result<Vec<RepositoryPattern
             format!("{key}.repositories"),
             "a route names the repositories it matches, and this one's list is empty — an \
              entry matching nothing is a mistake rather than a rule",
-            "list at least one pattern, such as `github.com/petsinc/*`, or remove the entry.",
+            "list at least one pattern, such as `github.com/example-org/*`, or remove the entry.",
         ));
     }
     patterns
@@ -361,7 +361,7 @@ fn patterns_of(key: &str, patterns: Vec<String>) -> Result<Vec<RepositoryPattern
                     format!("{key}.repositories"),
                     problem,
                     "write the pattern as host/owner/name, using `*` for one whole segment — \
-                     `github.com/petsinc/*`.",
+                     `github.com/example-org/*`.",
                 )
             })
         })
@@ -439,17 +439,17 @@ mod tests {
 
     #[test]
     fn a_star_matches_exactly_one_whole_segment() {
-        let pattern = RepositoryPattern::new("github.com/petsinc/*").expect("a pattern");
-        assert!(pattern.matches(&origin("github.com/petsinc/api")));
-        assert!(!pattern.matches(&origin("github.com/petsinc/api/sub")));
-        assert!(!pattern.matches(&origin("github.com/petsincx/api")));
-        assert!(!pattern.matches(&origin("gitlab.com/petsinc/api")));
+        let pattern = RepositoryPattern::new("github.com/example-org/*").expect("a pattern");
+        assert!(pattern.matches(&origin("github.com/example-org/api")));
+        assert!(!pattern.matches(&origin("github.com/example-org/api/sub")));
+        assert!(!pattern.matches(&origin("github.com/example-orgx/api")));
+        assert!(!pattern.matches(&origin("gitlab.com/example-org/api")));
     }
 
     #[test]
     fn a_malformed_pattern_is_refused() {
         for bad in [
-            "github.com/petsinc",
+            "github.com/example-org",
             "github.com/pets*/api",
             "https://github.com/a/b",
             "github.com//b",
@@ -462,12 +462,12 @@ mod tests {
     #[test]
     fn an_entry_matches_only_when_every_repository_does() {
         let route = Route {
-            repositories: vec![RepositoryPattern::new("github.com/petsinc/*").unwrap()],
+            repositories: vec![RepositoryPattern::new("github.com/example-org/*").unwrap()],
             to: SourceName::new("linear").unwrap(),
         };
-        assert!(route.matches(&[origin("github.com/petsinc/a")]));
+        assert!(route.matches(&[origin("github.com/example-org/a")]));
         assert!(!route.matches(&[
-            origin("github.com/petsinc/a"),
+            origin("github.com/example-org/a"),
             origin("github.com/nickderobertis/b")
         ]));
         assert!(!route.matches(&[]));

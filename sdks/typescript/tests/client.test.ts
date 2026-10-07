@@ -1400,7 +1400,7 @@ test("sources route answers from configuration, and a home reads with its member
     record(
       "tasks",
       "app",
-      "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+      "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/example-org/app]",
     );
     mkdirSync(resolve(routeRoot, "notes"));
     mkdirSync(resolve(routeRoot, "team"));
@@ -1413,7 +1413,7 @@ test("sources route answers from configuration, and a home reads with its member
           notes: {
             plugin: "local-md",
             config: { root: resolve(routeRoot, "notes"), ...folder },
-            routes: [{ repositories: ["github.com/petsinc/*"], to: "team" }],
+            routes: [{ repositories: ["github.com/example-org/*"], to: "team" }],
           },
           team: { plugin: "local-md", config: { root: resolve(routeRoot, "team"), ...folder } },
         },
@@ -1422,7 +1422,7 @@ test("sources route answers from configuration, and a home reads with its member
     const routeClient = new OnetaskgraphClient({ binaryPath: binary, cwd: routeRoot });
 
     expect(
-      await routeClient.sourcesRoute("notes", { repositories: ["github.com/petsinc/x"] }),
+      await routeClient.sourcesRoute("notes", { repositories: ["github.com/example-org/x"] }),
     ).toEqual({
       source: "notes",
       destination: "team",

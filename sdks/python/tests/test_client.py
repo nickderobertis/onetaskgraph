@@ -398,7 +398,7 @@ def test_sources_route_and_a_home_read_with_its_members_drive_the_binary(
         (
             "tasks",
             "app",
-            "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/petsinc/app]",
+            "title: App\nstatus: todo\nproject: goal\nrepositories: [github.com/example-org/app]",
         ),
     ]:
         (plan / kind).mkdir(parents=True, exist_ok=True)
@@ -414,7 +414,7 @@ def test_sources_route_and_a_home_read_with_its_members_drive_the_binary(
                     "notes": {
                         "plugin": "local-md",
                         "config": {"root": str(tmp_path / "notes"), **folder},
-                        "routes": [{"repositories": ["github.com/petsinc/*"], "to": "team"}],
+                        "routes": [{"repositories": ["github.com/example-org/*"], "to": "team"}],
                     },
                     "team": {
                         "plugin": "local-md",
@@ -427,7 +427,7 @@ def test_sources_route_and_a_home_read_with_its_members_drive_the_binary(
     )
     client = Client(binary, cwd=tmp_path)
 
-    routed = run(client.sources_route("notes", repository=["github.com/petsinc/api"]))
+    routed = run(client.sources_route("notes", repository=["github.com/example-org/api"]))
     assert (routed.source.root, routed.destination.root, routed.route) == ("notes", "team", 0)
     stays = run(client.sources_route(SourceName(root="notes")))
     assert (stays.destination.root, stays.route) == ("notes", None)
