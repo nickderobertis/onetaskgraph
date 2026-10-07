@@ -4594,4 +4594,73 @@ mod tests {
         // clearable when this test is done with it.
         drop(held);
     }
+
+    /// The real probe on a record whose folder will not open (onetaskgraph#3044): a folder that
+    /// has gone, one Windows is part-way through removing, and one an access-control entry
+    /// denies. All three refuse to be opened; only the first two are the record having left.
+    #[cfg(windows)]
+    #[test]
+    fn the_probe_calls_a_record_unlinked_when_its_folder_has_gone_or_is_going_and_not_when_denied()
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, SetFileInformationByHandle,
+        };
+
+        let root = tempfile::tempdir().expect("temporary notes");
+
+        // Gone: neither the record's folder nor the one above it is there.
+        assert!(super::probe::unlinked(
+            &root.path().join("tasks/theirs/deep-2/39.md")
+        ));
+
+        // Going: an empty folder marked for deletion through a handle that still holds it, by
+        // the classic disposition for the reason the test above gives for a file.
+        let going = root.path().join("going");
+        fs::create_dir(&going).expect("a folder");
+        let held = fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&going)
+            .expect("the folder opens");
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: `held` is an open handle carrying DELETE access, and `disposition` is one
+        // whole `FILE_DISPOSITION_INFO` whose length is passed with it; both outlive the call.
+        assert!(
+            unsafe {
+                SetFileInformationByHandle(
+                    held.as_raw_handle() as HANDLE,
+                    FileDispositionInfo,
+                    (&raw const disposition).cast(),
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } != 0,
+            "SetFileInformationByHandle: {}",
+            std::io::Error::last_os_error()
+        );
+        // The state this case is for: still named by its parent, and refusing to be opened.
+        assert!(
+            going.symlink_metadata().is_ok(),
+            "the folder left its parent instead of being marked"
+        );
+        assert!(
+            fs::read_dir(&going).is_err(),
+            "a marked folder refuses a listing"
+        );
+        assert!(super::probe::unlinked(&going.join("39.md")));
+        drop(held);
+
+        // Denied: a folder that is there, holding the record, which this reader may not open.
+        let sealed = root.path().join("sealed");
+        fs::create_dir(&sealed).expect("a folder");
+        fs::write(sealed.join("39.md"), "---\ntitle: Sealed\n---\n").expect("a record");
+        assert!(deny_folder(&sealed), "the folder refuses to be listed");
+        assert!(!super::probe::unlinked(&sealed.join("39.md")));
+        permit(&sealed);
+    }
 }
