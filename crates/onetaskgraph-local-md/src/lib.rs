@@ -3171,7 +3171,6 @@ impl LocalMdSource {
         fs::remove_file(&path).map_err(|e| SourceError::Unavailable {
             message: format!("cannot remove {}: {e}", path.display()),
         })?;
-        // The record's assets go with it: nothing is left of a removed record.
         assets::remove(&self.root, &path)
     }
 

@@ -504,9 +504,9 @@ fn closes_image(rest: &str) -> bool {
 /// Every asset reference in `content`, in order, duplicates included.
 ///
 /// An image whose `!` is escaped, or whose `!` or target sits inside code, is not one.
+/// Content holding no image syntax at all, which is most of it, is not parsed.
 fn references(content: &str) -> Vec<Reference> {
     let mut found = Vec::new();
-    // Most content has no image syntax at all, and then nothing is parsed.
     if !content.contains("![") {
         return found;
     }
