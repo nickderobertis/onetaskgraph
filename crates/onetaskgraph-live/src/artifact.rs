@@ -477,12 +477,10 @@ impl fmt::Display for CiStamp {
     }
 }
 
-/// `value`, when it is at least 1 and spelled in no more than `widest` digits.
 fn within(value: u64, widest: usize) -> Option<u64> {
     (value > 0 && value.to_string().len() <= widest).then_some(value)
 }
 
-/// `spelled` as a CI stamp field: at most `widest` digits, at least 1, no leading zero.
 fn bounded(spelled: &str, widest: usize) -> Option<u64> {
     if spelled.len() > widest || spelled.starts_with('0') {
         return None;
