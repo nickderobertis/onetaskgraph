@@ -560,12 +560,18 @@ impl LocalMdSource {
                 })?,
             };
             for entry in entries {
-                // llmlint: ignore[changed_behavior_has_e2e] An iterator failing after
-                // `read_dir` succeeds is an OS/filesystem race that cannot be induced
-                // deterministically without mocking the layer under test.
-                let entry = entry.map_err(|e| SourceError::Unavailable {
-                    message: format!("cannot read entry in {}: {e}", dir.display()),
-                })?;
+                #[cfg(test)]
+                let entry = interrupted(dir).map_or(entry, Err);
+                let entry = match entry {
+                    // A folder removed while it is listed holds nothing more to list, exactly
+                    // as one gone before it was opened: macOS reports that removal through the
+                    // iterator as *not found* rather than ending the listing. `emptied` is what
+                    // decides it, so a folder still standing keeps its error.
+                    Err(e) if emptied(dir, &e) => return Ok(()),
+                    entry => entry.map_err(|e| SourceError::Unavailable {
+                        message: format!("cannot read entry in {}: {e}", dir.display()),
+                    })?,
+                };
                 let path = entry.path();
                 // A narrow metadata write's staging file is never an item, and is skipped
                 // before it is resolved: it may be renamed away between the listing and here.
@@ -2235,6 +2241,36 @@ fn probed(path: &Path) -> Option<bool> {
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     probe.and_then(|probe| probe(path))
+}
+
+/// Whether the listing of the folder at `dir`, which failed part-way through with `error`,
+/// failed because the folder itself has gone since it was opened.
+///
+/// The iterator's error names no entry, so the failure alone cannot say which thing left: it
+/// is put to [`gone`] for the folder, and the folder must then be [`vanished`] as well. A
+/// folder that is still there keeps the error it was given, whatever that error says.
+fn emptied(dir: &Path, error: &std::io::Error) -> bool {
+    gone(dir, error) && vanished(dir)
+}
+
+/// What a test poses as the error the listing of `dir` meets next, in place of the entry the
+/// iterator gave — the error macOS's iterator returns for a folder removed under it, which
+/// the platforms this suite also runs on end the listing for instead.
+///
+/// `None` is *no interruption here*, and leaves every other folder in the run to the real
+/// iterator, as [`StandIn`] does for the probe.
+#[cfg(test)]
+type Interruption = fn(&Path) -> Option<std::io::Error>;
+
+#[cfg(test)]
+static INTERRUPTION: RwLock<Option<Interruption>> = RwLock::new(None);
+
+#[cfg(test)]
+fn interrupted(dir: &Path) -> Option<std::io::Error> {
+    let interruption = *INTERRUPTION
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    interruption.and_then(|interruption| interruption(dir))
 }
 
 /// Whether the entry at `path`, which could not be resolved, is gone from its folder rather
@@ -4666,5 +4702,103 @@ mod tests {
         assert!(deny_file(&record), "the record refuses to be read");
         assert!(!super::probe::unlinked(&record));
         permit(&record);
+    }
+
+    /// The error macOS's iterator returned for a folder removed while it was listed —
+    /// `No such file or directory (os error 2)` — which is *not found* on every platform.
+    fn removed_under_the_iterator() -> std::io::Error {
+        std::io::Error::from_raw_os_error(2)
+    }
+
+    /// The walk's decision on an iterator error, over real folders: one that has really been
+    /// removed and is met with *not found* has gone; one still standing, or met with any
+    /// other error, has not.
+    #[test]
+    fn an_iterator_error_reads_as_gone_only_for_a_folder_that_has_really_been_removed() {
+        let root = tempfile::tempdir().expect("temporary notes");
+        let removed = root.path().join("deep-0");
+        fs::create_dir(&removed).expect("a folder");
+        fs::write(removed.join("1.md"), "---\ntitle: One\n---\n").expect("a record");
+        fs::remove_dir_all(&removed).expect("the folder is removed");
+        let standing = root.path().join("deep-1");
+        fs::create_dir(&standing).expect("a folder");
+
+        assert!(super::emptied(&removed, &removed_under_the_iterator()));
+        assert!(!super::emptied(&standing, &removed_under_the_iterator()));
+        assert!(!super::emptied(
+            &removed,
+            &std::io::Error::other("the device stopped answering")
+        ));
+    }
+
+    /// Keyed by folder name so that it has no opinion about another test's folders, which
+    /// share this process with it.
+    #[cfg(unix)]
+    fn interruption(dir: &Path) -> Option<std::io::Error> {
+        match dir.file_name()?.to_str()? {
+            name if name.starts_with("vanishing") => {
+                fs::remove_dir_all(dir).expect("the folder is removed mid-listing");
+                Some(removed_under_the_iterator())
+            }
+            name if name.starts_with("standing") => Some(removed_under_the_iterator()),
+            name if name.starts_with("failing") => {
+                let _ = fs::remove_dir_all(dir);
+                Some(std::io::Error::from_raw_os_error(5))
+            }
+            _ => None,
+        }
+    }
+
+    /// A listing whose walk meets a folder removed while it is iterated answers with the
+    /// records that remain; one whose iterator fails for a folder still standing, or for a
+    /// reason other than its having gone, is reported naming that folder. Unix alone,
+    /// because the removal is made while the iterator holds the folder open, which Windows
+    /// does not permit.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_removed_while_it_is_listed_holds_nothing_and_any_other_iterator_error_is_reported()
+    {
+        let (root, source) = folder(&[
+            ("tasks/mine/a.md", "---\ntitle: A\nproject: mine\n---\n"),
+            (
+                "tasks/vanishing-0/b.md",
+                "---\ntitle: B\nproject: mine\n---\n",
+            ),
+        ]);
+        *super::INTERRUPTION
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(interruption);
+        let runtime = runtime();
+
+        let listed = runtime
+            .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+            .expect("a folder removed while it is listed holds nothing to list");
+        let ids: Vec<&str> = listed.items.iter().map(|task| task.id.0.as_str()).collect();
+        assert_eq!(ids, ["mine/a"]);
+        assert!(
+            !root.path().join("tasks/vanishing-0").exists(),
+            "the folder was really removed"
+        );
+
+        let standing = root.path().join("tasks/standing-0");
+        fs::create_dir(&standing).expect("a folder");
+        fs::write(standing.join("c.md"), "---\ntitle: C\n---\n").expect("a record");
+        let message = unavailable(
+            runtime
+                .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+                .expect_err("a folder still standing keeps its iterator error"),
+        );
+        assert!(message.contains("standing-0"), "{message}");
+        fs::remove_dir_all(&standing).expect("the folder is cleared");
+
+        let failing = root.path().join("tasks/failing-0");
+        fs::create_dir(&failing).expect("a folder");
+        fs::write(failing.join("d.md"), "---\ntitle: D\n---\n").expect("a record");
+        let message = unavailable(
+            runtime
+                .block_on(source.query_tasks(&TaskQuery::default(), &page()))
+                .expect_err("an iterator error that is not the folder going is reported"),
+        );
+        assert!(message.contains("failing-0"), "{message}");
     }
 }
