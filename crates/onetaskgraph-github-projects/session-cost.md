@@ -961,3 +961,24 @@ unqualified pages at 20,400 nodes each give way to two narrowed ones at 4,080 an
 unqualified one, so one request more and 12,240 nodes fewer. On the one-page loopback board
 the narrowed search shows as a request more; on a board of hundreds of items each walk it
 replaces was one page per hundred items, paid again by every fresh source.
+
+## A comment this source wrote makes its issue a candidate, and what that moved
+
+A comment-activity read used to depend on GitHub's issue search alone to report an issue whose
+`updatedAt` a comment had moved. That index lags. The credentialed journey watched it leave
+out a newly commented issue for thirty seconds, while the record this source kept of its own
+write still held the `updatedAt` from before the comment. So an issue this source commented on
+in the same command is now a candidate whatever the search says. It is read by its own node
+when the search did not name it, and its comments are read rather than ruled out by that
+older `updatedAt`.
+`an_issue_this_source_commented_on_is_selected_before_the_search_index_catches_up` in
+`tests/plugin.rs` holds it.
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The golden-cost test regenerates session-cost.txt from the identical loopback journey, and these totals are read off that record: the test fails whenever this explanation and its checked-in fixture need to move together. -->
+**`session-cost.txt`** goes from 119 requests and 234,006 worst-case nodes to **121 and
+234,562**. Only two lines move, `reading one issue` (6 → 7 requests, 2,736 → 3,192 nodes) and
+`reading a task's comments` (4 → 5, 400 → 500), and both come from one poll. The journey's
+first comment-activity read, taken before any activity after the instant, now reads the
+issue it commented on before the instant by its node and walks that issue's comments. That
+walk is what confirms the comment is older than the instant, and the poll still selects
+nothing. The estimate in `tests/journey/budget.rs` moves with the record, as it is built to.

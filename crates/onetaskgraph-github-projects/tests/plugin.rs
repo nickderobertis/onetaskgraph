@@ -959,7 +959,7 @@ impl Fixture {
     }
     /// Put a comment on `issue` written at `created_at` and last edited at `updated_at`, the
     /// way somebody writing on GitHub earlier would have left it.
-    fn commented_at(&self, issue: &str, created_at: &str, updated_at: &str) {
+    fn commented_at(&self, issue: &str, created_at: &str, updated_at: &str) -> String {
         let mut state = self.state.lock().unwrap();
         let held = state.comment(issue, Some("someone"), "a word\n");
         let held = state
@@ -969,6 +969,7 @@ impl Fixture {
             .expect("just added");
         held.created_at = created_at.to_owned();
         held.updated_at = updated_at.to_owned();
+        held.id.clone()
     }
     /// Which of the documents this board received selected its own item connection.
     ///
@@ -14348,6 +14349,112 @@ async fn comment_activity_within_one_project_asks_that_project_and_reads_only_up
         fixture.comment_reads(),
         ["I_lively"],
         "a task whose issue was not updated since has no comments read"
+    );
+}
+
+/// The credentialed journey's failure, on a board whose issue search has not caught up with
+/// any of the comment writes below: GitHub's index lags a write, and a comment-activity read
+/// taken in that window used to rule out an issue this process had just commented on.
+///
+/// - `I_edited` — written by this source, with a comment from long before the instant that
+///   this source then edits.
+/// - `I_new` — written by this source, then newly commented on by it.
+/// - `I_theirs` — never written by this source, newly commented on by it.
+/// - `I_quiet` — nobody touches it.
+///
+/// What this source wrote leaves its own record of each item holding the `updatedAt` the item
+/// had before, and the search still answers that same instant, so the only evidence of the
+/// comment activity is that this process wrote it. Each read is asked twice — once by comment
+/// activity alone and once narrowed by title too, as the journey asks it.
+#[tokio::test]
+async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_catches_up() {
+    let fixture = board(vec![
+        Item::issue("I_edited", "widget edited")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_new", "widget new")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_theirs", "widget theirs")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_quiet", "widget quiet")
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+    ]);
+    let old = fixture.commented_at("I_edited", LONG_BEFORE, "2026-06-02T09:00:00Z");
+    let source = source(&fixture);
+    for id in ["I_edited", "I_new"] {
+        source
+            .write_task(&ItemWrite {
+                target: Some(native(id)),
+                item: task(
+                    id,
+                    &format!("widget {id}"),
+                    status(StatusCategory::Todo, "Todo"),
+                ),
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    for id in ["I_edited", "I_new", "I_theirs", "I_quiet"] {
+        fixture.indexes_behind(id);
+    }
+    // Every comment write below is stamped by this board's clock, which reads 2026-09-01.
+    let since: chrono::DateTime<chrono::Utc> = "2026-08-01T00:00:00Z".parse().unwrap();
+    let commented_since = |text: Option<TextQuery>| TaskQuery {
+        text,
+        commented_since: Some(since),
+        ..TaskQuery::default()
+    };
+    let by_title = || text("widget", TextFields::Title);
+    for query in [commented_since(None), commented_since(by_title())] {
+        assert_eq!(
+            selected_tasks(source.as_ref(), &query).await,
+            Vec::<String>::new(),
+            "before any comment activity after the instant"
+        );
+    }
+
+    source
+        .edit_comment(&native("I_edited"), &native(&old), &comment_body("edited"))
+        .await
+        .unwrap()
+        .expect("a comment of that task");
+    source
+        .add_comment(&native("I_new"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    source
+        .add_comment(&native("I_theirs"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+
+    for query in [commented_since(None), commented_since(by_title())] {
+        let mut selected = selected_tasks(source.as_ref(), &query).await;
+        selected.sort();
+        assert_eq!(
+            selected,
+            ["I_edited", "I_new", "I_theirs"],
+            "the edited comment's issue and both newly commented on, though the search \
+             still answers each as it was before; never the quiet one ({query:?})"
+        );
+    }
+    assert!(
+        !fixture.comment_reads().iter().any(|read| read == "I_quiet"),
+        "an issue nobody commented on is still ruled out by its own updatedAt: {:?}",
+        fixture.comment_reads()
+    );
+
+    // What this process wrote is held for one command, like every other record of its own
+    // writes: the next command answers from the search alone, which is still behind.
+    source.end_command().await.unwrap();
+    assert_eq!(
+        selected_tasks(source.as_ref(), &commented_since(None)).await,
+        Vec::<String>::new()
     );
 }
 

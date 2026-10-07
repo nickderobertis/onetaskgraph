@@ -136,7 +136,7 @@
 //! | `comments` | **Supported and proven,** over the task issue's own comment connection, oldest first and paged by GitHub's own cursor; added, edited and removed through GitHub's comment mutations, paced as every other mutation is. A draft item has no comments on GitHub and is refused, and so is an author, because GitHub records the signed-in account as every comment's author. |
 //! | `priority` | **Supported and proven** by an instance configured with `priority_mapping`, and declared unsupported by one without it, which reports every task's priority as `none` and sends exactly the requests it sent before priorities existed. The priority is the board's single-select `Priority` field: no value is `none`, a mapped option is its level, matched case-insensitively, and an option the mapping does not name fails the read of that task, naming the option. A write selects the mapped option, or clears the value for `none`; a board without the field or the option is refused, pointing at `sources fields`, which is the one thing that creates either. |
 //! | `filter_by_priority` | **Supported and proven,** over the priority each task reads as — `none` for every task of an instance without `priority_mapping`. |
-//! | `filter_by_comment_activity` | **Supported, and exact** for comments created and for comments edited at or after `commented_since`, in every repository — of any owner — the board's items live in. Applied by asking a narrower question rather than by reading the board: GitHub's issue search scoped by `project:<owner>/<number>` alone, with an `updated:>=` qualifier, names the candidates, and each candidate's own comments confirm it, so neither `ProjectV2.items` nor any issue the search did not name is read. That rests on GitHub moving an issue's `updatedAt` when a comment on it is added **or edited**, which the credentialed journey `an_edited_comment_moves_its_issue_and_is_selected_since` re-takes on every run of this lane. The search is an index that lags a write by a second or two, so a caller asking again from its last instant should overlap the two by more than that. |
+//! | `filter_by_comment_activity` | **Supported, and exact** for comments created and for comments edited at or after `commented_since`, in every repository — of any owner — the board's items live in. Applied by asking a narrower question rather than by reading the board: GitHub's issue search scoped by `project:<owner>/<number>` alone, with an `updated:>=` qualifier, names the candidates, and each candidate's own comments confirm it, so `ProjectV2.items` is never read. That rests on GitHub moving an issue's `updatedAt` when a comment on it is added **or edited**, which the credentialed journey `an_edited_comment_moves_its_issue_and_is_selected_since` re-takes on every run of this lane. The search is an index that lags a write — the credentialed lane has watched it miss a newly commented issue for thirty seconds — so an issue this process itself commented on in the same command is a candidate whatever the search says, read by its own node if the search did not name it, and has its comments read rather than being ruled out by an `updatedAt` from before the comment. A comment another process wrote is found only once the index has it, so a caller asking again from its last instant should overlap the two generously. |
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping` for the item's kind — a task query by the task half, a project query by the project half, `unknown` included. |
@@ -2426,6 +2426,19 @@ pub struct GitHubProjectsSource {
     /// what this process just wrote onto an existing item would otherwise miss it. Nothing
     /// is remembered that this process did not itself just write.
     updated: Mutex<Vec<Resolved>>,
+    /// Every issue this source has added a comment to or edited a comment of in this command
+    /// — dropped by [`TaskSource::end_command`].
+    ///
+    /// A comment-activity read is narrowed by GitHub's issue search, whose `updated:` index
+    /// lags the write that moved an issue's `updatedAt`, and neither [`Self::created`] nor
+    /// [`Self::updated`] is moved by a comment, so an issue this process had just commented
+    /// on was missing from such a read — or ruled out by the `updatedAt` its own record held
+    /// from before — until the index caught up. Each id here is a candidate of every such
+    /// search-narrowed read, and wherever it is a candidate its comments are read rather than
+    /// it being ruled out by a stale `updatedAt`; that read is of the issue's own node, so it
+    /// is current. It holds ids alone: nothing of a comment is remembered. A comment another
+    /// process wrote is still found only once the index has it.
+    commented: Mutex<Vec<NativeId>>,
     /// How fast this source writes, and how long it waits out a refusal.
     pacing: Pacing,
     /// When the last content-creating mutation finished, or the moment the furthest-out
@@ -3434,6 +3447,7 @@ impl GitHubProjectsSource {
                 })?,
             created: Mutex::new(Vec::new()),
             updated: Mutex::new(Vec::new()),
+            commented: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             board_cache: Mutex::new(None),
@@ -4619,9 +4633,15 @@ impl GitHubProjectsSource {
         let search = self.board_search(Some(also));
         let limit = page.limit.min(MAX_PAGE_SIZE) as usize;
         let own = self.with_own_writes(Vec::new())?;
-        for item in &own {
-            if !position.own.contains(&item.id) {
-                position.own.push(item.id.clone());
+        // An issue this process commented on is a candidate of a comment-activity read
+        // whether or not the search has caught up with the comment; see `Self::commented`.
+        let commented = match query.commented_since {
+            Some(_) => self.commented()?.clone(),
+            None => Vec::new(),
+        };
+        for id in own.iter().map(|item| &item.id).chain(&commented) {
+            if !position.own.contains(id) {
+                position.own.push(id.clone());
             }
         }
         let mut tasks = Vec::new();
@@ -4680,13 +4700,19 @@ impl GitHubProjectsSource {
                         continue;
                     }
                     position.seen.push(item.id.clone());
-                    let updated_at = item.updated_at;
-                    let Some(written) = self.search_written(&own, &item.id).await? else {
-                        continue;
-                    };
-                    item = written;
-                    item.updated_at = item.updated_at.max(updated_at);
-                    self.resolved_cache()?.insert(item.id.clone(), item.clone());
+                    // The search's own copy of an issue this process only commented on is as
+                    // good as a node read of it, since its comments are read either way.
+                    let only_commented = commented.contains(&item.id)
+                        && !own.iter().any(|written| written.id == item.id);
+                    if !only_commented {
+                        let updated_at = item.updated_at;
+                        let Some(written) = self.search_written(&own, &item.id).await? else {
+                            continue;
+                        };
+                        item = written;
+                        item.updated_at = item.updated_at.max(updated_at);
+                        self.resolved_cache()?.insert(item.id.clone(), item.clone());
+                    }
                 }
                 if item.kind == BoardKind::Work(ItemKind::Task) {
                     let task = item.task()?;
@@ -4948,7 +4974,8 @@ impl GitHubProjectsSource {
     ///
     /// The candidate's own `updatedAt` is read first, because a comment written or edited at
     /// or after the instant moved it there: an issue not updated since holds no such comment,
-    /// and its comments are never asked for. Otherwise its comments are walked, oldest first,
+    /// and its comments are never asked for — unless this process commented on it in this
+    /// command, when the `updatedAt` held may predate that comment; see [`Self::commented`]. Otherwise its comments are walked, oldest first,
     /// only as far as the first that matches. A board draft is not an issue and has no
     /// comments, so it never matches.
     async fn commented_since(
@@ -4959,8 +4986,14 @@ impl GitHubProjectsSource {
         let Some(since) = since else {
             return Ok(true);
         };
-        if item.content_kind == ContentKind::DraftIssue
-            || item.updated_at.is_some_and(|updated| updated < since)
+        if item.content_kind == ContentKind::DraftIssue {
+            return Ok(false);
+        }
+        // An `updatedAt` this process's own record or a lagging index holds can predate a
+        // comment this process wrote since, so only an issue it did not comment on is ruled
+        // out by one.
+        if item.updated_at.is_some_and(|updated| updated < since)
+            && !self.commented()?.contains(&item.id)
         {
             return Ok(false);
         }
@@ -5109,6 +5142,7 @@ impl GitHubProjectsSource {
         self.resolved_cache()?.remove(id);
         self.created()?.retain(|own| own.id != *id);
         self.updated()?.retain(|own| own.id != *id);
+        self.commented()?.retain(|own| own != id);
         if let Some(board) = self.board_cache()?.as_mut() {
             board.items.retain(|item| item.id != *id);
         }
@@ -5185,6 +5219,25 @@ impl GitHubProjectsSource {
                       by an earlier failure; next: run the command again"
                 .into(),
         })
+    }
+
+    /// The issues this source has commented on in this command; see
+    /// [`Self::commented`](GitHubProjectsSource::commented).
+    fn commented(&self) -> Result<std::sync::MutexGuard<'_, Vec<NativeId>>, SourceError> {
+        self.commented.lock().map_err(|_| SourceError::Unavailable {
+            message: "this source's record of what it commented on in this run was left \
+                      inconsistent by an earlier failure; next: run the command again"
+                .into(),
+        })
+    }
+
+    /// Remember that this process wrote comment activity on `issue`.
+    fn remember_commented(&self, issue: &NativeId) -> Result<(), SourceError> {
+        let mut commented = self.commented()?;
+        if !commented.contains(issue) {
+            commented.push(issue.clone());
+        }
+        Ok(())
     }
 
     /// The items this source has created, for completing a board read that is behind.
@@ -9416,7 +9469,9 @@ impl TaskSource for GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub comment addition returned no comment".into(),
             })?;
-        comment_from(added).map(Some)
+        let added = comment_from(added)?;
+        self.remember_commented(&issue)?;
+        Ok(Some(added))
     }
 
     async fn edit_comment(
@@ -9449,6 +9504,7 @@ impl TaskSource for GitHubProjectsSource {
                 message: "GitHub comment update returned the wrong comment".into(),
             });
         }
+        self.remember_commented(&issue)?;
         Ok(Some(edited))
     }
 
@@ -9507,6 +9563,7 @@ impl TaskSource for GitHubProjectsSource {
         }
         clear(&self.created);
         clear(&self.updated);
+        clear(&self.commented);
         clear(&self.board_cache);
         clear(&self.search_cache);
         clear(&self.narrowed_cache);
