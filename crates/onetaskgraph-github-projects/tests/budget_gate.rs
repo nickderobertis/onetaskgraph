@@ -621,6 +621,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
                 owner: "octo-org".to_owned(),
                 project_number: 7,
                 repository: "acme/work".to_owned(),
+                writer: lane::Writer::this_machine(),
             }));
     })
     .join()

@@ -1,0 +1,268 @@
+{
+  "_": [
+    "The REST operations the live janitor sends, reduced from GitHub's published",
+    "OpenAPI description at this immutable upstream source:",
+    "github/rest-api-description@734bc9c1030b774eb3fc909cce477aceea21cf77, descriptions/api.github.com/api.github.com.json,",
+    "read 2026-10-07. Documentation-derived; no response here was captured live.",
+    "A response field mapped to null is present and not descended into.",
+    "tests/journey.py holds every request the janitor sends and every field its",
+    "loopback stand-in serves to this pin, so neither can drift from GitHub's contract."
+  ],
+  "//": "llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This pin is derived from GitHub OpenAPI commit 734bc9c1030b774eb3fc909cce477aceea21cf77, an immutable source which cannot drift. It retains the six REST operations, their query parameters and success-body fields. Moving that pin is the moment to regenerate this reduction; the offline journeys reconcile the janitor and its stand-in against it.",
+  "operations": [
+    {
+      "operation_id": "rate-limit/get",
+      "method": "GET",
+      "path": "/rate_limit",
+      "query": {},
+      "status": 200,
+      "response": {
+        "rate": null,
+        "resources": {
+          "actions_runner_registration": null,
+          "code_scanning_autofix": null,
+          "code_search": null,
+          "copilot_usage_records": null,
+          "core": {
+            "limit": null,
+            "remaining": null,
+            "reset": null,
+            "used": null
+          },
+          "dependency_sbom": null,
+          "dependency_snapshots": null,
+          "graphql": {
+            "limit": null,
+            "remaining": null,
+            "reset": null,
+            "used": null
+          },
+          "integration_manifest": null,
+          "scim": null,
+          "search": null,
+          "source_import": null
+        }
+      }
+    },
+    {
+      "operation_id": "issues/list-for-repo",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/issues",
+      "query": {
+        "milestone": null,
+        "state": ["open", "closed", "all"],
+        "assignee": null,
+        "type": null,
+        "creator": null,
+        "mentioned": null,
+        "issue_field_values": null,
+        "labels": null,
+        "sort": ["created", "updated", "comments"],
+        "direction": ["asc", "desc"],
+        "since": null,
+        "per_page": null,
+        "page": null
+      },
+      "status": 200,
+      "response": {
+        "[]": {
+          "active_lock_reason": null,
+          "assignee": null,
+          "assignees": null,
+          "author_association": null,
+          "body": null,
+          "body_html": null,
+          "body_text": null,
+          "closed_at": null,
+          "closed_by": null,
+          "comments": null,
+          "comments_url": null,
+          "created_at": null,
+          "draft": null,
+          "events_url": null,
+          "html_url": null,
+          "id": null,
+          "issue_dependencies_summary": null,
+          "issue_field_values": null,
+          "labels": null,
+          "labels_url": null,
+          "locked": null,
+          "milestone": null,
+          "node_id": null,
+          "number": null,
+          "parent_issue_url": null,
+          "performed_via_github_app": null,
+          "pinned_comment": null,
+          "pull_request": null,
+          "reactions": null,
+          "repository": null,
+          "repository_url": null,
+          "state": null,
+          "state_reason": null,
+          "sub_issues_summary": null,
+          "timeline_url": null,
+          "title": null,
+          "type": null,
+          "updated_at": null,
+          "url": null,
+          "user": null
+        }
+      }
+    },
+    {
+      "operation_id": "issues/list-labels-for-repo",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/labels",
+      "query": {
+        "per_page": null,
+        "page": null
+      },
+      "status": 200,
+      "response": {
+        "[]": {
+          "archived_at": null,
+          "archived_by": null,
+          "color": null,
+          "default": null,
+          "description": null,
+          "id": null,
+          "name": null,
+          "node_id": null,
+          "url": null
+        }
+      }
+    },
+    {
+      "operation_id": "issues/delete-label",
+      "method": "DELETE",
+      "path": "/repos/{owner}/{repo}/labels/{name}",
+      "query": {},
+      "status": 204,
+      "response": null
+    },
+    {
+      "operation_id": "actions/list-workflow-runs",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+      "query": {
+        "actor": null,
+        "branch": null,
+        "event": null,
+        "status": [
+          "completed",
+          "action_required",
+          "cancelled",
+          "failure",
+          "neutral",
+          "skipped",
+          "stale",
+          "success",
+          "timed_out",
+          "in_progress",
+          "queued",
+          "requested",
+          "waiting",
+          "pending"
+        ],
+        "per_page": null,
+        "page": null,
+        "created": null,
+        "exclude_pull_requests": null,
+        "check_suite_id": null,
+        "head_sha": null
+      },
+      "status": 200,
+      "response": {
+        "total_count": null,
+        "workflow_runs": {
+          "[]": {
+            "actor": null,
+            "artifacts_url": null,
+            "cancel_url": null,
+            "check_suite_id": null,
+            "check_suite_node_id": null,
+            "check_suite_url": null,
+            "conclusion": null,
+            "created_at": null,
+            "display_title": null,
+            "event": null,
+            "head_branch": null,
+            "head_commit": null,
+            "head_repository": null,
+            "head_repository_id": null,
+            "head_sha": null,
+            "html_url": null,
+            "id": null,
+            "jobs_url": null,
+            "logs_url": null,
+            "name": null,
+            "node_id": null,
+            "path": null,
+            "previous_attempt_url": null,
+            "pull_requests": null,
+            "referenced_workflows": null,
+            "repository": null,
+            "rerun_url": null,
+            "run_attempt": null,
+            "run_number": null,
+            "run_started_at": null,
+            "status": null,
+            "triggering_actor": null,
+            "updated_at": null,
+            "url": null,
+            "workflow_id": null,
+            "workflow_url": null
+          }
+        }
+      }
+    },
+    {
+      "operation_id": "actions/get-workflow-run",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/actions/runs/{run_id}",
+      "query": {
+        "exclude_pull_requests": null
+      },
+      "status": 200,
+      "response": {
+        "actor": null,
+        "artifacts_url": null,
+        "cancel_url": null,
+        "check_suite_id": null,
+        "check_suite_node_id": null,
+        "check_suite_url": null,
+        "conclusion": null,
+        "created_at": null,
+        "display_title": null,
+        "event": null,
+        "head_branch": null,
+        "head_commit": null,
+        "head_repository": null,
+        "head_repository_id": null,
+        "head_sha": null,
+        "html_url": null,
+        "id": null,
+        "jobs_url": null,
+        "logs_url": null,
+        "name": null,
+        "node_id": null,
+        "path": null,
+        "previous_attempt_url": null,
+        "pull_requests": null,
+        "referenced_workflows": null,
+        "repository": null,
+        "rerun_url": null,
+        "run_attempt": null,
+        "run_number": null,
+        "run_started_at": null,
+        "status": null,
+        "triggering_actor": null,
+        "updated_at": null,
+        "url": null,
+        "workflow_id": null,
+        "workflow_url": null
+      }
+    }
+  ],
+  "// end": "llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]"
+}

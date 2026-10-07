@@ -311,7 +311,7 @@ fn a_repository_nomination_that_would_address_something_else_is_refused_before_a
             Some("live-token"),
             Some("nickderobertis"),
             Some("1"),
-            Some("nickderobertis/onetaskgraph"),
+            Some(onetaskgraph_github_live::SCRATCH_REPOSITORY),
             None,
         ),
         Ok(LiveLane::Run { .. })
@@ -578,4 +578,133 @@ fn an_unreadable_live_tier_demand_is_a_misconfiguration() {
         live_lane(Some("live-token"), None, None, Some("acme/work"), None),
         "0 and unset both mean the lane may skip"
     );
+}
+
+#[test]
+fn the_core_repository_is_refused_even_without_a_credential_or_required_lane() {
+    use onetaskgraph_github_live::{CORE_REPOSITORY, SCRATCH_REPOSITORY};
+    for repository in [
+        CORE_REPOSITORY.to_owned(),
+        format!("  {}  ", CORE_REPOSITORY.to_uppercase()),
+    ] {
+        for required in [None, Some("1")] {
+            let error = live_lane(
+                None,
+                Some("nickderobertis"),
+                Some("1"),
+                Some(&repository),
+                required,
+            )
+            .expect_err("a core nomination is always a misconfiguration");
+            for named in [
+                "GH_PROJECTS_REPOSITORY",
+                repository.as_str(),
+                SCRATCH_REPOSITORY,
+                "secrets.env",
+                "environment",
+                "pushes",
+            ] {
+                assert!(error.contains(named), "missing {named:?} in {error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn admission_chooses_the_ci_stamp_only_in_actions() {
+    use lane::{Admission, Own};
+    use onetaskgraph_github_live::{ARTIFACT_PREFIX, SCRATCH_REPOSITORY};
+    use onetaskgraph_live::artifact::{CiStamp, Stamp};
+    for actions in ["true", "false", "TRUE", ""] {
+        let values = [
+            ("GH_PROJECTS_TOKEN", "placeholder"),
+            ("GH_PROJECTS_OWNER", "nickderobertis"),
+            ("GH_PROJECTS_NUMBER", "1"),
+            ("GH_PROJECTS_REPOSITORY", SCRATCH_REPOSITORY),
+            ("GITHUB_ACTIONS", actions),
+            ("GITHUB_RUN_ID", "37616803489"),
+            ("GITHUB_RUN_ATTEMPT", "2"),
+        ];
+        let Admission::Run { writer, .. } = lane::admit(&|key| {
+            values
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| (*value).to_owned())
+        })
+        .unwrap() else {
+            panic!("nominated lane runs")
+        };
+        writer.check_clock(NOW, 1).unwrap();
+        let own = Own::new(writer);
+        assert_eq!(own.writer(), writer);
+        let title = own.title(NOW);
+        let label = own.label(NOW);
+        assert!(own.title_carries_issued_stamp(&title));
+        assert!(own.label_carries_issued_stamp(&label));
+        let stamp = title.strip_prefix(ARTIFACT_PREFIX).unwrap();
+        assert!(stamp.starts_with(&writer.stamp_prefix()));
+        assert_eq!(label.strip_prefix(LABEL_PREFIX), Some(stamp));
+        if actions == "true" {
+            let stamp = CiStamp::read(stamp).unwrap();
+            assert_eq!(stamp.run().run_id(), 37616803489);
+            assert_eq!(stamp.run().attempt(), 2);
+            assert_eq!(stamp.micros(), NOW);
+        } else {
+            assert_eq!(Stamp::read(stamp).unwrap().run(), Run::current());
+        }
+    }
+}
+
+#[test]
+fn a_ci_writer_refuses_a_clock_its_stamps_cannot_carry_before_writing() {
+    use lane::Admission;
+    use onetaskgraph_github_live::SCRATCH_REPOSITORY;
+    let admitted = |actions: &str| {
+        let values = [
+            ("GH_PROJECTS_TOKEN", "placeholder"),
+            ("GH_PROJECTS_OWNER", "nickderobertis"),
+            ("GH_PROJECTS_NUMBER", "1"),
+            ("GH_PROJECTS_REPOSITORY", SCRATCH_REPOSITORY),
+            ("GITHUB_ACTIONS", actions),
+            ("GITHUB_RUN_ID", "37616803489"),
+            ("GITHUB_RUN_ATTEMPT", "2"),
+        ];
+        let Admission::Run { writer, .. } = lane::admit(&|key| {
+            values
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| (*value).to_owned())
+        })
+        .unwrap() else {
+            panic!("nominated lane runs")
+        };
+        writer
+    };
+    // The latest instant a CI stamp's sixteen digits of microseconds can spell.
+    const LATEST: u64 = 9_999_999_999_999_999;
+    let ci = admitted("true");
+    for (micros, span) in [(NOW, 0), (NOW, 10), (1, 0), (LATEST - 10, 10), (LATEST, 0)] {
+        assert_eq!(ci.check_clock(micros, span), Ok(()), "{micros} + {span}");
+    }
+    for (micros, span) in [
+        (0, 0),
+        (0, 10),
+        (LATEST + 1, 0),
+        (u64::MAX, 0),
+        (LATEST - 5, 10),
+        (NOW, u64::MAX),
+    ] {
+        let refusal = ci
+            .check_clock(micros, span)
+            .expect_err("a stamp the grammar cannot spell is refused before any write");
+        assert!(
+            refusal.contains(&micros.to_string()) && refusal.contains("fix this machine's clock"),
+            "{micros} + {span}: {refusal}"
+        );
+    }
+    // A machine stamp spells any clock, so outside Actions nothing is refused.
+    let machine = admitted("false");
+    for (micros, span) in [(0, 0), (u64::MAX, u64::MAX), (LATEST - 5, 10)] {
+        assert_eq!(machine.check_clock(micros, span), Ok(()));
+    }
 }

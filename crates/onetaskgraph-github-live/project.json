@@ -1,0 +1,62 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph-github-live",
+  "projectType": "library",
+  "tags": ["lang:rust", "layer:testing"],
+  "//": "The GitHub Projects lane's own names, which its tests and the scheduled janitor read. It depends only on onetaskgraph-live; the GitHub Projects plugin names it as a dev-dependency, so editing it selects that plugin and the janitor and nothing of Linear.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-github-live"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-github-live -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-github-live --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-github-live --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-github-live --all-features --locked"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-github-live"
+      },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
+      "cache": false,
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
+    }
+  },
+  "implicitDependencies": ["onetaskgraph-live"]
+}

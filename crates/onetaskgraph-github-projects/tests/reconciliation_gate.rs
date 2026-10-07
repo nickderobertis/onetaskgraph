@@ -148,6 +148,7 @@ fn a_board_that_prices_a_document_differently_fails_the_run_naming_both_figures(
                 owner: "octo-org".to_owned(),
                 project_number: 7,
                 repository: "acme/work".to_owned(),
+                writer: lane::Writer::this_machine(),
             }));
     })
     .join()

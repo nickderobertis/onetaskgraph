@@ -1,12 +1,31 @@
 //! The stamp a live lane writes into every artifact it creates, and what may remove one.
 //!
 //! Both hosted lanes name every item, project, document and label they write
-//! `<their own prefix><stamp>`. The prefix is each lane's business — GitHub's board items
-//! and Linear's issues are not spelled the same way — but **the stamp, and what it
-//! authorises, is one contract**, because both lanes have to answer the same question with
-//! the same answer: *may this run delete that artifact?*
+//! `<their own prefix><stamp>`. Each prefix is its lane's own business — the GitHub Projects
+//! lane's, with the repositories it writes to and refuses, are in
+//! `crates/onetaskgraph-github-live`, which that lane's tests and the scheduled janitor both
+//! read — and what is here is what every lane shares. **The stamp, and what it
+//! authorises, is one contract**, because every reader has to answer the same question
+//! with the same answer: *may this be deleted?*
 //!
-//! # The rule
+//! # Two forms of stamp
+//!
+//! - A **machine stamp**, `<host>-<process>-<micros>` ([`Stamp`]), names the machine and the
+//!   process that wrote it. Every run outside GitHub Actions writes one — Linear's lane
+//!   everywhere — and what may remove one is the rule below.
+//! - A **CI stamp**, `ci-<run id>-<attempt>-<micros>` ([`CiStamp`]), names the GitHub Actions
+//!   run and attempt that wrote it. The GitHub Projects lane writes one when `GITHUB_ACTIONS`
+//!   is `true`, reading the run with [`CiRun::read`]. A hosted runner is a fresh machine every time,
+//!   so no lock on it is evidence anybody can read later; the run id is, because GitHub
+//!   answers for a run by its id. What may remove a CI-stamped artifact is the janitor's
+//!   rule: that run read back from GitHub as `completed`, immediately before the delete.
+//!
+//! The two are disjoint by their first character — a machine stamp starts with a digit and
+//! a CI stamp with `ci-` — and each reader refuses the other's form, so the lock sweep below
+//! can never act on a CI stamp and the janitor never acts on a machine stamp in the scratch
+//! repository.
+//!
+//! # The rule for a machine stamp
 //!
 //! **A deletion is authorised by positive evidence that no live run owns the artifact, and
 //! never by the artifact's age.** An artifact may be removed only when all of these hold:
@@ -48,9 +67,24 @@
 //! against the hosted API, which would answer for a foreign machine too, is not what is here.
 //!
 //! **The bound that leaves, stated where it is met:** residue written by a run on *another*
-//! machine is never swept, because nothing here is evidence about a foreign process. An
-//! interrupted hosted-check run leaves its artifacts for a person or a separate janitor to
-//! clear. That direction is chosen: a leak is recoverable and a deleted live run is not.
+//! machine is never swept by this rule, because nothing here is evidence about a foreign
+//! process. A machine-stamped artifact stays the lock sweep's, on the machine that wrote
+//! it, and nothing else ever removes one from the scratch repository. A run in GitHub
+//! Actions writes a CI stamp instead, and an interrupted one — a pull request branch pushed
+//! again cancels the run in progress — leaves its residue to the scheduled janitor
+//! (`.github/workflows/live-janitor.yml`), which removes it only once GitHub reports that
+//! run `completed`. That direction is chosen: a leak is recoverable and a deleted live run
+//! is not.
+//!
+//! What the GitHub lane writes to and refuses — the scratch repository, never the core one,
+//! and how a machine fixes `GH_PROJECTS_REPOSITORY` — is that lane's own policy, stated in
+//! `onetaskgraph-github-live`. The janitor's two rules are stated where they are enforced,
+//! in `onetaskgraph-live-janitor`: a CI stamp's run read back `completed`, and for the
+//! core repository's pre-cutover machine stamps, complete listings of the non-completed
+//! `ci.yml` runs; one 24-hour waiting period is a margin there, never the authorisation,
+//! and no evidence covers a development-machine run still alive a day after cutover. It is
+//! scheduled cleanup rather than a test lane, so no `test` or `coverage` target runs it.
+//! Linear's machine stamps and lock sweep are unchanged; the janitor never reads Linear.
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -217,7 +251,8 @@ impl fmt::Display for Run {
     }
 }
 
-/// The `<host>-<process>-<microsecond timestamp>` every artifact name ends with.
+/// The machine stamp, `<host>-<process>-<microsecond timestamp>`, that an artifact written
+/// outside GitHub Actions ends with. The other form is [`CiStamp`].
 ///
 /// One type rather than two lanes' worth of `split_once('-')`, because writing a stamp and
 /// reading one back have to agree: a lane that formatted what this cannot parse would write
@@ -255,7 +290,9 @@ impl Stamp {
     ///
     /// Three digit groups, all non-empty: `1-2-3` is a stamp and `1-2`, `1-2-3-4`, `-2-3`
     /// and `a-2-3` are not. A name whose suffix is not a stamp is not this lane's artifact,
-    /// so the sweep passes over it rather than guessing.
+    /// so the sweep passes over it rather than guessing. Every [`CiStamp`] is refused here —
+    /// `ci` is not digits — which is what keeps the lock sweep off an artifact a hosted run
+    /// wrote: no registry on any machine can answer for one.
     #[must_use]
     pub fn read(suffix: &str) -> Option<Self> {
         let (host, rest) = suffix.split_once('-')?;
@@ -285,6 +322,171 @@ impl fmt::Display for Stamp {
 /// what `fresh_host` bounds one to — ten of process id, twenty of microseconds, and the two
 /// hyphens between them.
 pub const WIDEST_STAMP: usize = 9 + 1 + 10 + 1 + 20;
+
+/// What every CI stamp starts with, which no machine stamp can: those start with a digit.
+pub const CI_STAMP_PREFIX: &str = "ci-";
+
+/// Contract B's width for a run id: GitHub's ids are eleven digits today, and seventeen is
+/// what is left of the label budget once the other fields have theirs.
+const RUN_ID_DIGITS: usize = 17;
+
+/// Contract B's width for an attempt: a run re-run past 999 times is not a case worth room.
+const ATTEMPT_DIGITS: usize = 3;
+
+/// The most digits a CI stamp's time may have: microseconds since the epoch, enough until
+/// the year 2286.
+const CI_MICROS_DIGITS: usize = 16;
+
+/// The widest CI stamp the grammar admits, in characters.
+///
+/// `ci-`, seventeen digits of run id, three of attempt, sixteen of microseconds and the two
+/// hyphens between them. Held equal to [`WIDEST_STAMP`], so a lane that leaves room for one
+/// form has left room for the other, and a lane's label prefix plus either fits its limit.
+pub const WIDEST_CI_STAMP: usize =
+    CI_STAMP_PREFIX.len() + RUN_ID_DIGITS + 1 + ATTEMPT_DIGITS + 1 + CI_MICROS_DIGITS;
+
+const _: () = assert!(WIDEST_CI_STAMP == WIDEST_STAMP);
+
+/// Which GitHub Actions run, and which attempt of it, wrote an artifact.
+///
+/// The run id is what GitHub answers for — `GET /repos/{owner}/{repo}/actions/runs/{id}`
+/// reports the run's latest attempt — so a CI-stamped artifact names the one thing that can
+/// later say whether anything still owns it. The attempt is carried so that a re-run's
+/// artifacts are told from the first attempt's by a reader of the title, and so that one
+/// process's own cleanup recognises exactly its own stamps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CiRun {
+    run_id: u64,
+    attempt: u16,
+}
+
+impl CiRun {
+    /// Run `run_id`, attempt `attempt`, when both are within the widths the grammar admits.
+    #[must_use]
+    pub fn new(run_id: u64, attempt: u64) -> Option<Self> {
+        Some(Self {
+            run_id: within(run_id, RUN_ID_DIGITS)?,
+            attempt: u16::try_from(within(attempt, ATTEMPT_DIGITS)?).ok()?,
+        })
+    }
+
+    /// The GitHub Actions run id.
+    #[must_use]
+    pub fn run_id(self) -> u64 {
+        self.run_id
+    }
+
+    /// Which attempt of that run, from 1.
+    #[must_use]
+    pub fn attempt(self) -> u16 {
+        self.attempt
+    }
+
+    /// The run `run_id` and `attempt` spell, each a decimal number of at least 1 with no sign,
+    /// no leading zero and no more digits than the grammar admits.
+    ///
+    /// # Errors
+    ///
+    /// The first of the two that spells no field of a CI run.
+    pub fn read(run_id: &str, attempt: &str) -> Result<Self, CiRunField> {
+        let run_id = bounded(run_id, RUN_ID_DIGITS).ok_or(CiRunField::RunId)?;
+        let attempt = bounded(attempt, ATTEMPT_DIGITS).ok_or(CiRunField::Attempt)?;
+        Self::new(run_id, attempt).ok_or(CiRunField::Attempt)
+    }
+}
+
+/// One of the two fields a [`CiRun`] is spelled from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRunField {
+    /// The run id: GitHub's own, kept by a re-run.
+    RunId,
+    /// Which attempt of that run, from 1.
+    Attempt,
+}
+
+impl CiRunField {
+    /// The most digits the grammar admits for this field.
+    #[must_use]
+    pub fn widest(self) -> usize {
+        match self {
+            Self::RunId => RUN_ID_DIGITS,
+            Self::Attempt => ATTEMPT_DIGITS,
+        }
+    }
+}
+
+/// The `ci-<run id>-<attempt>-<micros>` an artifact written in GitHub Actions ends with.
+///
+/// Its characters are `c`, `i`, digits and hyphens, so a label carrying one still goes into
+/// a URL path unescaped, and a person reading an issue title sees `ci-` and the run id.
+/// Every field is a decimal number of at least 1 with no sign and no leading zero, so each
+/// value has exactly one spelling and the reader and the writer agree on every one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CiStamp {
+    run: CiRun,
+    micros: u64,
+}
+
+impl CiStamp {
+    /// The stamp `run` puts on an artifact it writes at `micros`, when `micros` is within the
+    /// grammar: at least 1, and no more than sixteen digits.
+    #[must_use]
+    pub fn new(run: CiRun, micros: u64) -> Option<Self> {
+        Some(Self {
+            run,
+            micros: within(micros, CI_MICROS_DIGITS)?,
+        })
+    }
+
+    /// Which run and attempt wrote the artifact carrying this stamp.
+    #[must_use]
+    pub fn run(self) -> CiRun {
+        self.run
+    }
+
+    /// When it was written, in microseconds since the epoch.
+    #[must_use]
+    pub fn micros(self) -> u64 {
+        self.micros
+    }
+
+    /// The CI stamp `suffix` spells, or `None` when it spells none.
+    ///
+    /// Exactly `ci-` and three fields, each within its width, at least 1, with no sign and no
+    /// leading zero. Every machine stamp is refused, because none starts with `ci-`.
+    #[must_use]
+    pub fn read(suffix: &str) -> Option<Self> {
+        let mut fields = suffix.strip_prefix(CI_STAMP_PREFIX)?.split('-');
+        let run_id = bounded(fields.next()?, RUN_ID_DIGITS)?;
+        let attempt = bounded(fields.next()?, ATTEMPT_DIGITS)?;
+        let micros = bounded(fields.next()?, CI_MICROS_DIGITS)?;
+        if fields.next().is_some() {
+            return None;
+        }
+        Self::new(CiRun::new(run_id, attempt)?, micros)
+    }
+}
+
+impl fmt::Display for CiStamp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{CI_STAMP_PREFIX}{}-{}-{}",
+            self.run.run_id, self.run.attempt, self.micros
+        )
+    }
+}
+
+fn within(value: u64, widest: usize) -> Option<u64> {
+    (value > 0 && value.to_string().len() <= widest).then_some(value)
+}
+
+fn bounded(spelled: &str, widest: usize) -> Option<u64> {
+    if spelled.len() > widest || spelled.starts_with('0') {
+        return None;
+    }
+    number::<u64>(spelled).and_then(|value| within(value, widest))
+}
 
 /// The instant a stamp written now would carry.
 ///

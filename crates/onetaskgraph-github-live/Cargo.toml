@@ -1,0 +1,16 @@
+[package]
+name = "onetaskgraph-github-live"
+description = "The GitHub Projects live lane's own policy: its artifact names and the repositories it writes to and refuses."
+# Not published, for the reason `onetaskgraph-live` is not: the GitHub Projects plugin names
+# it as a path-only dev-dependency, which cargo strips when it packages that crate.
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The cross-lane stamp grammar, whose widest value these names must leave room for.
+onetaskgraph-live.workspace = true
