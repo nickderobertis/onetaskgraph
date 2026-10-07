@@ -117,6 +117,49 @@ TITLE = declaration('ARTIFACT_PREFIX')
 LABEL = declaration('LABEL_PREFIX')
 CUTOVER = int(re.search(r'pub const CUTOVER_MICROS: u64 = ([\d_]+)', (ROOT / 'crates/onetaskgraph-live-janitor/src/lib.rs').read_text())[1].replace('_', ''))
 DAY = 86_400_000_000
+# GitHub's REST contract for every operation the janitor sends, reduced from GitHub's
+# published description; fixtures/rest-operations.json says from which commit and when.
+REST = json.loads((Path(__file__).resolve().parent / 'fixtures/rest-operations.json').read_text())['operations']
+
+def rest_operation(method, path):
+    for operation in REST:
+        if operation['method'] == method and re.fullmatch(re.sub(r'\{[^/]+\}', '[^/]+', operation['path']), path):
+            return operation
+    return None
+
+def unpinned_request(method, target):
+    """Why GitHub's description does not admit this request, or None when it does."""
+    parsed = urlparse(target)
+    operation = rest_operation(method, parsed.path)
+    if operation is None:
+        return f'{method} {parsed.path} is no operation GitHub describes'
+    for name, values in parse_qs(parsed.query).items():
+        if name not in operation['query']:
+            return f'{method} {parsed.path} sends {name}, which GitHub does not describe'
+        allowed = operation['query'][name]
+        if allowed is not None and any(value not in allowed for value in values):
+            return f'{method} {parsed.path} sends {name}={values}, outside {allowed}'
+    return None
+
+def unpinned_fields(shape, value, where='response'):
+    """Why GitHub's description has no such field in this body, or None when it has every one."""
+    if isinstance(value, list):
+        if shape is None or '[]' not in shape:
+            return f'{where} is an array GitHub does not describe'
+        if shape['[]'] is not None:
+            return next(filter(None, (unpinned_fields(shape['[]'], member, f'{where}[{n}]') for n, member in enumerate(value))), None)
+        return None
+    if isinstance(value, dict):
+        if shape is None or '[]' in shape:
+            return f'{where} is an object GitHub does not describe'
+        for name, member in value.items():
+            if name not in shape:
+                return f'{where}.{name} is no field GitHub describes'
+            if shape[name] is not None:
+                found = unpinned_fields(shape[name], member, f'{where}.{name}')
+                if found:
+                    return found
+    return None
 NOW = CUTOVER + 2 * DAY
 
 class Github:
@@ -157,6 +200,14 @@ class Github:
         self.delete_failure: Deletion | None = None
         self.allowance_record = None
         self.origin_field: OriginField = copy.deepcopy(ORIGIN_FIELD)
+        # Every way a request or a served body departed from GitHub's description.
+        self.unpinned: list[str] = []
+
+    def pin(self, method, target):
+        found = unpinned_request(method, target)
+        if found:
+            self.unpinned.append(found)
+        return rest_operation(method, urlparse(target).path)
 
     def artifact(self, repository: Repository, stamp: str, design: bool = False, run: int | None = None) -> IssueId:
         identity = IssueId(f'{repository}:{len(self.issues[repository])}')
@@ -176,8 +227,20 @@ class Github:
             def log_message(self, *_):
                 pass
 
+            # Set once a request reaches the stand-in's ordinary answer, so a fault a
+            # journey injects on purpose is not held to GitHub's description.
+            operation = None
+
             def reply(self, value, status=200, link=None):
-                body = json.dumps(value).encode()
+                if self.operation and 200 <= status < 300:
+                    if self.operation['response'] is None:
+                        if value is not None:
+                            state.unpinned.append(f"{self.operation['path']} answers no body")
+                    else:
+                        found = unpinned_fields(self.operation['response'], value)
+                        if found:
+                            state.unpinned.append(f"{self.operation['path']}: {found}")
+                body = json.dumps(value).encode() if value is not None else b''
                 self.send_response(status)
                 if link:
                     self.send_header('Link', link)
@@ -191,6 +254,7 @@ class Github:
                 query = parse_qs(parsed.query)
                 path = parsed.path
                 state.requests.append(Request('GET', self.path))
+                operation = state.pin('GET', self.path)
                 state.authentication.append(Authentication(self.path, Token(self.headers.get('Authorization', ''))))
                 page = int(query.get('page', ['1'])[0])
                 if state.fail_page and state.fail_page[0] in self.path and page >= state.fail_page[1]:
@@ -208,6 +272,8 @@ class Github:
                 if state.fail and state.fail in self.path:
                     self.reply({}, 500)
                     return
+                # A malformed allowance is a fault the journey injects, like those above.
+                self.operation = operation if state.allowance_record is None else None
                 match path.split('/'):
                     case ['', 'rate_limit']:
                         record: Allowance = {'limit': 5000, 'remaining': state.allowance, 'reset': 2000000000}
@@ -313,6 +379,7 @@ class Github:
 
             def do_DELETE(self):
                 state.requests.append(Request('DELETE', self.path))
+                operation = state.pin('DELETE', self.path)
                 state.authentication.append(Authentication(self.path, Token(self.headers.get('Authorization', ''))))
                 state.writes.append(Write('DELETE', LabelDelete(self.path)))
                 if state.delete_failure is Deletion.LABEL:
@@ -321,7 +388,8 @@ class Github:
                 parts = self.path.split('/')
                 repository = '/'.join(parts[2:4])
                 state.labels[repository] = [v for v in state.labels[repository] if v['name'] != parts[-1]]
-                self.reply({})
+                self.operation = operation
+                self.reply(None, operation['status'] if operation else 204)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
@@ -337,11 +405,15 @@ class Github:
         command = [BINARY] + (arguments if arguments is not None else [ '--loopback', f'http://127.0.0.1:{server.server_port}', str(now), '--virtual-clock'])
         command = [argument.replace('{origin}', f'http://127.0.0.1:{server.server_port}').replace('{host}', f'127.0.0.1:{server.server_port}') for argument in command]
         try:
-            return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=30)
         finally:
             server.shutdown()
             thread.join()
             server.server_close()
+        # Every journey holds the janitor and this stand-in to GitHub's description.
+        if self.unpinned:
+            raise AssertionError('departs from fixtures/rest-operations.json: ' + '; '.join(sorted(set(self.unpinned))))
+        return result
 
 
 def workload(scale=1):
@@ -653,6 +725,31 @@ class Journeys(unittest.TestCase):
                 self.assert_failed(result)
                 self.assertIn(refusal, result.stderr)
                 self.assertFalse(state.writes)
+
+    def test_rest_pin_is_exactly_what_the_janitor_sends(self):
+        state = workload()
+        self.assert_success(state.run())
+        sent = {(o['method'], o['path']) for o in (rest_operation(r.method, urlparse(r.target).path) for r in state.requests if r.method != 'POST') if o}
+        # The pin names nothing the janitor no longer sends, and run() refused anything it does not name.
+        self.assertEqual(sent, {(o['method'], o['path']) for o in REST})
+
+    def test_rest_pin_refuses_what_github_does_not_describe(self):
+        issues = rest_operation('GET', '/repos/a/b/issues')
+        for method, target in (('GET', '/repos/a/b/pulls'), ('GET', '/repos/a/b/issues?filter=all'),
+                               ('GET', '/repos/a/b/issues?state=everything'), ('PATCH', '/repos/a/b/labels/x'),
+                               ('GET', '/repos/a/b/actions/workflows/ci.yml/runs?status=running')):
+            with self.subTest(target=target):
+                self.assertIsNotNone(unpinned_request(method, target))
+        self.assertIsNone(unpinned_request('GET', '/repos/a/b/issues?state=all&sort=created&direction=asc&per_page=100&page=2'))
+        self.assertIsNotNone(unpinned_fields(issues['response'], [{'title': 't', 'node_identifier': 'x'}]))
+        self.assertIsNotNone(unpinned_fields(issues['response'], {'title': 't'}))
+        self.assertIsNone(unpinned_fields(issues['response'], [{'title': 't', 'node_id': 'x', 'pull_request': {}}]))
+        runs = rest_operation('GET', '/repos/a/b/actions/workflows/ci.yml/runs')
+        self.assertIsNotNone(unpinned_fields(runs['response'], {'total_count': 1, 'workflow_runs': [{'created': 'x'}]}))
+        state = Github()
+        state.unpinned.append('a departure')
+        with self.assertRaisesRegex(AssertionError, 'a departure'):
+            state.run()
 
     def test_incomplete_run_total_count_fails_closed(self):
         state = workload()

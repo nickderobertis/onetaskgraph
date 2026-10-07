@@ -175,6 +175,14 @@ MANIFEST = {
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
 NOT_A_STORE = {
+    "crates/onetaskgraph-live-janitor/tests/fixtures/rest-operations.json": (
+        "Not a store: it holds no items and no query reads it. It pins GitHub's published "
+        "description of the six REST operations the live janitor sends — paths, query "
+        "parameters and success-body fields — and `tests/journey.py` refuses every request the "
+        "janitor sends and every body its stand-in serves that the pin does not admit, and "
+        "asserts the janitor sends every operation it names, so the pin is reconciled both "
+        "ways rather than read for rows."
+    ),
     "crates/onetaskgraph-github-projects/tests/fixtures/rate-limits.json": (
         "Not a store: it holds no items and no query reads it. It pins the vocabulary a "
         "GitHub rate-limit refusal arrives in and the published ceiling on "

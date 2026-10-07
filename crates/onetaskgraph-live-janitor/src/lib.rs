@@ -7,6 +7,11 @@
 //! never ownership evidence. Legacy cleanup has no evidence about development machines:
 //! a machine run that wrote before cutover and lives a day may lose its artifacts.
 //! Linear keeps its machine stamps and lock sweep everywhere; this janitor never reads it.
+//!
+//! Every REST route, query parameter and response field this crate uses is held to GitHub's
+//! published description: `tests/fixtures/rest-operations.json` is that description reduced
+//! to these operations, pinned with its source commit, and the offline journeys refuse any
+//! request the janitor sends, or body the stand-in serves, that the pin does not admit.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
