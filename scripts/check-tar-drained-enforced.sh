@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 # Watch scripts/check-tar-drained.sh refuse, and watch the drain it sends every site to work.
 #
-# Four cases. The guard clears this tree, and clears the drain under a root holding a colon
-# and in a CRLF copy. It refuses an undrained extraction planted in a
-# copy of scripts/ in each spelling it reads — `-xf -`, a bare `-x` fed by a pipe, and one
-# with a trailing comment — while passing over a commented-out one. And extract_tar_stream
-# reads its stream to the end where a bare `tar -xf -` does not: a stream left unread is
-# what a macOS producer writes into a closed pipe, so the drain's whole claim is that no
-# byte is left. The stream is a regular file rather than a pipe so the bytes left over can
-# be counted without a race, and because GNU tar drains a pipe of its own accord, which
-# would make a pipe-fed case pass whether or not the helper drained.
+# The drain's whole claim is that no byte of the stream is left unread, because a stream left
+# unread is what a macOS producer writes into a closed pipe. The stream is a regular file rather
+# than a pipe so the bytes left over can be counted without a race, and because GNU tar drains a
+# pipe of its own accord, which would make a pipe-fed case pass whether or not the helper drained.
 set -euo pipefail
 
 fatal() {
