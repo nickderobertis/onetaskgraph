@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.3.3...onetaskgraph-github-projects-v0.3.4) - 2026-10-07
+
+### Fixed
+
+- *(github-projects)* select a newly commented issue in a comment-activity read ([#3442](https://github.com/nickderobertis/onetaskgraph/pull/3442))
+
 ## [0.3.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.3.2...onetaskgraph-github-projects-v0.3.3) - 2026-10-07
 
 ### Added
