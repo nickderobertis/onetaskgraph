@@ -3580,6 +3580,109 @@ async fn a_location_before_a_full_stop_is_not_recognised_and_comes_through_byte_
 }
 
 #[tokio::test]
+async fn a_reference_carrying_a_fragment_is_rewritten_and_keeps_the_fragment() {
+    // A `#` after a location opens a fragment naming a place inside that record, so the
+    // location before it is rewritten and the fragment rides through unchanged — ended by
+    // every character that already ends a location, by the end of the content, and by a
+    // full stop, which ends the *fragment* here rather than the location. A bare location
+    // before a full stop is still not recognised, as the test above pins.
+    const STOPS: &str = " \t\n`\"'()[]{}<>|,;";
+    let from = "/srv/from/plans/P-1/A.md";
+    let into = "/srv/into/board/A.md";
+    let link = "https://example.invalid/from/issues/1";
+    let linked_into = "https://example.invalid/board/issues/7";
+    let lines = |path: &str, url: &str| {
+        let mut written: String = STOPS
+            .chars()
+            .map(|stop| format!("({path}#budgets{stop} ({url}#budgets{stop}\n"))
+            .collect();
+        written.push_str(&format!("[t1]({path}#budgets). Bare: {path}.\n"));
+        written.push_str(&format!("At the end: {path}#budgets"));
+        written
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/from/plans/P-1", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", from, Some("root:A")),
+                linked("B", "Beta", link, Some("root:B")),
+            ],
+            "documents": [plan_document(&lines(from, link))],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", into, Some("root:A")),
+                linked("B", "Beta", linked_into, Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    let stops = STOPS.chars().count() as u64;
+    assert_eq!(
+        figures(&report),
+        (2 * stops + 2, 0, 0),
+        "every fragment reference is counted rewritten, and the bare one before a full \
+         stop is counted in neither figure"
+    );
+    let expected =
+        lines(into, linked_into).replace(&format!("Bare: {into}."), &format!("Bare: {from}."));
+    assert_eq!(body(&engine, "into:D-1").await, expected);
+}
+
+#[tokio::test]
+async fn a_fragment_reference_is_left_and_counted_as_any_other_reference_without_a_counterpart() {
+    // A fragment widens what is *recognised* and nothing else. A referent with no
+    // counterpart, and a location two referents report, are left byte-for-byte with their
+    // fragments and counted exactly as their bare forms are; and a referent whose own file
+    // name holds a `#` is still matched whole, because the longer location is tried first.
+    let root = "/srv/from/plans/P-1";
+    let authored = format!(
+        "Kept: [a]({root}/A.md#budgets) and `{root}/A.md#2`.\n\
+         Gone: [c]({root}/C.md#budgets).\n\
+         Twice: [d]({root}/D.md#budgets).\n"
+    );
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project(root, Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", &format!("{root}/A.md"), Some("root:A")),
+                located("A2", "Alpha two", &format!("{root}/A.md#2"), Some("root:A2")),
+                located("C", "Gamma", &format!("{root}/C.md"), Some("root:C")),
+                located("D", "Delta", &format!("{root}/D.md"), Some("root:D")),
+                located("E", "Epsilon", &format!("{root}/D.md"), Some("root:E")),
+            ],
+            "documents": [plan_document(&authored)],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("A2", "Alpha two", "/srv/into/board/A2.md", Some("root:A2")),
+                located("D", "Delta", "/srv/into/board/D.md", Some("root:D")),
+                located("E", "Epsilon", "/srv/into/board/E.md", Some("root:E")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (2, 2, 1));
+    assert_eq!(
+        body(&engine, "into:D-1").await,
+        format!(
+            "Kept: [a](/srv/into/board/A.md#budgets) and `/srv/into/board/A2.md`.\n\
+             Gone: [c]({root}/C.md#budgets).\n\
+             Twice: [d]({root}/D.md#budgets).\n"
+        )
+    );
+}
+
+#[tokio::test]
 async fn a_document_naming_another_document_of_its_project_is_rewritten_too() {
     // The referent set is the project's record, its tasks and its *other documents*. A plan
     // that points at the runbook beside it is the case this third read is for.

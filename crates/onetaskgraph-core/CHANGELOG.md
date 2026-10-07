@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.5...onetaskgraph-core-v0.3.6) - 2026-10-07
+
+### Fixed
+
+- *(copy)* carry a reference's #fragment through a rewrite ([#3518](https://github.com/nickderobertis/onetaskgraph/pull/3518))
+
 ## [0.3.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.2...onetaskgraph-core-v0.3.3) - 2026-10-07
 
 ### Added

@@ -3693,6 +3693,116 @@ fn a_copied_document_leaves_a_two_hop_chain_byte_for_byte_and_says_it_was_unreso
 }
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
+/// A plan in the folder `plans` whose design document summarises its budgets and links
+/// out to the owning task's `## Budgets` section, beside `destination` as `dest`.
+///
+/// The link carries a `#fragment` after the task's location, which is the reference this
+/// journey is about; the bare path in backticks beside it is the reference every copy
+/// already rewrote, kept so one copy proves both.
+fn budget_summary_beside(sandbox: &Sandbox, destination: Value) {
+    let root = sandbox.subdirectory("plans");
+    for (kind, id, front, body) in [
+        (
+            "projects",
+            "P-1",
+            "title: The plan\nstatus: todo",
+            "the plan",
+        ),
+        (
+            "tasks",
+            "A",
+            "title: Alpha\nstatus: todo\nproject: P-1",
+            "## Budgets\n\nTwelve turns.",
+        ),
+    ] {
+        let path = root.join(kind).join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a fixture parent")).expect("the folder");
+        std::fs::write(path, format!("---\n{front}\n---\n{body}\n")).expect("the Markdown");
+    }
+    let alpha = markdown_path(sandbox, "plans", "task", "A");
+    let documents = root.join("documents");
+    std::fs::create_dir_all(&documents).expect("the folder");
+    std::fs::write(
+        documents.join("D-1.md"),
+        format!(
+            "---\ntitle: Design\nproject: P-1\n---\n## Budgets\n\n\
+             | Task | Detail |\n| --- | --- |\n| Alpha | [t1]({alpha}#budgets) |\n\n\
+             Alpha itself is `{alpha}`.\n"
+        ),
+    )
+    .expect("the design document");
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin": "local-md", "config": empty_folder(sandbox, "plans")},
+        "dest": destination,
+    })));
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations, a few seconds in all. AGENTS.md puts a journey crossing more than one plugin in this suite.
+#[test]
+fn a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_location() {
+    // A design document's budget summary links to each owning task's `## Budgets` section.
+    // Copied after its project, every destination has to receive the link pointing at its
+    // *own* record for the task with the fragment still on it — a link left naming the
+    // authoring checkout's file is dead on the board a plan is reviewed from.
+    for plugin in ["local-md", "github-projects", "linear"] {
+        let sandbox = Sandbox::new();
+        let config = match plugin {
+            "local-md" => empty_folder(&sandbox, "dest"),
+            "github-projects" => github_projects_with_board(&sandbox).0,
+            _ => linear_empty_workspace(&sandbox),
+        };
+        budget_summary_beside(&sandbox, json!({"plugin": plugin, "config": config}));
+
+        let project = ok(
+            &sandbox,
+            &["project", "copy", "plans:P-1", "--to", "dest", "--json"],
+        );
+        let alpha_there = reported(&project)
+            .into_iter()
+            .find(|(source, _, _)| source == "plans:A")
+            .unwrap_or_else(|| panic!("{plugin}: the task was copied: {project}"))
+            .1;
+        let alpha_there = alpha_there.as_str().expect("a qualified id");
+        let location = shown(&sandbox, "task", alpha_there)["location"].clone();
+        let there = location["path"]
+            .as_str()
+            .or_else(|| location["url"].as_str())
+            .unwrap_or_else(|| panic!("{plugin}: the copied task says where it is: {location}"))
+            .to_owned();
+        let here = markdown_path(&sandbox, "plans", "task", "A");
+        assert_ne!(there, here, "{plugin}");
+
+        let copied = ok(
+            &sandbox,
+            &["document", "copy", "plans:D-1", "--to", "dest", "--json"],
+        );
+        assert_eq!(
+            references(&copied),
+            (json!(2), Value::Null, Value::Null),
+            "{plugin}: the fragment link and the bare path are both counted rewritten: {copied}"
+        );
+        let landed = reported(&copied)[0].1.clone();
+        let landed = landed.as_str().expect("a qualified id");
+
+        // Read back by a separate invocation, from the destination itself.
+        let authored = body(&sandbox, "plans:D-1");
+        assert!(
+            authored.contains(&format!("[t1]({here}#budgets)")),
+            "{authored}"
+        );
+        assert_eq!(
+            body(&sandbox, landed),
+            authored.replace(&here, &there),
+            "{plugin}: the link names the destination's task with its fragment kept, and \
+             nothing else moved"
+        );
+        assert!(
+            body(&sandbox, landed).contains(&format!("[t1]({there}#budgets)")),
+            "{plugin}"
+        );
+    }
+}
+
 /// One `linear` source at `boundary`, carrying the credential name across the pipe.
 ///
 /// `SourceBoundary::source` cannot do this for every plugin and must not try: §3.1 clears
