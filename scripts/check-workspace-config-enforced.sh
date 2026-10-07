@@ -212,8 +212,6 @@ expect check-workspace-config.sh "a registered spawner that no longer reaches th
   "sdks/python/tests/conftest.py: is registered in SPAWNERS in scripts/check-workspace-config.sh but no longer reaches into target/debug"
 restore "$CONFTEST"
 
-# --- The product version: a crate holds a number of its own only where the release writes it.
-
 # A test-only crate inherits the workspace's version, so it is exempt from the inventory; one
 # that goes back to a literal is a number no release writes, and must be refused.
 LINEAR_E2E_MANIFEST=crates/onetaskgraph-linear-e2e/Cargo.toml

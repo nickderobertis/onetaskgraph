@@ -37,7 +37,8 @@ pub fn directory() -> PathBuf {
     directory.join(Path::new(BELOW_BUILD))
 }
 
-/// The file `budget`'s telemetry is recorded in, in `directory`.
+/// One spelling of the file name for the recorder and the reader alike, so a runner test that
+/// plants a file through it is read exactly where a journey's figure would be.
 pub fn file_in(directory: &Path, budget: &str) -> PathBuf {
     directory.join(format!("{budget}.json"))
 }
@@ -48,7 +49,8 @@ pub fn record(budget: &str, value: usize, detail: &str) {
     record_in(&directory(), budget, value, detail);
 }
 
-/// [`record`], into `directory`.
+/// Takes its directory so the runner's tests record into a scratch tree of their own rather than
+/// over the figures the journeys left in the build directory.
 pub fn record_in(directory: &Path, budget: &str, value: usize, detail: &str) {
     std::fs::create_dir_all(directory).expect("the telemetry directory is writable");
     std::fs::write(
