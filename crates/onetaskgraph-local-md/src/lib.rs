@@ -2262,11 +2262,9 @@ fn emptied(dir: &Path, error: &std::io::Error) -> bool {
 #[cfg(test)]
 type Interruption = fn(&Path) -> Option<std::io::Error>;
 
-/// The interruption in force, if a test has installed one.
 #[cfg(test)]
 static INTERRUPTION: RwLock<Option<Interruption>> = RwLock::new(None);
 
-/// What the installed interruption, if there is one, poses for the listing of `dir`.
 #[cfg(test)]
 fn interrupted(dir: &Path) -> Option<std::io::Error> {
     let interruption = *INTERRUPTION
@@ -4733,10 +4731,8 @@ mod tests {
         ));
     }
 
-    /// The interruption these tests pose: a folder named `vanishing…` is really removed and
-    /// then met with [`removed_under_the_iterator`]; one named `standing…` is met with it and
-    /// left where it is; one named `failing…` is really removed and met with an error that
-    /// is not about its having gone. No opinion about any other folder in the run.
+    /// Keyed by folder name so that it has no opinion about another test's folders, which
+    /// share this process with it.
     #[cfg(unix)]
     fn interruption(dir: &Path) -> Option<std::io::Error> {
         match dir.file_name()?.to_str()? {
