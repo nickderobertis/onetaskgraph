@@ -5,7 +5,10 @@ mod budget_runner;
 #[test]
 fn offline_cleanup_journeys() {
     let result = std::process::Command::new("python3")
-        .env("JANITOR_BUDGET_TELEMETRY", budget_runner::telemetry())
+        .env(
+            "JANITOR_BUDGET_TELEMETRY",
+            budget_runner::telemetry("live-janitor-requests-per-run"),
+        )
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/journey.py"))
         .env(
             "JANITOR_BINARY",

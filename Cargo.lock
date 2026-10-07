@@ -1335,6 +1335,7 @@ dependencies = [
  "onetaskgraph-github-live",
  "onetaskgraph-github-projects",
  "onetaskgraph-live",
+ "regex",
  "reqwest",
  "serde_json",
  "tempfile",

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// The test target restores this recorded request count on a cache hit.
-pub fn telemetry() -> PathBuf {
+pub fn telemetry(budget: &str) -> PathBuf {
     if let Some(path) = std::env::var_os("JANITOR_BUDGET_TELEMETRY") {
         return path.into();
     }
@@ -13,7 +13,8 @@ pub fn telemetry() -> PathBuf {
         .expect("test executable directory")
         .parent()
         .expect("profile directory")
-        .join("telemetry/onetaskgraph-live-janitor/live-janitor-requests-per-run.json")
+        .join("telemetry/onetaskgraph-live-janitor")
+        .join(format!("{budget}.json"))
 }
 
 fn refuse(reason: &str) -> ! {
@@ -24,12 +25,17 @@ fn refuse(reason: &str) -> ! {
 // llmlint: ignore[tests_assert_real_behavior] This test executable is the portable budget command, inert when no budget is nominated. The subprocess journey below drives this exact entry point through onebudgetspec and asserts its reports and failures.
 #[test]
 fn report() {
-    match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
+    let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
         Err(std::env::VarError::NotPresent) => return,
-        Ok(id) if id == "live-janitor-requests-per-run" => {}
+        Ok(id) => id,
         other => refuse(&format!("not a janitor budget id: {other:?}")),
+    };
+    let grammar =
+        regex::Regex::new(onebudgetspec_core::model::ID_PATTERN).expect("onebudgetspec id grammar");
+    if !grammar.is_match(&budget) {
+        refuse("not a budget id");
     }
-    let path = telemetry();
+    let path = telemetry(&budget);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         refuse(&format!(
             "no telemetry at {} ({error}); run onetaskgraph-live-janitor:test first",

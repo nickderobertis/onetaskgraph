@@ -24,3 +24,4 @@ graphql-parser.workspace = true
 # Reports the offline journey telemetry to the workspace's pinned budget judge.
 onebudgetspec-core.workspace = true
 tempfile.workspace = true
+regex.workspace = true

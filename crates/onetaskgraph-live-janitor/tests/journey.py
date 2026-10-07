@@ -942,6 +942,22 @@ class Journeys(unittest.TestCase):
         self.assertFalse(state.status_reads)
         self.assertIn('pull', [issue['node_id'] for issue in state.issues[SCRATCH]])
 
+    def test_future_stamps_and_legacy_ci_stamps_survive(self):
+        state = Github()
+        state.status[RunId(123)] = Status.COMPLETED
+        for design in (False, True):
+            state.artifact(SCRATCH, f'ci-123-1-{NOW + DAY}', design=design)
+            state.artifact(CORE, f'ci-123-1-{CUTOVER - DAY}', design=design)
+        issues = copy.deepcopy(state.issues)
+        labels = copy.deepcopy(state.labels)
+        items = copy.deepcopy(state.items)
+        self.assert_success(state.run())
+        self.assertFalse(state.writes)
+        self.assertFalse(state.status_reads)
+        self.assertEqual(state.issues, issues)
+        self.assertEqual(state.labels, labels)
+        self.assertEqual(state.items, items)
+
     def test_both_passes_preserve_origin_field_and_retained_item_values(self):
         state = workload()
         # Populate values on every board item, including the running CI run, machine
@@ -966,7 +982,6 @@ class Journeys(unittest.TestCase):
         self.assertEqual(len(state.writes), 150)
         times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
         self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
-        self.assertLessEqual(len(state.requests), 250)
         self.assertEqual(state.requests[0], ('GET', '/rate_limit'))
         for path, token in state.authentication:
             self.assertEqual(token, 'Bearer offline-actions' if '/actions/' in path else 'Bearer offline-write')
