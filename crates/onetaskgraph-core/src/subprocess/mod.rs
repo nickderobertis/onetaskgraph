@@ -24,6 +24,7 @@
 //! | `projects` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `documents` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `comments` | **Supported and proven** — the hosted source's own, forwarded, and the four comment methods carried over the pipe as §4.15 and §4.16 specify. |
+//! | `assets` | **Supported and proven** — the hosted source's own, forwarded; absent from a handshake written before assets, and then read as unsupported, so such a plugin is never handed an asset. A record's assets cross beside `write_task` and `write_document` as §4.9 specifies; a source over the pipe reports no asset of its own, because the protocol carries no asset read. |
 //! | `priority` | **Supported and proven** — the hosted source's own, forwarded; absent from a handshake written before priorities, and then read as unsupported, so such a plugin is never handed a priority it would drop. `set_task_priority` is carried over the pipe as §4.19 specifies. |
 //! | `filter_by_priority` | **Supported and proven** — the hosted source's own, forwarded; absent from an older handshake, and then read as unsupported, so the engine narrows. |
 //! | `filter_by_comment_activity` | **Supported and proven** — the hosted source's own, forwarded, and a query's `commented_since` carried over the pipe as §4.5 specifies; absent from an older handshake, and then read as unsupported, so the engine narrows over the plugin's comments. |

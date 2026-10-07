@@ -271,7 +271,25 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 31
+    assert emitted_bundle["version"] == 32
+    # Version 32 published the image assets a task and a document hold: `assets` beside a task
+    # in what `task show` answers, the `DocumentDetail` `document show` and `document create`
+    # now answer with, and the asset roots the stdio plugin protocol carries beside a write.
+    for verb, root in (("document_show", "DocumentDetail"), ("document_create", "DocumentDetail")):
+        assert generate.RESPONSE_ROOTS[verb] == root, verb
+        assert root in bundle["roots"], root
+    for root in ("TaskDetail", "DocumentDetail"):
+        assert "assets" in emitted_bundle["roots"][root]["properties"], root
+    for root in ("Asset", "AssetName", "AssetContentType", "AssetWrite", "AssetUploads"):
+        assert root in bundle["roots"], root
+    from onetaskgraph_sdk import DocumentDetail
+
+    assert (
+        DocumentDetail.model_validate(
+            {"items": [], "next": None, "plan": {"per_source": []}, "errors": [], "assets": []}
+        ).assets
+        == []
+    )
     # Version 31 published projects among the items rendered from a template: what `project
     # create`, `project render` and `project answers` answer with, and the provenance a
     # rendered project records, described as the task and document ones are.
@@ -392,7 +410,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
         ("task_create", "TaskDetail"),
         ("task_render", "Regenerated"),
         ("task_answers", "TemplateAnswers"),
-        ("document_create", "QueryResponseOfQualifiedDocument"),
+        ("document_create", "DocumentDetail"),
         ("document_render", "Regenerated"),
         ("document_answers", "TemplateAnswers"),
     ):
@@ -444,7 +462,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     for root in ("QualifiedDocument", "QueryResponseOfQualifiedDocument"):
         assert root in bundle["roots"], root
     assert generate.RESPONSE_ROOTS["document_list"] == "QueryResponseOfQualifiedDocument"
-    assert generate.RESPONSE_ROOTS["document_show"] == "QueryResponseOfQualifiedDocument"
+    assert generate.RESPONSE_ROOTS["document_show"] == "DocumentDetail"
     assert generate.RESPONSE_ROOTS["document_copy"] == "CopyReport"
 
 

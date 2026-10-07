@@ -96,9 +96,10 @@ onetaskgraph task create <SOURCE> --project P --title TITLE
                           | --body-file PATH]      # none of the three: the body on stdin
                          [--answers FILE] [--var NAME=VALUE]... [--status CATEGORY]
                          [--label L]... [--repository R]... [--depends-on ID]...
-                         [--delivers ID]... [--metadata KEY=JSON]...
+                         [--delivers ID]... [--metadata KEY=JSON]... [--asset PATH]...
 onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
                          [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
+                         [--asset PATH]...
 onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
@@ -108,15 +109,15 @@ onetaskgraph project metadata set <ID> <KEY> <VALUE>
 onetaskgraph project create <SOURCE> --id NATIVE-ID --title TITLE [--status CATEGORY]
                             ...                  # the body, label, repository and metadata
                                                  # flags of `task create`
-onetaskgraph project render <ID> ...             # the flags of `task render`
+onetaskgraph project render <ID> ...             # the flags of `task render` but --asset
 onetaskgraph project answers <ID>
 
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph document metadata set <ID> <KEY> <VALUE>
 onetaskgraph document create <SOURCE> --project P --title TITLE [--id DOC]
-                             ...                 # the body, label, repository and metadata
-                                                 # flags of `task create`
+                             ...                 # the body, label, repository, metadata
+                                                 # and asset flags of `task create`
 onetaskgraph document render <ID> ...            # the flags of `task render`
 onetaskgraph document answers <ID>
 
@@ -644,6 +645,82 @@ the `search_path` directories, then the inline `templates`; `digest`, when prese
 the digest that chain computes, or the render is refused naming both. Every other key is
 ignored. `template variables` and `template render` take one in place of their `<FILE>`.
 [`docs/local-md.md`](./docs/local-md.md) describes the answers block.
+
+### Image assets
+
+A task or a document carries pictures — a before-and-after screenshot in a design document,
+say — as **image assets** stored with the record. Its content references each one as a
+Markdown image whose target is `./<name>`:
+
+```markdown
+![The settings page before](./before.png)
+![The settings page after](./after.png)
+```
+
+`<name>` is a bare file name — no `/`, no `\`, no `..` — ending, in any case, in `.png`,
+`.jpg`, `.jpeg`, `.gif` or `.webp`. That is the only shape that is an asset reference: an
+image at an absolute URL, one whose target has a directory (`./img/before.png`) or starts
+`../`, one with no `./` (`before.png`), and a plain link to `./before.png` are content like
+any other, stored, shown and copied exactly as written. So is an image outside the
+convention's reach because it is not an image at all: one whose `!` is escaped
+(`\![before](./before.png)`), and image syntax inside an inline code span, a fenced code block
+or an indented code block, which is how a document shows the convention without using it. A
+record whose only image syntax is of those kinds holds no asset.
+
+`task create`, `task render`, `document create` and `document render` store an asset from
+`--asset PATH`, repeatable, under the file's base name:
+
+```bash
+onetaskgraph document create notes --project launch --title "Settings redesign" \
+  --body-file design.md --asset shots/before.png --asset shots/after.png
+```
+
+Each is refused by name before anything is written: a file whose extension is not one of the
+five, two `--asset` with one base name, a reference in the content naming an asset the record
+would not hold, and an `--asset` the content does not reference. A `render` keeps every asset
+the record holds that the regenerated content still references, an `--asset` replaces a stored
+one of the same name, and an asset the new content no longer references is dropped; `document
+create --id` over a document the source holds leaves it holding exactly the assets that call
+gave. A source whose plugin stores no assets refuses the record, naming the source and the
+asset.
+
+`task show --json` and `document show --json` list them as `assets`, in the order the content
+first references them — `[]` for a record that holds none:
+
+```json
+"assets": [{"name": "before.png", "sha256": "9f86d0…", "content_type": "image/png",
+            "path": "/home/someone/notes/documents/settings-redesign.assets/before.png"}]
+```
+
+`path` is where the bytes are on this machine — a `local-md` folder keeps a record's assets in
+a directory beside its file ([`docs/local-md.md`](./docs/local-md.md)) — and `null` for a
+hosted source. `content_type` is `image/png`, `image/jpeg`, `image/gif` or `image/webp`,
+decided by the extension.
+
+**A copy carries every asset a record's content references.** `task copy`, `document copy` and
+every project copy that carries tasks or documents hand each asset's bytes to the destination
+with the record:
+
+- into a `local-md` folder, the bytes are stored as the copied record's own assets and the
+  content is unchanged;
+- into a source whose plugin stores them at a URL, the content's `./<name>` references are
+  rewritten to where that destination serves each image, and the destination records what it
+  uploaded under the reserved metadata key `onetaskgraph.assets` — each asset's `sha256` and
+  `url` — so a later copy whose bytes have not changed reuses the URL and uploads nothing
+  again;
+- into a source whose plugin stores no assets — `github-projects` and `linear` today, and any
+  plugin that declares nothing — the record is refused, naming the source, the record and the
+  asset, before anything is written for it, because a design document whose pictures silently
+  vanished on the way would be approved without them.
+
+A record whose content references an asset it does not hold is refused, naming both. Rewriting
+references follows the rule above for a copy that rewrites references: a rendering that still
+hashes to its recorded `body_digest` is re-recorded with the digest of the content as
+rewritten, and `template`, `digest` and `answers_digest` are carried as they were. A record
+whose content references no asset reads, renders, copies and digests exactly as it does without
+this feature, on every source, and a plugin that has never heard of assets is never sent
+anything about them. [`docs/plugin-protocol.md`](./docs/plugin-protocol.md) §4.9a states what a
+plugin is sent.
 
 ### Exit codes
 

@@ -11,10 +11,12 @@
 //! call that source makes.
 
 use std::fmt;
+use std::sync::Arc;
 
 use jsonschema::error::ValidationErrorKind;
 use onetaskgraph_plugin_api::{
-    SecretResolver, SourceError, SourceName, SourcePlugin, StatusMapping, TaskSource,
+    SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, StatusMapping, TaskSource,
+    system_clock,
 };
 use serde_json::Value;
 
@@ -200,6 +202,19 @@ pub fn resolve_available(
     config: &Config,
     secrets: &dyn SecretResolver,
 ) -> (Vec<ResolvedSource>, Vec<UnavailableSource>) {
+    resolve_available_with_clock(config, secrets, &system_clock())
+}
+
+/// [`resolve_available`], building every in-process source through
+/// [`SourcePlugin::build_with_clock`] with `clock`, the clock it paces and backs off on.
+///
+/// A `subprocess` source is not handed it: the program behind the pipe keeps its own time.
+#[must_use]
+pub fn resolve_available_with_clock(
+    config: &Config,
+    secrets: &dyn SecretResolver,
+    clock: &SharedClock,
+) -> (Vec<ResolvedSource>, Vec<UnavailableSource>) {
     let mut built = Vec::new();
     let mut unavailable = Vec::new();
     for (name, source) in config.sources() {
@@ -215,7 +230,13 @@ pub fn resolve_available(
                 source.document_dir(),
             )
         } else {
-            plugin.build(name, source.config(), secrets)
+            // llmlint: ignore[changed_behavior_has_e2e] No plugin of this build waits on the
+            // clock it is handed yet — routing the hosted plugins' pacing through it is the
+            // work this seam exists for — so nothing a source does can show which clock it was
+            // built with. What is observable is proven: the binary settles one clock and
+            // attaches to a test's coordinator with it (`crates/onetaskgraph-e2e/tests/e2e/clock.rs`), and every
+            // built-in plugin builds through this call in every journey.
+            plugin.build_with_clock(name, source.config(), secrets, Arc::clone(clock))
         };
         match outcome {
             Ok(source) => built.push(ResolvedSource::adopt(name.clone(), source)),

@@ -27,6 +27,7 @@
 ))]
 #![deny(missing_docs)]
 
+mod clock;
 pub mod config;
 
 mod engine;
@@ -43,15 +44,19 @@ pub mod subprocess;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
 pub mod template;
 
+pub use clock::{
+    ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,
+    process_clock,
+};
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::{
     Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup,
     CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine, EngineError,
-    Filters, LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, Paging, ProjectRequest,
-    ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind,
-    SearchRequest, SourceListing, SourceState, Spent, TaskContentSet, TaskDetail, TaskDetails,
-    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, settled,
+    DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine,
+    EngineError, Filters, LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, Paging,
+    ProjectRequest, ProjectSelector, Qualified, QualifiedEdge, QualifiedEndpoint, SearchHit,
+    SearchKind, SearchRequest, SourceListing, SourceState, Spent, TaskContentSet, TaskDetail,
+    TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
@@ -68,7 +73,8 @@ pub use onetaskgraph_plugin_api::UpdatedField;
 pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
 pub use resolve::{
-    ResolvedSource, UnavailableSource, resolve, resolve_available, validate_sources,
+    ResolvedSource, UnavailableSource, resolve, resolve_available, resolve_available_with_clock,
+    validate_sources,
 };
 pub use schema::{SCHEMA_BUNDLE_VERSION, schema_bundle};
 pub use secrets::{CredentialLayer, CredentialName, ResolvedCredential, Secrets, SecretsReport};

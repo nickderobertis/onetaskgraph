@@ -137,6 +137,125 @@ test("a plain body goes over stdin, and a document is created, rendered and answ
   expect(regenerated.body).toBe("Goal: Again\n");
 });
 
+// A valid 1×1 GIF, built here: the two colours of its table drawn from `seed`.
+function gif(seed: number): Buffer {
+  return Buffer.from([
+    ...Buffer.from("GIF89a"),
+    1,
+    0,
+    1,
+    0,
+    0x80,
+    0,
+    0,
+    seed & 0xff,
+    (seed >> 8) & 0xff,
+    7,
+    0,
+    0,
+    0,
+    0x2c,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    0,
+    0x02,
+    0x02,
+    0x44,
+    0x01,
+    0x00,
+    0x3b,
+  ]);
+}
+
+test("image assets are stored with a created task and document and listed on show", async () => {
+  mkdirSync(resolve(root, "inputs"), { recursive: true });
+  const pixel = resolve(root, "inputs", "pixel.gif");
+  const bytes = gif(3);
+  writeFileSync(pixel, bytes);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const body = "![pixel](./pixel.gif)\n";
+
+  const task = await client.taskCreate("notes", "P-1", "Pictured", { body, assets: [pixel] });
+  expect(task.assets?.map((asset) => [asset.name, asset.sha256, asset.content_type])).toEqual([
+    ["pixel.gif", digest, "image/gif"],
+  ]);
+  const document = await client.documentCreate("notes", "P-1", "Pictured", {
+    id: "pictured",
+    body,
+    assets: [pixel],
+  });
+  expect(document.assets?.[0]?.name).toBe("pixel.gif");
+  const shown = await client.documentShow("notes:pictured");
+  const path = shown.assets?.[0]?.path ?? "";
+  expect(createHash("sha256").update(readFileSync(path)).digest("hex")).toBe(digest);
+  expect((await client.taskShow(task.items[0]?.id ?? "")).assets?.[0]?.sha256).toBe(digest);
+
+  const unreferenced = await refusal(
+    client.taskCreate("notes", "P-1", "Refused", { body: "no picture", assets: [pixel] }),
+  );
+  expect(unreferenced.exitCode).toBe(1);
+  expect(unreferenced.message).toContain("pixel.gif");
+});
+
+test("asset options that are not a list of paths are refused before the binary runs", async () => {
+  await expect(
+    client.taskCreate("notes", "P-1", "Refused", {
+      body: "x",
+      // Typed past the option's own type on purpose: a JavaScript caller has no compiler to
+      // stop it, and this is the refusal such a caller gets instead of a malformed command.
+      assets: "pixel.gif" as unknown as string[],
+    }),
+  ).rejects.toThrow("taskCreate: assets");
+  await expect(
+    client.documentCreate("notes", "P-1", "Refused", { body: "x", assets: ["-pixel.gif"] }),
+  ).rejects.toThrow("documentCreate: assets is not a path");
+  await expect(client.taskRender("notes:none", { assets: [""] })).rejects.toThrow(
+    "taskRender: assets is not a path",
+  );
+  await expect(client.documentRender("notes:none", { assets: [""] })).rejects.toThrow(
+    "documentRender: assets is not a path",
+  );
+});
+
+test("a render stores the assets it is given, replacing a stored one by name", async () => {
+  const pictured = resolve(root, "pictured.md");
+  writeFileSync(
+    pictured,
+    "---\nonetaskgraph_template: 1\nvariables:\n  caption:\n    description: What it shows\n---\n![{{ caption }}](./pixel.gif)\n",
+  );
+  mkdirSync(resolve(root, "old"), { recursive: true });
+  mkdirSync(resolve(root, "new"), { recursive: true });
+  const old = resolve(root, "old", "pixel.gif");
+  const fresh = resolve(root, "new", "pixel.gif");
+  writeFileSync(old, gif(7));
+  writeFileSync(fresh, gif(8));
+  const task = await client.taskCreate("notes", "P-1", "Rendered", {
+    template: pictured,
+    vars: { caption: "a" },
+    assets: [old],
+  });
+  await client.documentCreate("notes", "P-1", "Rendered", {
+    id: "rendered",
+    template: pictured,
+    vars: { caption: "a" },
+    assets: [old],
+  });
+  const id = task.items[0]?.id ?? "";
+  expect((await client.taskRender(id, { assets: [fresh] })).changed).toBe(true);
+  expect((await client.documentRender("notes:rendered", { assets: [fresh] })).changed).toBe(true);
+  const digest = createHash("sha256").update(gif(8)).digest("hex");
+  expect((await client.taskShow(id)).assets?.map((asset) => asset.sha256)).toEqual([digest]);
+  expect(
+    (await client.documentShow("notes:rendered")).assets?.map((asset) => asset.sha256),
+  ).toEqual([digest]);
+});
+
 test("a project is created from a template, regenerated and its answers read", async () => {
   const created = await client.projectCreate("notes", "plan-1", "The plan", {
     template,
@@ -344,14 +463,14 @@ test("every flag the create, render, answers and template verbs take is spelled 
   };
   const template = ["templateSourceArguments", "varFlags"];
   const builders: Record<string, string[]> = {
-    "task create": ["taskCreate", "createArguments", ...template],
-    "task render": ["taskRender", "renderInvocation", ...template],
+    "task create": ["taskCreate", "createArguments", "assetFlags", ...template],
+    "task render": ["taskRender", "renderInvocation", "assetFlags", ...template],
     "task answers": ["taskAnswers"],
     "project create": ["projectCreate", "createArguments", ...template],
     "project render": ["projectRender", "renderInvocation", ...template],
     "project answers": ["projectAnswers"],
-    "document create": ["documentCreate", "createArguments", ...template],
-    "document render": ["documentRender", "renderInvocation", ...template],
+    "document create": ["documentCreate", "createArguments", "assetFlags", ...template],
+    "document render": ["documentRender", "renderInvocation", "assetFlags", ...template],
     "document answers": ["documentAnswers"],
     "template variables": [
       "templateVariables",

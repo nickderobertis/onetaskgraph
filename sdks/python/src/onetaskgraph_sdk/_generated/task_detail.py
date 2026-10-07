@@ -10,6 +10,22 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
+class AssetContentType(StrEnum):
+    AssetContentTypeImage_Png = "image/png"
+    AssetContentTypeImage_Jpeg = "image/jpeg"
+    AssetContentTypeImage_Gif = "image/gif"
+    AssetContentTypeImage_Webp = "image/webp"
+
+
+class AssetName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One asset's name: a bare file name ending in an accepted image extension.\n\nValidated wherever one is built, deserialized included: non-empty, no `/`, no `\\`, no\n`..`, no whitespace, control character or parenthesis — none of which a bare Markdown link\ntarget can hold — and ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or\n`.webp` after a non-empty stem. The name is kept exactly as written, case included: it is\nthe text a reference names and the file name a source stores the bytes under."
+        ),
+    ]
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -220,6 +236,23 @@ class TaskRef(RootModel[str]):
     ]
 
 
+class Asset(BaseModel):
+    content_type: Annotated[
+        AssetContentType, Field(description="The content type its extension gives it.")
+    ]
+    name: Annotated[
+        AssetName,
+        Field(description="Its name, which the record's content references as `./<name>`."),
+    ]
+    path: Annotated[
+        str | None,
+        Field(
+            description="The absolute path holding its bytes on this machine, for a source that keeps them\nhere; `null` for a hosted source."
+        ),
+    ] = None
+    sha256: Annotated[str, Field(description="The lowercase hex SHA-256 of its bytes.")]
+
+
 class Comment(BaseModel):
     author: Annotated[
         str | None,
@@ -363,6 +396,12 @@ class QualifiedTask(BaseModel):
 
 
 class TaskDetail(BaseModel):
+    assets: Annotated[
+        list[Asset] | None,
+        Field(
+            description="The image assets the task holds, in the order its content first references them —\n`[]` for a task that holds none.\n\n**Absent** for a task that was not found, and for one whose assets could not be read —\nthe failure then in the response's `errors`."
+        ),
+    ] = None
     comments: Annotated[
         list[Comment] | None,
         Field(

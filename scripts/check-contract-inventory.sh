@@ -55,6 +55,47 @@ EXCEPTIONS = {
         "`TaskSource::set_task_metadata`, `set_project_metadata` and `set_document_metadata` "
         "answer with by default, for a source that cannot write one metadata key on its own"
     ),
+    "assetless": (
+        "a free function, not one of the contract's types — the inventory enumerates the "
+        "traits and types a plugin author implements against, and this is the one refusal "
+        "`Capabilities.assets: Support::Unsupported` obliges every source without assets to "
+        "answer an asset write with"
+    ),
+    "asset_references": (
+        "a free function, not one of the contract's types — the one reader of the asset "
+        "reference convention, so the engine and every plugin agree about which text is a "
+        "reference"
+    ),
+    "rewrite_asset_references": (
+        "a free function, not one of the contract's types — the one writer of the asset "
+        "reference convention, beside its one reader `asset_references`"
+    ),
+    "serve_asset_references": (
+        "a free function, not one of the contract's types — the one way a plugin serving "
+        "assets at a URL rewrites a record's references, records `onetaskgraph.assets` and "
+        "keeps a rendering's `body_digest` true, so both hosted plugins apply one rule"
+    ),
+    "asset_sha256": (
+        "a free function, not one of the contract's types — the one spelling of the "
+        "lowercase hex SHA-256 every asset type carries"
+    ),
+    "body_digest": (
+        "a free function, not one of the contract's types — the one spelling of the "
+        "`body_digest` a rendering records, which `serve_asset_references` re-records"
+    ),
+    "is_sha256": (
+        "a free function, not one of the contract's types — the one check of the lowercase "
+        "hex SHA-256 spelling `asset_sha256` produces, which reading a recorded upload applies"
+    ),
+    "SIMULATED_CLOCK_VARIABLE": (
+        "a const, not one of the contract's types — the name of the variable that selects the "
+        "simulated `Clock`, spelled once for the binary that reads it and the harness that "
+        "hands it out"
+    ),
+    "system_clock": (
+        "a free function, not one of the contract's types — the real `Clock`, which the "
+        "binary hands every in-process source when no test asked for simulated time"
+    ),
     "SOURCE_NAME_PATTERN": (
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"

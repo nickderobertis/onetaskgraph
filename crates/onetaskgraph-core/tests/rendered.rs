@@ -103,6 +103,7 @@ impl Fixture {
                     MetadataKey::new("caller.kept").unwrap(),
                     json!({"nested": [1, true]}),
                 )]),
+                assets: Vec::new(),
             })
             .await
             .expect("the task is created");
@@ -373,6 +374,7 @@ async fn a_regenerate_needs_a_template_it_can_read_and_never_turns_a_reference_i
             depends_on: Vec::new(),
             delivers: Vec::new(),
             metadata: BTreeMap::new(),
+            assets: Vec::new(),
         })
         .await
         .unwrap()
@@ -450,6 +452,7 @@ async fn a_dry_run_renders_and_writes_nothing() {
                 template: RenderTemplate::Given(template),
                 answers: overlay,
                 dry_run: true,
+                assets: Vec::new(),
             },
         )
         .await
@@ -543,6 +546,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
         labels: Vec::new(),
         repositories: Vec::new(),
         metadata: BTreeMap::new(),
+        assets: Vec::new(),
     };
     let created = fixture.engine.create_document(&request).await.unwrap();
     assert_eq!(created.id.to_string(), "work:design");
@@ -603,6 +607,7 @@ async fn documents_are_created_replaced_and_regenerated_and_a_source_keeping_non
             labels: Vec::new(),
             repositories: Vec::new(),
             metadata: BTreeMap::new(),
+            assets: Vec::new(),
         })
         .await
         .unwrap();
@@ -638,6 +643,7 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
             depends_on: Vec::new(),
             delivers: Vec::new(),
             metadata: BTreeMap::new(),
+            assets: Vec::new(),
         })
         .await
         .unwrap()
@@ -680,6 +686,7 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
             labels: Vec::new(),
             repositories: Vec::new(),
             metadata: BTreeMap::new(),
+            assets: Vec::new(),
         })
         .await
         .unwrap();
@@ -908,6 +915,7 @@ async fn a_copy_that_rewrites_a_renderings_references_records_the_digest_of_what
             labels: Vec::new(),
             repositories: Vec::new(),
             metadata: BTreeMap::new(),
+            assets: Vec::new(),
         })
         .await
         .unwrap();

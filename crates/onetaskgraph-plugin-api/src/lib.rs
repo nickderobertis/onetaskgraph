@@ -14,7 +14,9 @@
 //! belongs in `onetaskgraph-core` unless a trait signature names it.
 #![deny(missing_docs)]
 
+mod asset;
 mod capability;
+mod clock;
 mod comment;
 mod error;
 mod id;
@@ -27,7 +29,13 @@ mod update;
 mod work;
 mod write;
 
+pub use asset::{
+    Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
+    AssetsWritten, asset_references, asset_sha256, assetless, body_digest, is_sha256,
+    rewrite_asset_references, serve_asset_references,
+};
 pub use capability::{Capabilities, DependencySupport, Support};
+pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};
 pub use comment::{Comment, CommentBody, NewComment, TaskDetailRead, commentless};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};

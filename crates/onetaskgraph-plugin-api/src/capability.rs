@@ -41,6 +41,22 @@ pub struct Capabilities {
     // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects` and `documents` already use, and a second enum here would say the same thing three ways for three sibling fields. Whether comments can be *written* is `TaskSource::writes`, the one write declaration every write of this contract already reads, so a read-only pairing is a source declaring `Native` here and `Unsupported` there rather than a third variant.
     #[serde(default = "no_comments")]
     pub comments: Support,
+    /// Whether the source stores the image assets a task's or a document's content references.
+    ///
+    /// Read exactly as [`documents`](Self::documents) is: it says what the source *holds*, not
+    /// which predicate it applies, so the second capability rule does not reach it. A source
+    /// declaring `Native` is handed a record's assets beside the record's own write — through
+    /// [`TaskSource::write_task_with_assets`](crate::TaskSource::write_task_with_assets) and its
+    /// siblings — and either keeps them beside the record or serves each at a URL it chooses,
+    /// rewriting the record's references to point there. A source declaring `Unsupported` is
+    /// never handed one: a create or a copy of a record carrying an asset into it is refused,
+    /// naming the source, the record and the asset, before anything is written for that record.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates assets says nothing here and is never handed bytes it would drop.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects`, `documents`, `comments` and `priority` already use, and a second enum here would say the same thing five ways for five sibling fields. Whether the record itself can be written at all is `TaskSource::writes`, the one write declaration every write of this contract already reads.
+    #[serde(default = "no_assets")]
+    pub assets: Support,
     /// Whether the source's tasks hold a [`Priority`](crate::Priority) at all.
     ///
     /// Read exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:
@@ -138,6 +154,12 @@ fn no_documents() -> Support {
 /// What [`Capabilities::comments`] means when a wire value does not carry it: a plugin
 /// written before there were comments, on the terms [`no_documents`] gives.
 fn no_comments() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::assets`] means when a wire value does not carry it: a plugin written
+/// before there were assets, on the terms [`no_documents`] gives.
+fn no_assets() -> Support {
     Support::Unsupported
 }
 

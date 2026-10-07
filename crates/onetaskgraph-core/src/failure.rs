@@ -232,6 +232,13 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::NotCreatable { name, .. } | EngineError::RenderingNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
+        EngineError::AssetNotReferenced { .. } => ("asset-not-referenced".to_owned(), None, None),
+        EngineError::AssetNotGiven { .. } => ("asset-not-given".to_owned(), None, None),
+        EngineError::AssetGivenTwice { .. } => ("asset-given-twice".to_owned(), None, None),
+        EngineError::AssetNotHeld { .. } => ("asset-not-held".to_owned(), None, None),
+        EngineError::AssetsUnsupported { name, .. } => {
+            ("assets-unsupported".to_owned(), configured(name), None)
+        }
         EngineError::MissingAnswers { .. } => ("template-missing-required".to_owned(), None, None),
         EngineError::Template { error } => (error.kind().to_owned(), None, None),
         EngineError::NoStoredAnswers { .. } => ("no-stored-answers".to_owned(), None, None),

@@ -96,3 +96,20 @@ answered from it, or a ruling that holding a source across commands is not a sup
 shape and saying that in the crate's own documentation. The first two both cost the
 single-request guarantee above, so whichever is chosen has to say what the three tests
 named here should assert instead.
+
+## Image assets on a GitHub board and in a Linear workspace
+
+`github-projects` and `linear` declare `assets` unsupported, so a create or a copy of a task or
+a document whose content references an image asset — `![alt](./<name>)` — into either is
+refused, naming the source, the record and the asset, before anything is written for that
+record. That is sound as it stands: a design document whose pictures silently vanished on
+the way to the board would be approved without them, and a refusal says so instead. What is
+missing is the storing, which is each plugin's own decision about where its backend serves
+an image: both build on the contract `onetaskgraph-plugin-api` already declares —
+`TaskSource::write_task_with_assets` and its siblings, `AssetWrite`, and the
+`onetaskgraph.assets` record `serve_asset_references` writes — and on the `Clock` they route
+their pacing through. Closing either means declaring `assets` native in that plugin,
+implementing those writes, and deleting its line below.
+
+Unsupported fields: `onetaskgraph-github-projects` `assets`
+Unsupported fields: `onetaskgraph-linear` `assets`

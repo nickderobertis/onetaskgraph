@@ -15,6 +15,7 @@
 //!
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
+mod assets;
 mod comment;
 mod copy;
 mod delivery;
@@ -35,8 +36,8 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, Direction, Document, DocumentQuery, Label, LabelFilter,
     MetadataMatch, MetadataRecord, NativeId, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, StatusCategory, Task,
-    TaskQuery, TextFields, TextQuery,
+    ProjectQuery, Repository, SecretResolver, SharedClock, SourceError, SourceName, StatusCategory,
+    Task, TaskQuery, TextFields, TextQuery, system_clock,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use crate::GlobalId;
 use crate::config::{Config, Placement, Routes};
 use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
-use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available};
+use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;
@@ -52,7 +53,7 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use comment::{CommentList, DeletedComment, TaskDetail, TaskDetails};
+pub use comment::{CommentList, DeletedComment, DocumentDetail, TaskDetail, TaskDetails};
 pub(crate) use copy::malformed_links;
 pub use copy::{
     BudgetSpent, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest,
@@ -478,6 +479,77 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
+    },
+
+    /// A create or a render was given an asset its content does not reference.
+    #[error(
+        "the {record} was given the asset {asset}, which its content does not reference\n\
+         next: reference it in the content as `![<alt>](./{asset})`, or drop that --asset."
+    )]
+    AssetNotReferenced {
+        /// The record being written.
+        record: String,
+        /// The asset given.
+        asset: String,
+    },
+
+    /// A create or a render's content references an asset the record would not hold.
+    #[error(
+        "the {record}'s content references the asset ./{asset}, which the {record} would not \
+         hold\n\
+         next: give it with --asset <PATH> naming a file called {asset}, or remove the \
+         reference."
+    )]
+    AssetNotGiven {
+        /// The record being written.
+        record: String,
+        /// The asset its content references.
+        asset: String,
+    },
+
+    /// A create or a render was given two assets under one name.
+    #[error(
+        "the {record} was given two assets named {asset}\n\
+         next: give each asset once — an asset is stored under its file's base name, so \
+         rename one of the two files."
+    )]
+    AssetGivenTwice {
+        /// The record being written.
+        record: String,
+        /// The name given twice.
+        asset: String,
+    },
+
+    /// A record carrying an image asset was to be written to a source whose plugin stores
+    /// none.
+    #[error(
+        "source {name} cannot store the asset {asset} of {record}: its plugin is {kind}, which \
+         declares image assets unsupported\n\
+         next: write the record to a source whose plugin stores assets — such as local-md — \
+         or remove the reference to ./{asset} from its content."
+    )]
+    AssetsUnsupported {
+        /// The configured name of the destination.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// The record that carries the asset.
+        record: String,
+        /// The asset.
+        asset: String,
+    },
+
+    /// A record whose content references an asset it does not hold was to be copied.
+    #[error(
+        "{record}'s content references the asset ./{asset}, which {record} does not hold\n\
+         next: store the asset with the record — `onetaskgraph task render` or `document \
+         render` with --asset <PATH> — or remove the reference, then copy again."
+    )]
+    AssetNotHeld {
+        /// The record being copied, by its qualified id.
+        record: String,
+        /// The asset its content references.
+        asset: String,
     },
 
     /// `task create` or `document create` named a source whose plugin has no write side.
@@ -982,7 +1054,19 @@ impl Engine {
     /// expired token gets the other two rather than nothing.
     #[must_use]
     pub fn build(config: &Config, secrets: &dyn SecretResolver) -> Self {
-        let (ready, unavailable) = resolve_available(config, secrets);
+        Self::build_with_clock(config, secrets, &system_clock())
+    }
+
+    /// [`build`](Self::build), handing every in-process source `clock` to pace and back off
+    /// on — the process's one clock, which the binary takes from
+    /// [`process_clock`](crate::process_clock).
+    #[must_use]
+    pub fn build_with_clock(
+        config: &Config,
+        secrets: &dyn SecretResolver,
+        clock: &SharedClock,
+    ) -> Self {
+        let (ready, unavailable) = resolve_available_with_clock(config, secrets, clock);
         Self::new(
             ready
                 .into_iter()
