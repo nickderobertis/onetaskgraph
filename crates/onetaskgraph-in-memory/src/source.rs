@@ -5,12 +5,14 @@ use std::sync::{Mutex, MutexGuard};
 
 use chrono::Utc;
 use onetaskgraph_plugin_api::{
+    Asset, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten,
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
     ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
     Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, WriteSupport, commentless, documentless, unwritable, unwritable_field,
+    UpdatedField, WriteSupport, assetless, commentless, documentless, serve_asset_references,
+    unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -72,6 +74,54 @@ struct Held {
     labels: Vec<Label>,
     task_dependencies: Vec<DependencyEdge>,
     project_dependencies: Vec<DependencyEdge>,
+    /// Every record's image assets, each beside the record it belongs to.
+    assets: Vec<HeldAsset>,
+    /// Every asset's bytes this source was ever sent, by SHA-256: what it serves at each URL.
+    ///
+    /// Addressed by content, as a hosted destination's uploads are, so a write that reuses an
+    /// upload by its digest — a copy undone, putting back what a record held before — finds
+    /// the bytes it names even after the record itself was given others.
+    blobs: BTreeMap<Digest, Vec<u8>>,
+}
+
+/// The SHA-256 of an asset's bytes, as `asset_sha256` spells it: made only from a payload that
+/// [`AssetPayload::checked`] has accepted, so its digest is well formed and any bytes it carries
+/// hash to it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Digest(String);
+
+impl Digest {
+    /// The digest of `payload`, once it has passed [`AssetPayload::checked`].
+    fn of(payload: &AssetPayload) -> Result<Self, SourceError> {
+        payload.checked()?;
+        Ok(Self(payload.sha256.clone()))
+    }
+}
+
+/// Which kind of record an asset belongs to: the two that hold assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    Task,
+    Document,
+}
+
+/// One image asset of one record: its name, and the digest of the bytes it is.
+#[derive(Debug)]
+struct HeldAsset {
+    /// The kind of record it belongs to.
+    owner: Owner,
+    /// The record it belongs to.
+    record: NativeId,
+    name: AssetName,
+    sha256: Digest,
+}
+
+/// The URL this source serves the asset `name` with digest `sha256` at.
+///
+/// Addressed by content, as a hosted destination's upload is: bytes that did not change keep
+/// their URL, and bytes that did get a new one.
+fn served_at(sha256: &str, name: &AssetName) -> String {
+    format!("in-memory://assets/{sha256}/{name}")
 }
 
 /// A source that serves exactly the work it was constructed with, plus whatever has been
@@ -106,6 +156,8 @@ impl InMemorySource {
                 labels: config.labels,
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
+                assets: Vec::new(),
+                blobs: BTreeMap::new(),
             }),
         })
     }
@@ -589,8 +641,99 @@ impl TaskSource for InMemorySource {
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         self.documentary()?;
         self.deletable(id)?;
-        self.held()?.documents.retain(|document| &document.id != id);
+        let mut held = self.held()?;
+        held.documents.retain(|document| &document.id != id);
+        held.assets
+            .retain(|asset| !(asset.owner == Owner::Document && &asset.record == id));
         Ok(())
+    }
+
+    async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.listed_assets(Owner::Task, id)
+    }
+
+    async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.listed_assets(Owner::Document, id)
+    }
+
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Owner::Task, id, name)
+    }
+
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.asset_bytes(Owner::Document, id, name)
+    }
+
+    /// The task as [`write_task`](TaskSource::write_task) writes it, its references pointed at
+    /// where this source serves each asset and what it served recorded under
+    /// `onetaskgraph.assets` — a payload without bytes reusing the URL the record already
+    /// records for it — and its asset set replaced by exactly `assets`.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = answers;
+        let uploads = self.uploads(assets)?;
+        let mut item = write.item.clone();
+        // Absent content stays absent: there is nothing in it to point at an upload.
+        let served = item
+            .content
+            .as_deref()
+            .map(|content| serve_asset_references(content, &mut item.metadata, &uploads));
+        item.content = served;
+        let id = self
+            .write_task(&ItemWrite {
+                target: write.target.clone(),
+                item: item.clone(),
+                depends_on: write.depends_on.clone(),
+            })
+            .await?;
+        self.keep_assets(Owner::Task, &id, assets)?;
+        Ok(AssetsWritten {
+            id,
+            content: item.content,
+        })
+    }
+
+    /// The document, on the terms of
+    /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, serde_json::Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = answers;
+        let uploads = self.uploads(assets)?;
+        let mut item = write.item.clone();
+        // Absent content stays absent: there is nothing in it to point at an upload.
+        let served = item
+            .content
+            .as_deref()
+            .map(|content| serve_asset_references(content, &mut item.metadata, &uploads));
+        item.content = served;
+        let id = self
+            .write_document(&ItemWrite {
+                target: write.target.clone(),
+                item: item.clone(),
+                depends_on: Vec::new(),
+            })
+            .await?;
+        self.keep_assets(Owner::Document, &id, assets)?;
+        Ok(AssetsWritten {
+            id,
+            content: item.content,
+        })
     }
 
     /// Set the held task's status, keeping its name when the category is the one it already
@@ -680,6 +823,77 @@ impl TaskSource for InMemorySource {
                 task.metadata
                     .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
             }))
+    }
+
+    /// The task's rendering replaced as [`set_task_rendering`](TaskSource::set_task_rendering)
+    /// replaces it, its references pointed at where this source serves each asset, what it
+    /// served recorded, and its asset set replaced by exactly `assets`.
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let uploads = self.uploads(assets)?;
+        let served = {
+            let mut held = self.held()?;
+            let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
+                return Ok(None);
+            };
+            task.metadata
+                .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            let served = serve_asset_references(content, &mut task.metadata, &uploads);
+            task.content = Some(served.clone());
+            served
+        };
+        self.keep_assets(Owner::Task, id, assets)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: Some(served),
+        }))
+    }
+
+    /// The document's rendering and its asset set, on the terms of
+    /// [`set_task_rendering_with_assets`](TaskSource::set_task_rendering_with_assets).
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &serde_json::Value,
+        _answers: &BTreeMap<String, serde_json::Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        self.documentary()?;
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let uploads = self.uploads(assets)?;
+        let served = {
+            let mut held = self.held()?;
+            let Some(document) = held
+                .documents
+                .iter_mut()
+                .find(|document| &document.id == id)
+            else {
+                return Ok(None);
+            };
+            document
+                .metadata
+                .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+            let served = serve_asset_references(content, &mut document.metadata, &uploads);
+            document.content = Some(served.clone());
+            served
+        };
+        self.keep_assets(Owner::Document, id, assets)?;
+        Ok(Some(AssetsWritten {
+            id: id.clone(),
+            content: Some(served),
+        }))
     }
 
     /// Replace one document's content and its provenance entry together, on the terms of
@@ -873,6 +1087,8 @@ impl TaskSource for InMemorySource {
         // A comment is on its task, so a task that is gone takes them with it: leaving them
         // would hand a later task created under the same id comments nobody wrote on it.
         held.comments.retain(|comment| &comment.task != id);
+        held.assets
+            .retain(|asset| asset.owner != Owner::Task || &asset.record != id);
         Ok(())
     }
 
@@ -988,6 +1204,119 @@ impl TaskSource for InMemorySource {
 }
 
 impl InMemorySource {
+    /// What a write of `assets` serves each asset at: a payload carrying bytes at the URL its
+    /// digest addresses, those bytes kept to serve there, and one without them at the URL its
+    /// record already records.
+    fn uploads(&self, assets: &AssetWrite) -> Result<AssetUploads, SourceError> {
+        if !self.declared().assets.is_native() {
+            return Err(assetless(KIND));
+        }
+        // Nothing is kept here: the bytes are stored by `keep_assets`, once the whole write has
+        // been accepted and its record written, so a refusal leaves nothing behind.
+        let mut uploads = AssetUploads::default();
+        for payload in &assets.assets {
+            let digest = Digest::of(payload)?;
+            if uploads.0.contains_key(&payload.name) {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the asset {} is given twice; next: give each asset once",
+                        payload.name
+                    ),
+                });
+            }
+            let url =
+                match &payload.bytes {
+                    Some(_) => served_at(&payload.sha256, &payload.name),
+                    // Reused only when this source really holds the bytes the record names — or
+                    // this very write sends them under another name: a record a caller handed over
+                    // is no evidence of an upload on its own.
+                    None => assets
+                        .recorded_assets
+                        .as_ref()
+                        .and_then(|recorded| recorded.reusable(&payload.name, &payload.sha256))
+                        .filter(|url| !url.is_empty())
+                        .filter(|_| {
+                            assets.assets.iter().any(|other| {
+                                other.bytes.is_some() && other.sha256 == payload.sha256
+                            }) || self
+                                .held()
+                                .is_ok_and(|held| held.blobs.contains_key(&digest))
+                        })
+                        .map(str::to_owned)
+                        .ok_or_else(|| SourceError::Refused {
+                            message: format!(
+                                "the asset {} carries no bytes and nothing records an upload of it \
+                             with sha256 {}; next: send its bytes",
+                                payload.name, payload.sha256
+                            ),
+                        })?,
+                };
+            uploads.0.insert(
+                payload.name.clone(),
+                AssetUpload {
+                    sha256: payload.sha256.clone(),
+                    url,
+                },
+            );
+        }
+        Ok(uploads)
+    }
+
+    /// Make the record `id` hold exactly the assets `write` names.
+    fn keep_assets(
+        &self,
+        owner: Owner,
+        id: &NativeId,
+        write: &AssetWrite,
+    ) -> Result<(), SourceError> {
+        let mut held = self.held()?;
+        held.assets
+            .retain(|asset| asset.owner != owner || &asset.record != id);
+        for payload in &write.assets {
+            let digest = Digest::of(payload)?;
+            if let Some(bytes) = &payload.bytes {
+                held.blobs.insert(digest.clone(), bytes.clone());
+            }
+            held.assets.push(HeldAsset {
+                owner,
+                record: id.clone(),
+                name: payload.name.clone(),
+                sha256: digest,
+            });
+        }
+        Ok(())
+    }
+
+    fn listed_assets(&self, owner: Owner, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        Ok(self
+            .held()?
+            .assets
+            .iter()
+            .filter(|asset| asset.owner == owner && &asset.record == id)
+            .map(|asset| Asset {
+                name: asset.name.clone(),
+                sha256: asset.sha256.0.clone(),
+                content_type: asset.name.content_type(),
+                path: None,
+            })
+            .collect())
+    }
+
+    fn asset_bytes(
+        &self,
+        owner: Owner,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        let held = self.held()?;
+        Ok(held
+            .assets
+            .iter()
+            .find(|asset| asset.owner == owner && &asset.record == id && &asset.name == name)
+            .and_then(|asset| held.blobs.get(&asset.sha256))
+            .cloned())
+    }
+
     /// Refuse every document call when this source's configuration says it has none.
     ///
     /// In the same words every document-free source uses, because the refusal is the

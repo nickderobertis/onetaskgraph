@@ -41,10 +41,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    DocumentQuery, ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId,
-    Page, PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory,
-    Task, TaskQuery, TaskRef, TextFields, TextQuery,
+    AssetPayload, AssetUploads, AssetWrite, Capabilities, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, ItemKind, ItemWrite,
+    Location, MetadataKey, MetadataMatch, Metering, NativeId, Page, PageRequest, Project,
+    ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
+    TextFields, TextQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,7 @@ use crate::config::Placement;
 use crate::resolve::ResolvedSource;
 use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
 
+use super::assets;
 use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
@@ -675,6 +677,12 @@ struct Prior {
     item: Item,
     /// Its forward edges there.
     edges: Vec<DependencyEdge>,
+    /// The image assets it held there, with the bytes of each its own record does not
+    /// already say the destination serves — `None` when it held none and no write of this
+    /// copy carried any, so putting it back writes it exactly as it did before assets.
+    assets: Option<Vec<AssetPayload>>,
+    /// What its `onetaskgraph.assets` says the destination serves, checked where it was read.
+    recorded: Option<AssetUploads>,
 }
 
 /// One item that landed with an edge whose far end was not written yet.
@@ -1006,6 +1014,9 @@ struct Planned {
     to: SourceName,
     /// What the report says placed it there, for a copy into a source with routes.
     placed: Option<Placement>,
+    /// The image assets its content references, with their bytes as its source holds them,
+    /// in the order the content first references them; none for a project.
+    assets: Vec<AssetPayload>,
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -2730,6 +2741,12 @@ impl Engine {
                 .await?;
         }
         let source = self.readable(&id.source)?;
+        // Read, and refused, before the destination is read and before anything is written:
+        // an asset its source does not hold, and a destination that stores none.
+        let assets = carried_assets(source, &id, &item).await?;
+        if let Some(first) = assets.first() {
+            assets::stores(destination, &id.to_string(), &first.name)?;
+        }
         let edges = forward_edges(source, &id.native, item.level()).await?;
         let (target, held) = self.target(destination, request, &id, &item).await?;
         Ok(Planned {
@@ -2740,6 +2757,7 @@ impl Engine {
             held,
             to: placement.destination.clone(),
             placed: routed.then_some(placement),
+            assets,
         })
     }
 
@@ -3421,7 +3439,15 @@ impl Engine {
             return Ok(None);
         };
         let edges = forward_edges(destination, id, kind).await?;
-        Ok(Some(Prior { item, edges }))
+        let recorded =
+            assets::recorded(described(&item).1).map_err(|error| refused(destination, error))?;
+        let assets = held_assets(destination, kind, id, recorded.as_ref()).await?;
+        Ok(Some(Prior {
+            item,
+            edges,
+            assets,
+            recorded,
+        }))
     }
 
     /// Hand one item to the destination's own write interface, recording how to take it
@@ -3464,7 +3490,16 @@ impl Engine {
         // altered. A restore of an item the write never reached rewrites what is already
         // there, which costs one mutation and is what "either complete or it never
         // happened" is worth.
-        if let (Some(id), Some(prior)) = (target.clone(), prior) {
+        // A write carries assets when the item's content references any, and when the item it
+        // overwrites holds any: what lands then holds exactly the assets this copy carries.
+        let held_assets = prior.as_ref().and_then(|prior| prior.assets.clone());
+        let carrying = !item.assets.is_empty() || held_assets.is_some();
+        let recorded = prior.as_ref().and_then(|prior| prior.recorded.clone());
+        if let (Some(id), Some(mut prior)) = (target.clone(), prior) {
+            if carrying && prior.assets.is_none() {
+                // Putting this item back then has to take away the assets this write adds.
+                prior.assets = Some(Vec::new());
+            }
             journal.record(Undo::Updated {
                 at: destination.name().clone(),
                 id,
@@ -3472,6 +3507,34 @@ impl Engine {
             });
         }
         let landed = match landing {
+            Item::Task(task) if carrying => destination
+                .source()
+                .write_task_with_assets(
+                    &ItemWrite {
+                        target: target.clone(),
+                        item: *task,
+                        depends_on: edges.to_vec(),
+                    },
+                    None,
+                    &assets::write_of(item.assets.clone(), recorded.clone()),
+                )
+                .await
+                .map(|written| written.id)
+                .map_err(|error| refused(destination, error))?,
+            Item::Document(document) if carrying => destination
+                .source()
+                .write_document_with_assets(
+                    &ItemWrite {
+                        target: target.clone(),
+                        item: *document,
+                        depends_on: Vec::new(),
+                    },
+                    None,
+                    &assets::write_of(item.assets.clone(), recorded.clone()),
+                )
+                .await
+                .map(|written| written.id)
+                .map_err(|error| refused(destination, error))?,
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -3674,7 +3737,7 @@ fn changes(
     let Some(held) = held else {
         return true;
     };
-    let outgoing = outgoing(
+    let mut outgoing = outgoing(
         item,
         target.clone(),
         project.clone(),
@@ -3682,7 +3745,175 @@ fn changes(
         delivers,
         Some(held),
     );
+    if (!item.assets.is_empty() || held.assets.is_some())
+        && !lands_as_held(item, held, &mut outgoing)
+    {
+        return true;
+    }
     !same(&held.item, &outgoing, destination) || !same_edges(&held.edges, edges)
+}
+
+/// Whether `held` already holds exactly the assets `item` carries, by name and digest — and,
+/// when it does, `outgoing` made what the destination would store of it.
+///
+/// A destination that serves its assets at a URL says what it holds in its own record,
+/// `onetaskgraph.assets`, and would rewrite the references to the URLs recorded there; one
+/// that keeps them beside the record says so in the assets it lists, and stores the references
+/// as written.
+fn lands_as_held(item: &Planned, held: &Prior, outgoing: &mut Item) -> bool {
+    let Some(recorded) = &held.recorded else {
+        let holds: Vec<onetaskgraph_plugin_api::Asset> = held
+            .assets
+            .iter()
+            .flatten()
+            .map(|payload| onetaskgraph_plugin_api::Asset {
+                name: payload.name.clone(),
+                sha256: payload.sha256.clone(),
+                content_type: payload.content_type,
+                path: None,
+            })
+            .collect();
+        return assets::same_set(&holds, &item.assets);
+    };
+    if recorded.0.len() != item.assets.len() {
+        return false;
+    }
+    let mut served = AssetUploads::default();
+    for payload in &item.assets {
+        let Some(url) = recorded.reusable(&payload.name, &payload.sha256) else {
+            return false;
+        };
+        served.0.insert(
+            payload.name.clone(),
+            onetaskgraph_plugin_api::AssetUpload {
+                sha256: payload.sha256.clone(),
+                url: url.to_owned(),
+            },
+        );
+    }
+    let (content, metadata) = match outgoing {
+        Item::Task(task) => (&mut task.content, &mut task.metadata),
+        Item::Document(document) => (&mut document.content, &mut document.metadata),
+        Item::Project(_) => return true,
+    };
+    if let Some(text) = content {
+        *text = onetaskgraph_plugin_api::serve_asset_references(text, metadata, &served);
+    }
+    true
+}
+
+/// The image assets `item`'s content references, each with its bytes as `source` holds them,
+/// in the order the content first references them — none for a project.
+///
+/// # Errors
+///
+/// [`EngineError::AssetNotHeld`] naming the record and the asset for a reference `source` holds
+/// no asset for, and [`EngineError::SourceRefused`] when it cannot answer.
+async fn carried_assets(
+    source: &ResolvedSource,
+    id: &GlobalId,
+    item: &Item,
+) -> Result<Vec<AssetPayload>, EngineError> {
+    let (content, owner) = match item {
+        Item::Task(task) => (task.content.as_deref(), assets::Owner::Task),
+        Item::Document(document) => (document.content.as_deref(), assets::Owner::Document),
+        Item::Project(_) => return Ok(Vec::new()),
+    };
+    let referenced = onetaskgraph_plugin_api::asset_references(content.unwrap_or_default());
+    if referenced.is_empty() {
+        return Ok(Vec::new());
+    }
+    let listed = match owner {
+        assets::Owner::Document => source.source().document_assets(&id.native).await,
+        assets::Owner::Task => source.source().task_assets(&id.native).await,
+    }
+    .map_err(|error| refused(source, error))?;
+    let mut carried = Vec::with_capacity(referenced.len());
+    for name in referenced {
+        let not_held = || EngineError::AssetNotHeld {
+            record: id.to_string(),
+            asset: name.to_string(),
+        };
+        if !listed.iter().any(|asset| asset.name == name) {
+            return Err(not_held());
+        }
+        let bytes = match owner {
+            assets::Owner::Document => source.source().document_asset(&id.native, &name).await,
+            assets::Owner::Task => source.source().task_asset(&id.native, &name).await,
+        }
+        .map_err(|error| refused(source, error))?
+        .ok_or_else(not_held)?;
+        carried.push(AssetPayload::of(name, bytes));
+    }
+    Ok(carried)
+}
+
+/// The image assets the item `id` of kind `kind` holds at `destination`, as [`Prior::assets`]
+/// keeps them: `None` for a destination that stores none, for a project, and for an item that
+/// holds none.
+async fn held_assets(
+    destination: &ResolvedSource,
+    kind: Level,
+    id: &NativeId,
+    recorded: Option<&AssetUploads>,
+) -> Result<Option<Vec<AssetPayload>>, EngineError> {
+    let owner = match kind {
+        Level::Task => assets::Owner::Task,
+        Level::Document => assets::Owner::Document,
+        Level::Project => return Ok(None),
+    };
+    if !destination.source().capabilities().assets.is_native() {
+        return Ok(None);
+    }
+    let listed = match owner {
+        assets::Owner::Document => destination.source().document_assets(id).await,
+        assets::Owner::Task => destination.source().task_assets(id).await,
+    }
+    .map_err(|error| refused(destination, error))?;
+    if listed.is_empty() {
+        // A destination that lists none may still serve some — one reached over the stdio
+        // protocol lists nothing — and its own record of what it uploaded is then what it holds,
+        // every one of them reusable by its digest without reading a byte back.
+        return Ok(recorded
+            .filter(|recorded| !recorded.0.is_empty())
+            .map(|recorded| {
+                recorded
+                    .0
+                    .iter()
+                    .map(|(name, upload)| AssetPayload {
+                        name: name.clone(),
+                        sha256: upload.sha256.clone(),
+                        content_type: name.content_type(),
+                        bytes: None,
+                    })
+                    .collect()
+            }));
+    }
+    let mut held = Vec::with_capacity(listed.len());
+    for asset in listed {
+        // Bytes the destination's own record says it serves are not read back: putting them
+        // back reuses what it serves.
+        let bytes = if recorded
+            .is_some_and(|recorded| recorded.reusable(&asset.name, &asset.sha256).is_some())
+        {
+            None
+        } else {
+            match owner {
+                assets::Owner::Document => {
+                    destination.source().document_asset(id, &asset.name).await
+                }
+                assets::Owner::Task => destination.source().task_asset(id, &asset.name).await,
+            }
+            .map_err(|error| refused(destination, error))?
+        };
+        held.push(AssetPayload {
+            name: asset.name,
+            sha256: asset.sha256,
+            content_type: asset.content_type,
+            bytes,
+        });
+    }
+    Ok(Some(held))
 }
 
 /// Remove one item this copy created, through the destination's own write interface.
@@ -3704,6 +3935,45 @@ async fn restore(
     id: &NativeId,
     prior: &Prior,
 ) -> Result<(), SourceError> {
+    if let Some(held) = &prior.assets {
+        let assets = AssetWrite {
+            assets: held.clone(),
+            recorded_assets: prior.recorded.clone(),
+        };
+        match &prior.item {
+            Item::Task(task) => {
+                return destination
+                    .source()
+                    .write_task_with_assets(
+                        &ItemWrite {
+                            target: Some(id.clone()),
+                            item: (**task).clone(),
+                            depends_on: prior.edges.clone(),
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .map(|_| ());
+            }
+            Item::Document(document) => {
+                return destination
+                    .source()
+                    .write_document_with_assets(
+                        &ItemWrite {
+                            target: Some(id.clone()),
+                            item: (**document).clone(),
+                            depends_on: Vec::new(),
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .map(|_| ());
+            }
+            Item::Project(_) => {}
+        }
+    }
     match &prior.item {
         Item::Task(task) => destination
             .source()
@@ -4191,6 +4461,7 @@ fn carried(
         MetadataKey::COPIES_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
+        MetadataKey::ASSETS_KEY,
     ] {
         carried.remove(kept);
         if let Some(held) = own.and_then(|own| own.get(kept)) {

@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
-    Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody,
+    DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
+    MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless,
     commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
@@ -881,6 +882,153 @@ pub trait TaskSource: Send + Sync {
         })
     }
 
+    /// The image assets the task `id` holds, or none when it holds none or this source holds
+    /// no such task.
+    ///
+    /// Defaulted to none, which is what keeps assets an addition rather than a break: a source
+    /// that keeps no assets needs no edit and reports every record as holding none. A source
+    /// declaring [`Capabilities::assets`] native answers what it holds for the record, in any
+    /// order — the engine orders them by the content's first reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not answer.
+    async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        let _ = id;
+        Ok(Vec::new())
+    }
+
+    /// The image assets the document `id` holds, on exactly the terms of
+    /// [`task_assets`](Self::task_assets).
+    ///
+    /// # Errors
+    ///
+    /// As [`task_assets`](Self::task_assets).
+    async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        let _ = id;
+        Ok(Vec::new())
+    }
+
+    /// The bytes of the asset `name` the task `id` holds, or `None` when it holds no such asset
+    /// or this source holds no such task.
+    ///
+    /// Defaulted to `None`, on the terms of [`task_assets`](Self::task_assets).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not answer.
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        let _ = (id, name);
+        Ok(None)
+    }
+
+    /// The bytes of the asset `name` the document `id` holds, on exactly the terms of
+    /// [`task_asset`](Self::task_asset).
+    ///
+    /// # Errors
+    ///
+    /// As [`task_asset`](Self::task_asset).
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        let _ = (id, name);
+        Ok(None)
+    }
+
+    /// Create or update one task carrying image assets, in one write: the task as
+    /// [`write_task`](Self::write_task) writes it — or, with `answers`, as
+    /// [`write_task_rendered`](Self::write_task_rendered) does — and `assets` as the record's
+    /// whole asset set, answering with where it landed and the content as stored.
+    ///
+    /// Only a source declaring [`Capabilities::assets`] native is asked, and the engine has
+    /// already checked that every reference in the content names one of `assets` and every one
+    /// of `assets` is referenced. A source that keeps the bytes beside the record stores each
+    /// payload under its name, removes every asset the record held that `assets` does not
+    /// name, and answers the content unchanged. A source that serves them at a URL uploads each
+    /// payload that carries bytes, reuses the URL [`AssetWrite::recorded_assets`] records for
+    /// each that does not, and writes the record through
+    /// [`serve_asset_references`](crate::serve_asset_references) — so its references point at
+    /// those URLs, its [`MetadataKey::ASSETS_KEY`] records each `{sha256, url}`, and a
+    /// rendering's `body_digest` stays true of what landed — answering the content it wrote.
+    ///
+    /// Defaulted to [`assetless`], which is what a source with no assets answers.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_task`](Self::write_task), and [`SourceError::Refused`] from a source that
+    /// keeps no assets.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = (write, answers, assets);
+        Err(assetless(self.kind()))
+    }
+
+    /// Create or update one document carrying image assets, on exactly the terms of
+    /// [`write_task_with_assets`](Self::write_task_with_assets).
+    ///
+    /// # Errors
+    ///
+    /// As [`write_task_with_assets`](Self::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        let _ = (write, answers, assets);
+        Err(assetless(self.kind()))
+    }
+
+    /// Replace one task's rendering as [`set_task_rendering`](Self::set_task_rendering) does,
+    /// and its asset set as [`write_task_with_assets`](Self::write_task_with_assets) does, in
+    /// one write; or answer `None` when this source holds no such task.
+    ///
+    /// Defaulted to [`assetless`].
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_rendering`](Self::set_task_rendering), and [`SourceError::Refused`] from a
+    /// source that keeps no assets.
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let _ = (id, content, provenance, answers, assets);
+        Err(assetless(self.kind()))
+    }
+
+    /// Replace one document's rendering and its asset set, on exactly the terms of
+    /// [`set_task_rendering_with_assets`](Self::set_task_rendering_with_assets).
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_rendering_with_assets`](Self::set_task_rendering_with_assets).
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let _ = (id, content, provenance, answers, assets);
+        Err(assetless(self.kind()))
+    }
+
     /// What this source has sent to its backend since it was built and what that spent, or
     /// `None` when it does not meter its own requests.
     ///
@@ -950,6 +1098,29 @@ pub trait SourcePlugin: Send + Sync + 'static {
         config: &serde_json::Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError>;
+
+    /// Build a live source from one configuration block, handing it the clock it paces and
+    /// backs off on.
+    ///
+    /// The binary builds every in-process source through this, with the process's one
+    /// [`SharedClock`] — [`system_clock`](crate::system_clock) unless a test asked for
+    /// simulated time. Defaulted to [`build`](Self::build), which ignores the clock: a plugin
+    /// that never waits needs no edit, and one that does overrides this and routes its waits
+    /// through `clock`.
+    ///
+    /// # Errors
+    ///
+    /// As [`build`](Self::build).
+    fn build_with_clock(
+        &self,
+        name: &SourceName,
+        config: &serde_json::Value,
+        secrets: &dyn SecretResolver,
+        clock: SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
+        let _ = clock;
+        self.build(name, config, secrets)
+    }
 
     /// The fields of this plugin's `config:` block that name a filesystem path, as dotted
     /// paths into that block.

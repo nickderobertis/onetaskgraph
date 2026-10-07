@@ -79,7 +79,9 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
-  `StatusNames`, `StatusName` and `UnmappedStatus`; and `SourceError`.
+  `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
+  `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
+  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -918,6 +920,23 @@ them do; this is the inventory of what is owed, not a status board.
     a copy into another folder, a board or a Linear workspace carries the content, the caller's
     keys and the entry, and no answers — with about ten kilobytes of JSON under one caller key
     reading back whole on the board's body slot and in a Linear project's `content`.
+82. A task and a document store the image assets `--asset` names on a folder of Markdown —
+    one of every accepted extension, upper and mixed case included — and `show --json` lists
+    each as `{name, sha256, content_type, path}` in the order the content first references it,
+    `[]` for a record holding none; every link outside `![alt](./<name>)` is stored, shown and
+    copied as written, and so is an image escaped or inside code, which is no reference —
+    copied into a folder of Markdown and into a plugin serving assets alike. Each refusal a create owes names the file or the reference and writes
+    nothing; a render keeps, replaces by name and drops; two records keep their own bytes under
+    one name; and a record replaced or removed takes its assets with it.
+83. A copy carries a record's assets: into a folder of Markdown byte for byte with the content
+    unchanged; into a stdio plugin that serves them at URLs with every reference rewritten, its
+    `onetaskgraph.assets` recorded, the rendering's `body_digest` re-recorded, and only changed
+    bytes sent again; into a source declaring none refused naming the source, the record and the
+    asset before anything is written for it. A record referencing an asset it does not hold is
+    refused naming both, and a record referencing none sends no asset member to any plugin.
+84. The simulated clock advances only while every attached process and every loopback handler
+    is waiting, never sleeps in real time, and gives the same virtual times on every run; the
+    binary attaches to it as the client its environment names, and to nothing without it.
 
 ## What a copied document's references are pointed at
 

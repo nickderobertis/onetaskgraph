@@ -1092,7 +1092,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "onetaskgraph"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "clap",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "assert_cmd",
  "jsonschema",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e-support"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1164,11 +1164,12 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "onetaskgraph-github-projects"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1186,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects-e2e"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "onetaskgraph-e2e-support",
  "onetaskgraph-github-projects",
@@ -1195,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-in-memory"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1209,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1226,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear-e2e"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "onetaskgraph-core",
  "onetaskgraph-e2e-support",
@@ -1238,11 +1239,11 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-live"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "onetaskgraph-local-md"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1259,21 +1260,24 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-plugin-api"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
+ "pulldown-cmark",
  "schemars",
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
 ]
 
 [[package]]
 name = "onetaskgraph-status-options"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
@@ -1284,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options-e2e"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "onetaskgraph-e2e-support",
  "serde_json",
@@ -1436,6 +1440,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]
@@ -2061,6 +2076,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-general-category"

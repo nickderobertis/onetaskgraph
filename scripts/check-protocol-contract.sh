@@ -107,6 +107,32 @@ NOT_METHODS = {
     "set_task_rendering": NOT_CARRIED_REASON,
     "set_document_rendering": NOT_CARRIED_REASON,
     "set_project_rendering": NOT_CARRIED_REASON,
+    "set_task_rendering_with_assets": NOT_CARRIED_REASON,
+    "set_document_rendering_with_assets": NOT_CARRIED_REASON,
+    "write_task_with_assets": (
+        "not a message of its own: §4.9a says it crosses as `write_task` carrying the "
+        "`assets` member"
+    ),
+    "write_document_with_assets": (
+        "not a message of its own: §4.9a says it crosses as `write_document` carrying the "
+        "`assets` member"
+    ),
+    "task_assets": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "reports every record as holding no asset"
+    ),
+    "document_assets": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "reports every record as holding no asset"
+    ),
+    "task_asset": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "reports every record as holding no asset"
+    ),
+    "document_asset": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "reports every record as holding no asset"
+    ),
 }
 
 # The one protocol method with no trait method behind it: it stands for building the

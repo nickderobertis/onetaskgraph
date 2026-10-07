@@ -9,14 +9,16 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Read as _, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
 use onetaskgraph_core::{
     Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, ProjectCreate,
     RenderRequest, RenderTemplate, RenderedRecord, TaskCreate,
 };
-use onetaskgraph_plugin_api::{MetadataKey, NativeId, Repository, SourceName};
+use onetaskgraph_plugin_api::{
+    AssetName, AssetPayload, MetadataKey, NativeId, Repository, SourceName,
+};
 use serde_json::Value;
 
 use crate::cli::{
@@ -40,6 +42,7 @@ pub(crate) async fn create_task(
     };
     let depends_on = ids(&args.depends_on)?;
     let delivers = ids(&args.delivers)?;
+    let assets = asset_files(&args.assets.asset)?;
     let engine = engine(loaded);
     let created = engine
         .create_task(&TaskCreate {
@@ -53,6 +56,7 @@ pub(crate) async fn create_task(
             depends_on,
             delivers,
             metadata: item.metadata,
+            assets,
         })
         .await
         .map_err(|error| Failure::from(&error))?;
@@ -82,6 +86,7 @@ pub(crate) async fn create_document(
         Err(Refusal::Answers(message)) => return Ok(refused(&message)),
         Err(Refusal::Failed(failure)) => return Err(failure),
     };
+    let assets = asset_files(&args.assets.asset)?;
     let engine = engine(loaded);
     let created = engine
         .create_document(&DocumentCreate {
@@ -93,17 +98,18 @@ pub(crate) async fn create_document(
             labels: args.item.label.clone(),
             repositories: item.repositories,
             metadata: item.metadata,
+            assets,
         })
         .await
         .map_err(|error| Failure::from(&error))?;
     match loaded.config.output() {
         OutputFormat::Text => emit(out, &created.id.to_string(), "the document's id")?,
         OutputFormat::Json => {
-            let response = engine
-                .document(&created.id)
+            let detail = engine
+                .document_detail(&created.id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            emit(out, &json(&response, "the document")?, "the document")?;
+            emit(out, &json(&detail, "the document")?, "the document")?;
         }
     }
     Ok(EXIT_OK)
@@ -149,9 +155,11 @@ pub(crate) async fn regenerate(
     loaded: &Loaded,
     record: RenderedRecord,
     args: &RenderArgs,
+    assets: &[PathBuf],
 ) -> Result<u8, Failure> {
     let id = qualified(&args.id)?;
-    match regenerated(out, loaded, record, &id, args).await {
+    let assets = asset_files(assets)?;
+    match regenerated(out, loaded, record, &id, args, assets).await {
         Ok(()) => Ok(EXIT_OK),
         Err(Refusal::Answers(message)) => Ok(refused(&message)),
         Err(Refusal::Failed(failure)) => Err(failure),
@@ -164,6 +172,7 @@ async fn regenerated(
     record: RenderedRecord,
     id: &GlobalId,
     args: &RenderArgs,
+    assets: Vec<AssetPayload>,
 ) -> Result<(), Refusal> {
     let template = input(
         args.template.as_deref(),
@@ -183,6 +192,7 @@ async fn regenerated(
                     },
                     RenderTemplate::Given,
                 ),
+                assets,
                 ..RenderRequest::default()
             },
         )
@@ -234,6 +244,56 @@ async fn regenerated(
     };
     emit(out, rendered.trim_end(), "the rendering")?;
     Ok(())
+}
+
+/// The image assets `paths` name, each read whole and named by its file's base name.
+///
+/// Refused by name before anything is built or asked: a base name that is not an asset name —
+/// an extension outside .png, .jpg, .jpeg, .gif and .webp among them — two paths with one base
+/// name, and a file that cannot be read.
+fn asset_files(paths: &[PathBuf]) -> Result<Vec<AssetPayload>, Failure> {
+    let mut assets: Vec<AssetPayload> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let base = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let name = AssetName::new(base).map_err(|problem| {
+            Failure::decided(
+                "asset-name",
+                format!(
+                    "--asset {}: {problem}\n\
+                     next: rename the file to a bare name ending in one of those extensions, \
+                     and reference it as `![alt](./<name>)`.",
+                    path.display()
+                ),
+            )
+        })?;
+        if let Some(earlier) = assets.iter().position(|held| held.name == name) {
+            return Err(Failure::decided(
+                "asset-given-twice",
+                format!(
+                    "--asset {} and --asset {} have one base name, {name}, and an asset is \
+                     stored under its base name\n\
+                     next: rename one of the two files.",
+                    paths[earlier].display(),
+                    path.display()
+                ),
+            ));
+        }
+        let bytes = std::fs::read(path).map_err(|error| {
+            Failure::decided(
+                "asset-unreadable",
+                format!(
+                    "--asset {}: the file could not be read: {error}\n\
+                     next: name an image file this process can read.",
+                    path.display()
+                ),
+            )
+        })?;
+        assets.push(AssetPayload::of(name, bytes));
+    }
+    Ok(assets)
 }
 
 /// `task answers`, `project answers` and `document answers`: the answers stored beside the item, as YAML — or,

@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, DependencyEdge, Direction, Document, DocumentQuery, Health,
-    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport,
-    unwritable_field, unwritable_metadata,
+    AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, DependencyEdge, Direction,
+    Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord, Metering,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery, SourceError,
+    SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport, assetless, unwritable_field, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,12 +28,13 @@ use super::connection::{Connection, Peer};
 use super::wire::{
     AddCommentParams, CommentResult, CommentsParams, CommentsResult, ContentParams, ContentResult,
     DeleteCommentParams, DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult,
-    DependencyParams, DocumentDir, DocumentQueryParams, DocumentResult, DocumentWriteParams,
-    EditCommentParams, EngineIdentity, IdParams, InitializeParams, InitializeResult, LabelParams,
-    MetadataParams, MeteringResult, PROTOCOL_VERSION, PriorityParams, PriorityResult,
-    ProjectQueryParams, ProjectResult, ProjectWriteParams, Request, StatusParams, StatusResult,
-    TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
-    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
+    DependencyParams, DocumentAssetWriteParams, DocumentDir, DocumentQueryParams, DocumentResult,
+    DocumentWriteParams, EditCommentParams, EngineIdentity, IdParams, InitializeParams,
+    InitializeResult, LabelParams, MetadataParams, MeteringResult, PROTOCOL_VERSION,
+    PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
+    StatusParams, StatusResult, TaskAssetWriteParams, TaskQueryParams, TaskResult, TaskWriteParams,
+    UpdateParams, UpdateResult, WriteResult, after_the_first_vocabulary, knows_every_category,
+    spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -534,6 +535,16 @@ impl SubprocessSource {
         }
     }
 
+    /// Refuse an asset write to a plugin whose handshake did not declare assets native: one
+    /// written before assets would drop the bytes in silence (§2.1), so it is never sent one.
+    fn stores_assets(&self) -> Result<(), SourceError> {
+        if self.capabilities.assets.is_native() {
+            Ok(())
+        } else {
+            Err(assetless(self.kind))
+        }
+    }
+
     /// Refuse a task write this plugin could only drop part of in silence.
     fn writable_task(&self, task: &Task) -> Result<(), SourceError> {
         self.knows(task.status.category)?;
@@ -716,6 +727,75 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.id)
+    }
+
+    /// A `write_task` carrying `assets` beside the write, answered with the id and the content
+    /// the plugin stored; see `docs/plugin-protocol.md` §4.9.
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        answers: Option<&BTreeMap<String, Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        if answers.is_some() {
+            return Err(self.unrendered("a task create from a template"));
+        }
+        self.stores_assets()?;
+        self.writable_task(&write.item)?;
+        self.ask(
+            "write_task",
+            params(&TaskAssetWriteParams {
+                write: write.clone(),
+                assets: assets.clone(),
+            }),
+        )
+        .await
+    }
+
+    /// A `write_document` carrying `assets`, on the terms of
+    /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        answers: Option<&BTreeMap<String, Value>>,
+        assets: &AssetWrite,
+    ) -> Result<AssetsWritten, SourceError> {
+        if answers.is_some() {
+            return Err(self.unrendered("a document create from a template"));
+        }
+        self.stores_assets()?;
+        self.ask(
+            "write_document",
+            params(&DocumentAssetWriteParams {
+                write: write.clone(),
+                assets: assets.clone(),
+            }),
+        )
+        .await
+    }
+
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let _ = (id, content, provenance, answers, assets);
+        Err(self.unrendered("a task's regenerate in place"))
+    }
+
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        answers: &BTreeMap<String, Value>,
+        assets: &AssetWrite,
+    ) -> Result<Option<AssetsWritten>, SourceError> {
+        let _ = (id, content, provenance, answers, assets);
+        Err(self.unrendered("a document's regenerate in place"))
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {

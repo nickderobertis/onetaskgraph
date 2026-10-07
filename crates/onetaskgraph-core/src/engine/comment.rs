@@ -13,12 +13,13 @@
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Comment, CommentBody, Cursor, NativeId, NewComment, Page, PageRequest, SourceError, SourceName,
-    Task, TaskDetailRead, TaskQuery,
+    Asset, Comment, CommentBody, Cursor, Document, NativeId, NewComment, Page, PageRequest,
+    SourceError, SourceName, Task, TaskDetailRead, TaskQuery,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::assets;
 use super::fetch::{fits, unrepeated};
 use super::{Answer, ConfiguredSource, Engine, EngineError, Qualified, delivery};
 use crate::GlobalId;
@@ -62,6 +63,32 @@ pub struct TaskDetail {
     /// reader.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comments: Option<Vec<Comment>>,
+    /// The image assets the task holds, in the order its content first references them —
+    /// `[]` for a task that holds none.
+    ///
+    /// **Absent** for a task that was not found, and for one whose assets could not be read —
+    /// the failure then in the response's `errors`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets: Option<Vec<Asset>>,
+}
+
+/// One document as `document show` reports it: the response every show verb answers with,
+/// and the document's image assets beside it.
+///
+/// The response is flattened rather than nested, so a reader of `document show --json`
+/// written before assets existed reads exactly the members it read before.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DocumentDetail {
+    /// The document, its plan and any failure, exactly as [`Engine::document`] answers.
+    #[serde(flatten)]
+    pub response: QueryResponse<Qualified<Document>>,
+    /// The image assets the document holds, in the order its content first references them
+    /// — `[]` for a document that holds none.
+    ///
+    /// **Absent** for a document that was not found, and for one whose assets could not be
+    /// read — the failure then in the response's `errors`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets: Option<Vec<Asset>>,
 }
 
 /// Several tasks as `task show-many` reports them: one [`TaskDetail`] per id asked for, in
@@ -133,6 +160,7 @@ impl Engine {
                             },
                         ),
                         comments: None,
+                        assets: None,
                     })
                     .collect(),
             };
@@ -176,6 +204,7 @@ impl Engine {
                         errors: answer.errors.clone(),
                     },
                     comments: None,
+                    assets: None,
                 })
                 .collect();
         };
@@ -237,9 +266,95 @@ impl Engine {
             } else {
                 None
             };
-            details.push(TaskDetail { response, comments });
+            let assets = match response.items.first() {
+                Some(task) => match source.source().task_assets(&id.native).await {
+                    Ok(listed) => Some(assets::ordered(listed, task.item.content.as_deref())),
+                    Err(error) => {
+                        response.errors.push(SourceFailure {
+                            source: source.name().clone(),
+                            error,
+                        });
+                        None
+                    }
+                },
+                None => None,
+            };
+            details.push(TaskDetail {
+                response,
+                comments,
+                assets,
+            });
         }
         details
+    }
+
+    /// The image assets the task or document `item`, as `response` read it, holds — in the
+    /// order its content first references them — or `None` when it was not found or its
+    /// assets could not be read, the failure then pushed onto `response`'s errors.
+    async fn assets_of<T>(
+        &self,
+        response: &mut QueryResponse<Qualified<T>>,
+        content: impl Fn(&T) -> Option<&str>,
+        owner: assets::Owner,
+    ) -> Option<Vec<Asset>> {
+        let item = response.items.first()?;
+        let source = self
+            .ready()
+            .find(|source| source.name() == &item.id.source)?;
+        let listed = match owner {
+            assets::Owner::Document => source.source().document_assets(&item.id.native).await,
+            assets::Owner::Task => source.source().task_assets(&item.id.native).await,
+        };
+        match listed {
+            Ok(listed) => Some(assets::ordered(listed, content(&item.item))),
+            Err(error) => {
+                response.errors.push(SourceFailure {
+                    source: source.name().clone(),
+                    error,
+                });
+                None
+            }
+        }
+    }
+
+    /// One task by its qualified id with its image assets beside it, and without its comments
+    /// — what `task show --no-comments` answers with.
+    ///
+    /// # Errors
+    ///
+    /// As [`task`](Self::task).
+    pub async fn task_without_comments(&self, id: &GlobalId) -> Result<TaskDetail, EngineError> {
+        let mut response = self.task(id).await?;
+        let assets = self
+            .assets_of(
+                &mut response,
+                |task: &Task| task.content.as_deref(),
+                assets::Owner::Task,
+            )
+            .await;
+        Ok(TaskDetail {
+            response,
+            comments: None,
+            assets,
+        })
+    }
+
+    /// One document by its qualified id with its image assets beside it: what `document
+    /// show` answers with.
+    ///
+    /// # Errors
+    ///
+    /// As [`document`](Self::document).
+    pub async fn document_detail(&self, id: &GlobalId) -> Result<DocumentDetail, EngineError> {
+        let mut response = self.document(id).await?;
+        let assets = self
+            .assets_of(
+                &mut response,
+                |document: &Document| document.content.as_deref(),
+                assets::Owner::Document,
+            )
+            .await;
+        Ok(DocumentDetail { response, assets })
     }
 
     /// Every comment on one task, oldest first.

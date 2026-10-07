@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite, MetadataKey,
-    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    WriteSupport,
+    AssetWrite, Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite,
+    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -438,6 +438,93 @@ pub(crate) struct TaskWriteParams {
     pub(crate) write: ItemWrite<Task>,
 }
 
+/// The params of a `write_task` that carries a record's image assets: the write, and beside
+/// it the two members of [`AssetWrite`] — `assets` and `recorded_assets` — which are the
+/// in-process trait's own argument, flattened, so the two cannot spell a field differently.
+///
+/// A plain write never carries the `assets` member at all, which is what lets a plugin written
+/// before assets keep reading every write it is sent; one that carries it, even empty, is a
+/// write of the record's whole asset set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskAssetWriteParams {
+    pub(crate) write: ItemWrite<Task>,
+    #[serde(flatten)]
+    pub(crate) assets: AssetWrite,
+}
+
+/// [`TaskAssetWriteParams`] for a document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DocumentAssetWriteParams {
+    pub(crate) write: ItemWrite<Document>,
+    #[serde(flatten)]
+    pub(crate) assets: AssetWrite,
+}
+
+/// A `write_task` or `write_document` as the reference host reads it: a plain write, or —
+/// when `assets` is present — one carrying the record's whole asset set.
+///
+/// Read through [`RawServedWrite`], so a write carrying `recorded_assets` without `assets` —
+/// a shape §4.9a does not have — is refused as malformed where it is decoded rather than
+/// represented here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    try_from = "RawServedWrite<T>",
+    bound(deserialize = "T: Deserialize<'de>")
+)]
+pub(crate) struct ServedWriteParams<T> {
+    pub(crate) write: ItemWrite<T>,
+    /// The record's assets, for a write that carries them.
+    pub(crate) assets: Option<AssetWrite>,
+}
+
+/// [`ServedWriteParams`] exactly as the line spells it, before its members are checked
+/// against one another.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub(crate) struct RawServedWrite<T> {
+    write: ItemWrite<T>,
+    /// Absent is a plain write; `null` is not a shape §4.9a has, and is refused.
+    #[serde(default, deserialize_with = "not_null")]
+    assets: Option<Vec<onetaskgraph_plugin_api::AssetPayload>>,
+    #[serde(default, deserialize_with = "not_null")]
+    recorded_assets: Option<onetaskgraph_plugin_api::AssetUploads>,
+}
+
+/// An optional member that, when present, is its value: absent reads as `None` through
+/// `#[serde(default)]`, and an explicit `null` is refused as the shape it is not.
+fn not_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl<T> TryFrom<RawServedWrite<T>> for ServedWriteParams<T> {
+    type Error = String;
+
+    fn try_from(raw: RawServedWrite<T>) -> Result<Self, Self::Error> {
+        let assets = match (raw.assets, raw.recorded_assets) {
+            (None, Some(_)) => {
+                return Err(
+                    "a write carrying `recorded_assets` names its assets in `assets` \
+                            (docs/plugin-protocol.md §4.9a)"
+                        .to_owned(),
+                );
+            }
+            (None, None) => None,
+            (Some(assets), recorded_assets) => Some(AssetWrite {
+                assets,
+                recorded_assets,
+            }),
+        };
+        Ok(Self {
+            write: raw.write,
+            assets,
+        })
+    }
+}
+
 /// `write_project` parameters (§4.9).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProjectWriteParams {
@@ -713,4 +800,145 @@ fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.
     pub(crate) id: NativeId,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten, Document,
+        ItemWrite, NativeId,
+    };
+    use serde_json::{Value, json};
+
+    use super::{DocumentAssetWriteParams, TaskAssetWriteParams};
+
+    /// The member names of one object.
+    fn members(value: &Value) -> BTreeSet<String> {
+        value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// The property names a root of the emitted schema declares.
+    fn declared(root: &str) -> BTreeSet<String> {
+        members(&crate::schema_bundle()["roots"][root]["properties"])
+    }
+
+    /// The trait's own argument, every member present.
+    fn whole() -> AssetWrite {
+        let name = AssetName::new("before.png").expect("a name");
+        AssetWrite {
+            assets: vec![AssetPayload::of(name.clone(), vec![1, 2, 3])],
+            recorded_assets: Some(AssetUploads(BTreeMap::from([(
+                name,
+                AssetUpload {
+                    sha256: "00".to_owned(),
+                    url: "https://example.invalid/before.png".to_owned(),
+                },
+            )]))),
+        }
+    }
+
+    #[test]
+    fn a_writes_asset_members_are_the_trait_arguments_and_the_emitted_schemas() {
+        let document: Document = serde_json::from_value(json!({
+            "id": "D-1", "title": "Design", "content": "![b](./before.png)", "labels": []
+        }))
+        .expect("a document");
+        let wire = serde_json::to_value(DocumentAssetWriteParams {
+            write: ItemWrite {
+                target: Some(NativeId::from("D-1")),
+                item: document,
+                depends_on: Vec::new(),
+            },
+            assets: whole(),
+        })
+        .expect("serializes");
+        let mut beside_the_write = members(&wire);
+        assert!(beside_the_write.remove("write"));
+        // What crosses beside a write is exactly the in-process argument's members, and those
+        // are exactly what the emitted `AssetWrite` root declares.
+        assert_eq!(
+            beside_the_write,
+            members(&serde_json::to_value(whole()).unwrap())
+        );
+        assert_eq!(beside_the_write, declared("AssetWrite"));
+        assert_eq!(members(&wire["assets"][0]), declared("AssetPayload"));
+        assert_eq!(
+            members(&wire["recorded_assets"]["before.png"]),
+            declared("AssetUpload")
+        );
+        let answered = serde_json::to_value(AssetsWritten {
+            id: NativeId::from("D-1"),
+            content: Some("![b](https://example.invalid/before.png)".to_owned()),
+        })
+        .unwrap();
+        assert_eq!(members(&answered), declared("AssetsWritten"));
+
+        // A task's asset write carries the same members beside its own `write`.
+        let task = serde_json::to_value(TaskAssetWriteParams {
+            write: ItemWrite {
+                target: None,
+                item: serde_json::from_value(json!({
+                    "id": "T-1", "title": "Alpha", "content": null,
+                    "status": {"category": "todo", "name": "Todo"}, "labels": []
+                }))
+                .expect("a task"),
+                depends_on: Vec::new(),
+            },
+            assets: whole(),
+        })
+        .unwrap();
+        let mut task_members = members(&task);
+        assert!(task_members.remove("write"));
+        assert_eq!(task_members, beside_the_write);
+
+        // The reference host reads what the engine sends through a shape of its own; both
+        // halves of it read back exactly the trait's argument, and a plain write reads as none.
+        for sent in [wire, task] {
+            let served: super::ServedWriteParams<Value> =
+                serde_json::from_value(sent).expect("the host reads the write");
+            assert_eq!(served.assets, Some(whole()));
+        }
+        let plain: super::ServedWriteParams<Value> = serde_json::from_value(json!({
+            "write": {"target": null, "item": {}, "depends_on": []}
+        }))
+        .expect("the host reads a plain write");
+        assert!(plain.assets.is_none());
+        for null in ["assets", "recorded_assets"] {
+            let mut sent = json!({"write": {"target": null, "item": {}, "depends_on": []}});
+            sent[null] = Value::Null;
+            assert!(
+                serde_json::from_value::<super::ServedWriteParams<Value>>(sent).is_err(),
+                "{null}: null is refused rather than read as absent"
+            );
+        }
+        // The emitted schema and the decoders agree about `null`: neither member admits it.
+        let bundle = crate::schema_bundle();
+        let bytes = &bundle["roots"]["AssetPayload"]["properties"]["bytes"];
+        assert_eq!(bytes["type"], json!("string"), "{bytes}");
+        let recorded = bundle["roots"]["AssetWrite"]["properties"]["recorded_assets"].to_string();
+        assert!(!recorded.contains("null"), "{recorded}");
+        let mut payload = serde_json::to_value(&whole().assets[0]).unwrap();
+        payload["bytes"] = Value::Null;
+        assert!(serde_json::from_value::<AssetPayload>(payload).is_err());
+        assert!(
+            serde_json::from_value::<AssetWrite>(json!({"assets": [], "recorded_assets": null}))
+                .is_err()
+        );
+        let orphaned = serde_json::from_value::<super::ServedWriteParams<Value>>(json!({
+            "write": {"target": null, "item": {}, "depends_on": []},
+            "recorded_assets": {}
+        }))
+        .expect_err("recorded uploads without assets are refused");
+        assert!(
+            orphaned.to_string().contains("recorded_assets"),
+            "{orphaned}"
+        );
+    }
 }
