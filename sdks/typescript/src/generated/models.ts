@@ -209,7 +209,7 @@ export interface AssetsWritten {
  * serves that asset, for a source that serves them at a URL; unchanged for one that keeps
  * them beside the record.
  */
-content?: (string | null)
+content: (string | null)
 /**
  * The id the destination holds the record under.
  */

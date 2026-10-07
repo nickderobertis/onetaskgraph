@@ -424,14 +424,36 @@ fn present_object<'de, D: Deserializer<'de>>(
 /// What an asset-carrying write answers with: where the record now is, and the content the
 /// destination stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = content_required)]
 pub struct AssetsWritten {
     /// The id the destination holds the record under.
     pub id: NativeId,
     /// The content as stored — each `./<name>` reference pointed at where the destination
     /// serves that asset, for a source that serves them at a URL; unchanged for one that keeps
     /// them beside the record.
-    #[serde(default)]
+    // Required and nullable, as docs/plugin-protocol.md §4.9a states it: an answer that leaves
+    // it out says nothing about what landed, so it is malformed rather than read as `null`.
+    #[serde(deserialize_with = "present_content")]
     pub content: Option<String>,
+}
+
+/// A `content` that may be `null` and may not be absent.
+///
+/// Serde reads an absent `Option` member as `None` of its own accord; naming a deserializer
+/// takes that away, so an answer that leaves the member out is refused.
+fn present_content<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
+}
+
+/// Mark `content` required in [`AssetsWritten`]'s schema.
+///
+/// `#[schemars(required)]` on an `Option` member drops `null` from its type, which would
+/// declare the `null` the protocol allows invalid; required-and-nullable is what the member
+/// is, so it is added to the list after the members are described.
+fn content_required(schema: &mut schemars::Schema) {
+    if let Some(serde_json::Value::Array(required)) = schema.get_mut("required") {
+        required.push(serde_json::Value::from("content"));
+    }
 }
 
 /// One asset reference in a content: where its target sits and the name it names.
@@ -752,6 +774,30 @@ mod tests {
         };
         let value = serde_json::to_value(&reused).expect("serializes");
         assert!(value.get("bytes").is_none());
+    }
+
+    #[test]
+    fn a_written_answer_must_carry_content_and_it_may_be_null() {
+        for content in [Some("![a](https://h/a.png)".to_owned()), None] {
+            let written = AssetsWritten {
+                id: NativeId::from("D-1"),
+                content,
+            };
+            let value = serde_json::to_value(&written).expect("serializes");
+            assert!(value.get("content").is_some(), "{value}");
+            let back: AssetsWritten = serde_json::from_value(value).expect("deserializes");
+            assert_eq!(back, written);
+        }
+        let missing = serde_json::from_value::<AssetsWritten>(serde_json::json!({"id": "D-1"}))
+            .expect_err("an answer without content is refused");
+        assert!(missing.to_string().contains("content"), "{missing}");
+
+        let schema = serde_json::to_value(schemars::schema_for!(AssetsWritten)).expect("a schema");
+        assert_eq!(schema["required"], serde_json::json!(["id", "content"]));
+        assert_eq!(
+            schema["properties"]["content"]["type"],
+            serde_json::json!(["string", "null"])
+        );
     }
 
     #[test]

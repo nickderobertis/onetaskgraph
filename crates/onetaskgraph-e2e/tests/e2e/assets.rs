@@ -41,8 +41,9 @@ variables:\n  \
 
 /// Two folders of Markdown — `notes` and `back` — and two asset stores over a real pipe:
 /// `served`, which declares assets native and serves each at a URL, `plain`, which says
-/// nothing about assets, and `flaky`, which serves them as `served` does and refuses an update
-/// of an item titled `Second` after applying it.
+/// nothing about assets, `flaky`, which serves them as `served` does and refuses an update
+/// of an item titled `Second` after applying it, and `terse` and `blank`, which serve them as
+/// `served` does and answer a write carrying them without its `content` and with it `null`.
 struct Folders {
     sandbox: Sandbox,
     notes: PathBuf,
@@ -78,6 +79,16 @@ impl Folders {
                 &stores.join("flaky.json"),
                 &flaky_log,
                 json!({"assets": "native", "half_written": ["Second"]}),
+            ),
+            "terse": store(
+                &stores.join("terse.json"),
+                &stores.join("terse.log"),
+                json!({"assets": "native", "answer_content": "omit"}),
+            ),
+            "blank": store(
+                &stores.join("blank.json"),
+                &stores.join("blank.log"),
+                json!({"assets": "native", "answer_content": "null"}),
             ),
         })));
         Self {
@@ -1131,6 +1142,43 @@ fn a_copy_of_a_record_referencing_an_asset_it_does_not_hold_is_refused_naming_bo
         "{said}"
     );
     assert!(!folders.back.join("tasks").exists(), "nothing was written");
+}
+
+/// `content` in a plugin's answer to a write carrying assets is required and may be `null`
+/// (docs/plugin-protocol.md §4.9a): an answer that leaves it out says nothing about what landed,
+/// so the copy is refused naming the member, and an answer of `null` is taken.
+#[test]
+fn an_answer_to_a_write_carrying_assets_must_carry_content_and_may_carry_null() {
+    let folders = Folders::new();
+    let (task, document, _, _) = rendered_pair(&folders, 120);
+    for (verb, id) in [("task", &task), ("document", &document)] {
+        let refused = folders.refused(&[verb, "copy", id, "--to", "terse"]);
+        assert!(
+            refused.contains("source terse")
+                && refused.contains(&format!(
+                    "the plugin's answer to write_{verb} is not the shape it promises: \
+                     missing field `content`"
+                )),
+            "{verb}: {refused}"
+        );
+        let report = folders.copy(&[verb, "copy", id, "--to", "blank"]);
+        assert_eq!(report["items"][0]["action"], json!("created"), "{verb}");
+        let shown = folders.show(verb, &landed(&report));
+        assert_eq!(recorded(&shown).len(), 2, "{verb}: both assets were served");
+    }
+    // What crossed the pipe: each refused answer left `content` out, and each taken one
+    // carried it as `null`.
+    for (log, answered) in [("terse.log", None), ("blank.log", Some(Value::Null))] {
+        let writes = Folders::logged(&folders.sandbox.subdirectory("stores").join(log));
+        assert_eq!(writes.len(), 2, "{log}");
+        for write in writes {
+            assert_eq!(
+                write["answered"].get("content"),
+                answered.as_ref(),
+                "{log}: {write}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2395,6 +2443,47 @@ fn properties(bundle: &Value, root: &str) -> Vec<String> {
     names
 }
 
+/// The members of the §4.9a table headed `header` that a peer must send: every row whose
+/// meaning does not say when the member is absent. §2.1 is what makes that the rule — a member
+/// the document lets a peer leave out says so in its own row.
+fn present(section: &str, header: &str) -> Vec<String> {
+    let mut lines = section.lines().skip_while(|line| *line != header);
+    assert!(
+        lines.next().is_some(),
+        "the protocol has a table headed {header}"
+    );
+    let mut names: Vec<String> = lines
+        .skip(1)
+        .take_while(|line| line.starts_with('|'))
+        .filter(|line| !line.to_lowercase().contains("absent"))
+        .map(|line| {
+            line.split('|')
+                .nth(1)
+                .expect("a first cell")
+                .trim()
+                .trim_matches('`')
+                .to_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// The members the emitted schema's root `root` requires, sorted.
+fn required(bundle: &Value, root: &str) -> Vec<String> {
+    let mut names: Vec<String> = bundle["roots"][root]["required"]
+        .as_array()
+        .map(|names| {
+            names
+                .iter()
+                .map(|name| name.as_str().expect("a member name").to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 fn sorted(mut names: Vec<String>) -> Vec<String> {
     names.sort();
     names
@@ -2428,6 +2517,15 @@ fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
         sorted(table(&section, "| Result member | Type | Meaning |")),
         properties(&bundle, "AssetsWritten")
     );
+    // And which of them a peer may leave out: a member whose row says nothing of its absence
+    // is one the schema requires, `null` allowed or not.
+    for (header, root) in [
+        ("| Member | Type | Meaning |", "AssetWrite"),
+        ("| Asset member | Type | Meaning |", "AssetPayload"),
+        ("| Result member | Type | Meaning |", "AssetsWritten"),
+    ] {
+        assert_eq!(present(&section, header), required(&bundle, root), "{root}");
+    }
 
     // The content types the document spells are the ones the schema allows.
     let row = section

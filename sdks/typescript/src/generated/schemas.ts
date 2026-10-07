@@ -324,7 +324,6 @@ export const runtimeSchemas = {
     "description": "What an asset-carrying write answers with: where the record now is, and the content the\ndestination stored.",
     "properties": {
       "content": {
-        "default": null,
         "description": "The content as stored — each `./<name>` reference pointed at where the destination\nserves that asset, for a source that serves them at a URL; unchanged for one that keeps\nthem beside the record.",
         "type": [
           "string",
@@ -337,7 +336,8 @@ export const runtimeSchemas = {
       }
     },
     "required": [
-      "id"
+      "id",
+      "content"
     ],
     "title": "AssetsWritten",
     "type": "object"

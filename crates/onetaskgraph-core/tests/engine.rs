@@ -1669,7 +1669,7 @@ const THIRTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 105] = [
     ("AssetUpload", 0xf417fb0dc8a3a044),
     ("AssetUploads", 0xc07fc8afac6acde5),
     ("AssetWrite", 0x425ab5b21768c337),
-    ("AssetsWritten", 0xd3ed527584869039),
+    ("AssetsWritten", 0x5a394f7414967354),
     ("Capabilities", 0x6d340697813a7f4f),
     ("Comment", 0xfc9fab5a2266887e),
     ("CommentList", 0xcd30d5deff29948d),
