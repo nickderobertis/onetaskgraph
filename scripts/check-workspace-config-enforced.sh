@@ -212,6 +212,44 @@ expect check-workspace-config.sh "a registered spawner that no longer reaches th
   "sdks/python/tests/conftest.py: is registered in SPAWNERS in scripts/check-workspace-config.sh but no longer reaches into target/debug"
 restore "$CONFTEST"
 
+# A test-only crate inherits the workspace's version, so it is exempt from the inventory; one
+# that goes back to a literal is a number no release writes, and must be refused.
+LINEAR_E2E_MANIFEST=crates/onetaskgraph-linear-e2e/Cargo.toml
+mutate "$LINEAR_E2E_MANIFEST" 'text = text.replace("version.workspace = true", "version = \"0.3.1\"")'
+expect check-workspace-config.sh "a test-only crate spelling a version of its own" \
+  "$LINEAR_E2E_MANIFEST: carries a product version but is absent from RECONCILED_VERSION_FILES"
+restore "$LINEAR_E2E_MANIFEST"
+
+# And a release's bump carries every inheriting crate with it: the inventory's own writer,
+# then cargo's resolution of each crate that names no number.
+# The interpreter is resolved here, absolutely, because the case runs it from the scratch
+# tree: a relative PATH entry would no longer name it there (see AGENTS.md).
+python="$(command -v python3)" || fatal "no python3 on PATH" "install python3, then rerun"
+case "$python" in /*) ;; *) python="$PWD/$python" ;; esac
+# llmlint: ignore[work_goes_through_command_surface] The bump is written into the scratch copy alone, which scripts/set-version.sh would also re-lock against the network.
+if ! output="$(cd "$scratch" && "$python" scripts/product_versions.py set 9.9.9 2>&1 \
+  && cargo metadata --no-deps --offline --format-version 1 2>&1 | "$python" -c '
+import json, re, pathlib, sys
+inherits = re.compile(r"(?m)^version\.workspace\s*=\s*true\s*$")
+inheriting = [
+    package for package in json.load(sys.stdin)["packages"]
+    if inherits.search(pathlib.Path(package["manifest_path"]).read_text(encoding="utf-8"))
+]
+behind = ["%s = %s" % (package["name"], package["version"])
+          for package in inheriting if package["version"] != "9.9.9"]
+if behind or not inheriting:
+    raise SystemExit("inheriting crates behind the bump: %s; inheriting: %d" % (behind, len(inheriting)))
+')"; then
+  printf '%s\n' "$output" >&2
+  echo "check-workspace-config-enforced: a bump to 9.9.9 left a crate that inherits its version behind, or found none inheriting" >&2
+  echo "check-workspace-config-enforced: next: give each crate named above 'version.workspace = true', or restore scripts/set-version.sh's write of [workspace.package] version, then rerun" >&2
+  failures=$((failures + 1))
+fi
+(cd "$ROOT" && git ls-files -z -- Cargo.toml Cargo.lock 'crates/*/Cargo.toml' pyproject.toml sdks npm bun.lock) \
+  | while IFS= read -r -d '' tracked; do cp "$ROOT/$tracked" "$scratch/$tracked" || exit 1; done \
+  || fatal "could not restore the manifests the bump case rewrote in $scratch" \
+    "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+
 # --- check-coverage-enforced.sh: the floor is one report over every crate's run.
 
 mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["dependsOn"][0]["projects"].remove("onetaskgraph-linear")'

@@ -61,7 +61,7 @@ trap 'rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/repo" || fatal \
   "could not create the scratch tree at $scratch/repo" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo" || fatal \
+copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
   "could not copy $ROOT's tracked files into $scratch/repo" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 

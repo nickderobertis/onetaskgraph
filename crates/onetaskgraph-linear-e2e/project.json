@@ -24,7 +24,8 @@
       "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage", "budgets"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -58,7 +59,22 @@
         "command": "cargo test --quiet -p onetaskgraph-linear-e2e --all-features --locked"
       },
       "dependsOn": ["onetaskgraph:build"],
-      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement."
+      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e"],
+      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the budget journeys record, which `budgets` reads, so a cache hit restores it."
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "bun run onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" }
+      ],
+      "//": "Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
     },
     "coverage": {
       "executor": "nx:run-commands",

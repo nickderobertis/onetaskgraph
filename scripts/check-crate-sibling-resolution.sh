@@ -43,7 +43,7 @@ scratch_clone_strip_git_env
 # The WORKING tree's tracked files, so what is under test is the manifests and the script as
 # they are now, and the cases below can break a copy rather than the checkout.
 mkdir -p "$scratch/repo" || fatal "could not create $scratch/repo" "check \$TMPDIR permissions, then rerun"
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo" || fatal \
+copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
   "could not copy $ROOT's tracked files into $scratch/repo" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 cd "$scratch/repo"

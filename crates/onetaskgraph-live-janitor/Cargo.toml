@@ -1,7 +1,6 @@
 [package]
 name = "onetaskgraph-live-janitor"
-# llmlint: ignore[crates_stay_in_one_cargo_workspace] A literal rather than `version.workspace = true` because that is what every crate manifest of this workspace spells, and `scripts/product_versions.py` writes and checks this line, so the two cannot drift.
-version = "0.3.6"
+version.workspace = true
 publish = false
 edition.workspace = true
 rust-version.workspace = true

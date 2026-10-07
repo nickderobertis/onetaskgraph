@@ -52,6 +52,8 @@ check_value() { [[ $1 == "$expected" ]] || { echo "$2 has $1; expected $expected
 if [[ ${1:-} == --check ]]; then
   python3 scripts/product_versions.py check "$expected" || fail=1
   for manifest in crates/*/Cargo.toml; do
+    # An inherited version is [workspace.package]'s, which product_versions.py checked above.
+    grep -qx 'version.workspace = true' "$manifest" && continue
     value=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$manifest" | head -n1)
     check_value "$value" "$manifest"
   done

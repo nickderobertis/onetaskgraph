@@ -41,7 +41,11 @@ scratch_clone "$ROOT" "$scratch/repo"
 # restores to THEM between cases. What is under test has to be the guard as it is right
 # now: a clone of HEAD alone would test the last committed guard, so an author repairing
 # it would watch this check keep failing against the version they just replaced.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo"
+if ! copy_tracked_files "$ROOT" "$scratch/repo"; then
+  echo "check-isolation-enforced: could not overlay this working tree on the scratch clone at $scratch/repo" >&2
+  echo "check-isolation-enforced: next: fix what scratch-clone reported above, then rerun 'just script-check'" >&2
+  exit 1
+fi
 git -C "$scratch/repo" add -A
 
 # Every fixture adds a path edge between crates already in the committed lock file, so

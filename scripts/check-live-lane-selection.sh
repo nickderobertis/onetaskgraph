@@ -106,7 +106,7 @@ scratch_clone "$ROOT" "$REPO" || fatal \
 # The working tree's tracked files over the clone, as scripts/check-live-lane-enforced.sh
 # does: what is under test has to be the decision and the recipes as they are right now,
 # not the last commit's copy of them.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$REPO" || fatal \
+copy_tracked_files "$ROOT" "$REPO" || fatal \
   "could not overlay this working tree's files onto $REPO" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 

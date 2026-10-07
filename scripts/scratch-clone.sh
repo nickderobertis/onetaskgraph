@@ -59,3 +59,30 @@ scratch_clone() {
     return 1
   fi
 }
+
+# extract_tar_stream <destination>
+#
+# Unpacks the tar stream on standard input into <destination>, then reads what is left of
+# the stream to its end, which macOS's tar does not; scripts/check-tar-drained.sh says why
+# that matters and refuses an extraction from a pipe anywhere else.
+extract_tar_stream() {
+  tar -xf - -C "$1" && cat >/dev/null && return 0
+  echo "scratch-clone: could not unpack a tar stream into $1; tar said why above." >&2
+  echo "scratch-clone: check that $1 exists and is writable, and 'df -h' for free space." >&2
+  return 1
+}
+
+# copy_tracked_files <source-repo> <destination> [<pathspec>...]
+#
+# Copies the files <source-repo> tracks, as they stand in its WORKING tree, into
+# <destination> — which is how a guard puts what is under test right now over a clone of
+# what was last committed. With pathspecs, only the tracked files they match.
+copy_tracked_files() {
+  local source="$1" dest="$2"
+  shift 2
+  if ! (cd "$source" && git ls-files -z -- "$@" | tar --null -T - -cf -) | extract_tar_stream "$dest"; then
+    echo "scratch-clone: could not copy the files $source tracks into $dest." >&2
+    echo "scratch-clone: run 'git -C $source ls-files' to see that it lists them, then rerun." >&2
+    return 1
+  fi
+}

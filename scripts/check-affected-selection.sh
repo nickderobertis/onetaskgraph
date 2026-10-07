@@ -119,9 +119,11 @@ export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
 
 failures=0
 
-# Edit one file, commit it, and print the projects real Nx selects for that commit.
+# Edit one file, commit it, and print the projects real Nx selects for that commit. Any
+# further arguments go to `nx show projects`, such as `--with-target budgets`.
 select_after_editing() {
   local file="$1"
+  shift
   local base
   base="$(git -C "$scratch/repo" rev-parse HEAD)"
 
@@ -135,7 +137,7 @@ select_after_editing() {
   local raw stderr_file
   stderr_file="$scratch/nx-stderr"
   if ! raw="$(cd "$scratch/repo" && node_modules/.bin/nx show projects --affected --json \
-    --base="$base" --head=HEAD 2>"$stderr_file")"; then
+    --base="$base" --head=HEAD "$@" 2>"$stderr_file")"; then
     echo "check-affected-selection: Nx could not compute the affected set for $file:" >&2
     printf '%s\n' "$raw" >&2
     cat "$stderr_file" >&2
@@ -253,6 +255,15 @@ expect_not_selected "editing one plugin" "$STATUS_OPTIONS_E2E" "$selection"
 report_on_failure "editing onetaskgraph-linear" "$selection" "$before"
 reset_scratch
 
+# 3b. The Linear request budgets measure that plugin, so its change runs their `budgets`
+#     target, which lives in the Linear suite alone.
+selection="$(select_after_editing crates/onetaskgraph-linear/src/lib.rs --with-target budgets)"
+before=$failures
+expect_selected "editing one plugin, for budgets" "$LINEAR_E2E" "$selection"
+expect_not_selected "editing one plugin, for budgets" onetaskgraph-linear "$selection"
+report_on_failure "editing onetaskgraph-linear, for budgets" "$selection" "$before"
+reset_scratch
+
 # 4. The other hosted plugin, the other way round.
 selection="$(select_after_editing crates/onetaskgraph-github-projects/src/lib.rs)"
 before=$failures
@@ -265,6 +276,13 @@ done
 expect_selected "editing the other hosted plugin" "$GITHUB_E2E" "$selection"
 expect_not_selected "editing the other hosted plugin" "$LINEAR_E2E" "$selection"
 report_on_failure "editing onetaskgraph-github-projects" "$selection" "$before"
+reset_scratch
+
+# 4b. And the Linear budgets measure nothing of it.
+selection="$(select_after_editing crates/onetaskgraph-github-projects/src/lib.rs --with-target budgets)"
+before=$failures
+expect_not_selected "editing the other hosted plugin, for budgets" "$LINEAR_E2E" "$selection"
+report_on_failure "editing onetaskgraph-github-projects, for budgets" "$selection" "$before"
 reset_scratch
 
 # 5. A script changed, and the graph owns it. scripts/read-lines.sh is deliberately one no
