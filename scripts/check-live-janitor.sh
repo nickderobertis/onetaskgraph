@@ -13,7 +13,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-janitor = Path('.github/workflows/live-janitor.yml')
+janitor = Path('.github/workflows/live-janitor.yml').as_posix()
 TARGETS = f'restore the explicit targets and credential boundary in {janitor}, then rerun'
 problems = []
 

@@ -69,7 +69,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "node_modules/.bin/onebudgetspec check crates/onetaskgraph-live-janitor/budgets.yaml"
+        "command": "bash scripts/check-live-janitor-budgets.sh"
       }
     }
   },
