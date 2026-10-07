@@ -35,7 +35,7 @@ readonly ROOT
 readonly EXTRACT='(^|[[:space:];&|(])tar[[:space:]]+(-?[A-Za-z]*x[A-Za-z]*|--extract)([[:space:]]|$)'
 readonly FROM_STDIN='(-[A-Za-z]*f[[:space:]]+-([[:space:]]|$)|--file[= ]-([[:space:]]|$)|\|[[:space:]]*tar[[:space:]])'
 # shellcheck disable=SC2016 # the \$1 is the helper's own source text, matched literally
-readonly DRAIN='^  [t]ar -xf - -C "\$1" && cat >/dev/null$'
+readonly DRAIN='^  [t]ar -xf - -C "\$1" && cat >/dev/null && return 0$'
 
 # grep exits 1 for no match and 2 for a scan it could not make; only the first is a pass.
 # It scans from inside the root, so every hit starts `scripts/` whatever the root is: a
