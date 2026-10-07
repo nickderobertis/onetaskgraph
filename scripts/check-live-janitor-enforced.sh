@@ -27,7 +27,7 @@ source "$ROOT/scripts/scratch-clone.sh" ||
   fatal "scripts/scratch-clone.sh could not be loaded" "restore it from git, then rerun"
 scratch_clone "$ROOT" "$scratch/repo" || fatal "could not clone this repository" "read the diagnostic above"
 # The working tree's tracked files, so a guard or janitor not yet committed is what is proven.
-(cd "$ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$scratch/repo" ||
+copy_tracked_files "$ROOT" "$scratch/repo" ||
   fatal "could not copy the working tree into $scratch/repo" "check 'df -h' for free space, then rerun"
 repo="$scratch/repo"
 failures=0

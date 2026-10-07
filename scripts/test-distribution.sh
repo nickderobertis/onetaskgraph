@@ -331,7 +331,7 @@ source "$root/scripts/scratch-clone.sh"
 scratch_clone "$root" "$tmp/version-repo"
 # The inventory and its manifests must describe the same tree, including a newly added
 # workspace crate not yet in HEAD. Stage the overlay so each recovery restores that tree.
-(cd "$root" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$tmp/version-repo" || { echo "could not copy the working tree into $tmp/version-repo; next: check 'df -h' for free space and rerun scripts/test-distribution.sh" >&2; exit 1; }
+copy_tracked_files "$root" "$tmp/version-repo" || { echo "could not copy the working tree into $tmp/version-repo; next: check 'df -h' for free space and rerun scripts/test-distribution.sh" >&2; exit 1; }
 git -C "$tmp/version-repo" add -A || { echo "could not stage the copied tree in $tmp/version-repo; next: check 'df -h' and that no other git process holds its index, then rerun scripts/test-distribution.sh" >&2; exit 1; }
 cp "$tmp/version-repo/crates/onetaskgraph/project.json" "$tmp/version-repo/crates/onetaskgraph/project.json.valid"
 printf '{\n' > "$tmp/version-repo/crates/onetaskgraph/project.json"
