@@ -95,6 +95,8 @@ use serde::{Deserialize, Serialize};
 mod assets;
 #[cfg(windows)]
 mod probe;
+#[cfg(any(windows, test))]
+mod unlinking;
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
