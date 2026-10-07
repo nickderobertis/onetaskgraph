@@ -974,11 +974,11 @@ older `updatedAt`.
 `an_issue_this_source_commented_on_is_selected_before_the_search_index_catches_up` in
 `tests/plugin.rs` holds it.
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The golden-cost test regenerates session-cost.txt from the identical loopback journey, and these totals and per-call figures are read off that record: the test fails whenever this explanation and its checked-in fixture need to move together. -->
-**`session-cost.txt`** goes from 119 requests and 234,006 worst-case nodes to **121 and
-234,562**. Only two lines move, `reading one issue` (6 → 7 requests, 2,736 → 3,192 nodes) and
-`reading a task's comments` (4 → 5, 400 → 500), and both come from one poll.
-<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] --> The journey's
+**`session-cost.txt`** moves only on its `reading one issue` and `reading a task's comments`
+lines, and both come from one poll. Its figures are not restated here: the checked-in fixture
+is their one source, and
+`a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_says` in
+`tests/plugin.rs` fails whenever it and the loopback journey disagree. The journey's
 first comment-activity read, taken before any activity after the instant, now reads the
 issue it commented on before the instant by its node and walks that issue's comments. That
 walk is what confirms the comment is older than the instant, and the poll still selects
