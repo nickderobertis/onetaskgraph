@@ -376,9 +376,13 @@ impl Janitor {
             .bearer_auth(token.expose())
             .send()
             .await
-            .map_err(|e| format!("read {path}: {e}"))?
-            .error_for_status()
             .map_err(|e| format!("read {path}: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "read {path}: unexpected HTTP {}",
+                response.status()
+            ));
+        }
         let next = response
             .headers()
             .get(reqwest::header::LINK)
@@ -413,16 +417,21 @@ impl Janitor {
             }
         }
         let (query, variables) = operation.payload();
-        let value: Value = self
+        let response = self
             .client
             .post(self.config.graphql.clone())
             .bearer_auth(self.config.write_token.expose())
             .json(&json!({"query":query,"variables":variables}))
             .send()
             .await
-            .map_err(|e| format!("GraphQL request: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("GraphQL response: {e}"))?
+            .map_err(|e| format!("GraphQL request: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "GraphQL response: unexpected HTTP {}",
+                response.status()
+            ));
+        }
+        let value: Value = response
             .json()
             .await
             .map_err(|e| format!("GraphQL decode: {e}"))?;

@@ -185,6 +185,7 @@ class Github:
         self.requests: list[Request] = []
         self.writes: list[Write] = []
         self.fail = None
+        self.redirect: str | None = None
         self.repeat = None
         self.status_reads = {}
         self.change_after = None
@@ -246,6 +247,8 @@ class Github:
             operation = None
 
             def reply(self, value, status=200, link=None):
+                if state.redirect and state.redirect in state.requests[-1][1]:
+                    status = 302
                 if self.operation and 200 <= status < 300:
                     if self.operation['response'] is None:
                         if value is not None:
@@ -866,6 +869,30 @@ class Journeys(unittest.TestCase):
                 self.assertEqual(len(issue_writes), operation is Deletion.ISSUE, response)
                 self.assertEqual(state.writes[-1].method, 'POST', response)
                 self.assertEqual(isinstance(state.writes[-1].target, IssueDelete), operation is Deletion.ISSUE, response)
+
+    def test_redirect_json_never_authorizes_or_confirms_cleanup(self):
+        for resource in ('/rate_limit', '/issues', '/labels', 'query', '/actions/workflows/'):
+            state = workload()
+            state.redirect = resource
+            result = state.run()
+            self.assert_failed(result)
+            self.assertIn('302', result.stderr)
+            self.assertFalse(state.writes)
+        state = Github()
+        state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
+        state.redirect = '/actions/runs/'
+        result = state.run()
+        self.assert_failed(result)
+        self.assertIn('302', result.stderr)
+        self.assertFalse(state.writes)
+        for operation in ('deleteProjectV2Item', 'deleteIssue'):
+            state = workload()
+            state.redirect = operation
+            result = state.run()
+            self.assert_failed(result)
+            self.assertIn('302', result.stderr)
+            self.assertEqual(sum(operation in request[1] for request in state.requests), 1)
+            self.assertIsInstance(state.writes[-1].target, ItemDelete if operation == 'deleteProjectV2Item' else IssueDelete)
 
     def test_label_delete_redirect_is_a_failure(self):
         for status in (302, 200):
