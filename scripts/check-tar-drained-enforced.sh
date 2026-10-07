@@ -34,12 +34,11 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
-# Case 1: this tree is clean.
 output="$(bash "$GUARD" 2>&1)" || fatal \
   "the guard refused this tree: $output" \
   "route each line it names through copy_tracked_files or extract_tar_stream in scripts/scratch-clone.sh"
 
-# Case 2: every planted spelling is refused by file and line, and the comment is not.
+# Every planted spelling is refused by file and line, and the comment is not.
 mkdir -p "$scratch/plant" || fatal "could not create $scratch/plant" "check \$TMPDIR, then rerun"
 cp -R "$ROOT/scripts" "$scratch/plant/scripts" || fatal \
   "could not copy scripts/ into $scratch/plant" "check 'df -h' for free space, then rerun"
@@ -70,7 +69,7 @@ if printf '%s\n' "$output" | grep -qF "scripts/planted.sh:5:"; then
     "check how scripts/check-tar-drained.sh skips a full-line comment"
 fi
 
-# Case 3: the drain itself stays cleared under a root whose path holds a colon, as a
+# The drain itself stays cleared under a root whose path holds a colon, as a
 # Windows drive letter's does, and with the carriage return a CRLF checkout leaves on it —
 # the two shapes in which the guard once refused its own helper on the Windows runner.
 # NTFS has no colon in a name; MSYS writes one under another code point, and a host that
@@ -94,7 +93,7 @@ output="$(bash "$GUARD" "$scratch/crlf" 2>&1)" || fatal \
   "the guard refused the drain in a CRLF copy of scripts/scratch-clone.sh: $output" \
   "check that scripts/check-tar-drained.sh drops a trailing carriage return before matching"
 
-# Case 4: the drain leaves no byte of its stream unread, where a bare extraction does.
+# The drain leaves no byte of its stream unread, where a bare extraction does.
 mkdir -p "$scratch/src" "$scratch/bare" "$scratch/drained" || fatal \
   "could not create the extraction directories" "check \$TMPDIR, then rerun"
 printf 'payload\n' >"$scratch/src/file.txt" || fatal \
