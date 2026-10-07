@@ -4595,9 +4595,10 @@ mod tests {
         drop(held);
     }
 
-    /// The real probe on a record whose folder will not open (onetaskgraph#3044): a folder that
-    /// has gone, one Windows is part-way through removing, and one an access-control entry
-    /// denies. All three refuse to be opened; only the first two are the record having left.
+    /// The real probe on a record that will not open (onetaskgraph#3044): one whose folder
+    /// has gone, one whose folder Windows is part-way through removing, and one in a folder that
+    /// opens which an access-control entry denies. All three refuse to be opened; only the first
+    /// two are the record having left.
     #[cfg(windows)]
     #[test]
     fn the_probe_calls_a_record_unlinked_when_its_folder_has_gone_or_is_going_and_not_when_denied()
@@ -4655,12 +4656,15 @@ mod tests {
         assert!(super::probe::unlinked(&going.join("39.md")));
         drop(held);
 
-        // Denied: a folder that is there, holding the record, which this reader may not open.
+        // Denied: a record that is there, in a folder that opens, which this reader may not
+        // open. The record rather than its folder carries the entry, because a folder's denied
+        // listing does not bind the hosted Windows runner's user and a file's does.
         let sealed = root.path().join("sealed");
         fs::create_dir(&sealed).expect("a folder");
-        fs::write(sealed.join("39.md"), "---\ntitle: Sealed\n---\n").expect("a record");
-        assert!(deny_folder(&sealed), "the folder refuses to be listed");
-        assert!(!super::probe::unlinked(&sealed.join("39.md")));
-        permit(&sealed);
+        let record = sealed.join("39.md");
+        fs::write(&record, "---\ntitle: Sealed\n---\n").expect("a record");
+        assert!(deny_file(&record), "the record refuses to be read");
+        assert!(!super::probe::unlinked(&record));
+        permit(&record);
     }
 }
