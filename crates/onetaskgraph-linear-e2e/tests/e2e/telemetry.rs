@@ -135,7 +135,12 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
         }
         recorded["value"]
             .as_f64()
-            .filter(|value| value.is_finite() && *value >= 0.0)
+            .filter(|value| {
+                value.is_finite()
+                    && *value >= 0.0
+                    && (!budget.ends_with("copies-refused")
+                        || (value.fract() == 0.0 && *value <= f64::from(copies)))
+            })
             .ok_or_else(|| format!("{budget}: missing non-negative observed value"))?
     } else {
         recorded["value"].as_u64().ok_or_else(|| {

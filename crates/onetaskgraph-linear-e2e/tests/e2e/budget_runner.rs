@@ -308,8 +308,15 @@ fn asset_reports_require_the_full_recorded_workload_before_reporting() {
             "no-value",
             "nonnumeric-value",
             "negative-value",
+            "fractional-copies",
+            "too-many-copies",
             "valid",
         ] {
+            if matches!(broken, "fractional-copies" | "too-many-copies")
+                && budget["unit"] != "copies"
+            {
+                continue;
+            }
             let path = telemetry::file_in(&directory, id);
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(&result);
@@ -321,7 +328,7 @@ fn asset_reports_require_the_full_recorded_workload_before_reporting() {
                 if broken == "size" {
                     sizes[0] = 49_999;
                 }
-                let mut recorded = json!({"value":1.5,"detail":"observed", "workload":{"sizes":sizes,"copies":if broken == "copies" {0} else {copies}}});
+                let mut recorded = json!({"value":1,"detail":"observed", "workload":{"sizes":sizes,"copies":if broken == "copies" {0} else {copies}}});
                 match broken {
                     "oversize" => recorded["workload"]["sizes"][0] = json!(500_001),
                     "noninteger" => recorded["workload"]["sizes"][0] = json!(475_000.5),
@@ -342,6 +349,8 @@ fn asset_reports_require_the_full_recorded_workload_before_reporting() {
                     }
                     "nonnumeric-value" => recorded["value"] = json!("not a number"),
                     "negative-value" => recorded["value"] = json!(-1),
+                    "fractional-copies" => recorded["value"] = json!(0.5),
+                    "too-many-copies" => recorded["value"] = json!(4),
                     _ => {}
                 }
                 std::fs::write(&path, recorded.to_string()).unwrap();

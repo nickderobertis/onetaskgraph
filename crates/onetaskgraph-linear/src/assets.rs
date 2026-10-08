@@ -187,57 +187,48 @@ impl LinearSource {
                 .as_ref()
                 .ok_or_else(|| failure(asset, Stage::Mutation, "missing bytes for a new asset"))?;
             let upload = loop {
-                let response = client.post(&self.endpoint.0)
-                    .header("Authorization", self.key.expose_secret())
-                    .json(&json!({"query":FILE_UPLOAD,"variables":{"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()}}))
-                    .send().await.map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
-                let status = response.status();
-                let hint = reset_wait(response.headers());
-                if status.as_u16() == 429 {
-                    self.wait_asset(asset, Stage::Mutation, status, hint, &mut waited)
-                        .await?;
-                    continue;
-                }
-                let body: serde_json::Value = response.json().await.map_err(|error| {
-                    failure(asset, Stage::Mutation, &format!("HTTP {status}: {error}"))
-                })?;
-                if status.as_u16() == 429
-                    || body["errors"].as_array().is_some_and(|errors| {
-                        errors
-                            .iter()
-                            .any(|error| error["extensions"]["code"] == "RATELIMITED")
-                    })
-                {
-                    let hint = hint.or_else(|| {
-                        body["errors"][0]["extensions"]["retryAfter"]
-                            .as_u64()
-                            .map(Duration::from_secs)
-                    });
-                    self.wait_asset(asset, Stage::Mutation, status, hint, &mut waited)
-                        .await?;
-                    continue;
-                }
-                if !status.is_success()
-                    || body.get("errors").is_some()
-                    || body["data"]["fileUpload"]["success"] != true
-                {
+                let body = match self.answer_using(&client, FILE_UPLOAD, json!({"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()})).await {
+                    Err(SourceError::RateLimited { retry_after_seconds, message }) => {
+                        self.wait_asset(asset, Stage::Mutation, reqwest::StatusCode::TOO_MANY_REQUESTS, retry_after_seconds.map(Duration::from_secs), &mut waited).await.map_err(|error| failure(asset, Stage::Mutation, &format!("{}: {error}", message.unwrap_or_default())))?;
+                        continue;
+                    }
+                    Err(error) => return Err(failure(asset, Stage::Mutation, &error.to_string())),
+                    Ok(Err(refusal)) => return Err(failure(asset, Stage::Mutation, &format!("HTTP 200: {}", refusal.into_error()))),
+                    Ok(Ok(body)) => body,
+                };
+                if body["fileUpload"]["success"] != true {
                     return Err(failure(
                         asset,
                         Stage::Mutation,
-                        &format!("HTTP {status}: {body}"),
+                        &format!("HTTP 200: {body}"),
                     ));
                 }
                 break serde_json::from_value::<UploadFile>(
-                    body["data"]["fileUpload"]["uploadFile"].clone(),
+                    body["fileUpload"]["uploadFile"].clone(),
                 )
                 .map_err(|error| {
                     failure(
                         asset,
                         Stage::Mutation,
-                        &format!("HTTP {status}: malformed upload: {error}"),
+                        &format!("HTTP 200: malformed upload: {error}"),
                     )
                 })?;
             };
+            for url in [&upload.upload_url.0, &upload.asset_url.0] {
+                if loopback(url) {
+                    let endpoint = reqwest::Url::parse(&self.endpoint.0)
+                        .map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
+                    if !loopback(&endpoint) || endpoint.origin() != url.origin() {
+                        return Err(failure(
+                            asset,
+                            Stage::Mutation,
+                            &format!(
+                                "untrusted upload destination {url} is outside the configured loopback"
+                            ),
+                        ));
+                    }
+                }
+            }
             if loopback(&upload.asset_url.0) {
                 let endpoint = reqwest::Url::parse(&self.endpoint.0)
                     .map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
@@ -271,7 +262,7 @@ impl LinearSource {
                         asset,
                         Stage::Put,
                         response.status(),
-                        reset_wait(response.headers()),
+                        super::reset_wait(response.headers()),
                         &mut waited,
                     )
                     .await?;
@@ -304,7 +295,7 @@ impl LinearSource {
                         asset,
                         Stage::VerifyingRead,
                         response.status(),
-                        reset_wait(response.headers()),
+                        super::reset_wait(response.headers()),
                         &mut waited,
                     )
                     .await
@@ -367,30 +358,4 @@ fn failure(asset: &AssetPayload, stage: Stage, detail: &str) -> SourceError {
     SourceError::Refused {
         message: format!("Linear asset {} {stage} failed: {detail}", asset.name),
     }
-}
-
-fn reset_wait(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    let reset = [
-        "x-ratelimit-endpoint-requests-reset",
-        "x-ratelimit-requests-reset",
-        "x-ratelimit-complexity-reset",
-    ]
-    .iter()
-    .filter_map(|name| headers.get(*name)?.to_str().ok()?.parse::<u64>().ok())
-    .max();
-    reset
-        .map(|reset| {
-            Duration::from_millis(reset.saturating_sub(
-                u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default(),
-            ))
-        })
-        .or_else(|| {
-            headers
-                .get("retry-after")?
-                .to_str()
-                .ok()?
-                .parse::<u64>()
-                .ok()
-                .map(Duration::from_secs)
-        })
 }

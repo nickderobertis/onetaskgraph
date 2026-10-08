@@ -1392,6 +1392,16 @@ struct GqlExtensions {
     retry_after: Option<u64>,
 }
 impl GqlError {
+    fn rate_limited(&self, retry: Option<u64>, status: reqwest::StatusCode) -> Option<SourceError> {
+        let extensions = self
+            .coded()
+            .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))?;
+        Some(SourceError::RateLimited {
+            retry_after_seconds: retry.or(extensions.retry_after),
+            message: (!status.is_success()).then(|| format!("Linear returned HTTP {status}")),
+        })
+    }
+
     /// The rate-limit shape of [`Self::extensions`], when it has one.
     fn coded(&self) -> Option<GqlExtensions> {
         self.extensions
@@ -1547,8 +1557,16 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
-        let response = self
-            .client
+        self.answer_using(&self.client, query, variables).await
+    }
+
+    async fn answer_using(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+        variables: Value,
+    ) -> Result<Result<Value, Refusal>, SourceError> {
+        let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
             .json(&json!({"query": query, "variables": variables}))
@@ -1558,11 +1576,10 @@ impl LinearSource {
                 message: e.to_string(),
             })?;
         let status = response.status();
-        let retry = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
+        let retry = reset_wait(response.headers()).map(|wait| {
+            wait.as_secs()
+                .saturating_add(u64::from(wait.subsec_nanos() > 0))
+        });
         if status.as_u16() == 429 {
             return Err(SourceError::RateLimited {
                 retry_after_seconds: retry,
@@ -1574,7 +1591,7 @@ impl LinearSource {
         }
         if status.as_u16() == 401 || status.as_u16() == 403 {
             return Err(SourceError::Auth {
-                message: "Linear rejected the configured credential".into(),
+                message: format!("Linear rejected the configured credential: HTTP {status}"),
             });
         }
         if !status.is_success() {
@@ -1583,6 +1600,13 @@ impl LinearSource {
             // body is Linear's answer to this request and holds no credential; it is cut
             // because a proxy in front of Linear can answer with a page.
             let text = response.text().await.unwrap_or_default();
+            if let Some(limited) = serde_json::from_str::<Envelope>(&text)
+                .ok()
+                .and_then(|body| body.errors.into_iter().next())
+                .and_then(|error| error.rate_limited(retry, status))
+            {
+                return Err(limited);
+            }
             // An id naming nothing is the one refusal a caller acts on rather than reports,
             // so it reads the same whichever status Linear sends it under.
             if let Some(missing) = serde_json::from_str::<Envelope>(&text)
@@ -1603,17 +1627,11 @@ impl LinearSource {
             });
         }
         let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
-            message: e.to_string(),
+            message: format!("HTTP {status}: {e}"),
         })?;
         if let Some(error) = body.errors.into_iter().next() {
-            if let Some(extensions) = error
-                .coded()
-                .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
-            {
-                return Err(SourceError::RateLimited {
-                    retry_after_seconds: extensions.retry_after.or(retry),
-                    message: None,
-                });
+            if let Some(limited) = error.rate_limited(retry, status) {
+                return Err(limited);
             }
             return Ok(Err(Refusal(error)));
         }
@@ -4862,4 +4880,32 @@ fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     }
     let cursor = str_at(info, "endCursor")?;
     Ok(Some(Cursor(cursor.into())))
+}
+
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] https://linear.app/developers/rate-limiting documents these headers and epoch milliseconds, but Linear publishes no machine-readable definition of its codes and headers. One shared parser serves GraphQL and asset HTTP requests; the loopback rate-limit journeys and live asset journey hold the documented response contract.
+fn reset_wait(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    use std::time::Duration;
+    let reset = [
+        "x-ratelimit-endpoint-requests-reset",
+        "x-ratelimit-requests-reset",
+        "x-ratelimit-complexity-reset",
+    ]
+    .iter()
+    .filter_map(|name| headers.get(*name)?.to_str().ok()?.parse::<u64>().ok())
+    .max();
+    reset
+        .map(|reset| {
+            Duration::from_millis(reset.saturating_sub(
+                u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default(),
+            ))
+        })
+        .or_else(|| {
+            headers
+                .get("retry-after")?
+                .to_str()
+                .ok()?
+                .parse::<u64>()
+                .ok()
+                .map(Duration::from_secs)
+        })
 }

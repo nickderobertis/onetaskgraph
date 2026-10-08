@@ -275,6 +275,15 @@ fn serve(
     if asset_request {
         if matches!(
             (fault, stage),
+            (Some("redirect-mutation"), "mutation")
+                | (Some("redirect-PUT"), "PUT")
+                | (Some("redirect-read"), "verifying read")
+        ) {
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/credential-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            return;
+        }
+        if matches!(
+            (fault, stage),
             (Some("disconnect-mutation"), "mutation")
                 | (Some("disconnect-PUT"), "PUT")
                 | (Some("disconnect-read"), "verifying read")
@@ -383,6 +392,15 @@ fn serve(
             }
             Some("wrong-loopback") => {
                 file["assetUrl"] = json!("http://127.0.0.1:9/credential-target.png")
+            }
+            Some("wrong-upload-loopback") => {
+                file["uploadUrl"] = json!("http://127.0.0.1:9/upload.png")
+            }
+            Some("credentials-upload") => {
+                file["uploadUrl"] = json!("https://user:secret@example.invalid/upload.png")
+            }
+            Some("fragment-asset") => {
+                file["assetUrl"] = json!("https://uploads.linear.app/image#fragment")
             }
             Some("bad-upload-scheme") => file["uploadUrl"] = json!("file:///upload.png"),
             Some("bad-header-name") => file["headers"][0]["key"] = json!("bad header"),
@@ -970,12 +988,14 @@ fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
 #[test]
 fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
-    let demanded = required(
-        std::env::var(onetaskgraph_live::REQUIRED_VARIABLE)
-            .ok()
-            .as_deref(),
-    )
-    .unwrap();
+    let demand = match std::env::var(onetaskgraph_live::REQUIRED_VARIABLE) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("ONETASKGRAPH_LIVE_REQUIRED is not Unicode")
+        }
+    };
+    let demanded = required(demand.as_deref()).unwrap();
     let key = std::env::var("LINEAR_API_KEY")
         .ok()
         .and_then(Credential::new);
@@ -1595,7 +1615,10 @@ fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_g
     for fault in [
         "untrusted-asset",
         "wrong-loopback",
+        "wrong-upload-loopback",
         "bad-upload-scheme",
+        "credentials-upload",
+        "fragment-asset",
         "bad-header-name",
         "bad-header-value",
     ] {
@@ -1618,4 +1641,53 @@ fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_g
                 .any(|(query, _)| query.contains("issueCreate("))
         );
     }
+}
+
+#[test]
+fn redirects_at_each_asset_stage_are_refused_before_content_is_written() {
+    for (fault, stage) in [
+        ("redirect-mutation", "mutation"),
+        ("redirect-PUT", "PUT"),
+        ("redirect-read", "verifying read"),
+    ] {
+        let journey = Journey::new();
+        let (id, _) = journey.create("task", 1);
+        journey.workspace.state.lock().unwrap().fault = Some(fault);
+        let refused = journey.copy("task", &id, false);
+        let said = refused.as_str().unwrap();
+        assert!(
+            said.contains("task-0.png") && said.contains(stage) && said.contains("302"),
+            "{said}"
+        );
+        assert!(
+            !journey
+                .workspace
+                .held
+                .served()
+                .iter()
+                .any(|(query, _)| query.contains("issueCreate("))
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_live_demand_is_refused_before_any_session_opens() {
+    use std::os::unix::ffi::OsStringExt;
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy",
+            "--nocapture",
+        ])
+        .env(
+            onetaskgraph_live::REQUIRED_VARIABLE,
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )
+        .env_remove("LINEAR_API_KEY")
+        .env_remove("LINEAR_WRITE_TEAM")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("ONETASKGRAPH_LIVE_REQUIRED is not Unicode"));
 }
