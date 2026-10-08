@@ -874,7 +874,6 @@ impl Accounting {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(request);
     }
-    /// Record an attachment response beside its request accounting.
     pub(crate) fn record_attachment(&self, response: AttachmentResponse) {
         self.attachment_responses
             .lock()
