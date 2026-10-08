@@ -85,15 +85,16 @@ deny = [
   { crate = "lru", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
 
   # The engine may depend on the contract and on every plugin; nothing may depend on the
-  # engine except the binary that runs it and the two test-only e2e suites that drive it in
+  # engine except the binary that runs it and the three test-only e2e suites that drive it in
   # process beside the binary — `onetaskgraph-e2e` (a long-lived caller ending a command) and
-  # `onetaskgraph-linear-e2e` (the warm Linear budgets). With the trait inside the engine
+  # `onetaskgraph-linear-e2e` (the warm Linear budgets) and
+  # `onetaskgraph-github-projects-e2e` (the GitHub asset journeys). With the trait inside the engine
   # crate every plugin would depend on the engine, every engine change would mark every
   # plugin affected, and affected selection would buy nothing for the six crates where it
-  # matters most. Naming only those three as permitted wrappers makes a plugin that adds the
+  # matters most. Naming only those four as permitted wrappers makes a plugin that adds the
   # engine to its [dependencies] or [dev-dependencies] fail this required check; an e2e suite
   # is unpublished and nothing depends on it, so its edge marks nothing else affected.
   # This is mechanism 1 of 2; scripts/check-plugin-isolation.sh is the other, and it fails
   # in seconds locally instead of minutes later here.
-  { crate = "onetaskgraph-core", wrappers = ["onetaskgraph", "onetaskgraph-e2e", "onetaskgraph-linear-e2e"], reason = "only the binary and the test-only e2e suites may depend on the engine; a plugin crate never may" },
+  { crate = "onetaskgraph-core", wrappers = ["onetaskgraph", "onetaskgraph-e2e", "onetaskgraph-linear-e2e", "onetaskgraph-github-projects-e2e"], reason = "only the binary and the test-only e2e suites may depend on the engine; a plugin crate never may" },
 ]

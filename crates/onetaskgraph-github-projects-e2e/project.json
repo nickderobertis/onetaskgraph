@@ -4,7 +4,12 @@
   "projectType": "application",
   "tags": ["lang:rust", "layer:e2e"],
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
-  "implicitDependencies": ["onetaskgraph-github-projects"],
+  "implicitDependencies": [
+    "onetaskgraph-github-projects",
+    "onetaskgraph-plugin-api",
+    "onetaskgraph-live",
+    "onetaskgraph-github-live"
+  ],
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
@@ -25,7 +30,10 @@
       "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "//": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] AGENTS.md requires hosted live journeys to be ordinary required tests selected by their plugin diff: an advisory lane let an invalid GitHub query merge. This node explicitly owes a credential-and-nomination-gated live asset copy under Session::open, so the domain check must include its ordinary test target.",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage", "budgets"],
+      "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]"
     },
     "format": {
       "executor": "nx:run-commands",
@@ -55,11 +63,33 @@
     },
     "test": {
       "executor": "nx:run-commands",
+      "// live": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] This node requires the credentialed asset journey as an ordinary test under the existing Session admission and allowance preconditions. Repository policy deliberately makes hosted journeys required under affected selection, because an advisory lane allowed a refused query to merge.",
       "options": {
         "command": "cargo test --quiet -p onetaskgraph-github-projects-e2e --all-features --locked"
       },
+      "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "dependsOn": ["onetaskgraph:build"],
-      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement."
+      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
+      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "env": "GH_PROJECTS_TOKEN"
+        },
+        {
+          "env": "GH_PROJECTS_OWNER"
+        },
+        {
+          "env": "GH_PROJECTS_NUMBER"
+        },
+        {
+          "env": "GH_PROJECTS_REPOSITORY"
+        },
+        {
+          "env": "ONETASKGRAPH_LIVE_REQUIRED"
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -70,6 +100,22 @@
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "bun run onebudgetspec check crates/onetaskgraph-github-projects-e2e/budgets.yaml"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-github-projects-e2e/*.json"
+        }
+      ],
+      "//": "Analyses telemetry the ordinary test target recorded, through the report-only test harness runner. No journey runs again. Cached: requests and simulated time are deterministic. default covers the domain, budgets, binary, engine, harness and shared lockfile pins; ^default covers this plugin and its API contract. No credential is an input."
     }
   }
 }

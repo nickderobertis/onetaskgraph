@@ -96,20 +96,3 @@ answered from it, or a ruling that holding a source across commands is not a sup
 shape and saying that in the crate's own documentation. The first two both cost the
 single-request guarantee above, so whichever is chosen has to say what the three tests
 named here should assert instead.
-
-## Image assets on a GitHub board
-
-`github-projects` declares `assets` unsupported, so a create or a copy of a task or
-a document whose content references an image asset — `![alt](./<name>)` — into it is
-refused before anything is written for that record. Implementing its storage builds on
-`TaskSource::write_task_with_assets` and its siblings, `AssetWrite`, and the
-`onetaskgraph.assets` record `serve_asset_references` writes.
-
-Linear supports assets through its documented `fileUpload` flow: a signed PUT stores the
-bytes and an authenticated GET verifies the returned asset URL before content is written
-with rewritten references and the upload record. Matching recorded SHA-256 values reuse
-their URLs without upload or verification. Images are visible to authenticated members of
-the workspace. See `crates/onetaskgraph-linear/src/assets.rs` for the mechanism and bounded
-rate-limit retries.
-
-Unsupported fields: `onetaskgraph-github-projects` `assets`

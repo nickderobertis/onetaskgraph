@@ -2988,7 +2988,7 @@ pub async fn run(nomination: Nomination) {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            assets: Support::Unsupported,
+            assets: Support::Native,
             priority: Support::Unsupported,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,

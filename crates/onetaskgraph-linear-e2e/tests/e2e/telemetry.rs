@@ -10,9 +10,10 @@
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
 
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+pub use onetaskgraph_e2e_support::telemetry::{file_in, record_in};
 
 /// The variable that, when set, names the telemetry directory in place of the build's.
 pub const DIRECTORY: &str = "LINEAR_BUDGET_TELEMETRY_DIR";
@@ -37,27 +38,10 @@ pub fn directory() -> PathBuf {
     directory.join(Path::new(BELOW_BUILD))
 }
 
-/// One spelling of the file name for the recorder and the reader alike, so a runner test that
-/// plants a file through it is read exactly where a journey's figure would be.
-pub fn file_in(directory: &Path, budget: &str) -> PathBuf {
-    directory.join(format!("{budget}.json"))
-}
-
 /// Record `value` as `budget`'s telemetry: the figure and how it was reached, and no judgement
 /// of it.
 pub fn record(budget: &str, value: usize, detail: &str) {
     record_in(&directory(), budget, value, detail);
-}
-
-/// Takes its directory so the runner's tests record into a scratch tree of their own rather than
-/// over the figures the journeys left in the build directory.
-pub fn record_in(directory: &Path, budget: &str, value: usize, detail: &str) {
-    std::fs::create_dir_all(directory).expect("the telemetry directory is writable");
-    std::fs::write(
-        file_in(directory, budget),
-        json!({"value": value, "detail": detail}).to_string(),
-    )
-    .expect("the telemetry file is writable");
 }
 
 /// Record an asset workload beside its observed figure; the analyser validates its weight.

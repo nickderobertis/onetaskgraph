@@ -134,7 +134,7 @@
 //! | `projects` | **Supported and proven,** and the one predicate here that is pushed down rather than applied in process: a task's project is the issue it is a sub-issue of, so a listing scoped to one *asks that issue* for its own sub-issues. This is the field that was declared and then not applied, which silently returned another project's tasks. |
 //! | `documents` | **Supported and proven.** A board holds issues, so a document is one: the issue whose title begins [`DESIGN_TITLE_PREFIX`]. Reads, filters and paging answer on exactly the terms a task read does, and a write puts the prefix back. |
 //! | `comments` | **Supported and proven,** over the task issue's own comment connection, oldest first and paged by GitHub's own cursor; added, edited and removed through GitHub's comment mutations, paced as every other mutation is. A draft item has no comments on GitHub and is refused, and so is an author, because GitHub records the signed-in account as every comment's author. |
-//! | `assets` | **Unsupported — unimplemented.** A copy of a record carrying an image asset into a board is refused, naming the source, the record and the asset, before anything is written for that record. Storing the bytes where the issue renders them is tracked in `docs/follow-ups.md`. |
+//! | `assets` | **Supported and native.** Image references travel as GitHub user attachments in the repository the task or document issue lives in. Uploads are authenticated and verified before the issue body is written. |
 //! | `priority` | **Supported and proven** by an instance configured with `priority_mapping`, and declared unsupported by one without it, which reports every task's priority as `none` and sends exactly the requests it sent before priorities existed. The priority is the board's single-select `Priority` field: no value is `none`, a mapped option is its level, matched case-insensitively, and an option the mapping does not name fails the read of that task, naming the option. A write selects the mapped option, or clears the value for `none`; a board without the field or the option is refused, pointing at `sources fields`, which is the one thing that creates either. |
 //! | `filter_by_priority` | **Supported and proven,** over the priority each task reads as — `none` for every task of an instance without `priority_mapping`. |
 //! | `filter_by_comment_activity` | **Supported, and exact** for comments created and for comments edited at or after `commented_since`, in every repository — of any owner — the board's items live in. Applied by asking a narrower question rather than by reading the board: GitHub's issue search scoped by `project:<owner>/<number>` alone, with an `updated:>=` qualifier, names the candidates, and each candidate's own comments confirm it, so `ProjectV2.items` is never read. That rests on GitHub moving an issue's `updatedAt` when a comment on it is added **or edited**, which the credentialed journey `an_edited_comment_moves_its_issue_and_is_selected_since` re-takes on every run of this lane. The search is an index that lags a write — the credentialed lane has watched it miss a newly commented issue for thirty seconds — so an issue this process itself commented on in the same command is a candidate whatever the search says, read by its own node if the search did not name it, and has its comments read rather than being ruled out by an `updatedAt` from before the comment. A comment another process wrote is found only once the index has it, so a caller asking again from its last instant should overlap the two generously. |
@@ -148,6 +148,27 @@
 //! | `task_dependencies` | **Supported and proven,** in both directions: `blockedBy` and `blocking`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, over the same two connections, because a project here is an issue. |
 //! | `max_page_size` | **Supported and proven.** [`MAX_PAGE_SIZE`], GitHub's own connection maximum. |
+//!
+//! Image writes use `POST https://uploads.github.com/user-attachments/assets` with `name`,
+//! `content_type` and the issue repository's numeric `repository_id` as query parameters,
+//! the source token as `Authorization: Bearer`, the image content type as `Content-Type`,
+//! and the raw bytes as the request body. The numeric repository id is read at most once
+//! per repository per source instance. A loopback API endpoint also selects the loopback
+//! uploads host; production needs no assets repository, commits or extra configuration.
+//! Every returned JSON `url` is read with the same token before a body is written: only
+//! a 2xx verification succeeds. A refusal names the asset, URL and HTTP status; an
+//! anonymous 404 does not invalidate an authenticated 200. An upload refusal names the
+//! asset and HTTP status and says the token type may not be accepted by the upload
+//! endpoint. A classic PAT was measured accepted; no acceptance claim is made about
+//! fine-grained PATs or OAuth tokens.
+//! The body keeps the authored alt text while `./<name>` becomes the attachment URL,
+//! and `onetaskgraph.assets` records `{sha256, url}` by name. A matching destination
+//! SHA-256 reuses its URL without an upload or verifying read; changed bytes are uploaded
+//! and verified afresh, in the repository the issue already lives in on an update.
+//! An uploaded image renders for the viewers GitHub lets read it, like the issue text beside it.
+//! Uploads take the same mutation spacing as content writes. Both uploads and verification
+//! reads wait out classified rate limits within the configured per-call retry budget,
+//! on the supplied clock; verifying reads take no mutation slot.
 //!
 //! Nothing here is unsupported. `documents` and `comments` are not predicates — they say this
 //! source has documents and that its tasks have comments, both of which hold — and the three
@@ -588,17 +609,17 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task, TaskDetailRead,
-    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UnmappedStatus, UpdatedField, WriteSupport,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SharedClock,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -607,6 +628,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod accounting;
+mod assets;
 
 use accounting::Accounting;
 
@@ -1935,7 +1957,7 @@ pub struct PacingConfig {
 /// a wait budget beyond it is the unbounded wait this whole mechanism exists to replace,
 /// and an interval beyond it is a command that never sends its second mutation. It also
 /// keeps the clock arithmetic in [`GitHubProjectsSource::reserve_mutation_slot`] inside
-/// what an `Instant` can hold on every platform.
+/// what a `Duration` can hold on every platform.
 pub const MAX_PACING_MS: u64 = 3_600_000;
 
 /// [`PacingConfig`] with every default resolved and every value checked, which is what the
@@ -2010,6 +2032,16 @@ impl SourcePlugin for Plugin {
     ) -> Result<Box<dyn TaskSource>, SourceError> {
         self.build_recording_into(name, config, secrets, Arc::new(Accounting::new()))
     }
+
+    fn build_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        clock: SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_recording_with_clock(name, config, secrets, Arc::new(Accounting::new()), clock)
+    }
 }
 
 impl Plugin {
@@ -2032,13 +2064,24 @@ impl Plugin {
         secrets: &dyn SecretResolver,
         ledger: Arc<Accounting>,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_recording_with_clock(name, config, secrets, ledger, system_clock())
+    }
+
+    fn build_recording_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        ledger: Arc<Accounting>,
+        clock: SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: GitHubProjectsConfig =
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
         let prefix = format!("source {name}: ");
-        let source = GitHubProjectsSource::recording_into(name, config, secrets, ledger).map_err(
-            |error| match error {
+        let mut source = GitHubProjectsSource::recording_into(name, config, secrets, ledger)
+            .map_err(|error| match error {
                 // The shared `StatusMapping::distinct` names the source itself.
                 SourceError::Config { message } if message.starts_with(&prefix) => {
                     SourceError::Config { message }
@@ -2050,8 +2093,8 @@ impl Plugin {
                     message: format!("source {name}: {message}"),
                 },
                 other => other,
-            },
-        )?;
+            })?;
+        source.clock = clock;
         Ok(Box::new(source))
     }
 }
@@ -2412,6 +2455,7 @@ pub struct GitHubProjectsSource {
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
     client: Client,
+    asset_client: Client,
     /// Every item this source has created in this command, in the order it created them —
     /// dropped by [`TaskSource::end_command`].
     ///
@@ -2455,7 +2499,9 @@ pub struct GitHubProjectsSource {
     /// spaced from that. See [`MIN_MUTATION_INTERVAL_MS`] for the interval and
     /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
     /// what it is measured from.
-    last_mutation: Mutex<Option<Instant>>,
+    last_mutation: Mutex<Option<Duration>>,
+    clock: SharedClock,
+    numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
     /// [`TaskSource::end_command`].
     ///
@@ -3440,6 +3486,7 @@ impl GitHubProjectsSource {
             owner: config.owner,
             project_number: config.project_number,
             repository,
+            asset_client: assets::client(&endpoint)?,
             endpoint,
             token,
             credential_name: config.token_env,
@@ -3459,6 +3506,8 @@ impl GitHubProjectsSource {
             commented: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
+            clock: system_clock(),
+            numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
@@ -3523,7 +3572,7 @@ impl GitHubProjectsSource {
             if is_mutation(query) {
                 let spacing = self.reserve_mutation_slot();
                 if !spacing.is_zero() {
-                    tokio::time::sleep(spacing).await;
+                    self.clock.sleep(spacing).await;
                 }
             }
             let attempt = self.send_once(query, &variables).await;
@@ -3555,7 +3604,7 @@ impl GitHubProjectsSource {
                     self.pacing.retry_budget,
                 ));
             }
-            tokio::time::sleep(wait).await;
+            self.clock.sleep(wait).await;
             waited += wait;
             waits += 1;
             backoff = backoff.saturating_mul(2);
@@ -3582,8 +3631,8 @@ impl GitHubProjectsSource {
             .last_mutation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = Instant::now();
-        // `checked_add` rather than `+`: `Instant + Duration` panics on overflow, and
+        let now = self.clock.now();
+        // `checked_add` rather than `+`: adding durations can panic on overflow, and
         // pacing is not worth a panic even at a bound `MAX_PACING_MS` already rules out.
         let at = last.map_or(now, |previous| {
             previous
@@ -3591,7 +3640,7 @@ impl GitHubProjectsSource {
                 .map_or(now, |earliest| earliest.max(now))
         });
         *last = Some(at);
-        at.saturating_duration_since(now)
+        at.saturating_sub(now)
     }
 
     /// Record that a content-creating mutation has finished, so the next one is spaced
@@ -3625,7 +3674,7 @@ impl GitHubProjectsSource {
             .last_mutation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = Instant::now();
+        let now = self.clock.now();
         // `max` rather than an assignment: a concurrent caller may already have reserved a
         // slot further out, and completing this request must never pull that slot back in.
         *last = Some(last.map_or(now, |reserved| reserved.max(now)));
@@ -6354,13 +6403,25 @@ impl GitHubProjectsSource {
         kind: BoardKind,
         content: &str,
         provenance: &Value,
-    ) -> Result<Option<()>, SourceError> {
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
         let Some(mut item) = self.bound_item(id).await?.filter(|item| item.kind == kind) else {
             return Ok(None);
         };
         let held = item.raw_body.clone().unwrap_or_default();
         let mut slot = item.slot.clone();
         slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let rewritten;
+        let content = if let Some(assets) = assets {
+            let uploads = self
+                .upload_assets(item.own_repository.as_ref(), assets)
+                .await?;
+            rewritten =
+                onetaskgraph_plugin_api::serve_asset_references(content, &mut slot, &uploads);
+            rewritten.as_str()
+        } else {
+            content
+        };
         let body = with_slot(&with_content(&held, content)?, &slot)?;
         // Checked before anything is sent, as a content write checks it.
         let (visible, read) = metadata_body(Some(body.clone()))?;
@@ -6382,7 +6443,10 @@ impl GitHubProjectsSource {
         item.raw_body = Some(body);
         item.slot = read;
         self.remember_written(item, false)?;
-        Ok(Some(()))
+        Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
+            id: id.clone(),
+            content: Some(content.to_owned()),
+        }))
     }
 
     async fn set_item_field(
@@ -6878,7 +6942,7 @@ impl GitHubProjectsSource {
         incoming: &Incoming<'_>,
         target: Option<&NativeId>,
         depends_on: &[DependencyEdge],
-    ) -> Result<NativeId, SourceError> {
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
         // Refused before anything is read or written: a task or a project titled the way
         // this board spells a document would land as an issue this same source reads back
         // as a document, so the field this destination cannot carry is named rather than
@@ -6999,8 +7063,20 @@ impl GitHubProjectsSource {
                 depends_on,
             )
             .await?;
-        let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
-        let body = compose_body(incoming.content, &slot)?;
+        let mut slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
+        let content = match incoming.assets {
+            Some(assets) => {
+                let uploads = self.upload_assets(own_repository.as_ref(), assets).await?;
+                let rewritten = onetaskgraph_plugin_api::serve_asset_references(
+                    incoming.content.unwrap_or_default(),
+                    &mut slot,
+                    &uploads,
+                );
+                incoming.content.map(|_| rewritten)
+            }
+            None => incoming.content.map(str::to_owned),
+        };
+        let body = compose_body(content.as_deref(), &slot)?;
         // Read before anything is created, for the reason the field below is: a value
         // this destination cannot store has to refuse, and refusing after `createIssue`
         // would leave an issue behind that nothing asked for. The engine writes a
@@ -7241,7 +7317,10 @@ impl GitHubProjectsSource {
             blocked_by: None,
         };
         self.remember_written(remembered, existing.is_none())?;
-        Ok(content_id)
+        Ok(onetaskgraph_plugin_api::AssetsWritten {
+            id: content_id,
+            content,
+        })
     }
 
     /// Everything a write does after the item exists: its board fields, its parent, and
@@ -8674,6 +8753,7 @@ struct Incoming<'a> {
     /// [`DESIGN_TITLE_PREFIX`] put back, so a round trip returns the title that went in.
     title: &'a str,
     content: Option<&'a str>,
+    assets: Option<&'a onetaskgraph_plugin_api::AssetWrite>,
     labels: &'a [Label],
     metadata: &'a BTreeMap<String, Value>,
     repositories: &'a [Repository],
@@ -8860,7 +8940,7 @@ impl TaskSource for GitHubProjectsSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            assets: Support::Unsupported,
+            assets: Support::Native,
             priority: if self.priorities.is_some() {
                 Support::Native
             } else {
@@ -8898,6 +8978,61 @@ impl TaskSource for GitHubProjectsSource {
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
             .map(|item| item.task())
             .transpose()
+    }
+    async fn task_assets(
+        &self,
+        id: &NativeId,
+    ) -> Result<Vec<onetaskgraph_plugin_api::Asset>, SourceError> {
+        self.held_assets(id, BoardKind::Work(ItemKind::Task)).await
+    }
+    async fn task_asset(
+        &self,
+        id: &NativeId,
+        name: &onetaskgraph_plugin_api::AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.held_asset(id, BoardKind::Work(ItemKind::Task), name)
+            .await
+    }
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        self.replace_rendering(
+            id,
+            BoardKind::Work(ItemKind::Task),
+            content,
+            provenance,
+            Some(assets),
+        )
+        .await
+    }
+    async fn document_assets(
+        &self,
+        id: &NativeId,
+    ) -> Result<Vec<onetaskgraph_plugin_api::Asset>, SourceError> {
+        self.held_assets(id, BoardKind::Document).await
+    }
+    async fn document_asset(
+        &self,
+        id: &NativeId,
+        name: &onetaskgraph_plugin_api::AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        self.held_asset(id, BoardKind::Document, name).await
+    }
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        self.replace_rendering(id, BoardKind::Document, content, provenance, Some(assets))
+            .await
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self
@@ -9091,34 +9226,18 @@ impl TaskSource for GitHubProjectsSource {
     /// metadata slot under their reserved keys, in place of any caller metadata of those
     /// names.
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        let near = write.target.as_ref().unwrap_or(&write.item.id);
-        for (key, entries) in [
-            (TaskRef::DELIVERS_KEY, &write.item.delivers),
-            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
-        ] {
-            TaskRef::listed(key, near, Some(&self.name), entries.clone())
-                .map_err(|message| SourceError::Refused { message })?;
-        }
-        if self.priorities.is_none() && write.item.priority != Priority::None {
-            return Err(self.holds_no_priority());
-        }
-        self.write_item(
-            &Incoming {
-                written: Written::Work(ItemKind::Task, &write.item.status),
-                title: &write.item.title,
-                content: write.item.content.as_deref(),
-                labels: &write.item.labels,
-                metadata: &write.item.metadata,
-                repositories: &write.item.repositories,
-                parent: write.item.project.as_ref(),
-                delivers: &write.item.delivers,
-                delivered_by: &write.item.delivered_by,
-                priority: self.priorities.as_ref().map(|_| write.item.priority),
-            },
-            write.target.as_ref(),
-            &write.depends_on,
-        )
-        .await
+        self.write_task_assets(write, None)
+            .await
+            .map(|written| written.id)
+    }
+
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        _answers: Option<&BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        self.write_task_assets(write, Some(assets)).await
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
@@ -9127,6 +9246,7 @@ impl TaskSource for GitHubProjectsSource {
                 written: Written::Work(ItemKind::Project, &write.item.status),
                 title: &write.item.title,
                 content: write.item.content.as_deref(),
+                assets: None,
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
@@ -9139,6 +9259,7 @@ impl TaskSource for GitHubProjectsSource {
             &write.depends_on,
         )
         .await
+        .map(|written| written.id)
     }
 
     /// Create or update one document, which is one issue titled the way this board spells
@@ -9150,37 +9271,18 @@ impl TaskSource for GitHubProjectsSource {
     /// naming an issue this board does not hold is refused rather than created, and an
     /// issue this call created is taken back when the rest of the write fails.
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
-        // A document takes part in no dependency graph, so there is no far end to write
-        // natively and none to record: a caller naming one is told so rather than having it
-        // stored under the reserved key, where a later read would report an edge the
-        // contract says cannot exist.
-        if !write.depends_on.is_empty() {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "this write names {} dependencies for a document, and a document takes \
-                     part in no dependency graph; next: put the dependency on the task or \
-                     project the document is about",
-                    write.depends_on.len()
-                ),
-            });
-        }
-        self.write_item(
-            &Incoming {
-                written: Written::Document,
-                title: &write.item.title,
-                content: write.item.content.as_deref(),
-                labels: &write.item.labels,
-                metadata: &write.item.metadata,
-                repositories: &write.item.repositories,
-                parent: write.item.project.as_ref(),
-                delivers: &[],
-                delivered_by: &[],
-                priority: None,
-            },
-            write.target.as_ref(),
-            &[],
-        )
-        .await
+        self.write_document_assets(write, None)
+            .await
+            .map(|written| written.id)
+    }
+
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        _answers: Option<&BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        self.write_document_assets(write, Some(assets)).await
     }
 
     /// Refused exactly as the write refuses it, from what the write reads: the mapping first,
@@ -9275,8 +9377,15 @@ impl TaskSource for GitHubProjectsSource {
         provenance: &Value,
         _answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.replace_rendering(id, BoardKind::Work(ItemKind::Task), content, provenance)
-            .await
+        self.replace_rendering(
+            id,
+            BoardKind::Work(ItemKind::Task),
+            content,
+            provenance,
+            None,
+        )
+        .await
+        .map(|written| written.map(|_| ()))
     }
 
     /// Replace one design-document issue's content and its provenance slot entry, on exactly
@@ -9288,8 +9397,9 @@ impl TaskSource for GitHubProjectsSource {
         provenance: &Value,
         _answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.replace_rendering(id, BoardKind::Document, content, provenance)
+        self.replace_rendering(id, BoardKind::Document, content, provenance, None)
             .await
+            .map(|written| written.map(|_| ()))
     }
 
     /// Replace one project issue's content and its provenance slot entry, on exactly the
@@ -9301,8 +9411,15 @@ impl TaskSource for GitHubProjectsSource {
         provenance: &Value,
         _answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.replace_rendering(id, BoardKind::Work(ItemKind::Project), content, provenance)
-            .await
+        self.replace_rendering(
+            id,
+            BoardKind::Work(ItemKind::Project),
+            content,
+            provenance,
+            None,
+        )
+        .await
+        .map(|written| written.map(|_| ()))
     }
 
     /// Apply a targeted update with one read of the item and a write only for what differs:
@@ -10361,6 +10478,82 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
     Page {
         items: selected,
         next,
+    }
+}
+
+impl GitHubProjectsSource {
+    async fn write_task_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let near = write.target.as_ref().unwrap_or(&write.item.id);
+        for (key, entries) in [
+            (TaskRef::DELIVERS_KEY, &write.item.delivers),
+            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
+        ] {
+            TaskRef::listed(key, near, Some(&self.name), entries.clone())
+                .map_err(|message| SourceError::Refused { message })?;
+        }
+        if self.priorities.is_none() && write.item.priority != Priority::None {
+            return Err(self.holds_no_priority());
+        }
+        self.write_item(
+            &Incoming {
+                written: Written::Work(ItemKind::Task, &write.item.status),
+                title: &write.item.title,
+                content: write.item.content.as_deref(),
+                assets,
+                labels: &write.item.labels,
+                metadata: &write.item.metadata,
+                repositories: &write.item.repositories,
+                parent: write.item.project.as_ref(),
+                delivers: &write.item.delivers,
+                delivered_by: &write.item.delivered_by,
+                priority: self.priorities.as_ref().map(|_| write.item.priority),
+            },
+            write.target.as_ref(),
+            &write.depends_on,
+        )
+        .await
+    }
+    async fn write_document_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        // A document takes part in no dependency graph, so there is no far end to write
+        // natively and none to record: a caller naming one is told so rather than having it
+        // stored under the reserved key, where a later read would report an edge the
+        // contract says cannot exist.
+        if !write.depends_on.is_empty() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this write names {} dependencies for a document, and a document takes \
+                     part in no dependency graph; next: put the dependency on the task or \
+                     project the document is about",
+                    write.depends_on.len()
+                ),
+            });
+        }
+        self.write_item(
+            &Incoming {
+                written: Written::Document,
+                title: &write.item.title,
+                content: write.item.content.as_deref(),
+                assets,
+                labels: &write.item.labels,
+                metadata: &write.item.metadata,
+                repositories: &write.item.repositories,
+                parent: write.item.project.as_ref(),
+                delivers: &[],
+                delivered_by: &[],
+                priority: None,
+            },
+            write.target.as_ref(),
+            &[],
+        )
+        .await
     }
 }
 

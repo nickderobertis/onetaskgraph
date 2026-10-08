@@ -708,7 +708,7 @@ with the record:
   uploaded under the reserved metadata key `onetaskgraph.assets` — each asset's `sha256` and
   `url` — so a later copy whose bytes have not changed reuses the URL and uploads nothing
   again;
-- into a source whose plugin stores no assets — `github-projects` today, and any
+- into a source whose plugin stores no assets — any
   plugin that declares nothing — the record is refused, naming the source, the record and the
   asset, before anything is written for it, because a design document whose pictures silently
   vanished on the way would be approved without them.
