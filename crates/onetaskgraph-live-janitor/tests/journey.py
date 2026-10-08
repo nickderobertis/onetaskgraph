@@ -1,6 +1,5 @@
 """Real janitor subprocess journeys against a fully paginated loopback GitHub."""
 import copy
-import datetime
 import http.server
 import json
 import os
@@ -45,10 +44,6 @@ class Content(TypedDict, total=False):
 class Item(TypedDict):
     id: ItemId
     content: Content
-
-class Run(TypedDict, total=False):
-    id: RunId
-    created_at: str
 
 class Allowance(TypedDict):
     limit: int
@@ -116,7 +111,6 @@ CORE = Repository(declaration('CORE_REPOSITORY'))
 SCRATCH = Repository(declaration('SCRATCH_REPOSITORY'))
 TITLE = declaration('ARTIFACT_PREFIX')
 LABEL = declaration('LABEL_PREFIX')
-CUTOVER = int(re.search(r'pub const CUTOVER_MICROS: u64 = ([\d_]+)', (ROOT / 'crates/onetaskgraph-live-janitor/src/lib.rs').read_text())[1].replace('_', ''))
 DAY = 86_400_000_000
 RestShape = dict[str, 'RestShape | None']
 
@@ -172,7 +166,7 @@ def unpinned_fields(shape: RestShape | None, value: object, where: str = 'respon
                         return found
     return None
 
-NOW = CUTOVER + 2 * DAY
+NOW = 1_800_000_000_000_000
 
 class Github:
     def __init__(self):
@@ -181,7 +175,6 @@ class Github:
         self.items: list[Item] = []
         # Malformed API values are intentional fixtures alongside valid statuses.
         self.status: dict[RunId, Status | str | int | None] = {}
-        self.owners: dict[Status, list[Run]] = {s: [] for s in Status if s != Status.COMPLETED}
         self.requests: list[Request] = []
         self.writes: list[Write] = []
         self.fail = None
@@ -191,9 +184,6 @@ class Github:
         self.change_after = None
         self.inject = None
         self.allowance = 5000
-        self.owner_reads = 0
-        self.owner_change_after = None
-        self.owner_fail_after = None
         self.undecodable = None
         self.page_size = 100
         self.write_inject = None
@@ -203,10 +193,7 @@ class Github:
         self.board_invalid_json = False
         self.board_fail_after = None
         self.board_reads = 0
-        self.owner_inject = None
         self.link_override = None
-        self.total_count = None
-        self.omit_total_count = False
         self.board_transform = None
         self.delete_response: dict[Deletion, object] = {}
         self.boards: set[Board] = set()
@@ -307,21 +294,8 @@ class Github:
                             callback()
                         self.reply({'status': status} if status is not None else {}, 200 if status is not None else 404)
                         return
-                    case ['', 'repos', _, _, 'actions', 'workflows', _, 'runs']:
-                        state.owner_reads += 1
-                        if state.owner_inject and state.owner_reads == 6:
-                            callback, state.owner_inject = state.owner_inject, None
-                            callback()
-                        if state.owner_fail_after and state.owner_reads > state.owner_fail_after:
-                            self.reply({}, 500)
-                            return
-                        if state.owner_change_after and state.owner_reads > state.owner_change_after:
-                            state.owners[Status.QUEUED] = [{'created_at': '2020-01-01T00:00:00Z'}]
-                        nodes = state.owners[Status(query['status'][0])]
-                        field = 'workflow_runs'
                     case ['', 'repos', owner, name, 'issues' | 'labels' as kind]:
                         repository = Repository(f'{owner}/{name}')
-                        field = None
                         nodes = state.issues[repository] if kind == 'issues' else state.labels[repository]
                     case _:
                         self.reply({'message': 'Not Found'}, 404)
@@ -336,10 +310,7 @@ class Github:
                 if state.link_override is not None:
                     filters = urlencode({k: v for k, v in query.items() if k != 'page'}, doseq=True)
                     link = state.link_override.format(origin=f'http://127.0.0.1:{self.server.server_port}', path=path, filters=filters)
-                value = {field: nodes} if field else nodes
-                # GitHub states a run listing's whole size on every page.
-                if field and not state.omit_total_count:
-                    value['total_count'] = state.total_count if state.total_count is not None else count
+                value = nodes
                 self.reply(value, link=link)
 
             def do_POST(self):
@@ -435,7 +406,7 @@ class Github:
 
     def run(self, now=NOW, overrides=None, arguments=None):
         server, thread = self.serve()
-        environment = dict(os.environ, GH_PROJECTS_OWNER='nickderobertis', GH_PROJECTS_NUMBER='1', GH_PROJECTS_REPOSITORY=SCRATCH, GH_PROJECTS_LEGACY_REPOSITORY=CORE, GH_PROJECTS_TOKEN='offline-write', GITHUB_TOKEN='offline-actions')
+        environment = dict(os.environ, GH_PROJECTS_OWNER='nickderobertis', GH_PROJECTS_NUMBER='1', GH_PROJECTS_REPOSITORY=SCRATCH, GH_PROJECTS_TOKEN='offline-write', GITHUB_TOKEN='offline-actions')
         environment.update(overrides or {})
         for name, value in list(environment.items()):
             if value is None:
@@ -456,22 +427,15 @@ class Github:
 
 def workload(scale=1):
     state = Github()
-    for n in range(194 * scale):
-        state.artifact(CORE, f'1-{n % (48 * scale) + 1}-{CUTOVER - DAY - n}', design=n % 7 == 0)
-    # One label per leaked run, independent of issue stamp times.
-    state.labels[CORE] = [{'name': LABEL + f'1-{n + 1}-{CUTOVER - DAY}'} for n in range(48 * scale)]
-    for n in range((356 if scale == 1 else 360)):
-        state.issues[CORE].append({'node_id': f'ordinary:{n}', 'title': f'Feature {n}'})
     for n in range(6 * scale):
-        state.artifact(SCRATCH, f'ci-{n // 6 + 1}-1-{CUTOVER - DAY - n}', run=n // 6 + 1)
+        state.artifact(SCRATCH, f'ci-{n // 6 + 1}-1-{NOW - 3 * DAY - n}', run=n // 6 + 1)
     # A cancelled run leaves one label shared by its six issues.
-    state.labels[SCRATCH] = [{'name': LabelName(LABEL + f'ci-{n + 1}-1-{CUTOVER - DAY - 6 * n}')} for n in range(scale)]
-    state.artifact(SCRATCH, f'ci-999-1-{CUTOVER - DAY}', run=999)
+    state.labels[SCRATCH] = [{'name': LabelName(LABEL + f'ci-{n + 1}-1-{NOW - 3 * DAY - 6 * n}')} for n in range(scale)]
+    state.artifact(SCRATCH, f'ci-999-1-{NOW - 3 * DAY}', run=999)
     state.status[RunId(999)] = Status.IN_PROGRESS
-    state.artifact(SCRATCH, f'1-1-{CUTOVER - DAY}')
+    state.artifact(SCRATCH, f'1-1-{NOW - 3 * DAY}')
     state.issues[SCRATCH].append({'node_id': 'scratch-ordinary', 'title': 'Ordinary scratch feature'})
     state.labels[SCRATCH].append({'name': 'ordinary'})
-    state.labels[CORE].append({'name': 'ordinary'})
     state.items.append({'id': 'draft', 'content': {'__typename': 'DraftIssue'}})
     return state
 
@@ -484,13 +448,13 @@ class Journeys(unittest.TestCase):
         self.assertIn('janitor failed:', result.stderr)
 
     def test_entry_refuses_invalid_configuration_without_requests(self):
-        for name in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY', 'GH_PROJECTS_LEGACY_REPOSITORY', 'GH_PROJECTS_TOKEN', 'GITHUB_TOKEN'):
+        for name in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY', 'GH_PROJECTS_TOKEN', 'GITHUB_TOKEN'):
             state = Github()
             result = state.run(overrides={name: None})
             self.assertEqual(result.returncode, REFUSED, result.stderr)
             self.assertIn(name, result.stderr)
             self.assertFalse(state.requests)
-        for name in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY', 'GH_PROJECTS_LEGACY_REPOSITORY'):
+        for name in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'):
             state = Github()
             result = state.run(overrides={name: 'other'})
             self.assertEqual(result.returncode, REFUSED, result.stderr)
@@ -509,6 +473,40 @@ class Journeys(unittest.TestCase):
             state = Github()
             self.assertEqual(state.run(arguments=arguments).returncode, REFUSED)
             self.assertFalse(state.requests)
+
+    def test_mixed_board_pages_ignore_non_scratch_before_title_inspection(self):
+        state = Github()
+        issue = state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
+        label = state.labels[SCRATCH][0]['name']
+        for stamp in (f'1-1-{NOW - DAY}', f'ci-456-1-{NOW - DAY}'):
+            state.artifact(CORE, stamp)
+        state.items.extend([
+            {'id': 'core-malformed', 'content': {'__typename': 'Issue', 'title': None, 'repository': {'nameWithOwner': CORE}}},
+            {'id': 'foreign-malformed', 'content': {'__typename': 'Issue', 'repository': {'nameWithOwner': 'other/repository'}}},
+            {'id': 'draft', 'content': {'__typename': 'DraftIssue'}},
+            {'id': 'hidden', 'content': None},
+        ])
+        state.items.extend({'id': f'd:{n}', 'content': {'__typename': 'DraftIssue'}} for n in range(100))
+        documents = {name: re.search(rf'pub const {name}: &str =\s*"([^"]+)";', JANITOR)[1]
+                     for name in ('BOARD_DOCUMENT', 'DELETE_ITEM_DOCUMENT', 'DELETE_ISSUE_DOCUMENT')}
+        self.assert_success(state.run())
+        self.assertEqual(state.requests, [
+            Request('GET', '/rate_limit'),
+            Request('POST', documents['BOARD_DOCUMENT']),
+            Request('POST', documents['BOARD_DOCUMENT']),
+            Request('GET', f'/repos/{SCRATCH}/issues?state=all&sort=created&direction=asc&per_page=100&page=1'),
+            Request('GET', f'/repos/{SCRATCH}/labels?&per_page=100&page=1'),
+            Request('GET', f'/repos/{CORE}/actions/runs/123'),
+            Request('POST', documents['DELETE_ITEM_DOCUMENT']),
+            Request('POST', documents['DELETE_ISSUE_DOCUMENT']),
+            Request('DELETE', f'/repos/{SCRATCH}/labels/{label}'),
+        ])
+        self.assertEqual(state.writes, [
+            Write('POST', ItemDelete('board1', ItemId('item:' + issue))),
+            Write('POST', IssueDelete(issue)),
+            Write('DELETE', LabelDelete(f'/repos/{SCRATCH}/labels/{label}')),
+        ])
+        self.assertEqual(state.status_reads, {123: 1})
 
     def test_real_clock_paces_writes(self):
         state = Github()
@@ -576,48 +574,22 @@ class Journeys(unittest.TestCase):
         self.assert_success(state.run())
         self.assertEqual(len(state.writes), writes)
 
-    def test_legacy_cutover_and_old_running_attempt(self):
-        state = Github()
-        state.artifact(CORE, f'1-1-{CUTOVER - 1}', design=True)
-        state.artifact(CORE, f'1-2-{CUTOVER}')
-        self.assert_success(state.run(CUTOVER + DAY - 1))
-        self.assertFalse(state.writes)
-        state.owners[Status.IN_PROGRESS] = [{'created_at': '2020-01-01T00:00:00Z'}]
-        self.assert_success(state.run())
-        self.assertFalse(state.writes)
-        state.owners[Status.IN_PROGRESS] = [{'created_at': '2030-01-01T00:00:00Z'}]
-        self.assert_success(state.run())
-        self.assertEqual(len(state.writes), 3)
-        self.assertEqual(len(state.issues[CORE]), 1)
-
-    def test_legacy_skew_boundary_is_strict_for_plain_and_design(self):
-        margin = int(re.search(r'CLOCK_SKEW_MARGIN: Duration = Duration::from_secs\((\d+) \* (\d+)\)', (ROOT / 'crates/onetaskgraph-live-janitor/src/lib.rs').read_text())[1]) * 60 * 1_000_000
-        stamp_time = (CUTOVER - DAY) // 1_000_000 * 1_000_000
-        for design in (False, True):
-            state = Github()
-            state.artifact(CORE, f'1-1-{stamp_time}', design=design)
-            boundary = datetime.datetime.fromtimestamp((stamp_time + margin) / 1_000_000, datetime.timezone.utc)
-            state.owners[Status.WAITING] = [{'created_at': boundary.isoformat()}]
-            self.assert_success(state.run())
-            self.assertFalse(state.writes)
-            state.owners[Status.WAITING] = [{'created_at': (boundary + datetime.timedelta(seconds=1)).isoformat()}]
-            self.assert_success(state.run())
-            self.assertEqual(len(state.writes), 3)
-
     def test_incomplete_enumeration_and_unaffordable_are_write_free(self):
-        for fail in ('/issues', '/labels', 'board', '/actions/workflows/'):
+        for fail in ('/issues', '/labels', 'board'):
             state = workload()
             state.fail = fail
             result = state.run()
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertFalse(state.writes)
-        for repeat in ('/issues', '/labels', 'board', '/actions/workflows/'):
+        for repeat in ('/issues', '/labels', 'board'):
             state = workload()
             match repeat:
                 case '/labels':
-                    state.labels[CORE].extend({'name': f'ordinary-{n}'} for n in range(100))
-                case '/actions/workflows/':
-                    state.owners[Status.QUEUED] = [{'id': RunId(n), 'created_at': '2030-01-01T00:00:00Z'} for n in range(100)]
+                    state.labels[SCRATCH].extend({'name': f'ordinary-{n}'} for n in range(100))
+                case '/issues':
+                    state.issues[SCRATCH].extend({'node_id': f'o:{n}', 'title': 'Ordinary'} for n in range(100))
+                case 'board':
+                    state.items.extend({'id': f'd:{n}', 'content': {'__typename': 'DraftIssue'}} for n in range(201))
             state.repeat = repeat
             result = state.run()
             self.assertNotEqual(result.returncode, 0)
@@ -630,45 +602,11 @@ class Journeys(unittest.TestCase):
         self.assertIn('janitor declined', result.stderr)
         self.assertFalse(state.writes)
 
-    def test_legacy_refresh_is_paginated_and_late_failure_stops_writes(self):
-        for failure in (False, True):
-            state = Github()
-            for n in range(30):
-                state.artifact(CORE, f'1-{n + 1}-{CUTOVER - DAY}')
-            # Two full pages and a final partial page, across each ownership refresh.
-            state.owners[Status.PENDING] = [{'id': n, 'created_at': '2030-01-01T00:00:00Z'} for n in range(201)]
-            # Initial evidence + first batch refresh = 14 calls, then refuse.
-            if failure:
-                state.owner_fail_after = 14
-            else:
-                state.owner_change_after = 14
-            result = state.run()
-            self.assertEqual(result.returncode == 0, not failure, result.stderr)
-            self.assertEqual(len(state.writes), 25)
-            self.assertGreater(state.owner_reads, 14)
-
-    def test_legacy_batch_only_deletes_previously_listed_artifacts(self):
-        state = Github()
-        for n in range(30):
-            state.artifact(CORE, f'1-{n + 1}-{CUTOVER - DAY}')
-        # Even an old-looking artifact inserted by a rerun after enumeration is not
-        # owned by this batch. A second one arrives during its first write.
-        before = f'1-999-{CUTOVER - DAY - 1}'
-        during = f'1-998-{CUTOVER - DAY - 2}'
-        state.write_inject = lambda: state.artifact(CORE, during)
-        state.owner_inject = lambda: state.artifact(CORE, before)
-        self.assert_success(state.run())
-        for stamp in (before, during):
-            self.assertTrue(any(v['title'].endswith(stamp) for v in state.issues[CORE]))
-            self.assertTrue(any(v['name'].endswith(stamp) for v in state.labels[CORE]))
-            self.assertTrue(any(v.get('content', {}).get('title', '').endswith(stamp) for v in state.items))
-
     def test_scratch_later_status_failure_stops_writes(self):
         state = Github()
         for n in range(30):
             state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY - n}', run=123)
         state.artifact(SCRATCH, f'ci-124-1-{NOW - DAY}', run=124)
-        state.artifact(CORE, f'1-124-{CUTOVER - DAY}')
         state.write_inject = lambda: setattr(state, 'invalid_json', '/actions/runs/123')
         self.assertNotEqual(state.run().returncode, 0)
         self.assertEqual(len(state.writes), 25)
@@ -678,24 +616,24 @@ class Journeys(unittest.TestCase):
         state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
         state.status[RunId(123)] = Status.IN_PROGRESS
         state.artifact(SCRATCH, f'ci-124-1-{NOW - DAY}', run=124)
-        state.artifact(CORE, f'1-124-{CUTOVER - DAY}')
         self.assert_success(state.run())
-        self.assertEqual(len(state.writes), 6)
+        self.assertEqual(len(state.writes), 3)
         self.assertEqual(len(state.issues[SCRATCH]), 1)
         self.assertFalse(state.issues[CORE])
 
     def test_later_list_failures_are_write_free(self):
-        for endpoint in ('/issues', '/labels', '/actions/workflows/', 'board'):
+        for endpoint in ('/issues', '/labels', 'board'):
             state = workload()
             match endpoint:
                 case '/labels':
-                    state.labels[CORE].extend({'name': f'ordinary-{n}'} for n in range(201))
-                case '/actions/workflows/':
-                    state.owners[Status.PENDING] = [{'id': RunId(n), 'created_at': '2030-01-01T00:00:00Z'} for n in range(201)]
+                    state.labels[SCRATCH].extend({'name': f'ordinary-{n}'} for n in range(201))
+                    state.fail_page = FailedPage(endpoint, 2)
+                case '/issues':
+                    state.issues[SCRATCH].extend({'node_id': f'o:{n}', 'title': 'Ordinary'} for n in range(201))
+                    state.fail_page = FailedPage(endpoint, 2)
                 case 'board':
                     state.board_fail_after = 1
-            if endpoint != 'board':
-                state.fail_page = FailedPage(endpoint, 2)
+                    state.items.extend({'id': f'd:{n}', 'content': {'__typename': 'DraftIssue'}} for n in range(201))
             result = state.run()
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(state.writes)
@@ -708,20 +646,20 @@ class Journeys(unittest.TestCase):
         state = Github()
         state.page_size = 10
         for n in range(25):
-            state.issues[CORE].append({'node_id': f'o:{n}', 'title': 'Ordinary'})
-        state.artifact(CORE, f'1-1-{CUTOVER - DAY}')
+            state.issues[SCRATCH].append({'node_id': f'o:{n}', 'title': 'Ordinary'})
+        state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
         self.assert_success(state.run())
         self.assertEqual(len(state.writes), 3)
         self.assertTrue(any('page=3' in path for _, path in state.requests))
 
     def test_undecodable_lists_fail_closed(self):
-        for path in ('/issues', '/labels', '/actions/workflows/'):
+        for path in ('/issues', '/labels'):
             state = workload()
             state.undecodable = path
             result = state.run()
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(state.writes)
-        for path in ('/issues', '/labels', '/actions/workflows/'):
+        for path in ('/issues', '/labels'):
             state = workload()
             state.invalid_json = path
             self.assertNotEqual(state.run().returncode, 0)
@@ -782,25 +720,10 @@ class Journeys(unittest.TestCase):
         self.assertIsNotNone(unpinned_fields(issues['response'], [{'title': 't', 'node_identifier': 'x'}]))
         self.assertIsNotNone(unpinned_fields(issues['response'], {'title': 't'}))
         self.assertIsNone(unpinned_fields(issues['response'], [{'title': 't', 'node_id': 'x', 'pull_request': {}}]))
-        runs = rest_operation('GET', '/repos/a/b/actions/workflows/ci.yml/runs')
-        self.assertIsNotNone(unpinned_fields(runs['response'], {'total_count': 1, 'workflow_runs': [{'created': 'x'}]}))
         state = Github()
         state.unpinned.append('a departure')
         with self.assertRaisesRegex(AssertionError, 'a departure'):
             state.run()
-
-    def test_incomplete_run_total_count_fails_closed(self):
-        state = workload()
-        state.total_count = 1
-        self.assert_failed(state.run())
-        self.assertFalse(state.writes)
-        # A listing that does not say how large it is cannot be shown complete.
-        state = workload()
-        state.omit_total_count = True
-        result = state.run()
-        self.assert_failed(result)
-        self.assertIn('incomplete enumeration', result.stderr)
-        self.assertFalse(state.writes)
 
     def test_invalid_records_fail_closed(self):
         for collection, record in (('issues', {'node_id': 42, 'title': 'ordinary'}),
@@ -809,7 +732,7 @@ class Journeys(unittest.TestCase):
                                    ('issues', {'node_id': 'id', 'title': None}),
                                    ('labels', {'name': 42})):
             state = workload()
-            getattr(state, collection)[CORE].append(record)
+            getattr(state, collection)[SCRATCH].append(record)
             self.assertNotEqual(state.run().returncode, 0, repr(record))
             self.assertFalse(state.writes)
         for field, value in (('id', 42), ('items', {'nodes': None}),
@@ -824,12 +747,6 @@ class Journeys(unittest.TestCase):
             state.board_transform = lambda body, f=field, v=value: body['data']['board']['projectV2'].__setitem__(f, v)
             self.assertNotEqual(state.run().returncode, 0, repr((field, value)))
             self.assertFalse(state.writes)
-        for created in ('not-a-date', '1969-12-31T23:59:59Z', None):
-            state = workload()
-            state.owners[Status.QUEUED] = [{'created_at': created}]
-            self.assert_failed(state.run())
-            self.assertFalse(state.writes, created)
-
     def test_an_unreadable_allowance_sends_nothing_further(self):
         # The allowance is the first request; without it no list is read and nothing written.
         for failure in ('fail', 'undecodable'):
@@ -871,7 +788,7 @@ class Journeys(unittest.TestCase):
                 self.assertEqual(isinstance(state.writes[-1].target, IssueDelete), operation is Deletion.ISSUE, response)
 
     def test_redirect_json_never_authorizes_or_confirms_cleanup(self):
-        for resource in ('/rate_limit', '/issues', '/labels', 'query', '/actions/workflows/'):
+        for resource in ('/rate_limit', '/issues', '/labels', 'query'):
             state = workload()
             state.redirect = resource
             result = state.run()
@@ -928,15 +845,26 @@ class Journeys(unittest.TestCase):
         for n in range(50):
             state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY - n}', run=123)
         state.artifact(SCRATCH, f'ci-124-1-{NOW - DAY}', run=124)
-        state.artifact(CORE, f'1-1-{CUTOVER - DAY}')
-        state.issues[CORE].extend({'node_id': IssueId(f'ordinary:{n}'), 'title': 'Ordinary'} for n in range(23_600))
+        state.issues[SCRATCH].extend({'node_id': IssueId(f'ordinary:{n}'), 'title': 'Ordinary'} for n in range(24_300))
         result = state.run()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('REST read limit', result.stderr)
         self.assertEqual(len(state.writes), 100)
         self.assertEqual(state.status_reads, {123: 4})
         self.assertTrue(any(issue['title'].endswith(f'ci-124-1-{NOW - DAY}') for issue in state.issues[SCRATCH]))
-        self.assertTrue(any(issue['title'].endswith(f'1-1-{CUTOVER - DAY}') for issue in state.issues[CORE]))
+
+    def test_scratch_write_cap_stops_at_150_with_fresh_batches(self):
+        state = Github()
+        for n in range(60):
+            state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY - n}', run=123)
+        result = state.run()
+        self.assert_success(result)
+        self.assertEqual(len(state.writes), 150)
+        self.assertEqual(state.status_reads, {123: 6})
+        self.assertEqual(len(state.issues[SCRATCH]) + len(state.labels[SCRATCH]) + len(state.items), 30)
+        times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
+        self.assertEqual(len(times), 150)
+        self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
 
     def test_read_limits_fail_closed_even_after_eligible_pages(self):
         for resource in ('REST', 'GraphQL'):
@@ -944,7 +872,7 @@ class Journeys(unittest.TestCase):
             state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
             match resource:
                 case 'REST':
-                    state.issues[CORE].extend({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'} for n in range(25_000))
+                    state.issues[SCRATCH].extend({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'} for n in range(25_000))
                 case 'GraphQL':
                     state.items.extend({'id': ItemId(f'd:{n}'), 'content': {'__typename': 'DraftIssue'}} for n in range(5_000))
             result = state.run()
@@ -955,8 +883,8 @@ class Journeys(unittest.TestCase):
     def test_exact_grammar_and_other_repository_survive(self):
         state = Github()
         for title in ('Feature request', TITLE, TITLE + 'ci-01-1-1', 'copy of ' + DESIGN + TITLE + '1-1-1'):
-            state.issues[CORE].append({'node_id': title, 'title': title})
-        state.labels[CORE].append({'name': LABEL + 'malformed'})
+            state.issues[SCRATCH].append({'node_id': title, 'title': title})
+        state.labels[SCRATCH].append({'name': LABEL + 'malformed'})
         state.items.append({'id': 'foreign', 'content': {'__typename': 'Issue', 'title': TITLE + '1-1-1', 'repository': {'nameWithOwner': 'other/repository'}}})
         # An item whose content this token cannot see is answered as null, and is nobody's residue.
         state.items.append({'id': 'hidden', 'content': None})
@@ -969,12 +897,11 @@ class Journeys(unittest.TestCase):
         self.assertFalse(state.status_reads)
         self.assertIn('pull', [issue['node_id'] for issue in state.issues[SCRATCH]])
 
-    def test_future_stamps_and_legacy_ci_stamps_survive(self):
+    def test_future_stamps_survive(self):
         state = Github()
         state.status[RunId(123)] = Status.COMPLETED
         for design in (False, True):
             state.artifact(SCRATCH, f'ci-123-1-{NOW + DAY}', design=design)
-            state.artifact(CORE, f'ci-123-1-{CUTOVER - DAY}', design=design)
         issues = copy.deepcopy(state.issues)
         labels = copy.deepcopy(state.labels)
         items = copy.deepcopy(state.items)
@@ -985,17 +912,16 @@ class Journeys(unittest.TestCase):
         self.assertEqual(state.labels, labels)
         self.assertEqual(state.items, items)
 
-    def test_both_passes_preserve_origin_field_and_retained_item_values(self):
+    def test_cleanup_preserves_origin_field_and_retained_item_values(self):
         state = workload()
         # Populate values on every board item, including the running CI run, machine
-        # artifacts and drafts which both passes must leave. Values belong to items,
+        # artifacts and drafts which cleanup must leave. Values belong to items,
         # so values on items actually deleted are not part of the preservation claim.
         state.origin_values = {item['id']: f"source:{item['id']}" for item in state.items}
         before_field = copy.deepcopy(state.origin_field)
         before_values = copy.deepcopy(state.origin_values)
         self.assert_success(state.run())
         self.assertTrue(any(isinstance(write.target, IssueDelete) and write.target.id.startswith(SCRATCH) for write in state.writes))
-        self.assertTrue(any(isinstance(write.target, IssueDelete) and write.target.id.startswith(CORE) for write in state.writes))
         self.assertEqual(state.origin_field, before_field)
         retained = {item['id'] for item in state.items}
         self.assertTrue(retained)
@@ -1006,7 +932,7 @@ class Journeys(unittest.TestCase):
         state = workload()
         result = state.run()
         self.assert_success(result)
-        self.assertEqual(len(state.writes), 150)
+        self.assertEqual(len(state.writes), 13)
         times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
         self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
         self.assertEqual(state.requests[0], ('GET', '/rate_limit'))
@@ -1026,45 +952,35 @@ class Journeys(unittest.TestCase):
             }))
         state = workload(10)
         protected = copy.deepcopy(state.issues[SCRATCH][-3:])
-        ordinary = copy.deepcopy([v for v in state.issues[CORE] if v['title'].startswith('Feature')])
         protected_items = copy.deepcopy([v for v in state.items if v['id'] == 'draft' or any(v['id'] == 'item:' + issue['node_id'] for issue in protected)])
         protected_labels = {repo: copy.deepcopy([v for v in nodes if v['name'] == 'ordinary' or (repo == SCRATCH and ('ci-999-' in v['name'] or v['name'].startswith(LABEL + '1-')))]) for repo, nodes in state.labels.items()}
-        for _ in range(40):
-            before = len(state.requests)
-            writes = len(state.writes)
-            listing_sizes = {(repo, kind): len(nodes) for repo in (CORE, SCRATCH) for kind, nodes in (('issues', state.issues[repo]), ('labels', state.labels[repo]))}
-            board_pages = max(1, (len(state.items) + 99) // 100)
-            result = state.run()
-            self.assert_success(result)
-            times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
-            self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
-            for issue in protected:
-                self.assertIn(issue, state.issues[SCRATCH])
-            for issue in ordinary:
-                self.assertIn(issue, state.issues[CORE])
-            for item in protected_items:
-                self.assertIn(item, state.items)
-            for repo, nodes in protected_labels.items():
-                for label in nodes:
-                    self.assertIn(label, state.labels[repo])
-            self.assertEqual(state.origin_field, ORIGIN_FIELD)
-            requests = state.requests[before:]
-            for (repo, kind), size in listing_sizes.items():
-                pages = [path for method, path in requests if method == 'GET' and urlparse(path).path == f'/repos/{repo}/{kind}']
-                self.assertEqual(len(pages), size // 100 + 1)
-                self.assertEqual([int(parse_qs(urlparse(path).query)['page'][0]) for path in pages], list(range(1, len(pages) + 1)))
-            self.assertEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), board_pages)
-            self.assertLessEqual(sum(method == 'GET' for method, _ in requests), 250)
-            self.assertLessEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), 50)
-            self.assertLessEqual(len(state.writes) - writes, 150)
-            eligible = any(v['title'].startswith(TITLE) or v['title'].startswith(DESIGN + TITLE) for v in state.issues[CORE]) or any('ci-999-' not in v['title'] and 'ci-' in v['title'] for v in state.issues[SCRATCH]) or any(v['name'].startswith(LABEL) for v in state.labels[CORE])
-            if not eligible:
-                break
-            self.assertGreater(len(state.writes), writes)
-        else:
-            self.fail('backlog did not drain')
+        before = len(state.requests)
+        writes = len(state.writes)
+        listing_sizes = {(repo, kind): len(nodes) for repo in (SCRATCH,) for kind, nodes in (('issues', state.issues[repo]), ('labels', state.labels[repo]))}
+        board_pages = max(1, (len(state.items) + 99) // 100)
+        result = state.run()
+        self.assert_success(result)
+        times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
+        self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
+        for issue in protected:
+            self.assertIn(issue, state.issues[SCRATCH])
+        for item in protected_items:
+            self.assertIn(item, state.items)
+        for repo, nodes in protected_labels.items():
+            for label in nodes:
+                self.assertIn(label, state.labels[repo])
+        self.assertEqual(state.origin_field, ORIGIN_FIELD)
+        requests = state.requests[before:]
+        for (repo, kind), size in listing_sizes.items():
+            pages = [path for method, path in requests if method == 'GET' and urlparse(path).path == f'/repos/{repo}/{kind}']
+            self.assertEqual(len(pages), size // 100 + 1)
+            self.assertEqual([int(parse_qs(urlparse(path).query)['page'][0]) for path in pages], list(range(1, len(pages) + 1)))
+        self.assertEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), board_pages)
+        self.assertLessEqual(sum(method == 'GET' for method, _ in requests), 250)
+        self.assertLessEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), 50)
+        self.assertLessEqual(len(state.writes) - writes, 150)
+        self.assertEqual(len(state.writes), 130)
         self.assertEqual(state.issues[SCRATCH], protected)
-        self.assertEqual(len(state.issues[CORE]), 360)
         self.assertTrue(any(v['id'] == 'draft' for v in state.items))
 
 if __name__ == '__main__':

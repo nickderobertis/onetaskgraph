@@ -8,7 +8,7 @@
     "tests/journey.py holds every request the janitor sends and every field its",
     "loopback stand-in serves to this pin, so neither can drift from GitHub's contract."
   ],
-  "//": "llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This pin is derived from GitHub OpenAPI commit 734bc9c1030b774eb3fc909cce477aceea21cf77, an immutable source which cannot drift. It retains the six REST operations, their query parameters and success-body fields. Moving that pin is the moment to regenerate this reduction; the offline journeys reconcile the janitor and its stand-in against it.",
+  "//": "llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This pin is derived from GitHub OpenAPI commit 734bc9c1030b774eb3fc909cce477aceea21cf77, an immutable source which cannot drift. It retains the five REST operations, their query parameters and success-body fields. Moving that pin is the moment to regenerate this reduction; the offline journeys reconcile the janitor and its stand-in against it.",
   "operations": [
     {
       "operation_id": "rate-limit/get",
@@ -139,82 +139,6 @@
       "query": {},
       "status": 204,
       "response": null
-    },
-    {
-      "operation_id": "actions/list-workflow-runs",
-      "method": "GET",
-      "path": "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
-      "query": {
-        "actor": null,
-        "branch": null,
-        "event": null,
-        "status": [
-          "completed",
-          "action_required",
-          "cancelled",
-          "failure",
-          "neutral",
-          "skipped",
-          "stale",
-          "success",
-          "timed_out",
-          "in_progress",
-          "queued",
-          "requested",
-          "waiting",
-          "pending"
-        ],
-        "per_page": null,
-        "page": null,
-        "created": null,
-        "exclude_pull_requests": null,
-        "check_suite_id": null,
-        "head_sha": null
-      },
-      "status": 200,
-      "response": {
-        "total_count": null,
-        "workflow_runs": {
-          "[]": {
-            "actor": null,
-            "artifacts_url": null,
-            "cancel_url": null,
-            "check_suite_id": null,
-            "check_suite_node_id": null,
-            "check_suite_url": null,
-            "conclusion": null,
-            "created_at": null,
-            "display_title": null,
-            "event": null,
-            "head_branch": null,
-            "head_commit": null,
-            "head_repository": null,
-            "head_repository_id": null,
-            "head_sha": null,
-            "html_url": null,
-            "id": null,
-            "jobs_url": null,
-            "logs_url": null,
-            "name": null,
-            "node_id": null,
-            "path": null,
-            "previous_attempt_url": null,
-            "pull_requests": null,
-            "referenced_workflows": null,
-            "repository": null,
-            "rerun_url": null,
-            "run_attempt": null,
-            "run_number": null,
-            "run_started_at": null,
-            "status": null,
-            "triggering_actor": null,
-            "updated_at": null,
-            "url": null,
-            "workflow_id": null,
-            "workflow_url": null
-          }
-        }
-      }
     },
     {
       "operation_id": "actions/get-workflow-run",

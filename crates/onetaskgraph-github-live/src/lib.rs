@@ -43,8 +43,7 @@ pub const SCRATCH_REPOSITORY: &str = "nickderobertis/onetaskgraph-live-scratch";
 ///
 /// Named so it can be **refused**: the lane fails before any request when it is nominated
 /// (a machine still configured with the old value says so on its next run rather than
-/// writing there), and the janitor's legacy pass, the one thing allowed to delete in it,
-/// reaches only the residue that lane left. It is also where `ci.yml` runs, so it is the
+/// writing there). It is also where `ci.yml` runs, so it is the
 /// repository whose Actions runs a CI stamp's run id is read back from. A machine the lane
 /// refuses fixes `GH_PROJECTS_REPOSITORY` to [`SCRATCH_REPOSITORY`] in its onetaskgraph
 /// `secrets.env`, or in the environment it pushes from.
