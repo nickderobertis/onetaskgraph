@@ -1329,7 +1329,6 @@ version = "0.3.7"
 name = "onetaskgraph-live-janitor"
 version = "0.3.7"
 dependencies = [
- "chrono",
  "graphql-parser",
  "onebudgetspec-core",
  "onetaskgraph-github-live",

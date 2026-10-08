@@ -10,7 +10,6 @@ python3 - <<'PY'
 import json
 import re
 import sys
-import subprocess
 from pathlib import Path
 
 janitor = Path('.github/workflows/live-janitor.yml').as_posix()
@@ -30,12 +29,6 @@ def read(path):
         return Path(path).read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError) as error:
         unreadable(path, f'cannot be read ({error})', 'restore it from git, then rerun')
-
-def git(*arguments):
-    try:
-        return subprocess.run(['git', *arguments], capture_output=True, text=True, encoding='utf-8')
-    except OSError as error:
-        unreadable('git', f'cannot be run ({error})', 'put git on PATH, then rerun')
 
 def section(text, start, end, name):
     if start not in text:
@@ -62,8 +55,6 @@ if values(source, 'GH_PROJECTS_NUMBER') != ['1']:
     refuse('GH_PROJECTS_NUMBER must name board 1 only')
 if values(source, 'GH_PROJECTS_REPOSITORY') != [constant('SCRATCH_REPOSITORY')]:
     refuse('GH_PROJECTS_REPOSITORY differs from SCRATCH_REPOSITORY')
-if values(source, 'GH_PROJECTS_LEGACY_REPOSITORY') != [constant('CORE_REPOSITORY')]:
-    refuse('GH_PROJECTS_LEGACY_REPOSITORY differs from CORE_REPOSITORY')
 if values(source, 'GH_PROJECTS_OWNER') != [constant('BOARD_OWNER')]:
     refuse('GH_PROJECTS_OWNER differs from BOARD_OWNER')
 if values(source, 'GH_PROJECTS_NUMBER') != [constant('BOARD_NUMBER', r'u32 = ([0-9]+)')]:
@@ -96,38 +87,6 @@ for path in [*Path('crates').glob('*/project.json'), *Path('sdks').glob('*/proje
         if re.search(r'cargo\s+run\b.*onetaskgraph-live-janitor', commands):
             refuse(f'{name} opens a janitor session', path,
                    'remove that cargo run of onetaskgraph-live-janitor; the janitor runs only from its workflow')
-# Check committed provenance once the finished constant is in HEAD. An uncommitted
-# introduction has no author timestamp yet; committing it makes this check applicable.
-cutover_path = 'crates/onetaskgraph-live-janitor/src/lib.rs'
-listed = git('ls-tree', '--name-only', 'HEAD', '--', cutover_path)
-if listed.returncode != 0:
-    unreadable(cutover_path, f'HEAD cannot be read ({listed.stderr.strip()})', 'run this from a git checkout with at least one commit, then rerun')
-committed_text = ''
-if listed.stdout.strip():
-    committed = git('show', f'HEAD:{cutover_path}')
-    if committed.returncode != 0:
-        unreadable(cutover_path, f'HEAD lists it but it cannot be read ({committed.stderr.strip()})', 'repair the clone, then rerun')
-    committed_text = committed.stdout
-current = read(cutover_path)
-pattern = r'pub const CUTOVER_MICROS: u64 = ([0-9_]+);'
-match = re.search(pattern, current)
-# A HEAD without the declaration has not introduced it yet, exactly like a HEAD without the file.
-in_head = re.search(pattern, committed_text)
-if not match:
-    refuse('janitor must declare CUTOVER_MICROS', cutover_path,
-           'declare `pub const CUTOVER_MICROS: u64 = <author second>_000_000;` and commit it at that second')
-elif in_head and in_head.group(1) != match.group(1):
-    refuse('CUTOVER_MICROS changed after its introducing commit', cutover_path,
-           f'restore it to {in_head.group(1)}, the value that commit introduced; it names that commit')
-elif in_head:
-    log = git('log', '--reverse', '--format=%at', '-S', 'pub const CUTOVER_MICROS:', '--', cutover_path)
-    if log.returncode != 0:
-        unreadable(cutover_path, f'history cannot be read ({log.stderr.strip()})', 'run this from a full clone, then rerun')
-    introduced = log.stdout.splitlines()
-    if not introduced or int(match.group(1).replace('_', '')) != int(introduced[0]) * 1_000_000:
-        refuse('CUTOVER_MICROS must equal its introducing commit author second in microseconds', cutover_path,
-               'set it to the author second of the commit that introduced it, times 1,000,000, '
-               f'which git reports as {introduced[0] if introduced else "no commit"}')
 if problems:
     for path, text, repair in problems:
         print(f'check-live-janitor: {path}: {text}', file=sys.stderr)

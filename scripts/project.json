@@ -58,7 +58,6 @@
           "bash scripts/check-live-decline-reading.sh",
           "bash scripts/check-live-lane-enforced.sh",
           "bash scripts/check-live-janitor.sh",
-          "bash scripts/check-live-janitor-enforced.sh",
           "bash scripts/check-fixture-discrimination-credential-free.sh",
           "bash scripts/check-live-lane-selection.sh",
           "bash scripts/check-selection-line-endings.sh",

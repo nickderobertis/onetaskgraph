@@ -2,10 +2,6 @@
 //!
 //! Scratch CI artifacts require their owning Actions run to read `completed` immediately
 //! before their delete batch. Machine stamps stay the writing machine's lock sweep's.
-//! The legacy pass requires fully paginated non-completed `ci.yml` runs all created strictly
-//! after the artifact's time plus the skew margin. Both passes wait a day; that margin is
-//! never ownership evidence. Legacy cleanup has no evidence about development machines:
-//! a machine run that wrote before cutover and lives a day may lose its artifacts.
 //! Linear keeps its machine stamps and lock sweep everywhere; this janitor never reads it.
 //!
 //! Every REST route, query parameter and response field this crate uses is held to GitHub's
@@ -26,21 +22,17 @@ use onetaskgraph_github_live::{
     BOARD_NUMBER, BOARD_OWNER, CORE_REPOSITORY, SCRATCH_REPOSITORY, labelled_stamp, titled_stamp,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
-use onetaskgraph_live::artifact::{CiStamp, Stamp};
+use onetaskgraph_live::artifact::CiStamp;
 use onetaskgraph_live::{Allowance, Credential, Demand, Metered, affordable};
 use serde_json::{Value, json};
 
 /// A generous delay, never the authorisation for a deletion.
 pub const WAITING_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
-/// Clock disagreement permitted when comparing legacy stamps with Actions creation times.
-pub const CLOCK_SKEW_MARGIN: Duration = Duration::from_secs(10 * 60);
-/// The commit introducing the CI nomination has this exact author second.
-pub const CUTOVER_MICROS: u64 = 1_791_409_304_000_000;
-/// Shared runtime limits, across both passes; these are not performance budgets.
+/// Runtime limits; these are not performance budgets.
 pub const WRITE_LIMIT: usize = 150;
 pub const REST_READ_LIMIT: usize = 250;
 pub const GRAPHQL_READ_LIMIT: usize = 50;
-/// One content request per second at most, including the boundary between passes.
+/// One content request per second at most, across delete batches.
 pub const WRITE_INTERVAL: Duration = Duration::from_secs(1);
 const BATCH_SIZE: usize = 25;
 
@@ -152,20 +144,6 @@ enum CredentialRole {
     Actions,
 }
 
-#[derive(Clone, Copy)]
-enum Target {
-    Scratch,
-    Legacy,
-}
-impl Target {
-    fn repository(self) -> &'static str {
-        match self {
-            Self::Scratch => SCRATCH_REPOSITORY,
-            Self::Legacy => CORE_REPOSITORY,
-        }
-    }
-}
-
 fn identifier(value: &Value, field: &str) -> Result<String, String> {
     let value = text(value, field)?;
     if value.is_empty() || value.chars().any(char::is_control) {
@@ -204,7 +182,7 @@ enum RunStatus {
     Pending,
 }
 impl RunStatus {
-    /// Every status a run that has not finished can have: the legacy pass lists each.
+    /// Every status a run that has not finished can have: used to decode ownership reads.
     const ACTIVE: [Self; 5] = [
         Self::Queued,
         Self::InProgress,
@@ -213,7 +191,7 @@ impl RunStatus {
         Self::Pending,
     ];
 
-    /// GitHub's spelling, in a run's `status` and in a listing's `status` filter alike.
+    /// GitHub's spelling, in a run's `status` and in an ownership read.
     fn spelling(self) -> &'static str {
         match self {
             Self::Completed => "completed",
@@ -249,7 +227,7 @@ pub const DELETE_ITEM_DOCUMENT: &str =
 // Operation variants bind the document, variables, accounting and response contract.
 enum GraphqlOperation {
     Board { after: Option<Cursor> },
-    DeleteIssue { id: IssueId, target: Target },
+    DeleteIssue { id: IssueId },
     DeleteItem { board: BoardId, id: ItemId },
 }
 impl GraphqlOperation {
@@ -271,11 +249,11 @@ impl GraphqlOperation {
     fn confirm(&self, value: &Value) -> Result<(), String> {
         let confirmed = match self {
             Self::Board { .. } => true,
-            Self::DeleteIssue { target, .. } => {
+            Self::DeleteIssue { .. } => {
                 value
                     .pointer("/data/deleteIssue/repository/nameWithOwner")
                     .and_then(Value::as_str)
-                    == Some(target.repository())
+                    == Some(SCRATCH_REPOSITORY)
             }
             Self::DeleteItem { id, .. } => {
                 value
@@ -318,20 +296,14 @@ enum Delete {
     Label(LabelName),
 }
 
-/// One listed artifact, owned the way its pass requires: a scratch artifact by the CI run
-/// that wrote it, a legacy one by a machine stamp.
+/// One listed artifact owned by the scratch CI run that wrote it.
 #[derive(Clone)]
-struct Artifact<O> {
-    owner: O,
+struct Artifact {
+    owner: CiStamp,
     delete: Delete,
 }
 
-/// Everything enumeration found eligible, already split by the pass that may delete it.
-#[derive(Default)]
-struct Listed {
-    scratch: Vec<Artifact<CiStamp>>,
-    legacy: Vec<Artifact<Stamp>>,
-}
+type Listed = Vec<Artifact>;
 
 struct Janitor {
     config: Config,
@@ -460,12 +432,7 @@ impl Janitor {
 
     // Numeric pagination avoids GitHub search's 1,000-result ceiling. A repeated page
     // fails closed rather than claiming that an incomplete listing authorised cleanup.
-    async fn pages(
-        &mut self,
-        path: &str,
-        field: Option<&str>,
-        role: CredentialRole,
-    ) -> Result<Vec<Value>, String> {
+    async fn pages(&mut self, path: &str, role: CredentialRole) -> Result<Vec<Value>, String> {
         let mut result = Vec::new();
         let mut seen = BTreeSet::new();
         let mut paths = BTreeSet::new();
@@ -476,8 +443,7 @@ impl Janitor {
                 return Err(format!("{path} page {page} did not advance"));
             }
             let (value, linked) = self.rest_page(&next, role).await?;
-            let nodes = field
-                .map_or(Some(&value), |field| value.get(field))
+            let nodes = Some(&value)
                 .and_then(Value::as_array)
                 .ok_or_else(|| format!("{path} page {page}: missing array"))?;
             if !nodes.is_empty() && !seen.insert(Value::Array(nodes.to_vec()).to_string()) {
@@ -491,48 +457,30 @@ impl Janitor {
                 // header is supplied. Empty terminal pages are valid.
                 next = format!("{path}&per_page=100&page={}", page + 1);
             } else {
-                // A wrapped listing (the Actions runs) states its own size, and must.
-                if field.is_some()
-                    && value.get("total_count").and_then(Value::as_u64) != Some(result.len() as u64)
-                {
-                    return Err(format!("{path} incomplete enumeration at page {page}"));
-                }
                 return Ok(result);
             }
             page += 1;
         }
     }
 
-    /// Lists `stamp`'s artifact for its target's pass when it is that pass's form and age.
-    fn list(&self, stamp: &str, delete: Delete, target: Target, listed: &mut Listed) {
+    /// Lists a scratch CI artifact when it has waited at least a day.
+    fn list(&self, stamp: &str, delete: Delete, listed: &mut Listed) {
         let waited = |micros: u64| {
             self.config
                 .now_micros
                 .checked_sub(micros)
                 .is_some_and(|age| age >= WAITING_PERIOD.as_micros() as u64)
         };
-        match target {
-            Target::Scratch => {
-                if let Some(owner) = CiStamp::read(stamp).filter(|o| waited(o.micros())) {
-                    listed.scratch.push(Artifact { owner, delete });
-                }
-            }
-            Target::Legacy => {
-                if let Some(owner) =
-                    Stamp::read(stamp).filter(|o| waited(o.micros()) && o.micros() < CUTOVER_MICROS)
-                {
-                    listed.legacy.push(Artifact { owner, delete });
-                }
-            }
+        if let Some(owner) = CiStamp::read(stamp).filter(|o| waited(o.micros())) {
+            listed.push(Artifact { owner, delete });
         }
     }
 
-    async fn repositories(&mut self, target: Target, listed: &mut Listed) -> Result<(), String> {
-        let repository = target.repository();
+    async fn repositories(&mut self, listed: &mut Listed) -> Result<(), String> {
+        let repository = SCRATCH_REPOSITORY;
         for issue in self
             .pages(
                 &format!("/repos/{repository}/issues?state=all&sort=created&direction=asc"),
-                None,
                 CredentialRole::Write,
             )
             .await?
@@ -543,25 +491,19 @@ impl Janitor {
                 continue;
             }
             if let Some(stamp) = titled_stamp(title, DESIGN_TITLE_PREFIX) {
-                self.list(stamp, Delete::Issue(id), target, listed);
+                self.list(stamp, Delete::Issue(id), listed);
             }
         }
         for label in self
             .pages(
                 &format!("/repos/{repository}/labels?"),
-                None,
                 CredentialRole::Write,
             )
             .await?
         {
             let name = text(&label, "name")?;
             if let Some(stamp) = labelled_stamp(name) {
-                self.list(
-                    stamp,
-                    Delete::Label(LabelName(name.to_owned())),
-                    target,
-                    listed,
-                );
+                self.list(stamp, Delete::Label(LabelName(name.to_owned())), listed);
             }
         }
         Ok(())
@@ -599,13 +541,11 @@ impl Janitor {
                 else {
                     return Err("board issue repository missing".into());
                 };
-                let target = match repository {
-                    CORE_REPOSITORY => Target::Legacy,
-                    SCRATCH_REPOSITORY => Target::Scratch,
-                    _ => continue,
-                };
+                if repository != SCRATCH_REPOSITORY {
+                    continue;
+                }
                 if let Some(stamp) = titled_stamp(text(content, "title")?, DESIGN_TITLE_PREFIX) {
-                    self.list(stamp, Delete::Item(item_id), target, listed);
+                    self.list(stamp, Delete::Item(item_id), listed);
                 }
             }
             match items
@@ -629,38 +569,11 @@ impl Janitor {
         }
     }
 
-    async fn legacy_owners(&mut self) -> Result<Vec<u64>, String> {
-        let mut times = Vec::new();
-        for status in RunStatus::ACTIVE.map(RunStatus::spelling) {
-            for run in self
-                .pages(
-                    &format!(
-                        "/repos/{CORE_REPOSITORY}/actions/workflows/ci.yml/runs?status={status}"
-                    ),
-                    Some("workflow_runs"),
-                    CredentialRole::Actions,
-                )
-                .await?
-            {
-                let created = chrono::DateTime::parse_from_rfc3339(text(&run, "created_at")?)
-                    .map_err(|e| format!("Actions created_at: {e}"))?;
-                times.push(
-                    u64::try_from(created.timestamp_micros())
-                        .map_err(|_| "Actions time before epoch")?,
-                );
-            }
-        }
-        Ok(times)
-    }
-
-    async fn delete(&mut self, delete: &Delete, target: Target) -> Result<(), String> {
+    async fn delete(&mut self, delete: &Delete) -> Result<(), String> {
         match delete {
             Delete::Issue(id) => {
-                self.graphql(GraphqlOperation::DeleteIssue {
-                    id: id.clone(),
-                    target,
-                })
-                .await?;
+                self.graphql(GraphqlOperation::DeleteIssue { id: id.clone() })
+                    .await?;
             }
             Delete::Item(id) => {
                 self.graphql(GraphqlOperation::DeleteItem {
@@ -671,7 +584,7 @@ impl Janitor {
             }
             Delete::Label(name) => {
                 self.pace().await?;
-                let path = format!("/repos/{}/labels/{}", target.repository(), name.0);
+                let path = format!("/repos/{}/labels/{}", SCRATCH_REPOSITORY, name.0);
                 let response = self
                     .client
                     .delete(self.config.rest.join(&path).map_err(|e| e.to_string())?)
@@ -692,8 +605,8 @@ impl Janitor {
         Ok(())
     }
 
-    async fn scratch_pass(&mut self, artifacts: Vec<Artifact<CiStamp>>) -> Result<(), String> {
-        let mut groups: BTreeMap<u64, Vec<Artifact<CiStamp>>> = BTreeMap::new();
+    async fn scratch_pass(&mut self, artifacts: Vec<Artifact>) -> Result<(), String> {
+        let mut groups: BTreeMap<u64, Vec<Artifact>> = BTreeMap::new();
         for artifact in artifacts {
             groups
                 .entry(artifact.owner.run().run_id())
@@ -737,37 +650,7 @@ impl Janitor {
                     if self.report.writes == WRITE_LIMIT {
                         return Ok(());
                     }
-                    self.delete(&artifact.delete, Target::Scratch).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn legacy_pass(&mut self, artifacts: Vec<Artifact<Stamp>>) -> Result<(), String> {
-        if self.config.now_micros < CUTOVER_MICROS.saturating_add(WAITING_PERIOD.as_micros() as u64)
-        {
-            return Ok(());
-        }
-        // Enumeration obtained the first evidence after listing. Every batch refreshes
-        // that complete listing immediately before its own writes.
-        for batch in artifacts.chunks(BATCH_SIZE) {
-            if self.report.writes == WRITE_LIMIT {
-                return Ok(());
-            }
-            let owners = self.legacy_owners().await?;
-            for artifact in batch {
-                if self.report.writes == WRITE_LIMIT {
-                    return Ok(());
-                }
-                if owners.iter().all(|created| {
-                    *created
-                        > artifact
-                            .owner
-                            .micros()
-                            .saturating_add(CLOCK_SKEW_MARGIN.as_micros() as u64)
-                }) {
-                    self.delete(&artifact.delete, Target::Legacy).await?;
+                    self.delete(&artifact.delete).await?;
                 }
             }
         }
@@ -898,20 +781,9 @@ pub async fn run_with_clock(config: Config, clock: Arc<dyn Clock>) -> Result<Rep
     }
     let mut listed = Listed::default();
     janitor.board(&mut listed).await?;
-    janitor.repositories(Target::Scratch, &mut listed).await?;
-    janitor.repositories(Target::Legacy, &mut listed).await?;
-    let Listed {
-        mut scratch,
-        mut legacy,
-    } = listed;
+    janitor.repositories(&mut listed).await?;
     // Remove board items before their issues; issue deletion also removes its board item.
-    scratch.sort_by_key(|a| (!matches!(a.delete, Delete::Item(_)), a.owner.to_string()));
-    legacy.sort_by_key(|a| (!matches!(a.delete, Delete::Item(_)), a.owner.to_string()));
-    if janitor.config.now_micros >= CUTOVER_MICROS.saturating_add(WAITING_PERIOD.as_micros() as u64)
-    {
-        janitor.legacy_owners().await?;
-    }
-    janitor.scratch_pass(scratch).await?;
-    janitor.legacy_pass(legacy).await?;
+    listed.sort_by_key(|a| (!matches!(a.delete, Delete::Item(_)), a.owner.to_string()));
+    janitor.scratch_pass(listed).await?;
     Ok(janitor.report)
 }
