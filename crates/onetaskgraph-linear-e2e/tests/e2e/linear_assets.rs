@@ -146,6 +146,7 @@ fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<
     let headers = match hint {
         Some("none" | "body") => String::new(),
         Some("zero") => "Retry-After: 0\r\n".to_owned(),
+        Some("conflicting") => "Retry-After: 3\r\n".to_owned(),
         Some("shared") => "Retry-After: 31\r\n".to_owned(),
         Some("epoch") => format!(
             "X-RateLimit-Requests-Reset: {}\r\nX-RateLimit-Endpoint-Requests-Reset: {}\r\nX-RateLimit-Complexity-Reset: {}\r\n",
@@ -1379,6 +1380,8 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
     for (hint, minimum, maximum) in [
         ("normal", 1.99, 2.01),
         ("body", 1.99, 2.01),
+        // HTTP Retry-After=3 takes precedence over GraphQL retryAfter=2.
+        ("conflicting", 2.99, 3.01),
         ("none", 0.99, 1.01),
         ("zero", 0.0009, 0.0011),
         ("expired", 0.0009, 0.0011),
