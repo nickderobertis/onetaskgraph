@@ -669,6 +669,8 @@ fn hosted_asset_reads_and_rendering_updates_cross_the_real_source_boundary() {
             .strip_prefix("board:")
             .unwrap();
         let id = NativeId(target.to_owned());
+        let lease = clock.lease(0);
+        lease.wait_for_detach();
         let environment = onetaskgraph_core::Environment::from_pairs(clock.client_env(0));
         let clock = onetaskgraph_core::process_clock(&environment).unwrap();
         let source = onetaskgraph_github_projects::Plugin
