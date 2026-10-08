@@ -3,6 +3,40 @@
 use super::*;
 use onetaskgraph_plugin_api::{AssetName, AssetUpload, AssetUploads, AssetWrite};
 
+/// Attachment redirects may stay on the fixture origin or GitHub's HTTPS content hosts.
+/// Keep this policy separate from the existing API client.
+pub(super) fn client(endpoint: &Url) -> Result<Client, SourceError> {
+    let fixture_origin = endpoint
+        .host_str()
+        .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"))
+        .then(|| endpoint.origin());
+    Client::builder()
+        .user_agent("onetaskgraph")
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            let url = attempt.url();
+            let trusted = fixture_origin
+                .as_ref()
+                .is_some_and(|origin| url.origin() == *origin)
+                || (url.scheme() == "https"
+                    && url.port_or_known_default() == Some(443)
+                    && url.host_str().is_some_and(|host| {
+                        matches!(host, "github.com" | "api.github.com" | "uploads.github.com")
+                            || host.ends_with(".githubusercontent.com")
+                    }));
+            if !trusted || !url.username().is_empty() || url.password().is_some() {
+                attempt.error("attachment redirect destination is not trusted")
+            } else if attempt.previous().len() >= 10 {
+                attempt.error("too many attachment redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .map_err(|error| SourceError::Config {
+            message: format!("cannot build attachment HTTP client: {error}"),
+        })
+}
+
 enum AssetOperation {
     Repository,
     Upload,
@@ -251,7 +285,7 @@ impl GitHubProjectsSource {
                 self.clock.sleep(self.reserve_mutation_slot()).await;
             }
             let response = self
-                .client
+                .asset_client
                 .execute(request.try_clone().ok_or_else(|| SourceError::Refused {
                     message: format!("GitHub asset {name} {stage} cannot be retried"),
                 })?)

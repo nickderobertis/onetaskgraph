@@ -1578,3 +1578,95 @@ fn truncated_asset_responses_are_refused_and_accounted_without_changing_issue_bo
         assert_eq!(last.rate_limit().remaining(), None);
     }
 }
+
+#[test]
+fn attachment_redirects_preserve_trusted_reads_and_refuse_foreign_destinations() {
+    for case in [
+        "trusted",
+        "foreign",
+        "credentials",
+        "scheme",
+        "port",
+        "chain",
+    ] {
+        let trusted = case == "trusted";
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        plan.author("document", "D", false, &[480_000], 42);
+        let foreign = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        foreign.set_nonblocking(true).unwrap();
+        let origin = plan.board.endpoint.trim_end_matches("/graphql");
+        let attachment = format!("{origin}/user-attachments/assets/1");
+        let destination = match case {
+            "trusted" | "chain" => attachment,
+            "credentials" => attachment.replacen("http://", "http://user:password@", 1),
+            "scheme" => "http://github.com/user-attachments/assets/1".into(),
+            "port" => "https://github.com:444/user-attachments/assets/1".into(),
+            "foreign" => format!("http://{}/foreign.png", foreign.local_addr().unwrap()),
+            _ => unreachable!(),
+        };
+        plan.board.refuse(Refusal {
+            stage: Stage::Read,
+            status: 302,
+            headers: format!("Location: {destination}\r\n"),
+            body: String::new(),
+            remaining: if case == "chain" { usize::MAX } else { 1 },
+        });
+        // The foreign listener answers if reached, so an unchecked redirect would falsely succeed.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopping = stop.clone();
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = reached.clone();
+        let listener = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok((mut stream, _)) = foreign.accept() {
+                    observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let mut request = [0; 4096];
+                    let _ = stream.read(&mut request);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .unwrap();
+                } else {
+                    std::thread::yield_now();
+                }
+            }
+        });
+        let output = plan.spawn("document", "D").wait_with_output().unwrap();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        listener.join().unwrap();
+        if trusted {
+            success(&output);
+        } else {
+            assert!(!output.status.success(), "{case} redirect was accepted");
+            assert!(
+                !reached.load(std::sync::atomic::Ordering::SeqCst),
+                "foreign destination was contacted"
+            );
+            assert!(
+                stderr(&output).contains("shot-0.png"),
+                "{}",
+                stderr(&output)
+            );
+            if case == "chain" {
+                assert_eq!(
+                    plan.board
+                        .calls()
+                        .iter()
+                        .filter(|call| call.status == 302)
+                        .count(),
+                    10
+                );
+            }
+            assert!(
+                !plan
+                    .github
+                    .documents()
+                    .iter()
+                    .any(|query| query.contains("createIssue(input:"))
+            );
+        }
+    }
+}

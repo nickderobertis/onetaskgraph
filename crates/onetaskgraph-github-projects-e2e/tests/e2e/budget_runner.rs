@@ -19,6 +19,7 @@ pub(super) enum Workload {
     Unchanged,
     Single,
     Concurrent,
+    ConcurrentRefusals,
 }
 impl Workload {
     pub(super) fn label(self) -> &'static str {
@@ -26,7 +27,7 @@ impl Workload {
             Self::New => "new",
             Self::Unchanged => "unchanged",
             Self::Single => "single",
-            Self::Concurrent => "concurrent",
+            Self::Concurrent | Self::ConcurrentRefusals => "concurrent",
         }
     }
     fn facts(self) -> (Vec<usize>, u64, u64, u64) {
@@ -34,7 +35,7 @@ impl Workload {
             Self::New => (vec![6, 2], 50_000, 500_000, 1),
             Self::Unchanged => (vec![6, 2], 50_000, 500_000, 3),
             Self::Single => (vec![24], 450_000, 500_000, 1),
-            Self::Concurrent => (vec![24, 24, 24], 450_000, 500_000, 1),
+            Self::Concurrent | Self::ConcurrentRefusals => (vec![24, 24, 24], 450_000, 500_000, 1),
         }
     }
 }
@@ -61,6 +62,11 @@ fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
         .as_f64()
         .filter(|value| value.is_finite() && *value >= 0.0)
         .ok_or("missing nonnegative figure")?;
+    if matches!(expected, Workload::ConcurrentRefusals)
+        && (figure.fract() != 0.0 || figure > expected.facts().0.len() as f64)
+    {
+        return Err("refusal count must be a whole number within the recorded copy count".into());
+    }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     Ok((figure, detail))
 }
@@ -101,7 +107,7 @@ fn validate(value: &Value, expected: Workload) -> Result<(), String> {
     Ok(())
 }
 // Each registered command selects its workload by exact filter; telemetry cannot select it.
-// llmlint: ignore-block[tests_assert_real_behavior] These four functions are report-only command entry points selected by budgets.yaml, using the landed test-harness runner convention. Ordinary tests must not report without ONEBUDGETSPEC_BUDGET_ID. The real_report_boundary journey below invokes this executable and asserts success, refusal, and whether a figure was written, including mismatched workloads; these entry points themselves are not behavioral tests.
+// llmlint: ignore-block[tests_assert_real_behavior] These five functions are report-only command entry points selected by budgets.yaml, using the landed test-harness runner convention. Ordinary tests must not report without ONEBUDGETSPEC_BUDGET_ID. The real_report_boundary journey below invokes this executable and asserts success, refusal, and whether a figure was written, including mismatched workloads; these entry points themselves are not behavioral tests.
 #[test]
 fn report_new() {
     report_expected(Workload::New);
@@ -117,6 +123,10 @@ fn report_single() {
 #[test]
 fn report_concurrent() {
     report_expected(Workload::Concurrent);
+}
+#[test]
+fn report_concurrent_refusals() {
+    report_expected(Workload::ConcurrentRefusals);
 }
 // llmlint: ignore-end[tests_assert_real_behavior]
 
@@ -289,4 +299,44 @@ fn nx_tracks_the_reporter_telemetry_directory() {
         project["targets"]["budgets"]["inputs"][2]["dependentTasksOutputFiles"],
         format!("**/{suffix}/*.json")
     );
+}
+
+#[test]
+fn refusal_report_rejects_fractional_and_impossible_counts() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("counts");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (figure, accepted) in [(0.5, false), (4.0, false), (3.0, true)] {
+        let recorded = json!({"budget":"recorded-count","value":figure,"detail":"observed refusals","workload":"concurrent","repetitions":1,"images":[vec![480000;24],vec![480000;24],vec![480000;24]]});
+        std::fs::write(
+            onetaskgraph_e2e_support::telemetry::file_in(&directory, "recorded-count"),
+            recorded.to_string(),
+        )
+        .unwrap();
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_concurrent_refusals",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", "recorded-count")
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            accepted,
+            "figure {figure}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(result.exists(), accepted);
+        if !accepted {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("refusal count"));
+        }
+    }
 }

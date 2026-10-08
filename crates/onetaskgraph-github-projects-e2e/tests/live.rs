@@ -88,7 +88,12 @@ async fn nominated_status_option(
 
 #[tokio::test]
 async fn disposable_task_and_document_asset_copies() {
-    let admission = lane::admit(&|variable| std::env::var(variable).ok()).unwrap();
+    let admission = lane::admit(&|variable| match std::env::var(variable) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("{variable} must be Unicode"),
+    })
+    .unwrap();
     let (token, owner, number, repository, writer) = match admission {
         lane::Admission::Skip(reason) => {
             journey::say(&format!("live asset journey did not run: {reason}"));
@@ -397,4 +402,33 @@ async fn board_admission_rejects_non_success_even_with_valid_board_json() {
             assert_eq!(snapshot.requests()[0].outcome(), Outcome::Refused);
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_live_demand_is_refused_before_admission() {
+    use std::os::unix::ffi::OsStringExt;
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "disposable_task_and_document_asset_copies",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(
+            "ONETASKGRAPH_LIVE_REQUIRED",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )
+        .env_remove("GH_PROJECTS_OWNER")
+        .env_remove("GH_PROJECTS_NUMBER")
+        .env_remove("GH_PROJECTS_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "malformed demand became an optional skip"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("ONETASKGRAPH_LIVE_REQUIRED must be Unicode")
+    );
 }

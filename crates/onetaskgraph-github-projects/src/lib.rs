@@ -2460,6 +2460,7 @@ pub struct GitHubProjectsSource {
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
     client: Client,
+    asset_client: Client,
     /// Every item this source has created in this command, in the order it created them —
     /// dropped by [`TaskSource::end_command`].
     ///
@@ -3490,6 +3491,7 @@ impl GitHubProjectsSource {
             owner: config.owner,
             project_number: config.project_number,
             repository,
+            asset_client: assets::client(&endpoint)?,
             endpoint,
             token,
             credential_name: config.token_env,

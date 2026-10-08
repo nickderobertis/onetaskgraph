@@ -32,7 +32,7 @@ budgets:
       An inner measure of refusals while people copy a project then each of its documents onto the real board, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent_refusals", "--exact", "--nocapture"]
     unit: copies
     direction: max
     threshold: 0
