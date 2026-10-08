@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.3.6...onetaskgraph-linear-v0.3.7) - 2026-10-08
+
+### Fixed
+
+- name no real organization's configuration in onetaskgraph's examples, fixtures and tests ([#3551](https://github.com/nickderobertis/onetaskgraph/pull/3551))
+
 ## [0.3.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.3.2...onetaskgraph-linear-v0.3.3) - 2026-10-07
 
 ### Added
