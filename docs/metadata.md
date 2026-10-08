@@ -443,7 +443,7 @@ task of it routes to. The two keys are what tie them together, and the store is 
 live:
 
 - `onetaskgraph.members`, on a home, is a JSON list of qualified project ids, each in a
-  different source from the home and from the others: `["hellopatient:a1b2c3"]`.
+  different source from the home and from the others: `["example-team:a1b2c3"]`.
 - `onetaskgraph.member_of`, on a member, is the qualified id of its home: `"plans:42"`.
 
 Both are written by a routed write alone — a copy, or a `task create` routed away from the

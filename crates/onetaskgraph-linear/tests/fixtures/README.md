@@ -304,7 +304,7 @@ finding beside the code it decided:
   escaped brackets and tildes, emphasis rewritten, a backslash dropped or doubled, a line
   opening `-->` escaped — except inside a code span on one line, which comes back identical.
   That is why the slot is now written that way.
-- **The Hello Patient team's states**, read on 2026-10-01: Proposed and Backlog (`backlog`),
+- **An anonymized workspace’s team states**, read on 2026-10-01: Proposed and Backlog (`backlog`),
   Todo and Queued (`unstarted`), In Progress and Needs Attention (`started`), Done
   (`completed`), Canceled (`canceled`), Triage (`triage`), and review states typed `started`,
   `canceled` and `duplicate`. The shared e2e fake's team carries those names and types, so a

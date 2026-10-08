@@ -166,8 +166,8 @@
 //! reaches `accessibleTeams:{some:{key:{eqIgnoreCase:…}}}`. And a project's status is not
 //! an issue's state: the counterpart of `IssueFilter.state` is `ProjectFilter.status`,
 //! while `ProjectFilter.state` exists and is a bare `StringComparator` over something else.
-//! The two do not even share a vocabulary — a project's statuses are the workspace's, Hello
-//! Patient's `Idea`, `Proposal`, `Planned`, `Completed` among them, where an issue's states are
+//! The two do not even share a vocabulary — a project's statuses are the workspace's,
+//! `Idea`, `Proposal`, `Planned`, `Completed` among them, where an issue's states are
 //! the team's — which is why `status_mapping` names each kind's statuses separately, and why a
 //! filter spelled in the other level's names matches nothing while being refused by nothing.
 //!

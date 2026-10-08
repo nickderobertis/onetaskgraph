@@ -35,7 +35,7 @@ pub const WAITING_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
 /// Clock disagreement permitted when comparing legacy stamps with Actions creation times.
 pub const CLOCK_SKEW_MARGIN: Duration = Duration::from_secs(10 * 60);
 /// The commit introducing the CI nomination has this exact author second.
-pub const CUTOVER_MICROS: u64 = 1_791_387_489_000_000;
+pub const CUTOVER_MICROS: u64 = 1_791_409_304_000_000;
 /// Shared runtime limits, across both passes; these are not performance budgets.
 pub const WRITE_LIMIT: usize = 150;
 pub const REST_READ_LIMIT: usize = 250;

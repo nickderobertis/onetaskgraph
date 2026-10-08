@@ -925,7 +925,7 @@ it names, wherever that item is filed, with no read before it.
 
 ```yaml
 sources:
-  hellopatient:
+  example-team:
     plugin: linear
     config:
       team: ENG
@@ -1126,9 +1126,9 @@ sources:
     plugin: github-projects
     config: { owner: nickderobertis, project_number: 2 }
     routes:
-      - repositories: ["github.com/petsinc/*"]
-        to: hellopatient
-  hellopatient:
+      - repositories: ["github.com/example-org/*"]
+        to: example-team
+  example-team:
     plugin: linear
     config: { api_key_env: LINEAR_API_KEY, team: ENG }
 ```
@@ -1148,10 +1148,10 @@ and a malformed pattern.
 address one entry by its index, because neither can spell a list of objects:
 
 ```bash
-onetaskgraph --set 'sources.plans.routes.0.repositories=github.com/petsinc/*' \
-             --set sources.plans.routes.0.to=hellopatient  task copy plan:T-1 --to plans
-ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__REPOSITORIES='github.com/petsinc/*' \
-ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__TO=hellopatient  onetaskgraph sources route plans
+onetaskgraph --set 'sources.plans.routes.0.repositories=github.com/example-org/*' \
+             --set sources.plans.routes.0.to=example-team  task copy plan:T-1 --to plans
+ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__REPOSITORIES='github.com/example-org/*' \
+ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__TO=example-team  onetaskgraph sources route plans
 ```
 
 A comma in a `repositories` value makes it a list of patterns, as a comma does everywhere
@@ -1161,7 +1161,7 @@ layer set rather than merging into it. `config show` prints `routes` with the la
 from — the document's list as one row, a flag's or a variable's entries one row per field.
 
 `onetaskgraph sources route <SOURCE> --repository <R>...` answers where an item would go —
-`{"source": "plans", "destination": "hellopatient", "route": 0}`, with `route` null when no
+`{"source": "plans", "destination": "example-team", "route": 0}`, with `route` null when no
 entry matched — from configuration alone.
 
 ### Which writes route, and where each item lands
