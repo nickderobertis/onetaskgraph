@@ -1398,7 +1398,7 @@ impl GqlError {
             .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))?;
         Some(SourceError::RateLimited {
             retry_after_seconds: retry.or(extensions.retry_after),
-            message: (!status.is_success()).then(|| format!("Linear returned HTTP {status}")),
+            message: Some(format!("Linear returned HTTP {status}")),
         })
     }
 
@@ -1557,7 +1557,16 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
-        self.answer_using(&self.client, query, variables).await
+        match self.answer_using(&self.client, query, variables).await {
+            Err(SourceError::RateLimited {
+                retry_after_seconds,
+                ..
+            }) => Err(SourceError::RateLimited {
+                retry_after_seconds,
+                message: None,
+            }),
+            result => result,
+        }
     }
 
     async fn answer_using(
@@ -1583,10 +1592,7 @@ impl LinearSource {
         if status.as_u16() == 429 {
             return Err(SourceError::RateLimited {
                 retry_after_seconds: retry,
-                // Linear has one rate limiter and the status is the whole of what it said,
-                // so there is nothing to add beyond the kind — which is what an absent
-                // message means.
-                message: None,
+                message: Some(format!("Linear returned HTTP {status}")),
             });
         }
         if status.as_u16() == 401 || status.as_u16() == 403 {

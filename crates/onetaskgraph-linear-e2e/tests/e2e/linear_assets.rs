@@ -11,7 +11,7 @@ use onetaskgraph_plugin_api::asset_sha256;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task explicitly assigns comparison with the cited published page to the manager's audit after this node settles, outside this node's acceptance bar. The required offline test reconciles this model's number and window with that sourced budget description; fetching the changing page in a measuring journey would defeat its deterministic cached telemetry.
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This deterministic quota model is reconciled with the sourced budget description by loopback_request_limit_and_budget_description_agree. The changing published quota is checked by an external audit rather than a cached measuring journey.
 const REQUEST_LIMIT: usize = 2_500;
 const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
@@ -1077,6 +1077,9 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         "notes":{"plugin":"local-md","config":{"root":journey.sandbox.project().join("notes")}},
         "dest":{"plugin":"linear","config":{"endpoint":endpoint,"team":team,"status_mapping":{"todo":state_name}}}
     })));
+    // Catch assertion failures so disposable items are removed before rethrowing. Cleanup
+    // reads the observer's item journal, never the failed journey state; mutex guards are
+    // dropped before assertions, and the runtime/client are only reused for fresh deletes.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for (kind, id) in origins {
             let run = || {
@@ -1128,11 +1131,8 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
             let before = observed.lock().unwrap().signed.len();
             let output = run();
             assert!(output.status.success(), "{}", stderr(&output));
-            assert_eq!(
-                observed.lock().unwrap().signed.len(),
-                before,
-                "unchanged copy sends no fileUpload"
-            );
+            let after = observed.lock().unwrap().signed.len();
+            assert_eq!(after, before, "unchanged copy sends no fileUpload");
         }
     }));
     for observation in &observed.lock().unwrap().observations {

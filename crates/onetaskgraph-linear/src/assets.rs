@@ -189,7 +189,7 @@ impl LinearSource {
             let upload = loop {
                 let body = match self.answer_using(&client, FILE_UPLOAD, json!({"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()})).await {
                     Err(SourceError::RateLimited { retry_after_seconds, message }) => {
-                        self.wait_asset(asset, Stage::Mutation, reqwest::StatusCode::TOO_MANY_REQUESTS, retry_after_seconds.map(Duration::from_secs), &mut waited).await.map_err(|error| failure(asset, Stage::Mutation, &format!("{}: {error}", message.unwrap_or_default())))?;
+                        self.wait_asset(asset, Stage::Mutation, message.as_deref().unwrap_or("Linear rate limiter"), retry_after_seconds.map(Duration::from_secs), &mut waited).await?;
                         continue;
                     }
                     Err(error) => return Err(failure(asset, Stage::Mutation, &error.to_string())),
@@ -261,7 +261,7 @@ impl LinearSource {
                     self.wait_asset(
                         asset,
                         Stage::Put,
-                        response.status(),
+                        &format!("HTTP {}", response.status()),
                         super::reset_wait(response.headers()),
                         &mut waited,
                     )
@@ -294,7 +294,7 @@ impl LinearSource {
                     self.wait_asset(
                         asset,
                         Stage::VerifyingRead,
-                        response.status(),
+                        &format!("HTTP {}", response.status()),
                         super::reset_wait(response.headers()),
                         &mut waited,
                     )
@@ -332,7 +332,7 @@ impl LinearSource {
         &self,
         asset: &AssetPayload,
         stage: Stage,
-        status: reqwest::StatusCode,
+        status: &str,
         hint: Option<Duration>,
         waited: &mut Duration,
     ) -> Result<(), SourceError> {
@@ -344,7 +344,7 @@ impl LinearSource {
                 asset,
                 stage,
                 &format!(
-                    "RATELIMITED: Linear limiter returned HTTP {status} and exceeds the 60 second total wait bound"
+                    "RATELIMITED: Linear limiter returned {status} and exceeds the 60 second total wait bound"
                 ),
             ));
         }
