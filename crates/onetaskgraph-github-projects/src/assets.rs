@@ -331,7 +331,7 @@ impl GitHubProjectsSource {
                 .record(accounting::Request::rest(endpoint.clone()).finished(outcome, limits));
             if let Some(limiter) = limiter {
                 let limited = Limited { limiter, hint };
-                let wait = hint.map_or(Duration::from_secs(1), |hint| Duration::from_secs(hint).max(backoff));
+                let wait = hint.map_or(backoff, |hint| Duration::from_secs(hint).max(backoff));
                 if wait.is_zero() || wait > self.pacing.retry_budget.saturating_sub(waited) {
                     return Err(limited.exhausted(
                         &format!("asset {name} {stage}"),
