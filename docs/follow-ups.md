@@ -97,19 +97,19 @@ shape and saying that in the crate's own documentation. The first two both cost 
 single-request guarantee above, so whichever is chosen has to say what the three tests
 named here should assert instead.
 
-## Image assets on a GitHub board and in a Linear workspace
+## Image assets on a GitHub board
 
-`github-projects` and `linear` declare `assets` unsupported, so a create or a copy of a task or
-a document whose content references an image asset — `![alt](./<name>)` — into either is
-refused, naming the source, the record and the asset, before anything is written for that
-record. That is sound as it stands: a design document whose pictures silently vanished on
-the way to the board would be approved without them, and a refusal says so instead. What is
-missing is the storing, which is each plugin's own decision about where its backend serves
-an image: both build on the contract `onetaskgraph-plugin-api` already declares —
+`github-projects` declares `assets` unsupported, so a create or a copy of a task or
+a document whose content references an image asset — `![alt](./<name>)` — into it is
+refused before anything is written for that record. Implementing its storage builds on
 `TaskSource::write_task_with_assets` and its siblings, `AssetWrite`, and the
-`onetaskgraph.assets` record `serve_asset_references` writes — and on the `Clock` they route
-their pacing through. Closing either means declaring `assets` native in that plugin,
-implementing those writes, and deleting its line below.
+`onetaskgraph.assets` record `serve_asset_references` writes.
+
+Linear supports assets through its documented `fileUpload` flow: a signed PUT stores the
+bytes and an authenticated GET verifies the returned asset URL before content is written
+with rewritten references and the upload record. Matching recorded SHA-256 values reuse
+their URLs without upload or verification. Images are visible to authenticated members of
+the workspace. See `crates/onetaskgraph-linear/src/assets.rs` for the mechanism and bounded
+rate-limit retries.
 
 Unsupported fields: `onetaskgraph-github-projects` `assets`
-Unsupported fields: `onetaskgraph-linear` `assets`
