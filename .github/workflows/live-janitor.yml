@@ -24,7 +24,6 @@ jobs:
           GH_PROJECTS_OWNER: nickderobertis
           GH_PROJECTS_NUMBER: "1"
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
-          GH_PROJECTS_LEGACY_REPOSITORY: nickderobertis/onetaskgraph
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo run --locked -p onetaskgraph-live-janitor

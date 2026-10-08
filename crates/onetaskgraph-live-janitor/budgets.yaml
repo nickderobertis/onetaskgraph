@@ -3,12 +3,15 @@ budgets:
   - id: live-janitor-requests-per-run
     description: >-
       Every REST and GraphQL request, under either token, sent by the scheduled
-      executable to a loopback GitHub at the realistic legacy and scratch workload.
+      executable to a loopback GitHub at the realistic scratch workload.
       Protects headroom on the shared GitHub credential while hourly cleanup drains residue.
     labels: [github]
     measure: reported
     command: [cargo, test, --quiet, -p, onetaskgraph-live-janitor, --all-features, --locked, --test, journeys, --, budget_runner::report, --exact, --nocapture]
     unit: requests
     direction: max
-    threshold: 250
+    # 1 rate-limit read + 2 scratch listing pages + 1 board page +
+    # 2 run-status reads + 13 writes (6 items, 6 issues, 1 label) = 19;
+    # threshold 20 leaves one request headroom.
+    threshold: 20
     timeout_seconds: 1800

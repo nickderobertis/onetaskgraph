@@ -78,11 +78,9 @@
 //!
 //! What the GitHub lane writes to and refuses — the scratch repository, never the core one,
 //! and how a machine fixes `GH_PROJECTS_REPOSITORY` — is that lane's own policy, stated in
-//! `onetaskgraph-github-live`. The janitor's two rules are stated where they are enforced,
-//! in `onetaskgraph-live-janitor`: a CI stamp's run read back `completed`, and for the
-//! core repository's pre-cutover machine stamps, complete listings of the non-completed
-//! `ci.yml` runs; one 24-hour waiting period is a margin there, never the authorisation,
-//! and no evidence covers a development-machine run still alive a day after cutover. It is
+//! `onetaskgraph-github-live`. The janitor's rule is enforced in
+//! `onetaskgraph-live-janitor`: a CI stamp's run must read back `completed`;
+//! a 24-hour waiting period is a margin, never the authorisation. It is
 //! scheduled cleanup rather than a test lane, so no `test` or `coverage` target runs it.
 //! Linear's machine stamps and lock sweep are unchanged; the janitor never reads Linear.
 

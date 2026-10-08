@@ -471,23 +471,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   run in this repository reads back as `completed` immediately before each delete batch.
   A re-run in progress protects every attempt; failed, missing or undecodable reads
   protect the artifacts. A batch contains only artifacts listed before that read.
-  Its separate **legacy pass** targets the core repository's machine-stamped residue
-  strictly before its committed cutover. Fully paginated `ci.yml` listings for `queued`,
-  `in_progress`, `waiting`, `requested` and `pending`, read after enumeration and again
-  immediately before each batch, must show every run created strictly after each stamp
-  plus the single ten-minute clock-skew margin. Failure or incomplete pagination
-  authorises nothing. The cutover constant equals its introducing commit's author
-  second in microseconds; the CI repoint and core refusal land with it.
-  **One 24-hour waiting period applies to both janitor passes**, and the legacy pass
-  starts no earlier than cutover plus that period. It is a generous cheap margin,
-  never what protects a running test: the Actions ownership reads do that.
-  **Remaining limitation:** there is no evidence about development machines; a
-  development-machine run stamped before cutover and still alive a day later could lose
-  its artifacts in the legacy pass. This limitation does not change the scratch pass's
-  refusal to touch machine stamps. Neither pass touches `onetaskgraph.origin`, draft
-  items, other repositories' items, or anything outside the exact artifact grammar.
+  A 24-hour waiting period is a margin, never the ownership authorisation.
+  Machine stamps, `onetaskgraph.origin`, draft items and other repositories' items
+  remain untouched. Shared-board enumeration skips non-scratch issues before inspecting
+  their titles; core Actions single-run reads establish scratch CI ownership.
   The janitor reads `/rate_limit` first and writes nothing when `affordable` refuses.
-  Across both passes it caps writes at 150, at least one second apart, and reads at
+  It caps writes at 150, at least one second apart, and reads at
   250 REST and 50 GraphQL queries; incomplete enumeration fails closed and red. Its exit
   statuses, stated once in `crates/onetaskgraph-live-janitor/src/main.rs`, tell a decline
   from a failure, and a decline is red too, because the allowance is shared.

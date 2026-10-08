@@ -14,7 +14,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use onetaskgraph_github_live::{BOARD_NUMBER, BOARD_OWNER, CORE_REPOSITORY, SCRATCH_REPOSITORY};
+use onetaskgraph_github_live::{BOARD_NUMBER, BOARD_OWNER, SCRATCH_REPOSITORY};
 use onetaskgraph_live::artifact::now_micros;
 use onetaskgraph_live_janitor::{Config, Outcome, Report, VirtualClock, run, run_with_clock};
 
@@ -46,7 +46,6 @@ fn configure() -> Result<(Config, ClockMode), Failure> {
         ("GH_PROJECTS_OWNER", BOARD_OWNER),
         ("GH_PROJECTS_NUMBER", number.as_str()),
         ("GH_PROJECTS_REPOSITORY", SCRATCH_REPOSITORY),
-        ("GH_PROJECTS_LEGACY_REPOSITORY", CORE_REPOSITORY),
     ] {
         if variable(name)? != expected {
             return Err(Failure::Configuration(format!(

@@ -519,14 +519,8 @@
 //! the owning machine's lock sweep's; Linear always keeps that form and is unaffected.
 //! The hourly janitor is cleanup, never a test lane: scratch CI residue is removed only
 //! after its run reads back as `completed`, immediately before the listed-artifact batch.
-//! Its separate legacy pass reaches only pre-cutover machine residue in the core
-//! repository, after fully paginated non-completed `ci.yml` listings prove every run was
-//! created strictly after the stamp plus ten minutes, refreshed before each batch.
-//! Failed or incomplete ownership reads preserve residue. One 24-hour waiting period
-//! applies to both passes and delays legacy startup until cutover plus that period;
-//! it is a margin, never the ownership authorisation. The legacy limitation is that no
-//! evidence covers a development-machine run that remains alive a day after its stamp.
-//! Neither pass removes the board's `onetaskgraph.origin` field.
+//! Failed or incomplete ownership reads preserve residue. A 24-hour waiting period
+//! is a margin, never the ownership authorisation. The janitor never removes the board's `onetaskgraph.origin` field.
 //!
 //! # What a session of requests costs, and where the report is
 //!
