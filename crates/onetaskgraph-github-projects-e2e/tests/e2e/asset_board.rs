@@ -15,7 +15,7 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Stage {
     Upload,
-    Verify,
+    Read,
     Repository,
 }
 
@@ -45,6 +45,7 @@ struct State {
     assets: BTreeMap<String, Vec<u8>>,
     refusal: Option<Refusal>,
     disconnect: Option<Stage>,
+    truncate: Option<Stage>,
     rolling: VecDeque<Duration>,
     enforce_limit: bool,
 }
@@ -94,7 +95,7 @@ impl Board {
                 let first = headers.lines().next().unwrap();
                 let path = first.split_whitespace().nth(1).unwrap().to_owned();
                 let upload = first.starts_with("POST /user-attachments/assets?");
-                let verify = first.starts_with("GET /user-attachments/assets/");
+                let attachment_read = first.starts_with("GET /user-attachments/assets/");
                 let graphql = path == "/graphql";
                 let creating = upload
                     || (graphql
@@ -106,14 +107,15 @@ impl Board {
                 let at = clock.now();
                 let mut answer = None;
                 let mut disconnect = false;
+                let mut truncate = false;
                 let mut status = 200;
                 let mut extra_headers = String::new();
                 {
                     let mut state = held.lock().unwrap();
                     let stage = if upload {
                         Some(Stage::Upload)
-                    } else if verify {
-                        Some(Stage::Verify)
+                    } else if attachment_read {
+                        Some(Stage::Read)
                     } else if path.starts_with("/repos/") {
                         Some(Stage::Repository)
                     } else {
@@ -124,12 +126,21 @@ impl Board {
                         state.disconnect = None;
                     }
 
+                    if state.truncate.is_some() && state.truncate == stage {
+                        truncate = true;
+                        state.truncate = None;
+                    }
+
                     while state.rolling.front().is_some_and(|previous| {
                         at.saturating_sub(*previous) >= Duration::from_secs(60)
                     }) {
                         state.rolling.pop_front();
                     }
-                    if creating && state.enforce_limit && state.rolling.len() >= 80 {
+                    if creating
+                        && state.enforce_limit
+                        && state.rolling.len() as u64
+                            >= onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE
+                    {
                         status = 403;
                         let wait = (state.rolling[0] + Duration::from_secs(60))
                             .saturating_sub(at)
@@ -146,7 +157,7 @@ impl Board {
                         if let Some(refusal) = &mut state.refusal
                             && refusal.remaining > 0
                             && ((upload && refusal.stage == Stage::Upload)
-                                || (verify && refusal.stage == Stage::Verify)
+                                || (attachment_read && refusal.stage == Stage::Read)
                                 || (path.starts_with("/repos/")
                                     && refusal.stage == Stage::Repository))
                         {
@@ -175,7 +186,7 @@ impl Board {
                             serde_json::to_vec(&json!({"url":format!("http://{address}{key}")}))
                                 .unwrap(),
                         );
-                    } else if !disconnect && answer.is_none() && verify {
+                    } else if !disconnect && answer.is_none() && attachment_read {
                         let authenticated = headers
                             .to_ascii_lowercase()
                             .contains("authorization: bearer test-token");
@@ -230,7 +241,7 @@ impl Board {
                     stream.write_all(&forwarded).unwrap();
                 } else {
                     let answer = answer.unwrap();
-                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n", answer.len()).unwrap();
+                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n", answer.len() + usize::from(truncate)).unwrap();
                     stream.write_all(&answer).unwrap();
                 }
                 drop(request);
@@ -250,6 +261,9 @@ impl Board {
     }
     pub fn disconnect_next(&self, stage: Stage) {
         self.state.lock().unwrap().disconnect = Some(stage);
+    }
+    pub fn truncate_next(&self, stage: Stage) {
+        self.state.lock().unwrap().truncate = Some(stage);
     }
     pub fn enforce_limit(&self) {
         self.state.lock().unwrap().enforce_limit = true;
@@ -285,7 +299,11 @@ fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>, Vec<u8>) {
         .find_map(|line| {
             line.to_ascii_lowercase()
                 .strip_prefix("content-length: ")
-                .and_then(|number| number.parse::<usize>().ok())
+                .map(|number| {
+                    number
+                        .parse::<usize>()
+                        .expect("Content-Length must be an unsigned integer")
+                })
         })
         .unwrap_or(0);
     while raw.len() < end + length {

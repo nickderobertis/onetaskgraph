@@ -2505,7 +2505,7 @@ pub struct GitHubProjectsSource {
     /// what it is measured from.
     last_mutation: Mutex<Option<Duration>>,
     clock: SharedClock,
-    numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, u64>>,
+    numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
     /// [`TaskSource::end_command`].
     ///

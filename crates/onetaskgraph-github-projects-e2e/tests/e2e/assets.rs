@@ -207,17 +207,23 @@ fn uploads(calls: &[Call]) -> Vec<&Call> {
         .filter(|call| call.path.starts_with("/user-attachments/assets?"))
         .collect()
 }
-fn verifications(calls: &[Call]) -> usize {
+fn attachment_reads(calls: &[Call]) -> usize {
     calls
         .iter()
         .filter(|call| call.path.starts_with("/user-attachments/assets/"))
         .count()
 }
-fn record(budget: &str, value: f64, workload: &str, copies: &[Vec<Vec<u8>>]) {
+fn record(
+    budget: &str,
+    value: f64,
+    workload: super::budget_runner::Workload,
+    copies: &[Vec<Vec<u8>>],
+) {
+    let workload = workload.label();
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(onetaskgraph_e2e_support::telemetry::file_in(&directory,budget), serde_json::to_vec(&json!({
-        "value":value,"detail":"Requests and simulated time observed by the real binary's loopback endpoint",
+        "budget":budget,"value":value,"detail":"Requests and simulated time observed by the real binary's loopback endpoint",
         "workload":workload,"repetitions":if workload=="unchanged" {3} else {1},"images":copies.iter().map(|copy|copy.iter().map(Vec::len).collect::<Vec<_>>()).collect::<Vec<_>>()
     })).unwrap()).unwrap();
 }
@@ -242,14 +248,14 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
         let calls = plan.board.calls();
         let calls = &calls[before..];
         assert_eq!(uploads(calls).len(), bytes.len());
-        assert_eq!(verifications(calls), bytes.len());
+        assert_eq!(attachment_reads(calls), bytes.len());
         for (index, call) in uploads(calls).iter().enumerate() {
             assert!(call.path.contains(&format!("name=shot-{index}.png")));
             assert!(call.path.contains("content_type=image%2Fpng"));
             assert!(call.path.contains("repository_id=123456"));
             assert_eq!(&call.bytes, &bytes[index], "the server receives every byte");
         }
-        new_requests += uploads(calls).len() + verifications(calls);
+        new_requests += uploads(calls).len() + attachment_reads(calls);
         records.push(plan.assert_record(&report, &format!("notes:{id}"), bytes));
     }
     assert_eq!(
@@ -264,7 +270,7 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
     record(
         "github-asset-requests-per-new-asset",
         new_requests as f64 / 8.0,
-        "new",
+        super::budget_runner::Workload::New,
         &[docs.clone(), tasks.clone()],
     );
     let before = plan.board.calls().len();
@@ -276,11 +282,11 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
     }
     let calls = plan.board.calls();
     assert!(uploads(&calls[before..]).is_empty());
-    assert_eq!(verifications(&calls[before..]), 0);
+    assert_eq!(attachment_reads(&calls[before..]), 0);
     record(
         "github-asset-requests-per-unchanged-asset",
         0.0,
-        "unchanged",
+        super::budget_runner::Workload::Unchanged,
         &[docs.clone(), tasks.clone()],
     );
     for (position, kind, id, mut bytes) in [(0, "document", "D", docs), (1, "task", "T", tasks)] {
@@ -294,7 +300,7 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
         let report = plan.copy(kind, id);
         let calls = plan.board.calls();
         assert_eq!(uploads(&calls[before..]).len(), 1);
-        assert_eq!(verifications(&calls[before..]), 1);
+        assert_eq!(attachment_reads(&calls[before..]), 1);
         let changed = plan.assert_record(&report, &format!("notes:{id}"), &bytes);
         assert_ne!(changed["shot-0.png"], records[position]["shot-0.png"]);
         for index in 1..bytes.len() {
@@ -339,8 +345,10 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
         (Stage::Upload, 401),
         (Stage::Upload, 403),
         (Stage::Upload, 422),
-        (Stage::Verify, 404),
-        (Stage::Verify, 500),
+        (Stage::Read, 404),
+        (Stage::Read, 500),
+        (Stage::Repository, 404),
+        (Stage::Repository, 500),
     ] {
         let clock = SimulatedClock::start(1);
         let plan = Plan::new(&clock, 0, None);
@@ -364,7 +372,7 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
                 message.contains("token type may not be accepted"),
                 "{message}"
             );
-        } else {
+        } else if stage == Stage::Read {
             assert!(message.contains("/user-attachments/assets/1"), "{message}");
         }
         assert!(
@@ -379,102 +387,133 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
 
 #[test]
 fn asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_budget() {
-    for stage in [Stage::Upload, Stage::Verify] {
+    #[derive(Clone, Copy)]
+    enum Hint {
+        Server,
+        Missing,
+        Invalid,
+    }
+    for stage in [Stage::Upload, Stage::Read, Stage::Repository] {
         for primary in [false, true] {
-            for persistent in [false, true] {
-                let clock = SimulatedClock::start(1);
-                let plan = Plan::new(&clock, 0, None);
-                plan.author("document", "D", false, &[480_000, 480_000], 1);
-                let headers = if primary {
-                    &format!(
-                        "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {}\r\n",
-                        chrono::Utc::now().timestamp() + 2
-                    )
-                } else {
-                    "Retry-After: 1\r\n"
-                };
-                plan.board.refuse(Refusal {
-                    stage,
-                    status: 403,
-                    headers: headers.into(),
-                    body: if primary {
-                        "rate limit exceeded"
-                    } else {
-                        "You have exceeded a secondary rate limit"
-                    }
-                    .into(),
-                    remaining: if persistent { usize::MAX } else { 1 },
-                });
-                let output = plan.spawn("document", "D").wait_with_output().unwrap();
-                let calls = plan.board.calls();
-                let attempts: Vec<_> = calls
-                    .iter()
-                    .filter(|call| {
-                        if stage == Stage::Upload {
-                            call.path.starts_with("/user-attachments/assets?")
-                        } else {
-                            call.path.starts_with("/user-attachments/assets/")
+            for hint in [Hint::Server, Hint::Missing, Hint::Invalid] {
+                for persistent in [false, true] {
+                    let clock = SimulatedClock::start(1);
+                    let plan = Plan::new(&clock, 0, None);
+                    plan.author("document", "D", false, &[480_000, 480_000], 1);
+                    let headers = match (primary, hint) {
+                        (true, Hint::Server) => format!(
+                            "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {}\r\n",
+                            chrono::Utc::now().timestamp() + 2
+                        ),
+                        (false, Hint::Server) => "Retry-After: 1\r\n".into(),
+                        (true, Hint::Missing) => "x-ratelimit-remaining: 0\r\n".into(),
+                        (false, Hint::Missing) => String::new(),
+                        (true, Hint::Invalid) => {
+                            "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: not-a-time\r\n".into()
                         }
-                    })
-                    .collect();
-                assert!(attempts.len() > 1, "no backoff attempt");
-                assert!(attempts[1].at.saturating_sub(attempts[0].at) >= Duration::from_secs(1));
-                if persistent {
-                    assert!(!output.status.success());
-                    let message = format!("{}{}", stdout(&output), stderr(&output));
-                    for text in [
-                        "shot-0.png",
-                        if primary {
-                            "primary API rate limit"
+                        (false, Hint::Invalid) => "Retry-After: not-a-time\r\n".into(),
+                    };
+                    plan.board.refuse(Refusal {
+                        stage,
+                        status: 403,
+                        headers,
+                        body: if primary {
+                            "rate limit exceeded"
                         } else {
-                            "secondary rate limit"
-                        },
-                        if stage == Stage::Upload {
-                            "upload"
+                            "You have exceeded a secondary rate limit"
+                        }
+                        .into(),
+                        remaining: if persistent {
+                            usize::MAX
+                        } else if matches!(hint, Hint::Server) {
+                            1
                         } else {
-                            "verification"
+                            3
                         },
-                    ] {
-                        assert!(message.contains(text), "{message}");
+                    });
+                    let output = plan.spawn("document", "D").wait_with_output().unwrap();
+                    let calls = plan.board.calls();
+                    let attempts: Vec<_> = calls
+                        .iter()
+                        .filter(|call| match stage {
+                            Stage::Upload => call.path.starts_with("/user-attachments/assets?"),
+                            Stage::Read => call.path.starts_with("/user-attachments/assets/"),
+                            Stage::Repository => call.path.starts_with("/repos/"),
+                        })
+                        .collect();
+                    assert!(attempts.len() > 1, "no backoff attempt");
+                    assert!(
+                        attempts[1].at.saturating_sub(attempts[0].at) >= Duration::from_secs(1)
+                    );
+                    if !matches!(hint, Hint::Server) {
+                        assert!(attempts.len() >= 4);
+                        let latency =
+                            Duration::from_millis(if stage == Stage::Upload { 800 } else { 200 });
+                        for (pair, seconds) in attempts.windows(2).take(3).zip([1, 2, 4]) {
+                            assert_eq!(
+                                pair[1].at - pair[0].at,
+                                latency + Duration::from_secs(seconds),
+                                "hintless retries did not double the backoff"
+                            );
+                        }
                     }
-                    assert!(
-                        clock.now() < Duration::from_secs(125),
-                        "past retry budget: {:?}",
-                        clock.now()
-                    );
-                    assert!(
-                        !plan
-                            .github
-                            .documents()
-                            .iter()
-                            .any(|query| query.contains("createIssue(input:"))
-                    );
-                } else {
-                    let report = success(&output);
-                    plan.assert_record(
-                        &report,
-                        "notes:D",
-                        &[images::png(1, 480_000), images::png(2, 480_000)],
-                    );
-                    let creating: Vec<_> = calls.iter().filter(|call| call.creating).collect();
-                    for pair in creating.windows(2) {
+                    if persistent {
+                        assert!(!output.status.success());
+                        let message = format!("{}{}", stdout(&output), stderr(&output));
+                        for text in [
+                            "shot-0.png",
+                            if primary {
+                                "primary API rate limit"
+                            } else {
+                                "secondary rate limit"
+                            },
+                            match stage {
+                                Stage::Upload => "upload",
+                                Stage::Read => "verification",
+                                Stage::Repository => "reading repository id",
+                            },
+                        ] {
+                            assert!(message.contains(text), "{message}");
+                        }
                         assert!(
-                            pair[1].at.saturating_sub(pair[0].at) >= Duration::from_millis(750)
+                            clock.now() < Duration::from_secs(125),
+                            "past retry budget: {:?}",
+                            clock.now()
+                        );
+                        assert!(
+                            !plan
+                                .github
+                                .documents()
+                                .iter()
+                                .any(|query| query.contains("createIssue(input:"))
+                        );
+                    } else {
+                        let report = success(&output);
+                        plan.assert_record(
+                            &report,
+                            "notes:D",
+                            &[images::png(1, 480_000), images::png(2, 480_000)],
+                        );
+                        let creating: Vec<_> = calls.iter().filter(|call| call.creating).collect();
+                        for pair in creating.windows(2) {
+                            assert!(
+                                pair[1].at.saturating_sub(pair[0].at) >= Duration::from_millis(750)
+                            );
+                        }
+                        let last_upload = uploads(&calls).last().unwrap().at;
+                        let read = calls
+                            .iter()
+                            .find(|call| {
+                                call.at >= last_upload
+                                    && call.path.starts_with("/user-attachments/assets/")
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            read.at - last_upload,
+                            Duration::from_millis(800),
+                            "verification follows upload latency with no pacing slot"
                         );
                     }
-                    let last_upload = uploads(&calls).last().unwrap().at;
-                    let read = calls
-                        .iter()
-                        .find(|call| {
-                            call.at >= last_upload
-                                && call.path.starts_with("/user-attachments/assets/")
-                        })
-                        .unwrap();
-                    assert_eq!(
-                        read.at - last_upload,
-                        Duration::from_millis(800),
-                        "verification follows upload latency with no pacing slot"
-                    );
                 }
             }
         }
@@ -502,7 +541,7 @@ fn measure_single_and_three_concurrent_project_copies_in_virtual_time() {
     }
     let calls = plan.board.calls();
     let upload_count = uploads(&calls).len();
-    let reads = verifications(&calls);
+    let reads = attachment_reads(&calls);
     let other = calls.len() - upload_count - reads;
     let holds = Duration::from_millis((upload_count * 800 + (reads + other) * 200) as u64);
     eprintln!(
@@ -520,7 +559,7 @@ fn measure_single_and_three_concurrent_project_copies_in_virtual_time() {
     record(
         "github-asset-copy-seconds",
         elapsed.as_secs_f64(),
-        "single",
+        super::budget_runner::Workload::Single,
         &[bytes],
     );
     let real = Instant::now();
@@ -531,24 +570,30 @@ fn measure_single_and_three_concurrent_project_copies_in_virtual_time() {
     let third = Plan::new(&clock, 2, Some(&first.board));
     let plans = [first, second, third];
     let bytes: Vec<_> = plans.iter().map(Plan::long).collect();
-    let started = clock.now();
     let results = std::thread::scope(|scope| {
         let bundles: Vec<_> = plans
             .iter()
-            .map(|plan| scope.spawn(move || plan.bundle_outputs()))
+            .map(|plan| {
+                let clock = &clock;
+                scope.spawn(move || {
+                    let started = clock.now();
+                    let outputs = plan.bundle_outputs();
+                    (outputs, clock.now() - started)
+                })
+            })
             .collect();
         bundles
             .into_iter()
             .map(|bundle| bundle.join().unwrap())
             .collect::<Vec<_>>()
     });
-    let elapsed = clock.now() - started;
+    let elapsed = results.iter().map(|(_, elapsed)| *elapsed).max().unwrap();
     assert_eq!(results.len(), 3);
     let refused = results
         .iter()
-        .filter(|bundle| bundle.iter().any(|output| !output.status.success()))
+        .filter(|(bundle, _)| bundle.iter().any(|output| !output.status.success()))
         .count();
-    for bundle in &results {
+    for (bundle, _) in &results {
         for output in bundle {
             success(output);
         }
@@ -589,13 +634,13 @@ fn measure_single_and_three_concurrent_project_copies_in_virtual_time() {
     record(
         "github-concurrent-copies-refused",
         refused as f64,
-        "concurrent",
+        super::budget_runner::Workload::Concurrent,
         &bytes,
     );
     record(
         "github-concurrent-copy-seconds",
         elapsed.as_secs_f64(),
-        "concurrent",
+        super::budget_runner::Workload::Concurrent,
         &bytes,
     );
 }
@@ -663,7 +708,7 @@ fn hosted_asset_reads_and_rendering_updates_cross_the_real_source_boundary() {
             let write=AssetWrite {assets:vec![reused,AssetPayload::of(AssetName::new("next.png").unwrap(),next.clone())],recorded_assets:Some(existing_uploads)};
             let before=plan.board.calls().len();
             let written=if kind=="task" {source.set_task_rendering_with_assets(&id,content,&provenance,&Default::default(),&write).await} else {source.set_document_rendering_with_assets(&id,content,&provenance,&Default::default(),&write).await}.unwrap().unwrap();
-            let calls=plan.board.calls();assert_eq!(uploads(&calls[before..]).len(),1);assert_eq!(verifications(&calls[before..]),1);
+            let calls=plan.board.calls();assert_eq!(uploads(&calls[before..]).len(),1);assert_eq!(attachment_reads(&calls[before..]),1);
             let body=plan.github.body(&id.0);let body=body.as_str().unwrap();
             let rewritten=written.content.as_deref().unwrap();assert!(body.contains(rewritten));assert!(!rewritten.contains("](./"));
             source.end_command().await.unwrap();
@@ -674,7 +719,7 @@ fn hosted_asset_reads_and_rendering_updates_cross_the_real_source_boundary() {
             let held=AssetUploads::read(&metadata).unwrap().unwrap();
             let mut changed=write.clone();changed.recorded_assets=Some(held);changed.assets[1]=AssetPayload::of(AssetName::new("next.png").unwrap(),images::png(100,480_000));
             let before=plan.github.body(&id.0);
-            plan.board.refuse(Refusal {stage:Stage::Verify,status:404,headers:String::new(),body:"broken".into(),remaining:1});
+            plan.board.refuse(Refusal {stage:Stage::Read,status:404,headers:String::new(),body:"broken".into(),remaining:1});
             let error=if kind=="task" {source.set_task_rendering_with_assets(&id,content,&provenance,&Default::default(),&changed).await} else {source.set_document_rendering_with_assets(&id,content,&provenance,&Default::default(),&changed).await}.unwrap_err();
             assert!(error.to_string().contains("404"));assert_eq!(plan.github.body(&id.0),before,"failed verification changed the issue body");
             let missing=if kind=="task" {source.set_task_rendering_with_assets(&missing,"",&json!({}),&Default::default(),&AssetWrite::default()).await} else {source.set_document_rendering_with_assets(&missing,"",&json!({}),&Default::default(),&AssetWrite::default()).await}.unwrap();
@@ -701,10 +746,17 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
         Bytes,
         RepositoryJson,
         RepositoryId,
+        RepositoryZero,
+        RepositoryTransport,
+        RepositoryTruncated,
         UploadJson,
         MissingUrl,
         InvalidUrl,
         ForeignUrl,
+        ForeignPort,
+        UsernameUrl,
+        PasswordUrl,
+        Truncated,
         ReusedUrl,
         Transport,
     }
@@ -732,7 +784,7 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
             .build()
             .unwrap();
         runtime.block_on(async {
-            for fault in [Fault::Digest,Fault::Bytes,Fault::RepositoryJson,Fault::RepositoryId,Fault::UploadJson,Fault::MissingUrl,Fault::InvalidUrl,Fault::ForeignUrl,Fault::ReusedUrl,Fault::Transport] {
+            for fault in [Fault::Digest,Fault::Bytes,Fault::RepositoryJson,Fault::RepositoryId,Fault::RepositoryZero,Fault::RepositoryTransport,Fault::RepositoryTruncated,Fault::UploadJson,Fault::MissingUrl,Fault::InvalidUrl,Fault::ForeignUrl,Fault::ForeignPort,Fault::UsernameUrl,Fault::PasswordUrl,Fault::Truncated,Fault::ReusedUrl,Fault::Transport] {
                 let source=onetaskgraph_github_projects::Plugin.build_with_clock(&SourceName::new("board").unwrap(),&plan.config,&Secrets,shared.clone()).unwrap();
                 let content="![Unwritten change](./next.png)";
                 let task=if kind=="task" {let mut item=source.get_task(&target).await.unwrap().unwrap();item.content=Some(content.into());Some(item)} else {None};
@@ -751,18 +803,30 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                 let assets=AssetWrite {assets:vec![payload],recorded_assets};
                 for rendering in [false,true] {
                     match fault {
-                        Fault::RepositoryJson|Fault::RepositoryId|Fault::UploadJson|Fault::MissingUrl|Fault::InvalidUrl|Fault::ForeignUrl=>{
+                        Fault::RepositoryJson|Fault::RepositoryId|Fault::RepositoryZero|Fault::UploadJson|Fault::MissingUrl|Fault::InvalidUrl|Fault::ForeignUrl|Fault::ForeignPort|Fault::UsernameUrl|Fault::PasswordUrl=>{
                             let (stage,body)=match fault {
                                 Fault::RepositoryJson=>(Stage::Repository,"not json"),
                                 Fault::RepositoryId=>(Stage::Repository,"{\"id\":\"opaque\"}"),
+                                Fault::RepositoryZero=>(Stage::Repository,r#"{"id":0}"#),
                                 Fault::UploadJson=>(Stage::Upload,"not json"),
                                 Fault::MissingUrl=>(Stage::Upload,"{\"href\":\"https://github.com/user-attachments/assets/example\"}"),
                                 Fault::InvalidUrl=>(Stage::Upload,"{\"url\":\"not-a-url\"}"),
                                 Fault::ForeignUrl=>(Stage::Upload,"{\"url\":\"https://example.invalid/image.png\"}"),
+                                Fault::ForeignPort=>(Stage::Upload,r#"{"url":"https://github.com:8443/user-attachments/assets/example"}"#),
+                                Fault::UsernameUrl=>(Stage::Upload,"{\"url\":\"https://user@github.com/user-attachments/assets/example\"}"),
+                                Fault::PasswordUrl=>(Stage::Upload,"{\"url\":\"https://:secret@github.com/user-attachments/assets/example\"}"),
                                 _=>unreachable!(),
                             };
-                            plan.board.refuse(Refusal {stage,status:200,headers:String::new(),body:body.into(),remaining:1});
+                            let body=if matches!(fault,Fault::UsernameUrl|Fault::PasswordUrl) {
+                                let authority=plan.board.endpoint.strip_prefix("http://").unwrap().split('/').next().unwrap();
+                                let credentials=if matches!(fault,Fault::UsernameUrl) {"user"} else {":secret"};
+                                json!({"url":format!("http://{credentials}@{authority}/user-attachments/assets/example")}).to_string()
+                            } else {body.into()};
+                            plan.board.refuse(Refusal {stage,status:200,headers:String::new(),body,remaining:1});
                         },
+                        Fault::Truncated=>plan.board.truncate_next(Stage::Upload),
+                        Fault::RepositoryTruncated=>plan.board.truncate_next(Stage::Repository),
+                        Fault::RepositoryTransport=>plan.board.disconnect_next(Stage::Repository),
                         Fault::Transport=>plan.board.disconnect_next(Stage::Upload),
                         _=>(),
                     }
@@ -776,6 +840,8 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                         source.write_document_with_assets(&ItemWrite {target:Some(target.clone()),item:document.as_ref().unwrap().clone(),depends_on:vec![]},None,&assets).await.unwrap_err()
                     };
                     assert!(error.to_string().contains("next.png"),"{error}");
+                    if matches!(fault,Fault::ForeignPort|Fault::UsernameUrl|Fault::PasswordUrl) {assert!(error.to_string().contains("unexpected attachment URL"),"{error}");}
+                    if matches!(fault,Fault::Truncated|Fault::RepositoryTruncated) {assert!(error.to_string().contains("response could not be read"),"{error}");}
                     assert_eq!(plan.github.body(&target.0),before,"a preparation refusal changed the issue");
                 }
             }
@@ -840,4 +906,665 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
         assert_eq!(source.get_task(&id).await.unwrap().unwrap(), before);
         assert!(!board.calls().iter().any(|call| call.creating));
     });
+}
+
+#[test]
+fn attachment_accounting_matches_the_real_http_responses() {
+    use onetaskgraph_github_projects::{
+        Plugin,
+        accounting::{Accounting, AttachmentOperation, Mode, Outcome},
+    };
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetWrite, NativeId, SecretResolver, SourceName,
+    };
+    struct Secrets;
+    impl SecretResolver for Secrets {
+        fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+            (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+        }
+    }
+    for (stage, status, outcome) in [
+        (Stage::Upload, 201, Outcome::Answered),
+        (Stage::Upload, 0, Outcome::Refused),
+        (Stage::Upload, 422, Outcome::Refused),
+        (Stage::Read, 404, Outcome::Refused),
+        (Stage::Upload, 403, Outcome::RateLimited),
+        (Stage::Read, 403, Outcome::RateLimited),
+    ] {
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        plan.author("document", "D", false, &[], 1);
+        let report = plan.copy("document", "D");
+        let target = NativeId(
+            report["items"][0]["destination"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("board:")
+                .unwrap()
+                .into(),
+        );
+        let mut config = plan.config.clone();
+        // No real-time waits: this journey inspects accounting, not pacing or retry recovery.
+        config["pacing"] = json!({"min_mutation_interval_ms":0,"retry_budget_ms":0});
+        let ledger = std::sync::Arc::new(Accounting::new());
+        let source = Plugin
+            .build_recording_into(
+                &SourceName::new("board").unwrap(),
+                &config,
+                &Secrets,
+                ledger.clone(),
+            )
+            .unwrap();
+        if status == 0 {
+            plan.board.disconnect_next(Stage::Upload);
+        } else if status != 201 {
+            plan.board.refuse(Refusal {
+                stage, status,
+                headers:"x-ratelimit-limit: 5000\r\nx-ratelimit-remaining: 4999\r\nx-ratelimit-used: 1\r\nx-ratelimit-reset: 12345\r\nx-ratelimit-resource: core\r\nRetry-After: 1\r\n".into(),
+                body:if status == 403 {"You have exceeded a secondary rate limit"} else {"refused"}.into(), remaining:1,
+            });
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(source.set_document_rendering_with_assets(
+            &target,
+            "![Accounting image](./ledger.png)",
+            &json!({}),
+            &Default::default(),
+            &AssetWrite {
+                assets: vec![AssetPayload::of(
+                    AssetName::new("ledger.png").unwrap(),
+                    images::png(150, 480_000),
+                )],
+                recorded_assets: None,
+            },
+        ));
+        assert_eq!(result.is_ok(), status == 201, "{result:?}");
+        let attachments = ledger.attachment_responses();
+        assert_eq!(
+            attachments.len(),
+            if status == 0 {
+                0
+            } else if stage == Stage::Upload && status != 201 {
+                1
+            } else {
+                2
+            }
+        );
+        for (index, response) in attachments.iter().enumerate() {
+            let operation = if index == 0 {
+                AttachmentOperation::Upload
+            } else {
+                AttachmentOperation::Read
+            };
+            assert_eq!(response.operation, operation);
+            assert_eq!(response.name.as_str(), "ledger.png");
+            assert_eq!(
+                response.url.origin().ascii_serialization(),
+                plan.board.endpoint.trim_end_matches("/graphql")
+            );
+            assert_eq!(
+                response.status.as_u16(),
+                if index == attachments.len() - 1 {
+                    if status == 201 { 200 } else { status }
+                } else {
+                    201
+                }
+            );
+            if index == 0 {
+                assert_eq!(response.url.path(), "/user-attachments/assets");
+                assert!(response.url.query().unwrap().contains("name=ledger.png"));
+            } else {
+                assert_eq!(response.url.path(), "/user-attachments/assets/1");
+            }
+        }
+        let snapshot = ledger.snapshot();
+        let last = snapshot
+            .requests()
+            .iter()
+            .find(|request| {
+                request.name()
+                    == if stage == Stage::Upload && status != 201 {
+                        "POST /user-attachments/assets"
+                    } else {
+                        "GET /user-attachments/assets/{asset}"
+                    }
+            })
+            .unwrap();
+        assert_eq!(last.outcome(), outcome);
+        assert_eq!(
+            last.mode(),
+            if stage == Stage::Upload && status != 201 {
+                Mode::Write
+            } else {
+                Mode::Read
+            }
+        );
+        if status == 0 {
+            assert_eq!(last.rate_limit().limit(), None);
+            assert_eq!(last.rate_limit().remaining(), None);
+            assert_eq!(last.rate_limit().used_by_the_account(), None);
+            assert_eq!(last.rate_limit().reset(), None);
+            assert_eq!(last.rate_limit().resource(), None);
+        } else if status != 201 {
+            let limits = last.rate_limit();
+            assert_eq!(limits.limit(), Some(5000));
+            assert_eq!(limits.remaining(), Some(4999));
+            assert_eq!(limits.used_by_the_account(), Some(1));
+            assert_eq!(limits.reset(), Some(12345));
+            assert_eq!(limits.resource(), Some("core"));
+        }
+    }
+}
+
+#[test]
+fn malformed_stored_assets_refuse_reads_and_assets_without_content_are_persisted() {
+    use onetaskgraph_github_projects::Plugin;
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetUploads, AssetWrite, ItemWrite, NativeId, SecretResolver,
+        SourceName, SourcePlugin,
+    };
+    struct Secrets;
+    impl SecretResolver for Secrets {
+        fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+            (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+        }
+    }
+    for (kind, record) in [("task", "T"), ("document", "D")] {
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        plan.author(kind, record, false, &[], 1);
+        let report = plan.copy(kind, record);
+        let target = NativeId(
+            report["items"][0]["destination"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("board:")
+                .unwrap()
+                .into(),
+        );
+        let mut config = plan.config.clone();
+        config["pacing"] =
+            json!({"min_mutation_interval_ms":0,"retry_backoff_ms":1000,"retry_budget_ms":2000});
+        let lease = clock.lease(0);
+        lease.wait_for_detach();
+        let shared = onetaskgraph_core::process_clock(&onetaskgraph_core::Environment::from_pairs(
+            clock.client_env(0),
+        ))
+        .unwrap();
+        let source = Plugin
+            .build_with_clock(
+                &SourceName::new("board").unwrap(),
+                &config,
+                &Secrets,
+                shared,
+            )
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            if kind == "task" {
+                let mut item = source.get_task(&target).await.unwrap().unwrap();
+                item.metadata
+                    .insert("onetaskgraph.assets".into(), json!("malformed"));
+                source
+                    .write_task(&ItemWrite {
+                        target: Some(target.clone()),
+                        item,
+                        depends_on: vec![],
+                    })
+                    .await
+                    .unwrap();
+            } else {
+                let mut item = source.get_document(&target).await.unwrap().unwrap();
+                item.metadata
+                    .insert("onetaskgraph.assets".into(), json!("malformed"));
+                source
+                    .write_document(&ItemWrite {
+                        target: Some(target.clone()),
+                        item,
+                        depends_on: vec![],
+                    })
+                    .await
+                    .unwrap();
+            }
+            source.end_command().await.unwrap();
+            assert!(
+                plan.github
+                    .body(&target.0)
+                    .as_str()
+                    .unwrap()
+                    .contains("malformed")
+            );
+            let name = AssetName::new("held.png").unwrap();
+            let list = if kind == "task" {
+                source.task_assets(&target).await
+            } else {
+                source.document_assets(&target).await
+            };
+            assert!(
+                list.unwrap_err()
+                    .to_string()
+                    .contains("onetaskgraph.assets")
+            );
+            let read = if kind == "task" {
+                source.task_asset(&target, &name).await
+            } else {
+                source.document_asset(&target, &name).await
+            };
+            assert!(
+                read.unwrap_err()
+                    .to_string()
+                    .contains("onetaskgraph.assets")
+            );
+            let bytes = images::png(151, 480_000);
+            let assets = AssetWrite {
+                assets: vec![AssetPayload::of(name.clone(), bytes.clone())],
+                recorded_assets: None,
+            };
+            let written = if kind == "task" {
+                let mut item = source.get_task(&target).await.unwrap().unwrap();
+                item.content = None;
+                item.metadata.remove("onetaskgraph.assets");
+                source
+                    .write_task_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .unwrap()
+            } else {
+                let mut item = source.get_document(&target).await.unwrap().unwrap();
+                item.content = None;
+                item.metadata.remove("onetaskgraph.assets");
+                source
+                    .write_document_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .unwrap()
+            };
+            assert!(written.content.is_none());
+            assert_eq!(written.id, target);
+            source.end_command().await.unwrap();
+            let metadata = if kind == "task" {
+                source.get_task(&target).await.unwrap().unwrap().metadata
+            } else {
+                source
+                    .get_document(&target)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .metadata
+            };
+            let held = AssetUploads::read(&metadata).unwrap().unwrap();
+            assert_eq!(held.0[&name].sha256, asset_sha256(&bytes));
+            assert_eq!(held.0.len(), 1);
+            assert_eq!(
+                held.0[&name].url,
+                plan.board
+                    .endpoint
+                    .replace("/graphql", "/user-attachments/assets/1")
+            );
+            let calls = plan.board.calls();
+            assert_eq!(uploads(&calls).len(), 1);
+            assert_eq!(attachment_reads(&calls), 1);
+            for url in ["not-a-url", held.0[&name].url.as_str()] {
+                let mut uploads = held.clone();
+                uploads.0.get_mut(&name).unwrap().url = url.into();
+                if kind == "task" {
+                    let mut item = source.get_task(&target).await.unwrap().unwrap();
+                    item.metadata.insert(
+                        "onetaskgraph.assets".into(),
+                        serde_json::to_value(&uploads).unwrap(),
+                    );
+                    source
+                        .write_task(&ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        })
+                        .await
+                        .unwrap();
+                } else {
+                    let mut item = source.get_document(&target).await.unwrap().unwrap();
+                    item.metadata.insert(
+                        "onetaskgraph.assets".into(),
+                        serde_json::to_value(&uploads).unwrap(),
+                    );
+                    source
+                        .write_document(&ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        })
+                        .await
+                        .unwrap();
+                }
+                source.end_command().await.unwrap();
+                let before = attachment_reads(&plan.board.calls());
+                let read = if kind == "task" {
+                    source.task_asset(&target, &name).await
+                } else {
+                    source.document_asset(&target, &name).await
+                };
+                if url == "not-a-url" {
+                    assert!(read.unwrap_err().to_string().contains("invalid URL"));
+                    assert_eq!(attachment_reads(&plan.board.calls()), before);
+                } else {
+                    assert_eq!(read.unwrap(), Some(bytes.clone()));
+                }
+            }
+            let before_body = plan.github.body(&target.0);
+            for failure in ["http", "transport", "truncated", "primary", "secondary"] {
+                if failure == "transport" {
+                    plan.board.disconnect_next(Stage::Read);
+                } else if failure == "truncated" {
+                    plan.board.truncate_next(Stage::Read);
+                } else {
+                    let (status, headers, body) = match failure {
+                        "http" => (404, String::new(), "missing"),
+                        "primary" => (
+                            403,
+                            format!(
+                                "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {}\r\n",
+                                chrono::Utc::now().timestamp() + 1
+                            ),
+                            "API rate limit exceeded",
+                        ),
+                        "secondary" => (
+                            403,
+                            "Retry-After: 1\r\n".into(),
+                            "You have exceeded a secondary rate limit",
+                        ),
+                        _ => unreachable!(),
+                    };
+                    plan.board.refuse(Refusal {
+                        stage: Stage::Read,
+                        status,
+                        headers,
+                        body: body.into(),
+                        remaining: 1,
+                    });
+                }
+                let before = clock.now();
+                let read = if kind == "task" {
+                    source.task_asset(&target, &name).await
+                } else {
+                    source.document_asset(&target, &name).await
+                };
+                if matches!(failure, "primary" | "secondary") {
+                    assert_eq!(read.unwrap(), Some(bytes.clone()));
+                    assert!(clock.now() - before >= Duration::from_secs(1));
+                } else {
+                    let error = read.unwrap_err().to_string();
+                    assert!(
+                        error.contains("held.png") && error.contains("reading attachment"),
+                        "{error}"
+                    );
+                    if failure == "http" {
+                        assert!(error.contains("404"));
+                    }
+                    let recovered = if kind == "task" {
+                        source.task_asset(&target, &name).await
+                    } else {
+                        source.document_asset(&target, &name).await
+                    };
+                    assert_eq!(recovered.unwrap(), Some(bytes.clone()));
+                }
+                assert_eq!(plan.github.body(&target.0), before_body);
+            }
+            let removed = if kind == "task" {
+                source
+                    .set_task_rendering_with_assets(
+                        &target,
+                        "Images removed",
+                        &json!({}),
+                        &Default::default(),
+                        &AssetWrite::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap()
+            } else {
+                source
+                    .set_document_rendering_with_assets(
+                        &target,
+                        "Images removed",
+                        &json!({}),
+                        &Default::default(),
+                        &AssetWrite::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap()
+            };
+            assert_eq!(removed.content.as_deref(), Some("Images removed"));
+            source.end_command().await.unwrap();
+            let empty = if kind == "task" {
+                source.get_task(&target).await.unwrap().unwrap().metadata
+            } else {
+                source
+                    .get_document(&target)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .metadata
+            };
+            assert!(AssetUploads::read(&empty).unwrap().is_none());
+            assert!(
+                !plan
+                    .github
+                    .body(&target.0)
+                    .as_str()
+                    .unwrap()
+                    .contains("onetaskgraph.assets")
+            );
+            if kind == "task" {
+                let mut item = source.get_task(&target).await.unwrap().unwrap();
+                item.content = Some("![Restored](./held.png)".into());
+                source
+                    .write_task_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                let mut item = source.get_document(&target).await.unwrap().unwrap();
+                item.content = Some("![Restored](./held.png)".into());
+                source
+                    .write_document_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &assets,
+                    )
+                    .await
+                    .unwrap();
+            }
+            source.end_command().await.unwrap();
+            if kind == "task" {
+                let mut item = source.get_task(&target).await.unwrap().unwrap();
+                assert!(AssetUploads::read(&item.metadata).unwrap().is_some());
+                item.content = Some("Assets removed by write".into());
+                source
+                    .write_task_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &AssetWrite::default(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                let mut item = source.get_document(&target).await.unwrap().unwrap();
+                assert!(AssetUploads::read(&item.metadata).unwrap().is_some());
+                item.content = Some("Assets removed by write".into());
+                source
+                    .write_document_with_assets(
+                        &ItemWrite {
+                            target: Some(target.clone()),
+                            item,
+                            depends_on: vec![],
+                        },
+                        None,
+                        &AssetWrite::default(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            source.end_command().await.unwrap();
+            let empty = if kind == "task" {
+                source.get_task(&target).await.unwrap().unwrap().metadata
+            } else {
+                source
+                    .get_document(&target)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .metadata
+            };
+            assert!(AssetUploads::read(&empty).unwrap().is_none());
+            assert!(
+                !plan
+                    .github
+                    .body(&target.0)
+                    .as_str()
+                    .unwrap()
+                    .contains("onetaskgraph.assets")
+            );
+        });
+    }
+}
+
+#[test]
+fn truncated_asset_responses_are_refused_and_accounted_without_changing_issue_bodies() {
+    use onetaskgraph_github_projects::{
+        Plugin,
+        accounting::{Accounting, Outcome},
+    };
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetWrite, NativeId, SecretResolver, SourceName,
+    };
+    struct Secrets;
+    impl SecretResolver for Secrets {
+        fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+            (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+        }
+    }
+    for (stage, held) in [
+        (Stage::Repository, false),
+        (Stage::Upload, false),
+        (Stage::Read, false),
+        (Stage::Read, true),
+    ] {
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        plan.author("document", "D", false, &[], 1);
+        let report = plan.copy("document", "D");
+        let target = NativeId(
+            report["items"][0]["destination"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("board:")
+                .unwrap()
+                .into(),
+        );
+        let mut config = plan.config.clone();
+        config["pacing"] = json!({"min_mutation_interval_ms":0,"retry_budget_ms":0});
+        let ledger = std::sync::Arc::new(Accounting::new());
+        let source = Plugin
+            .build_recording_into(
+                &SourceName::new("board").unwrap(),
+                &config,
+                &Secrets,
+                ledger.clone(),
+            )
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let name = AssetName::new("truncated.png").unwrap();
+        let assets = AssetWrite {
+            assets: vec![AssetPayload::of(name.clone(), images::png(155, 480_000))],
+            recorded_assets: None,
+        };
+        let content = "![Never broken](./truncated.png)";
+        if held {
+            runtime
+                .block_on(source.set_document_rendering_with_assets(
+                    &target,
+                    content,
+                    &json!({}),
+                    &Default::default(),
+                    &assets,
+                ))
+                .unwrap()
+                .unwrap();
+            runtime.block_on(source.end_command()).unwrap();
+        }
+        let before = plan.github.body(&target.0);
+        plan.board.truncate_next(stage);
+        let error = if held {
+            runtime
+                .block_on(source.document_asset(&target, &name))
+                .unwrap_err()
+        } else {
+            runtime
+                .block_on(source.set_document_rendering_with_assets(
+                    &target,
+                    content,
+                    &json!({}),
+                    &Default::default(),
+                    &assets,
+                ))
+                .unwrap_err()
+        };
+        assert!(
+            error.to_string().contains("truncated.png")
+                && error.to_string().contains("response could not be read"),
+            "{error}"
+        );
+        assert_eq!(plan.github.body(&target.0), before);
+        let snapshot = ledger.snapshot();
+        let last = snapshot.requests().last().unwrap();
+        assert_eq!(
+            last.name(),
+            match stage {
+                Stage::Repository => "GET /repos/{owner}/{repo}",
+                Stage::Upload => "POST /user-attachments/assets",
+                Stage::Read => "GET /user-attachments/assets/{asset}",
+            }
+        );
+        assert_eq!(last.outcome(), Outcome::Refused);
+        assert_eq!(last.rate_limit().remaining(), None);
+    }
 }

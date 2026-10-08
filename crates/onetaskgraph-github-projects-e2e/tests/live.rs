@@ -5,7 +5,7 @@ use onetaskgraph_core::{
 use onetaskgraph_e2e_support::{common::Sandbox, images};
 use onetaskgraph_github_projects::{
     Plugin,
-    accounting::{Accounting, RateLimit, Request},
+    accounting::{Accounting, Outcome, RateLimit, Request},
     graphql,
 };
 use onetaskgraph_live::{Exclusivity, Session};
@@ -27,15 +27,16 @@ fn name(value: &str) -> SourceName {
     SourceName::new(value).unwrap()
 }
 
-async fn fields(
+async fn nominated_status_option(
+    endpoint: &str,
     token: &str,
     owner: &str,
     number: u32,
     ledger: &Accounting,
-) -> Result<Value, String> {
+) -> Result<String, String> {
     let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
     let response = reqwest::Client::new()
-        .post("https://api.github.com/graphql")
+        .post(endpoint)
         .header("user-agent", "onetaskgraph-live-assets")
         .bearer_auth(token)
         .json(&json!({"query":graphql::BOARD_FIELDS,"variables":variables}))
@@ -49,15 +50,40 @@ async fn fields(
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned)
     });
-    ledger.record(Request::graphql(graphql::BOARD_FIELDS, &variables, None, None).answered(limits));
+    let status = response.status();
     let answer: Value = response.json().await.map_err(|error| error.to_string())?;
+    let outcome = Outcome::of_response(status, limits.exhausted(), &answer.to_string());
+    ledger.record(
+        Request::graphql(graphql::BOARD_FIELDS, &variables, None, None).finished(outcome, limits),
+    );
+    if !status.is_success() {
+        return Err(format!("nominated board read returned HTTP {status}"));
+    }
     if !answer["errors"].is_null() {
         return Err(format!(
             "nominated board read refused: {}",
             answer["errors"]
         ));
     }
-    Ok(answer["data"]["boardFields"]["projectV2"].clone())
+    let board = &answer["data"]["boardFields"]["projectV2"];
+    board["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("missing nominated board id")?;
+    let nodes = board["fields"]["nodes"]
+        .as_array()
+        .ok_or("missing nominated board fields")?;
+    let status = nodes
+        .iter()
+        .find(|field| field["name"] == "Status")
+        .ok_or("missing nominated board Status field")?;
+    let option = status["options"]
+        .as_array()
+        .and_then(|options| options.first())
+        .and_then(|option| option["name"].as_str())
+        .filter(|name| !name.is_empty())
+        .ok_or("missing nominated board Status option")?;
+    Ok(option.to_owned())
 }
 
 #[tokio::test]
@@ -83,17 +109,17 @@ async fn disposable_task_and_document_asset_copies() {
     let admitted = journey::budget::precondition(token, "https://api.github.com", &ledger)
         .await
         .unwrap_or_else(|declined| declined.refuse());
-    let board = fields(token, &owner, number, &ledger).await.unwrap();
+    let option = nominated_status_option(
+        "https://api.github.com/graphql",
+        token,
+        &owner,
+        number,
+        &ledger,
+    )
+    .await
+    .unwrap();
     journey::budget::recheck(&admitted, &ledger).unwrap_or_else(|declined| declined.refuse());
-    let option = board["fields"]["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|field| field["name"] == "Status")
-        .unwrap()["options"][0]["name"]
-        .as_str()
-        .unwrap();
-    let config = lane::live_write_config(&owner, number, &repository, option);
+    let config = lane::live_write_config(&owner, number, &repository, &option);
     let secrets = lane::LiveSecret(token.to_owned().into());
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("notes");
@@ -123,21 +149,22 @@ async fn disposable_task_and_document_asset_copies() {
     let destination = Plugin
         .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
         .unwrap();
+    let notes_name = name(&format!("live-assets-{stamp}"));
     let notes = onetaskgraph_local_md::Plugin
-        .build(&name("notes"), &json!({"root":root}), &secrets)
+        .build(&notes_name, &json!({"root":root}), &secrets)
         .unwrap();
     let engine = Engine::new(
         vec![
-            ConfiguredSource::Ready(ResolvedSource::adopt(name("notes"), notes)),
+            ConfiguredSource::Ready(ResolvedSource::adopt(notes_name.clone(), notes)),
             ConfiguredSource::Ready(ResolvedSource::adopt(name("board"), destination)),
         ],
-        vec![name("notes"), name("board")],
+        vec![notes_name.clone(), name("board")],
     );
     let mut created = Vec::new();
     let outcome: Result<(), String> = async {
         for (kind, id) in [("task", "T"), ("document", "D")] {
             let request = CopyRequest {
-                items: CopyItems::new(vec![format!("notes:{id}").parse().unwrap()]).unwrap(),
+                items: CopyItems::new(vec![format!("{notes_name}:{id}").parse().unwrap()]).unwrap(),
                 scope: if kind == "task" {
                     CopyScope::Tasks
                 } else {
@@ -291,4 +318,83 @@ async fn disposable_task_and_document_asset_copies() {
         "live cleanup failures: {failures:?}; outcome {outcome:?}"
     );
     assert!(outcome.is_ok(), "live asset journey: {outcome:?}");
+}
+
+#[tokio::test]
+async fn board_admission_rejects_non_success_even_with_valid_board_json() {
+    use std::io::{BufRead, Read, Write};
+    let complete = json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board","fields":{"nodes":[{"name":"Status","options":[{"name":"Todo"}]}]}}}}});
+    for (status, answer, expected) in [
+        (200, complete.clone(), None),
+        (503, complete, Some("503")),
+        (200, json!({}), Some("missing nominated board id")),
+        (
+            200,
+            json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board"}}}}),
+            Some("missing nominated board fields"),
+        ),
+        (
+            200,
+            json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board","fields":{"nodes":[]}}}}}),
+            Some("missing nominated board Status field"),
+        ),
+        (
+            200,
+            json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board","fields":{"nodes":[{"name":"Status","options":[]}]}}}}}),
+            Some("missing nominated board Status option"),
+        ),
+        (
+            200,
+            json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board","fields":{"nodes":[{"name":"Status","options":[{"name":null}]}]}}}}}),
+            Some("missing nominated board Status option"),
+        ),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let mut headers = String::new();
+            let mut length = None;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(number) = line.to_ascii_lowercase().strip_prefix("content-length: ") {
+                    length = Some(number.trim().parse::<usize>().unwrap());
+                }
+                headers.push_str(&line);
+            }
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-token")
+            );
+            let mut bytes = vec![0; length.unwrap()];
+            reader.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(request["query"], graphql::BOARD_FIELDS);
+            let body = answer.to_string();
+            write!(stream,"HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        });
+        let ledger = Accounting::new();
+        let result =
+            nominated_status_option(&endpoint, "test-token", "fixture-owner", 1, &ledger).await;
+        server.join().unwrap();
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.requests().len(), 1);
+        if status == 200 {
+            if let Some(expected) = expected {
+                assert!(result.unwrap_err().contains(expected));
+            } else {
+                assert_eq!(result.unwrap(), "Todo");
+            }
+            assert_eq!(snapshot.requests()[0].outcome(), Outcome::Answered);
+        } else {
+            assert!(result.unwrap_err().contains(expected.unwrap()));
+            assert_eq!(snapshot.requests()[0].outcome(), Outcome::Refused);
+        }
+    }
 }

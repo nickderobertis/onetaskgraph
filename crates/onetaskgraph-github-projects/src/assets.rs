@@ -3,6 +3,24 @@
 use super::*;
 use onetaskgraph_plugin_api::{AssetName, AssetUpload, AssetUploads, AssetWrite};
 
+enum AssetOperation {
+    Repository,
+    Upload,
+    Verification,
+    Read,
+}
+
+impl AssetOperation {
+    fn stage(&self, url: &Url) -> String {
+        match self {
+            Self::Repository => "reading repository id".into(),
+            Self::Upload => "upload".into(),
+            Self::Verification => format!("verification of {url}"),
+            Self::Read => "reading attachment".into(),
+        }
+    }
+}
+
 impl GitHubProjectsSource {
     /// The uploads host follows the API host for a loopback journey only. Production
     /// attachments always land on GitHub's uploads host, without another source setting.
@@ -29,6 +47,7 @@ impl GitHubProjectsSource {
         })?;
         let production = url.scheme() == "https"
             && url.host_str() == Some("github.com")
+            && url.port_or_known_default() == Some(443)
             && url.path().starts_with("/user-attachments/assets/")
             && !url.path().trim_end_matches('/').ends_with("assets");
         let fixture = self.loopback() && url.origin() == self.endpoint.origin();
@@ -46,7 +65,7 @@ impl GitHubProjectsSource {
         &self,
         repository: &RepositoryTarget,
         name: &AssetName,
-    ) -> Result<u64, SourceError> {
+    ) -> Result<std::num::NonZeroU64, SourceError> {
         let mut repositories = self.numeric_repositories.lock().await;
         if let Some(id) = repositories.get(repository).copied() {
             return Ok(id);
@@ -61,7 +80,7 @@ impl GitHubProjectsSource {
         }
         base.set_query(None);
         let bytes = self
-            .asset_request(self.client.get(base), name, "reading repository id", false)
+            .asset_request(self.client.get(base), name, AssetOperation::Repository)
             .await?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|error| SourceError::Refused {
@@ -71,7 +90,7 @@ impl GitHubProjectsSource {
             })?;
         let id = value["id"]
             .as_u64()
-            .filter(|id| *id > 0)
+            .and_then(std::num::NonZeroU64::new)
             .ok_or_else(|| SourceError::Refused {
                 message: format!(
                     "GitHub repository {} for asset {name} returned no numeric id",
@@ -123,7 +142,7 @@ impl GitHubProjectsSource {
                     .header(reqwest::header::CONTENT_TYPE, asset.content_type.as_str())
                     .body(bytes.clone());
                 let answer = self
-                    .asset_request(request, &asset.name, "upload", true)
+                    .asset_request(request, &asset.name, AssetOperation::Upload)
                     .await?;
                 let value: Value =
                     serde_json::from_slice(&answer).map_err(|error| SourceError::Refused {
@@ -139,8 +158,7 @@ impl GitHubProjectsSource {
                 self.asset_request(
                     self.client.get(verified),
                     &asset.name,
-                    &format!("verification of {url}"),
-                    false,
+                    AssetOperation::Verification,
                 )
                 .await?;
                 url.to_owned()
@@ -195,7 +213,7 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let url = self.attachment_url(name, &upload.url)?;
-        self.asset_request(self.client.get(url), name, "reading attachment", false)
+        self.asset_request(self.client.get(url), name, AssetOperation::Read)
             .await
             .map(Some)
     }
@@ -206,26 +224,22 @@ impl GitHubProjectsSource {
         &self,
         request: reqwest::RequestBuilder,
         name: &AssetName,
-        stage: &str,
-        mutation: bool,
+        operation: AssetOperation,
     ) -> Result<Vec<u8>, SourceError> {
+        let mutation = matches!(operation, AssetOperation::Upload);
         let request = request
             .bearer_auth(self.token.expose_secret())
             .build()
             .map_err(|error| SourceError::Refused {
-                message: format!("GitHub asset {name} {stage} request is invalid: {error}"),
+                message: format!("GitHub asset {name} request is invalid: {error}"),
             })?;
-        let method = if mutation {
-            accounting::Method::Post
-        } else {
-            accounting::Method::Get
-        };
-        let path = if stage == "reading repository id" {
-            "/repos/{owner}/{repo}"
-        } else if mutation {
-            "/user-attachments/assets"
-        } else {
-            "/user-attachments/assets/{asset}"
+        let stage = operation.stage(request.url());
+        let (method, path) = match operation {
+            AssetOperation::Repository => (accounting::Method::Get, "/repos/{owner}/{repo}"),
+            AssetOperation::Upload => (accounting::Method::Post, "/user-attachments/assets"),
+            AssetOperation::Verification | AssetOperation::Read => {
+                (accounting::Method::Get, "/user-attachments/assets/{asset}")
+            }
         };
         let endpoint =
             accounting::Endpoint::parse(method, path).expect("a literal REST endpoint template");
@@ -259,7 +273,7 @@ impl GitHubProjectsSource {
                 }
             };
             let status = response.status();
-            if stage != "reading repository id" {
+            if !matches!(operation, AssetOperation::Repository) {
                 self.ledger
                     .record_attachment(accounting::AttachmentResponse {
                         name: name.clone(),
@@ -290,14 +304,20 @@ impl GitHubProjectsSource {
                     .flatten()
                     .map(|reset| reset.saturating_sub(Utc::now().timestamp().max(0).unsigned_abs()))
             });
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|error| SourceError::Unavailable {
-                    message: format!(
-                        "GitHub asset {name} {stage} response could not be read: {error}"
-                    ),
-                })?;
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.ledger.record(
+                        accounting::Request::rest(endpoint.clone())
+                            .finished(accounting::Outcome::Refused, limits),
+                    );
+                    return Err(SourceError::Unavailable {
+                        message: format!(
+                            "GitHub asset {name} {stage} response could not be read: {error}"
+                        ),
+                    });
+                }
+            };
             let body = String::from_utf8_lossy(&bytes);
             let limiter = Limiter::classify(status, exhausted, &body);
             let outcome = if limiter.is_some() {
@@ -311,7 +331,7 @@ impl GitHubProjectsSource {
                 .record(accounting::Request::rest(endpoint.clone()).finished(outcome, limits));
             if let Some(limiter) = limiter {
                 let limited = Limited { limiter, hint };
-                let wait = hint.map_or(backoff, |hint| Duration::from_secs(hint).max(backoff));
+                let wait = hint.map_or(Duration::from_secs(1), |hint| Duration::from_secs(hint).max(backoff));
                 if wait.is_zero() || wait > self.pacing.retry_budget.saturating_sub(waited) {
                     return Err(limited.exhausted(
                         &format!("asset {name} {stage}"),

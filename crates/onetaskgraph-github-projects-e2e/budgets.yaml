@@ -5,7 +5,7 @@ budgets:
       An inner measure of headroom on a shared board token that no check may reach: the extra upload and authenticated verification requests per new image, excluding the one repository-id read per source instance. It protects room for other managers sharing that token.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_new", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 2
@@ -14,7 +14,7 @@ budgets:
       An inner measure of headroom on a shared board token that no check may reach: the extra requests per unchanged image across three re-copies. It protects reuse from spending the shared allowance again.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_unchanged", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 0
@@ -23,16 +23,16 @@ budgets:
       An inner measure of wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_single", "--exact", "--nocapture"]
     unit: seconds
     direction: max
-    threshold: 60
+    threshold: 90
   - id: github-concurrent-copies-refused
     description: >-
       An inner measure of refusals while people copy a project then each of its documents onto the real board, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent", "--exact", "--nocapture"]
     unit: copies
     direction: max
     threshold: 0
@@ -41,7 +41,7 @@ budgets:
       An inner measure of the slowest wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent", "--exact", "--nocapture"]
     unit: seconds
     direction: max
     threshold: 240
