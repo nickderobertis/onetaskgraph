@@ -524,6 +524,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_REWRITE, true),
         (graphql::ISSUE_LABEL, false),
         (graphql::PROJECT_LABEL, false),
+        (graphql::FILE_UPLOAD, true),
         (graphql::ISSUE_CREATE, true),
         (graphql::ISSUE_UPDATE, true),
         (graphql::ISSUE_PRIORITY_UPDATE, true),

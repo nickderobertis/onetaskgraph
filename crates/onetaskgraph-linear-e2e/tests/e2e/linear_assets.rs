@@ -11,8 +11,10 @@ use onetaskgraph_plugin_api::asset_sha256;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task explicitly assigns comparison with the cited published page to the manager's audit after this node settles, outside this node's acceptance bar. The required offline test reconciles this model's number and window with that sourced budget description; fetching the changing page in a measuring journey would defeat its deterministic cached telemetry.
 const REQUEST_LIMIT: usize = 2_500;
 const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 use crate::fixtures::{LinearWorkspace, document, linear_workspace};
 
@@ -31,6 +33,10 @@ struct State {
     tokens: f64,
     last_refill: Duration,
     fail: Option<(&'static str, usize, u16)>,
+    fault: Option<&'static str>,
+    hint: Option<&'static str>,
+    network_time: Duration,
+    refused_names: std::collections::BTreeSet<String>,
 }
 
 struct Workspace {
@@ -129,7 +135,36 @@ fn read_request(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 fn answer(stream: &mut TcpStream, status: u16, body: &[u8]) {
-    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nRetry-After: 2\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+    answer_hinted(stream, status, body, Some("normal"));
+}
+
+fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let headers = match hint {
+        Some("none" | "body") => String::new(),
+        Some("zero") => "Retry-After: 0\r\n".to_owned(),
+        Some("shared") => "Retry-After: 31\r\n".to_owned(),
+        Some("epoch") => format!(
+            "X-RateLimit-Requests-Reset: {}\r\nX-RateLimit-Endpoint-Requests-Reset: {}\r\nX-RateLimit-Complexity-Reset: {}\r\n",
+            now + 2000,
+            now + 4000,
+            now + 6000
+        ),
+        Some("expired") => "X-RateLimit-Requests-Reset: 1\r\n".to_owned(),
+        Some("malformed") => {
+            "X-RateLimit-Requests-Reset: nonsense\r\nRetry-After: 2\r\n".to_owned()
+        }
+        _ => "Retry-After: 2\r\n".to_owned(),
+    };
+    write!(
+        stream,
+        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
     stream.write_all(body).unwrap();
 }
 
@@ -168,9 +203,11 @@ fn serve(
         Value::Null
     };
     let asset_request = !gql.is_object() || gql["query"].as_str().unwrap().contains("fileUpload(");
+    let mut quota_limited = false;
     let refusal = {
         let mut state = state.lock().unwrap();
         state.requests += 1;
+        state.network_time += Duration::from_millis(if stage == "PUT" { 800 } else { 200 });
         if gql.is_object() {
             let now = clock.now();
             state.tokens = (state.tokens
@@ -178,25 +215,54 @@ fn serve(
                     / REQUEST_WINDOW.as_secs_f64())
             .min(REQUEST_LIMIT as f64);
             state.last_refill = now;
-            if state.tokens < 1.0 {
-                drop(state);
-                answer(
-                    &mut stream,
-                    400,
-                    br#"{"errors":[{"extensions":{"code":"RATELIMITED","retryAfter":2}}]}"#,
-                );
-                return;
+            if asset_request
+                && stage == "mutation"
+                && state.fault == Some("quota-at-upload")
+                && state.refused_names.insert("quota".to_owned())
+            {
+                state.tokens = 0.0;
             }
-            state.tokens -= 1.0;
+            if state.tokens < 1.0 {
+                quota_limited = true;
+            } else {
+                state.tokens -= 1.0;
+            }
         }
-        state.fail.as_mut().and_then(|(failed, remaining, status)| {
-            if asset_request && *failed == stage && *remaining > 0 {
-                *remaining -= 1;
-                Some(*status)
+        if quota_limited {
+            Some(429)
+        } else if asset_request && matches!(state.fault, Some("shared-stages" | "shared-images")) {
+            let key = if state.fault == Some("shared-stages") {
+                stage.to_owned()
+            } else {
+                gql["variables"]["filename"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let throttled = if state.fault == Some("shared-stages") {
+                stage != "verifying read"
+            } else {
+                stage == "mutation"
+            };
+            if throttled && state.refused_names.insert(key) {
+                Some(429)
             } else {
                 None
             }
-        })
+        } else {
+            state.fail.as_mut().and_then(|(failed, remaining, status)| {
+                if asset_request && *failed == stage && *remaining > 0 {
+                    *remaining -= 1;
+                    Some(*status)
+                } else {
+                    None
+                }
+            })
+        }
+    };
+    let (fault, hint) = {
+        let state = state.lock().unwrap();
+        (state.fault, state.hint)
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -206,20 +272,59 @@ fn serve(
     } else {
         200
     })));
+    if asset_request {
+        if matches!(
+            (fault, stage),
+            (Some("disconnect-mutation"), "mutation")
+                | (Some("disconnect-PUT"), "PUT")
+                | (Some("disconnect-read"), "verifying read")
+        ) {
+            return;
+        }
+        if stage == "mutation" {
+            let bad = match fault {
+                Some("invalid-json") => Some("not JSON"),
+                Some("graphql-errors") => Some(r#"{"errors":[{"message":"upload forbidden"}]}"#),
+                Some("success-false") => {
+                    Some(r#"{"data":{"fileUpload":{"success":false,"uploadFile":null}}}"#)
+                }
+                Some("malformed-upload") => Some(
+                    r#"{"data":{"fileUpload":{"success":true,"uploadFile":{"assetUrl":123}}}}"#,
+                ),
+                _ => None,
+            };
+            if let Some(body) = bad {
+                answer(&mut stream, 200, body.as_bytes());
+                return;
+            }
+        }
+    }
     if let Some(status) = refusal {
-        let body = if stage == "mutation" {
+        let body = if stage == "mutation" && fault != Some("mutation-http429") {
             json!({"errors":[{"message":"asset refused","extensions":{"code":if status == 429 {"RATELIMITED"} else {"FORBIDDEN"},"retryAfter":2}}]}).to_string()
         } else {
             String::new()
         };
-        answer(
+        let mut body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        if hint == Some("none") {
+            body["errors"][0]["extensions"]
+                .as_object_mut()
+                .map(|entry| entry.remove("retryAfter"));
+        }
+        let body = if body.is_null() {
+            String::new()
+        } else {
+            body.to_string()
+        };
+        answer_hinted(
             &mut stream,
-            if stage == "mutation" && status == 429 {
+            if stage == "mutation" && status == 429 && fault != Some("mutation-http429") {
                 400
             } else {
                 status
             },
             body.as_bytes(),
+            hint,
         );
         return;
     }
@@ -251,6 +356,8 @@ fn serve(
             }
             "PUT" => {
                 assert!(head.contains("x-upload-signature: signed"));
+                assert!(head.contains("content-type: image/png"));
+                assert!(head.contains("cache-control: public, max-age=31536000"));
                 assert!(!head.to_ascii_lowercase().contains("authorization:"));
                 let upload = state.uploads.get_mut(&parts[2].parse().unwrap()).unwrap();
                 assert_eq!(bytes.len() - split, upload.size);
@@ -266,6 +373,26 @@ fn serve(
             }
         }
     };
+    let mut response = response;
+    if stage == "mutation" {
+        let mut body: Value = serde_json::from_slice(&response).unwrap();
+        let file = &mut body["data"]["fileUpload"]["uploadFile"];
+        match fault {
+            Some("untrusted-asset") => {
+                file["assetUrl"] = json!("https://example.invalid/credential-target.png")
+            }
+            Some("wrong-loopback") => {
+                file["assetUrl"] = json!("http://127.0.0.1:9/credential-target.png")
+            }
+            Some("bad-upload-scheme") => file["uploadUrl"] = json!("file:///upload.png"),
+            Some("bad-header-name") => file["headers"][0]["key"] = json!("bad header"),
+            Some("bad-header-value") => {
+                file["headers"][0]["value"] = json!("value\r\nInjected: true")
+            }
+            _ => {}
+        }
+        response = body.to_string().into_bytes();
+    }
     answer(&mut stream, 200, &response);
 }
 
@@ -462,33 +589,71 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
 
 #[test]
 fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
-    for stage in ["mutation", "PUT", "verifying read"] {
-        for (times, status, succeeds) in [(1, 403, false), (1, 429, true), (31, 429, false)] {
-            let journey = Journey::new();
-            let (id, _) = journey.create("task", 1);
-            journey.workspace.state.lock().unwrap().fail = Some((stage, times, status));
-            let result = journey.copy("task", &id, succeeds);
-            if succeeds {
-                assert_eq!(journey.workspace.counts(), (1, 1, 1));
-                assert!(journey.workspace.clock.now() >= Duration::from_secs(2));
-            } else {
-                let said = result.as_str().unwrap();
-                assert!(
-                    said.contains(stage) && said.contains("task-0.png"),
-                    "{said}"
-                );
-                assert!(said.contains(&status.to_string()), "{said}");
-                if status == 429 {
-                    assert!(said.contains("limiter"));
-                }
-                assert!(
-                    !journey
+    for kind in ["task", "document"] {
+        for stage in ["mutation", "PUT", "verifying read"] {
+            for (times, status, succeeds) in [(1, 403, false), (1, 429, true), (31, 429, false)] {
+                let journey = Journey::new();
+                let (id, images) = journey.create(kind, 1);
+                journey.workspace.state.lock().unwrap().fail = Some((stage, times, status));
+                let result = journey.copy(kind, &id, succeeds);
+                if succeeds {
+                    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+                    assert!(journey.workspace.clock.now() >= Duration::from_secs(2));
+                    let destination = result["items"][0]["destination"]
+                        .as_str()
+                        .unwrap()
+                        .split_once(':')
+                        .unwrap()
+                        .1;
+                    let raw = journey
                         .workspace
                         .held
-                        .served()
-                        .iter()
-                        .any(|(query, _)| query.contains("issueCreate("))
-                );
+                        .long_form(
+                            if kind == "task" { "tasks" } else { "documents" },
+                            destination,
+                        )
+                        .unwrap();
+                    assert!(!raw.contains("](./") && raw.contains("![alt 0](http://"));
+                    assert!(
+                        raw.contains("onetaskgraph.metadata")
+                            && raw.contains("onetaskgraph.assets")
+                    );
+                    assert!(raw.contains(&asset_sha256(&images[0])));
+                    assert!(raw.contains(&format!("{}/0/asset/0", journey.workspace.endpoint)));
+                } else {
+                    let said = result.as_str().unwrap();
+                    assert!(
+                        said.contains(stage) && said.contains(&format!("{kind}-0.png")),
+                        "{said}"
+                    );
+                    assert!(
+                        said.contains(
+                            &if stage == "mutation" && status == 429 {
+                                400
+                            } else {
+                                status
+                            }
+                            .to_string()
+                        ),
+                        "{said}"
+                    );
+                    if status == 429 {
+                        assert!(said.contains("limiter"));
+                    }
+                    if stage == "verifying read" {
+                        assert!(
+                            said.contains(&format!("{}/0/asset/0", journey.workspace.endpoint)),
+                            "{said}"
+                        );
+                    }
+                    assert!(!journey.workspace.held.served().iter().any(|(query, _)| {
+                        query.contains(if kind == "task" {
+                            "issueCreate("
+                        } else {
+                            "documentCreate("
+                        })
+                    }));
+                }
             }
         }
     }
@@ -545,7 +710,7 @@ fn measure_three_concurrent_project_asset_copies() {
     let journey = Journey::with_clients(3);
     let (sizes, documents) = project_workload(&journey);
     let real_start = std::time::Instant::now();
-    let mut refused = 0;
+    let mut refused_clients = [false; 3];
     for (kind, id) in std::iter::once(("project", "notes:launch"))
         .chain(documents.iter().map(|id| ("document", id.as_str())))
     {
@@ -569,10 +734,10 @@ fn measure_three_concurrent_project_asset_copies() {
                     .unwrap(),
             );
         }
-        for child in children {
+        for (client, child) in children.into_iter().enumerate() {
             let output = child.wait_with_output().unwrap();
             if !output.status.success() {
-                refused += 1;
+                refused_clients[client] = true;
                 eprintln!("{}", stderr(&output));
             }
         }
@@ -587,14 +752,14 @@ fn measure_three_concurrent_project_asset_copies() {
     let sizes: Vec<_> = sizes.iter().copied().cycle().take(72).collect();
     record_workload(
         "linear-concurrent-copies-refused",
-        refused as f64,
+        refused_clients.iter().filter(|refused| **refused).count() as f64,
         &sizes,
         3,
     );
 }
 
 #[test]
-fn published_request_limit_and_budget_description_agree() {
+fn loopback_request_limit_and_budget_description_agree() {
     let budgets: Value = serde_norway::from_str(include_str!("../../budgets.yaml")).unwrap();
     let description = budgets["budgets"]
         .as_array()
@@ -730,6 +895,13 @@ fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
             if let Some(id) = path.strip_prefix("/upload/") {
                 let id: usize = id.parse().unwrap();
                 let url = recording.lock().unwrap().signed[&id].clone();
+                let url = reqwest::Url::parse(&url).unwrap();
+                assert_eq!(url.scheme(), "https");
+                assert!(
+                    url.username().is_empty()
+                        && url.password().is_none()
+                        && url.fragment().is_none()
+                );
                 let mut request = client.put(url);
                 for line in head.lines().skip(1) {
                     if let Some((name, value)) = line.split_once(':')
@@ -915,6 +1087,15 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
             for (name, upload) in uploads {
                 let url = upload["url"].as_str().unwrap();
                 assert!(content.contains(url));
+                let parsed = reqwest::Url::parse(url).unwrap();
+                assert_eq!(parsed.scheme(), "https");
+                assert_eq!(parsed.host_str(), Some("uploads.linear.app"));
+                assert_eq!(parsed.port_or_known_default(), Some(443));
+                assert!(
+                    parsed.username().is_empty()
+                        && parsed.password().is_none()
+                        && parsed.fragment().is_none()
+                );
                 let response = runtime
                     .block_on(client.get(url).header("Authorization", &key).send())
                     .unwrap();
@@ -1134,4 +1315,307 @@ fn asset_rendering_of_missing_items_returns_none_without_uploading() {
             .iter()
             .any(|(query, _)| query.contains("fileUpload"))
     );
+}
+
+#[test]
+fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_written() {
+    for (fault, stage) in [
+        ("invalid-json", "mutation"),
+        ("graphql-errors", "mutation"),
+        ("success-false", "mutation"),
+        ("malformed-upload", "mutation"),
+        ("disconnect-mutation", "mutation"),
+        ("disconnect-PUT", "PUT"),
+        ("disconnect-read", "verifying read"),
+    ] {
+        let journey = Journey::new();
+        let (id, _) = journey.create("task", 1);
+        journey.workspace.state.lock().unwrap().fault = Some(fault);
+        let refused = journey.copy("task", &id, false);
+        let said = refused.as_str().unwrap();
+        assert!(
+            said.contains(stage) && said.contains("task-0.png"),
+            "{fault}: {said}"
+        );
+        if fault == "disconnect-read" {
+            assert!(said.contains(&journey.workspace.endpoint));
+        }
+        if !fault.starts_with("disconnect") {
+            assert!(said.contains("200"), "{said}");
+        }
+        assert!(
+            !journey
+                .workspace
+                .held
+                .served()
+                .iter()
+                .any(|(query, _)| query.contains("issueCreate("))
+        );
+    }
+}
+
+#[test]
+fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
+    for (hint, minimum, maximum) in [
+        ("normal", 1.99, 2.01),
+        ("body", 1.99, 2.01),
+        ("none", 0.99, 1.01),
+        ("zero", 0.0009, 0.0011),
+        ("expired", 0.0009, 0.0011),
+        ("malformed", 1.99, 2.01),
+        ("epoch", 5.0, 6.01),
+    ] {
+        let journey = Journey::new();
+        let (id, _) = journey.create("task", 1);
+        {
+            let mut state = journey.workspace.state.lock().unwrap();
+            state.fail = Some(("mutation", 1, 429));
+            state.hint = Some(hint);
+        }
+        journey.copy("task", &id, true);
+        let network = journey.workspace.state.lock().unwrap().network_time;
+        let waited = journey
+            .workspace
+            .clock
+            .now()
+            .saturating_sub(network)
+            .as_secs_f64();
+        assert!(
+            (minimum..=maximum).contains(&waited),
+            "{hint}: waited {waited}s, network {network:?}"
+        );
+        assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    }
+    let journey = Journey::new();
+    let (id, _) = journey.create("task", 1);
+    {
+        let mut state = journey.workspace.state.lock().unwrap();
+        state.fail = Some(("mutation", 1, 429));
+        state.fault = Some("mutation-http429");
+    }
+    journey.copy("task", &id, true);
+    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+}
+
+#[test]
+fn a_records_wait_allowance_is_shared_across_stages_and_images() {
+    for fault in ["shared-stages", "shared-images"] {
+        let journey = Journey::new();
+        let (id, _) = journey.create("task", 2);
+        {
+            let mut state = journey.workspace.state.lock().unwrap();
+            state.fault = Some(fault);
+            state.hint = Some("shared");
+        }
+        let refused = journey.copy("task", &id, false);
+        let said = refused.as_str().unwrap();
+        assert!(
+            said.contains("limiter") && said.contains("60 second"),
+            "{said}"
+        );
+        assert!(
+            said.contains(if fault == "shared-stages" {
+                "PUT"
+            } else {
+                "task-1.png"
+            }),
+            "{said}"
+        );
+        let network = journey.workspace.state.lock().unwrap().network_time;
+        assert_eq!(
+            journey.workspace.clock.now().saturating_sub(network),
+            Duration::from_secs(31)
+        );
+        assert!(
+            !journey
+                .workspace
+                .held
+                .served()
+                .iter()
+                .any(|(query, _)| query.contains("issueCreate("))
+        );
+    }
+}
+
+#[test]
+fn public_asset_writes_validate_payloads_and_require_bytes_for_new_uploads() {
+    use onetaskgraph_plugin_api::{
+        AssetContentType, AssetName, AssetPayload, AssetWrite, ItemWrite, SourceName, SourcePlugin,
+    };
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace(
+        &sandbox,
+        json!({"tasks":[{"id":"T","title":"Existing","status":{"category":"todo","name":"Todo"},"labels":[]}],"projects":[],"documents":[],"labels":[],"task_dependencies":[],"project_dependencies":[]}),
+    );
+    let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs([(
+        "LINEAR_API_KEY",
+        "fixture-key",
+    )]))
+    .unwrap();
+    let source = onetaskgraph_linear::Plugin
+        .build(&SourceName::new("dest").unwrap(), &config, &secrets)
+        .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut item = runtime
+        .block_on(source.get_task(&"T".into()))
+        .unwrap()
+        .unwrap();
+    item.content = Some("![alt](./picture.png)".to_owned());
+    let write = ItemWrite {
+        target: None,
+        item,
+        depends_on: Vec::new(),
+    };
+    for broken in ["digest", "bytes", "content-type", "missing-bytes"] {
+        let mut payload = AssetPayload::of(
+            AssetName::new("picture.png").unwrap(),
+            images::png(900, 475_000),
+        );
+        match broken {
+            "digest" => payload.sha256 = "invalid".to_owned(),
+            "bytes" => payload.bytes = Some(images::png(901, 475_000)),
+            "content-type" => payload.content_type = AssetContentType::Jpeg,
+            _ => payload.bytes = None,
+        }
+        let before = workspace.served().len();
+        let error = runtime
+            .block_on(source.write_task_with_assets(
+                &write,
+                None,
+                &AssetWrite {
+                    assets: vec![payload],
+                    recorded_assets: None,
+                },
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("picture.png"), "{error}");
+        assert_eq!(
+            workspace.served().len(),
+            before,
+            "invalid payload sends no request"
+        );
+    }
+    for url in [
+        "",
+        "https://example.com/image.png",
+        "http://127.0.0.1:1/image.png",
+    ] {
+        let payload = AssetPayload::of(
+            AssetName::new("picture.png").unwrap(),
+            images::png(902, 475_000),
+        );
+        let recorded = onetaskgraph_plugin_api::AssetUploads(std::collections::BTreeMap::from([(
+            payload.name.clone(),
+            onetaskgraph_plugin_api::AssetUpload {
+                sha256: payload.sha256.clone(),
+                url: url.to_owned(),
+            },
+        )]));
+        let before = workspace.served().len();
+        let error = runtime
+            .block_on(source.write_task_with_assets(
+                &write,
+                None,
+                &AssetWrite {
+                    assets: vec![payload],
+                    recorded_assets: Some(recorded),
+                },
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("picture.png"), "{error}");
+        assert_eq!(workspace.served().len(), before);
+    }
+}
+
+#[test]
+fn the_published_quota_refills_in_virtual_time_before_an_asset_retry() {
+    let journey = Journey::new();
+    let (id, _) = journey.create("task", 1);
+    journey.workspace.state.lock().unwrap().fault = Some("quota-at-upload");
+    let result = journey.copy("task", &id, true);
+    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    let state = journey.workspace.state.lock().unwrap();
+    assert!(
+        journey
+            .workspace
+            .clock
+            .now()
+            .saturating_sub(state.network_time)
+            >= Duration::from_secs(2)
+    );
+    drop(state);
+    let id = result["items"][0]["destination"]
+        .as_str()
+        .unwrap()
+        .split_once(':')
+        .unwrap()
+        .1;
+    let raw = journey.workspace.held.long_form("tasks", id).unwrap();
+    assert!(!raw.contains("](./") && raw.contains("onetaskgraph.assets"));
+}
+
+#[test]
+fn records_without_images_keep_the_same_non_asset_request_flow() {
+    for kind in ["task", "document"] {
+        let plain = Journey::new();
+        let pictured = Journey::new();
+        let (plain_id, _) = plain.create(kind, 0);
+        let (pictured_id, _) = pictured.create(kind, 1);
+        plain.copy(kind, &plain_id, true);
+        pictured.copy(kind, &pictured_id, true);
+        assert_eq!(plain.workspace.counts(), (0, 0, 0));
+        assert_eq!(pictured.workspace.counts(), (1, 1, 1));
+        let plain_operations: Vec<_> = plain
+            .workspace
+            .held
+            .served()
+            .into_iter()
+            .map(|(query, _)| query)
+            .collect();
+        let pictured_operations: Vec<_> = pictured
+            .workspace
+            .held
+            .served()
+            .into_iter()
+            .map(|(query, _)| query)
+            .collect();
+        assert_eq!(
+            plain_operations, pictured_operations,
+            "assets add only their upload protocol, leaving every ordinary request as it was"
+        );
+        assert_eq!(
+            plain.workspace.state.lock().unwrap().requests,
+            plain_operations.len()
+        );
+    }
+}
+
+#[test]
+fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_get() {
+    for fault in [
+        "untrusted-asset",
+        "wrong-loopback",
+        "bad-upload-scheme",
+        "bad-header-name",
+        "bad-header-value",
+    ] {
+        let journey = Journey::new();
+        let (id, _) = journey.create("task", 1);
+        journey.workspace.state.lock().unwrap().fault = Some(fault);
+        let refused = journey.copy("task", &id, false);
+        assert!(
+            refused.as_str().unwrap().contains("task-0.png")
+                && refused.as_str().unwrap().contains("mutation"),
+            "{refused}"
+        );
+        assert_eq!(journey.workspace.counts(), (1, 0, 0));
+        assert!(
+            !journey
+                .workspace
+                .held
+                .served()
+                .iter()
+                .any(|(query, _)| query.contains("issueCreate("))
+        );
+    }
 }

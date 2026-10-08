@@ -403,6 +403,9 @@ const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 /// Fixture servers consume these constants so their recognized contract cannot drift
 /// from the production requests.
 pub mod graphql {
+    /// Request Linear's signed upload URL, private asset URL, and required PUT headers.
+    pub const FILE_UPLOAD: &str = "mutation AssetUpload($contentType:String!,$filename:String!,$size:Int!){fileUpload(contentType:$contentType,filename:$filename,size:$size){success uploadFile{uploadUrl assetUrl headers{key value}}}}";
+
     /// Linear's missing-issue error, reconciled with the service by the live status journey.
     pub const ISSUE_NOT_FOUND_MESSAGE: &str = "Entity not found: Issue";
     /// Its user-facing alternative; the loopback fixture shares this contract.

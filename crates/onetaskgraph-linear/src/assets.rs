@@ -31,20 +31,111 @@ use super::LinearSource;
 
 /// Total rate-limit wait allowed for one record's assets, across all stages and images.
 const MAX_WAIT: Duration = Duration::from_secs(60);
-const FILE_UPLOAD: &str = "mutation AssetUpload($contentType:String!,$filename:String!,$size:Int!){fileUpload(contentType:$contentType,filename:$filename,size:$size){success uploadFile{uploadUrl assetUrl headers{key value}}}}";
+use super::graphql::FILE_UPLOAD;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadFile {
-    upload_url: String,
-    asset_url: String,
+    upload_url: UploadUrl,
+    asset_url: AssetUrl,
     headers: Vec<UploadHeader>,
 }
 
 #[derive(Deserialize)]
 struct UploadHeader {
-    key: String,
-    value: String,
+    #[serde(deserialize_with = "header_name")]
+    key: reqwest::header::HeaderName,
+    #[serde(deserialize_with = "header_value")]
+    value: reqwest::header::HeaderValue,
+}
+
+#[derive(Clone, Copy)]
+enum Stage {
+    Mutation,
+    Put,
+    VerifyingRead,
+}
+
+impl std::fmt::Display for Stage {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(match self {
+            Self::Mutation => "mutation",
+            Self::Put => "PUT",
+            Self::VerifyingRead => "verifying read",
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(try_from = "String")]
+struct UploadUrl(reqwest::Url);
+
+#[derive(Deserialize)]
+#[serde(try_from = "String")]
+struct AssetUrl(reqwest::Url);
+
+fn loopback(url: &reqwest::Url) -> bool {
+    url.host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback())
+}
+
+fn http_url(value: &str) -> Result<reqwest::Url, String> {
+    let url = reqwest::Url::parse(value).map_err(|error| error.to_string())?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !(url.scheme() == "https" || (url.scheme() == "http" && loopback(&url)))
+    {
+        return Err(format!(
+            "inappropriate upload URL {value:?}; use HTTPS, or an explicitly configured loopback"
+        ));
+    }
+    Ok(url)
+}
+
+impl TryFrom<String> for UploadUrl {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        http_url(&value).map(Self)
+    }
+}
+
+impl TryFrom<String> for AssetUrl {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let url = http_url(&value)?;
+        if !(url.scheme() == "https"
+            && url.host_str() == Some("uploads.linear.app")
+            && url.port_or_known_default() == Some(443))
+            && !loopback(&url)
+        {
+            return Err(format!(
+                "untrusted Linear asset URL {value:?}; authenticated files are served by https://uploads.linear.app"
+            ));
+        }
+        Ok(Self(url))
+    }
+}
+
+impl std::fmt::Display for AssetUrl {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(out)
+    }
+}
+
+fn header_name<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<reqwest::header::HeaderName, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    reqwest::header::HeaderName::from_bytes(value.as_bytes()).map_err(serde::de::Error::custom)
+}
+
+fn header_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<reqwest::header::HeaderValue, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    reqwest::header::HeaderValue::from_str(&value).map_err(serde::de::Error::custom)
 }
 
 impl LinearSource {
@@ -53,6 +144,14 @@ impl LinearSource {
         assets: &AssetWrite,
     ) -> Result<AssetUploads, SourceError> {
         let mut uploads = AssetUploads::default();
+        let Some(first) = assets.assets.first() else {
+            return Ok(uploads);
+        };
+        // A redirect is not the requested URL's 2xx answer and must never forward a key.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| failure(first, Stage::Mutation, &format!("client setup: {error}")))?;
         let mut waited = Duration::ZERO;
         for asset in &assets.assets {
             asset.checked()?;
@@ -61,6 +160,19 @@ impl LinearSource {
                 .as_ref()
                 .and_then(|held| held.reusable(&asset.name, &asset.sha256))
             {
+                let parsed = AssetUrl::try_from(url.to_owned())
+                    .map_err(|error| failure(asset, Stage::Mutation, &error))?;
+                if loopback(&parsed.0) {
+                    let endpoint = reqwest::Url::parse(&self.endpoint.0)
+                        .map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
+                    if !loopback(&endpoint) || endpoint.origin() != parsed.0.origin() {
+                        return Err(failure(
+                            asset,
+                            Stage::Mutation,
+                            "recorded asset URL is outside the configured loopback",
+                        ));
+                    }
+                }
                 uploads.0.insert(
                     asset.name.clone(),
                     AssetUpload {
@@ -73,21 +185,21 @@ impl LinearSource {
             let bytes = asset
                 .bytes
                 .as_ref()
-                .ok_or_else(|| failure(asset, "mutation", "missing bytes for a new asset"))?;
+                .ok_or_else(|| failure(asset, Stage::Mutation, "missing bytes for a new asset"))?;
             let upload = loop {
-                let response = self.client.post(&self.endpoint.0)
+                let response = client.post(&self.endpoint.0)
                     .header("Authorization", self.key.expose_secret())
                     .json(&json!({"query":FILE_UPLOAD,"variables":{"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()}}))
-                    .send().await.map_err(|error| failure(asset, "mutation", &error.to_string()))?;
+                    .send().await.map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
                 let status = response.status();
                 let hint = reset_wait(response.headers());
                 if status.as_u16() == 429 {
-                    self.wait_asset(asset, "mutation", hint, &mut waited)
+                    self.wait_asset(asset, Stage::Mutation, status, hint, &mut waited)
                         .await?;
                     continue;
                 }
                 let body: serde_json::Value = response.json().await.map_err(|error| {
-                    failure(asset, "mutation", &format!("HTTP {status}: {error}"))
+                    failure(asset, Stage::Mutation, &format!("HTTP {status}: {error}"))
                 })?;
                 if status.as_u16() == 429
                     || body["errors"].as_array().is_some_and(|errors| {
@@ -101,7 +213,7 @@ impl LinearSource {
                             .as_u64()
                             .map(Duration::from_secs)
                     });
-                    self.wait_asset(asset, "mutation", hint, &mut waited)
+                    self.wait_asset(asset, Stage::Mutation, status, hint, &mut waited)
                         .await?;
                     continue;
                 }
@@ -111,7 +223,7 @@ impl LinearSource {
                 {
                     return Err(failure(
                         asset,
-                        "mutation",
+                        Stage::Mutation,
                         &format!("HTTP {status}: {body}"),
                     ));
                 }
@@ -121,58 +233,44 @@ impl LinearSource {
                 .map_err(|error| {
                     failure(
                         asset,
-                        "mutation",
+                        Stage::Mutation,
                         &format!("HTTP {status}: malformed upload: {error}"),
                     )
                 })?;
             };
+            if loopback(&upload.asset_url.0) {
+                let endpoint = reqwest::Url::parse(&self.endpoint.0)
+                    .map_err(|error| failure(asset, Stage::Mutation, &error.to_string()))?;
+                if !loopback(&endpoint) || endpoint.origin() != upload.asset_url.0.origin() {
+                    return Err(failure(
+                        asset,
+                        Stage::Mutation,
+                        &format!(
+                            "untrusted asset URL {} is outside the configured loopback",
+                            upload.asset_url
+                        ),
+                    ));
+                }
+            }
             // The upload URL is signed; never send the source credential to it.
             loop {
-                let mut request = self
-                    .client
-                    .put(&upload.upload_url)
+                let mut request = client
+                    .put(upload.upload_url.0.clone())
                     .header("Content-Type", asset.content_type.as_str())
                     .header("Cache-Control", "public, max-age=31536000");
                 for header in &upload.headers {
-                    request = request.header(&header.key, &header.value);
+                    request = request.header(header.key.clone(), header.value.clone());
                 }
                 let response = request
                     .body(bytes.clone())
                     .send()
                     .await
-                    .map_err(|error| failure(asset, "PUT", &error.to_string()))?;
-                if response.status().as_u16() == 429 {
-                    self.wait_asset(asset, "PUT", reset_wait(response.headers()), &mut waited)
-                        .await?;
-                    continue;
-                }
-                if !response.status().is_success() {
-                    return Err(failure(
-                        asset,
-                        "PUT",
-                        &format!("HTTP {}", response.status()),
-                    ));
-                }
-                break;
-            }
-            loop {
-                let response = self
-                    .client
-                    .get(&upload.asset_url)
-                    .header("Authorization", self.key.expose_secret())
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        failure(
-                            asset,
-                            "verifying read",
-                            &format!("{}: {error}", upload.asset_url),
-                        )
-                    })?;
+                    .map_err(|error| failure(asset, Stage::Put, &error.to_string()))?;
                 if response.status().as_u16() == 429 {
                     self.wait_asset(
                         asset,
-                        "verifying read",
+                        Stage::Put,
+                        response.status(),
                         reset_wait(response.headers()),
                         &mut waited,
                     )
@@ -182,7 +280,47 @@ impl LinearSource {
                 if !response.status().is_success() {
                     return Err(failure(
                         asset,
-                        "verifying read",
+                        Stage::Put,
+                        &format!("HTTP {}", response.status()),
+                    ));
+                }
+                break;
+            }
+            loop {
+                let response = client
+                    .get(upload.asset_url.0.clone())
+                    .header("Authorization", self.key.expose_secret())
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        failure(
+                            asset,
+                            Stage::VerifyingRead,
+                            &format!("{}: {error}", upload.asset_url),
+                        )
+                    })?;
+                if response.status().as_u16() == 429 {
+                    self.wait_asset(
+                        asset,
+                        Stage::VerifyingRead,
+                        response.status(),
+                        reset_wait(response.headers()),
+                        &mut waited,
+                    )
+                    .await
+                    .map_err(|error| {
+                        failure(
+                            asset,
+                            Stage::VerifyingRead,
+                            &format!("{}: {error}", upload.asset_url),
+                        )
+                    })?;
+                    continue;
+                }
+                if !response.status().is_success() {
+                    return Err(failure(
+                        asset,
+                        Stage::VerifyingRead,
                         &format!("{}: HTTP {}", upload.asset_url, response.status()),
                     ));
                 }
@@ -192,7 +330,7 @@ impl LinearSource {
                 asset.name.clone(),
                 AssetUpload {
                     sha256: asset.sha256.clone(),
-                    url: upload.asset_url,
+                    url: upload.asset_url.0.to_string(),
                 },
             );
         }
@@ -202,7 +340,8 @@ impl LinearSource {
     async fn wait_asset(
         &self,
         asset: &AssetPayload,
-        stage: &str,
+        stage: Stage,
+        status: reqwest::StatusCode,
         hint: Option<Duration>,
         waited: &mut Duration,
     ) -> Result<(), SourceError> {
@@ -213,7 +352,9 @@ impl LinearSource {
             return Err(failure(
                 asset,
                 stage,
-                "RATELIMITED (HTTP 429): Linear limiter exceeds the 60 second total wait bound",
+                &format!(
+                    "RATELIMITED: Linear limiter returned HTTP {status} and exceeds the 60 second total wait bound"
+                ),
             ));
         }
         *waited += wait;
@@ -222,9 +363,9 @@ impl LinearSource {
     }
 }
 
-fn failure(asset: &AssetPayload, stage: &str, status: &str) -> SourceError {
+fn failure(asset: &AssetPayload, stage: Stage, detail: &str) -> SourceError {
     SourceError::Refused {
-        message: format!("Linear asset {} {stage} failed: {status}", asset.name),
+        message: format!("Linear asset {} {stage} failed: {detail}", asset.name),
     }
 }
 
