@@ -555,6 +555,7 @@ pub const ROWS: &[Row] = &[
                 // Linear's own first-class `Document`, read through `documents(…)` and
                 // written through `documentCreate`/`documentUpdate`.
                 documents: Support::Native,
+                assets: Support::Native,
                 // A Linear issue's own comments.
                 comments: Support::Native,
                 // Linear's own issue priority, 0 to 4.

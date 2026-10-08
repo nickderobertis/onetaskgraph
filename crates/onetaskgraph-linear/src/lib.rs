@@ -355,6 +355,9 @@
 //! failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
+/// The image upload mechanism and its bounded verification rule.
+pub mod assets;
+
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
@@ -1004,11 +1007,27 @@ impl SourcePlugin for Plugin {
         config: &Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_with_clock(
+            name,
+            config,
+            secrets,
+            onetaskgraph_plugin_api::system_clock(),
+        )
+    }
+    fn build_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        clock: onetaskgraph_plugin_api::SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: LinearConfig =
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
-        Ok(Box::new(LinearSource::new(name, config, secrets)?))
+        let mut source = LinearSource::new(name, config, secrets)?;
+        source.clock = clock;
+        Ok(Box::new(source))
     }
 }
 
@@ -1204,6 +1223,7 @@ pub async fn status_names(
 }
 
 struct LinearSource {
+    clock: onetaskgraph_plugin_api::SharedClock,
     client: reqwest::Client,
     endpoint: Endpoint,
     key: SecretString,
@@ -1243,6 +1263,7 @@ impl LinearSource {
                 message: format!("set environment variable {}", config.api_key_env.0),
             })?;
         Ok(Self {
+            clock: onetaskgraph_plugin_api::system_clock(),
             client: reqwest::Client::new(),
             endpoint: config.endpoint,
             key,
@@ -2679,7 +2700,7 @@ impl TaskSource for LinearSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            assets: Support::Unsupported,
+            assets: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
@@ -3014,6 +3035,46 @@ impl TaskSource for LinearSource {
                 });
             }
         }
+    }
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        _answers: Option<&std::collections::BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let mut write = write.clone();
+        let uploads = self.upload_assets(assets).await?;
+        let content = onetaskgraph_plugin_api::serve_asset_references(
+            write.item.content.as_deref().unwrap_or_default(),
+            &mut write.item.metadata,
+            &uploads,
+        );
+        write.item.content = write.item.content.as_ref().map(|_| content);
+        let id = self.write_task(&write).await?;
+        Ok(onetaskgraph_plugin_api::AssetsWritten {
+            id,
+            content: write.item.content,
+        })
+    }
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        _answers: Option<&std::collections::BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let mut write = write.clone();
+        let uploads = self.upload_assets(assets).await?;
+        let content = onetaskgraph_plugin_api::serve_asset_references(
+            write.item.content.as_deref().unwrap_or_default(),
+            &mut write.item.metadata,
+            &uploads,
+        );
+        write.item.content = write.item.content.as_ref().map(|_| content);
+        let id = self.write_document(&write).await?;
+        Ok(onetaskgraph_plugin_api::AssetsWritten {
+            id,
+            content: write.item.content,
+        })
     }
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
         // Two refusals by name rather than two silent drops. Linear's own document type
@@ -3496,6 +3557,54 @@ impl TaskSource for LinearSource {
                 .await?;
         }
         Ok(Some(()))
+    }
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        let Some((item, held)) = self.issue_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut metadata) = metadata_description(held)?;
+        metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let uploads = self.upload_assets(assets).await?;
+        let content =
+            onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
+        let written = Self::described(Some(&content), &metadata)?;
+        self.write_description_alone(&item.id, written.as_deref())
+            .await?;
+        Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
+            id: item.id,
+            content: Some(content),
+        }))
+    }
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        let Some((item, held)) = self.document_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut metadata) = metadata_description(held)?;
+        metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let uploads = self.upload_assets(assets).await?;
+        let content =
+            onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
+        let written = Self::described(Some(&content), &metadata)?;
+        self.write_document_content(&item.id, written.as_deref())
+            .await?;
+        Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
+            id: item.id,
+            content: Some(content),
+        }))
     }
     /// One project's rendering, on the terms of `set_task_rendering`, through one
     /// `projectUpdate` carrying the content alone.

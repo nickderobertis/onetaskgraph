@@ -271,3 +271,97 @@ fn a_budget_id_that_is_not_unicode_is_refused_rather_than_read_as_absent() {
     assert!(!output.status.success(), "{stderr}");
     assert!(stderr.contains("is not even Unicode"), "{stderr}");
 }
+
+#[test]
+fn asset_reports_require_the_full_recorded_workload_before_reporting() {
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("asset-telemetry");
+    let budgets: Value = serde_norway::from_str(include_str!("../../budgets.yaml")).unwrap();
+    for budget in budgets["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|budget| {
+            let id = budget["id"].as_str().unwrap();
+            id.starts_with("linear-asset-") || id.starts_with("linear-concurrent-")
+        })
+    {
+        let id = budget["id"].as_str().unwrap();
+        let (count, copies) = match budget["unit"].as_str().unwrap() {
+            "seconds" => (24, 1),
+            "copies" => (72, 3),
+            _ => (8, if id.contains("unchanged") { 3 } else { 1 }),
+        };
+        let result = directory.join("result.json");
+        for broken in [
+            "missing",
+            "count",
+            "size",
+            "oversize",
+            "noninteger",
+            "no-large",
+            "copies",
+            "no-workload",
+            "malformed-workload",
+            "no-sizes",
+            "malformed-sizes",
+            "no-value",
+            "nonnumeric-value",
+            "negative-value",
+            "valid",
+        ] {
+            let path = telemetry::file_in(&directory, id);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&result);
+            if broken != "missing" {
+                let mut sizes = vec![475_000; count];
+                if broken == "count" {
+                    sizes.pop();
+                }
+                if broken == "size" {
+                    sizes[0] = 49_999;
+                }
+                let mut recorded = json!({"value":1.5,"detail":"observed", "workload":{"sizes":sizes,"copies":if broken == "copies" {0} else {copies}}});
+                match broken {
+                    "oversize" => recorded["workload"]["sizes"][0] = json!(500_001),
+                    "noninteger" => recorded["workload"]["sizes"][0] = json!(475_000.5),
+                    "no-large" => recorded["workload"]["sizes"] = json!(vec![100_000; count]),
+                    "no-workload" => {
+                        recorded.as_object_mut().unwrap().remove("workload");
+                    }
+                    "malformed-workload" => recorded["workload"] = json!("not an object"),
+                    "no-sizes" => {
+                        recorded["workload"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("sizes");
+                    }
+                    "malformed-sizes" => recorded["workload"]["sizes"] = json!("not an array"),
+                    "no-value" => {
+                        recorded.as_object_mut().unwrap().remove("value");
+                    }
+                    "nonnumeric-value" => recorded["value"] = json!("not a number"),
+                    "negative-value" => recorded["value"] = json!(-1),
+                    _ => {}
+                }
+                std::fs::write(&path, recorded.to_string()).unwrap();
+            }
+            let output = run_report(&directory, |command| {
+                command
+                    .env("ONEBUDGETSPEC_BUDGET_ID", id)
+                    .env("ONEBUDGETSPEC_RESULT", &result);
+            });
+            assert_eq!(
+                output.status.success(),
+                broken == "valid",
+                "{id} {broken}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                result.exists(),
+                broken == "valid",
+                "{id} {broken}: refused workloads report no figure"
+            );
+        }
+    }
+}

@@ -1241,7 +1241,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            assets: Support::Unsupported,
+            assets: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,

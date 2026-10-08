@@ -44,3 +44,39 @@ budgets:
     unit: requests
     direction: max
     threshold: 2
+  - id: linear-asset-requests-per-new-asset
+    description: >-
+      An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 3
+  - id: linear-asset-requests-per-unchanged-asset
+    description: >-
+      An inner measure of requests added by three unchanged re-copies protects headroom on a production Linear key every manager of a host shares, which no check may reach.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 0
+  - id: linear-asset-copy-seconds
+    description: >-
+      An inner measure of a plan-copy operation (project copy followed by each document copy into the copied project) duration in simulated time against a loopback modelling Linear latency and limits protects the time a person waits, because the production key may not be spent by a check and the measurement costs no gate time.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: seconds
+    direction: max
+    threshold: 90
+  - id: linear-concurrent-copies-refused
+    description: >-
+      An inner measure of concurrent plan-copy operation refusals (each project copy followed by its document copies into the copied project) in simulated time against a loopback modelling Linear latency and limits avoids spending the production key and costs no gate time. The GraphQL limit is 2500 requests per 3600 seconds per authenticated user across API keys, refilled as a leaky bucket, from https://linear.app/developers/rate-limiting.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: copies
+    direction: max
+    threshold: 0
