@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.8...onetaskgraph-core-v0.3.9) - 2026-10-08
+
+### Added
+
+- *(github-projects)* upload image assets as GitHub user attachments ([#3560](https://github.com/nickderobertis/onetaskgraph/pull/3560))
+
 ## [0.3.8](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.7...onetaskgraph-core-v0.3.8) - 2026-10-08
 
 ### Added
