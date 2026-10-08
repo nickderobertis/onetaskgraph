@@ -807,6 +807,28 @@ fn bindings(variables: &Value) -> Variables {
     bindings
 }
 
+/// Which attachment request GitHub answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentOperation {
+    /// The content-creating upload.
+    Upload,
+    /// An authenticated attachment read.
+    Read,
+}
+
+/// One attachment response, retained inside the owning plugin for live verification reports.
+#[derive(Debug, Clone)]
+pub struct AttachmentResponse {
+    /// The referenced asset's validated name.
+    pub name: onetaskgraph_plugin_api::AssetName,
+    /// The endpoint GitHub answered.
+    pub url: reqwest::Url,
+    /// The status GitHub actually returned.
+    pub status: reqwest::StatusCode,
+    /// Whether this was the content-creating upload rather than a read.
+    pub operation: AttachmentOperation,
+}
+
 /// Every request one session sent, and what each cost.
 ///
 /// It is on this crate's ordinary code path — [`crate::GitHubProjectsSource`] records into
@@ -819,6 +841,7 @@ fn bindings(variables: &Value) -> Variables {
 #[derive(Debug, Default)]
 pub struct Accounting {
     requests: Mutex<Vec<Request>>,
+    attachment_responses: Mutex<Vec<AttachmentResponse>>,
     estimates: Mutex<BTreeMap<Budget, u64>>,
 }
 
@@ -850,6 +873,21 @@ impl Accounting {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(request);
+    }
+    /// Record an attachment response beside its request accounting.
+    pub(crate) fn record_attachment(&self, response: AttachmentResponse) {
+        self.attachment_responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(response);
+    }
+    /// The actual upload and read statuses, for a caller verifying a credentialed copy.
+    #[must_use]
+    pub fn attachment_responses(&self) -> Vec<AttachmentResponse> {
+        self.attachment_responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
     /// A snapshot of what has been recorded so far: a value to hold and compare, never a
     /// live borrow of this accounting.

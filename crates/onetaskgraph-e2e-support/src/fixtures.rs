@@ -592,6 +592,7 @@ pub const ROWS: &[Row] = &[
             // three `D-*` items of the fixture board above are.
             declared: Declared {
                 documents: Support::Native,
+                assets: Support::Native,
                 // An issue's own comments; a draft has none, and says so.
                 comments: Support::Native,
                 // The board's `Priority` field, which this row's configuration maps.

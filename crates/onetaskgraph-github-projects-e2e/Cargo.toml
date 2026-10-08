@@ -20,3 +20,14 @@ onetaskgraph-e2e-support.workspace = true
 # the plugin's own constants rather than from a copy a journey could drift from.
 onetaskgraph-github-projects.workspace = true
 serde_json.workspace = true
+onetaskgraph-plugin-api.workspace = true
+onebudgetspec-core.workspace = true
+regex.workspace = true
+tokio.workspace = true
+onetaskgraph-core.workspace = true
+onetaskgraph-local-md.workspace = true
+onetaskgraph-live.workspace = true
+onetaskgraph-github-live.workspace = true
+secrecy.workspace = true
+reqwest.workspace = true
+chrono.workspace = true

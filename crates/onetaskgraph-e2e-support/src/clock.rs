@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use tokio::sync::oneshot;
@@ -39,6 +39,39 @@ pub struct SimulatedClock {
     address: SocketAddr,
 }
 
+/// An opt-in logical participant across multiple binary invocations.
+///
+/// While its participant has no attached subprocess, the driver is computing and virtual
+/// time cannot advance. Dropping the lease means the logical participant has finished.
+/// Existing callers without a lease keep the coordinator's original detach behaviour.
+pub struct SimulatedLease {
+    state: Arc<Mutex<State>>,
+    client: usize,
+}
+
+impl SimulatedLease {
+    /// `wait_for_detach(&self) -> ()`: after waiting for one subprocess to exit, wait for
+    /// its clock connection's detach to be acknowledged before starting the next.
+    /// This synchronises connection teardown and advances no virtual time.
+    pub fn wait_for_detach(&self) {
+        let mut state = self.state.lock().expect("the coordinator is not poisoned");
+        while state.clients.contains_key(&self.client) {
+            let disconnected = Arc::clone(&state.disconnected);
+            state = disconnected
+                .wait(state)
+                .expect("the coordinator is not poisoned");
+        }
+    }
+}
+
+impl Drop for SimulatedLease {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().expect("the coordinator is not poisoned");
+        state.leases.remove(&self.client);
+        state.advance();
+    }
+}
+
 /// A request a loopback endpoint's handler is answering, taken for each request it receives.
 ///
 /// While it is held outside [`delay`](Self::delay) the handler is computing, and virtual time
@@ -58,6 +91,9 @@ struct State {
     attached: BTreeSet<usize>,
     /// The clients attached now, each with its pending waits and its open connection.
     clients: BTreeMap<usize, Client>,
+    /// Logical participants whose driver may be between subprocess invocations.
+    leases: BTreeSet<usize>,
+    disconnected: Arc<Condvar>,
     /// Requests held by a handler outside a delay.
     computing: usize,
     /// Pending delays, by deadline then a sequence number, with whose request each holds.
@@ -89,7 +125,13 @@ impl State {
     /// Advance to the earliest pending wake-up when nothing is computing, and wake what is
     /// due there.
     fn advance(&mut self) {
-        if self.attached.len() < self.expected || self.computing > 0 {
+        if self.attached.len() < self.expected
+            || self.computing > 0
+            || self
+                .leases
+                .iter()
+                .any(|client| !self.clients.contains_key(client))
+        {
             return;
         }
         if !self.clients.values().all(Client::waiting) {
@@ -180,6 +222,26 @@ impl SimulatedClock {
     pub fn request(&self, client: usize) -> SimulatedRequest {
         self.lock().computing += 1;
         SimulatedRequest {
+            state: Arc::clone(&self.state),
+            client,
+        }
+    }
+
+    /// `lease(client: usize) -> SimulatedLease`: keep one logical participant present
+    /// across its subprocess transitions. Take it before the first invocation and drop it
+    /// after the last; the driver between invocations then counts as computing. The client
+    /// must be one `start` nominated and may hold only one lease at a time.
+    ///
+    /// # Panics
+    /// A client outside this coordinator's nomination or one already leased is a test bug.
+    pub fn lease(&self, client: usize) -> SimulatedLease {
+        let mut state = self.lock();
+        assert!(
+            client < state.expected,
+            "a lease must name a nominated client"
+        );
+        assert!(state.leases.insert(client), "a client holds only one lease");
+        SimulatedLease {
             state: Arc::clone(&self.state),
             client,
         }
@@ -324,5 +386,6 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
     }
     let mut state = state.lock().expect("the coordinator is not poisoned");
     state.clients.remove(&client);
+    state.disconnected.notify_all();
     state.advance();
 }

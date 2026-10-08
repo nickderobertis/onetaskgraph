@@ -22,6 +22,7 @@ pub mod common;
 pub mod fixtures;
 pub mod images;
 pub mod linear_vocabulary;
+pub mod telemetry;
 
 /// The `onetaskgraph` executable every journey spawns.
 ///
