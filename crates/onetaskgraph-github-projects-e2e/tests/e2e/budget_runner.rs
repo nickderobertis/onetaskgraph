@@ -127,8 +127,12 @@ fn report_expected(expected: Workload) {
         Err(error) => refuse(&error.to_string()),
     };
     let (value, detail) = read(&budget, expected).unwrap_or_else(|error| refuse(&error));
+    // llmlint: ignore[budget_commands_measure_directly] An explicitly selected standalone report command must fail when report returns false (no destination), rather than claim success without a figure. This checks its exit-status contract only; onebudgetspec alone validates the result file and judges the figure against its threshold.
     match onebudgetspec_core::report(value, Some(&detail)) {
-        Ok(_) => (),
+        Ok(true) => (),
+        Ok(false) => {
+            refuse("no budget figure written: ONEBUDGETSPEC_RESULT must name a destination")
+        }
         Err(error) => refuse(&error.to_string()),
     }
 }
@@ -238,6 +242,23 @@ fn the_real_report_boundary_refuses_invalid_telemetry_without_a_figure() {
         assert!(!result.exists(), "reported over an invalid workload");
     }
     std::fs::write(&path, valid.to_string()).unwrap();
+    for destination in [None, Some("")] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["budget_runner::report_single", "--exact", "--nocapture"])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", "recorded-assets")
+            .env_remove("ONEBUDGETSPEC_RESULT");
+        if let Some(destination) = destination {
+            command.env("ONEBUDGETSPEC_RESULT", destination);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            !output.status.success(),
+            "accepted a missing result destination"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("no budget figure written"));
+    }
     let result = directory.join("result.json");
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["budget_runner::report_single", "--exact", "--nocapture"])
