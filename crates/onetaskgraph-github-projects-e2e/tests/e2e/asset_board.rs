@@ -205,7 +205,11 @@ impl Board {
                                 .to_ascii_lowercase()
                                 .contains("authorization: bearer test-token")
                         );
-                        answer = Some(br#"{"id":123456}"#.to_vec());
+                        answer = Some(if path == "/repos/fixture/transferred" {
+                            br#"{"id":654321}"#.to_vec()
+                        } else {
+                            br#"{"id":123456}"#.to_vec()
+                        });
                     }
                     if !disconnect {
                         state.calls.push(Call {

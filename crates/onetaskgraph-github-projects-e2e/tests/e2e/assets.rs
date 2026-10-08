@@ -1589,6 +1589,8 @@ fn attachment_redirects_preserve_trusted_reads_and_refuse_foreign_destinations()
         "credentials",
         "scheme",
         "port",
+        "other-bucket",
+        "storage-lookalike",
         "chain",
     ] {
         let trusted = case == "trusted";
@@ -1604,6 +1606,8 @@ fn attachment_redirects_preserve_trusted_reads_and_refuse_foreign_destinations()
             "credentials" => attachment.replacen("http://", "http://user:password@", 1),
             "scheme" => "http://github.com/user-attachments/assets/1".into(),
             "port" => "https://github.com:444/user-attachments/assets/1".into(),
+            "other-bucket" => "https://other-bucket.s3.amazonaws.com/attachment.png".into(),
+            "storage-lookalike" => "https://github-production-user-asset-6210df.s3.amazonaws.com.example.org/attachment.png".into(),
             "foreign" => format!("http://{}/foreign.png", foreign.local_addr().unwrap()),
             _ => unreachable!(),
         };
@@ -1671,4 +1675,106 @@ fn attachment_redirects_preserve_trusted_reads_and_refuse_foreign_destinations()
             );
         }
     }
+}
+
+#[test]
+fn changed_assets_follow_the_existing_issues_repository_after_a_transfer() {
+    for (kind, id) in [("task", "T"), ("document", "D")] {
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        plan.author(kind, id, false, &[480_000], 101);
+        let report = plan.copy(kind, id);
+        let target = report["items"][0]["destination"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("board:")
+            .unwrap();
+        plan.github.transfer_issue(target, "fixture/transferred");
+        let bytes = plan.author(kind, id, false, &[480_000], 102);
+        let before = plan.board.calls().len();
+        let report = plan.copy(kind, id);
+        let calls = plan.board.calls();
+        assert!(
+            calls[before..]
+                .iter()
+                .any(|call| call.path == "/repos/fixture/transferred")
+        );
+        let sent = uploads(&calls[before..]);
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].path.contains("repository_id=654321"));
+        assert_eq!(sent[0].bytes, bytes[0]);
+        plan.assert_record(&report, &format!("notes:{id}"), &bytes);
+    }
+}
+
+#[test]
+fn github_signed_storage_redirect_reaches_the_proxy_and_refuses_a_transport_failure() {
+    use std::io::{Read, Write};
+    let clock = SimulatedClock::start(1);
+    let plan = Plan::new(&clock, 0, None);
+    plan.author("document", "D", false, &[480_000], 103);
+    let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    proxy.set_nonblocking(true).unwrap();
+    let proxy_address = proxy.local_addr().unwrap();
+    plan.board.refuse(Refusal {
+        stage: Stage::Read,
+        status: 302,
+        headers: "Location: https://github-production-user-asset-6210df.s3.amazonaws.com/attachment.png?X-Amz-Algorithm=AWS4-HMAC-SHA256\r\n".into(),
+        body: String::new(),
+        remaining: 1,
+    });
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopping = stop.clone();
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Ok((mut stream, _)) = proxy.accept() {
+                let mut request = [0; 4096];
+                let length = stream.read(&mut request).unwrap();
+                requests.push(String::from_utf8_lossy(&request[..length]).into_owned());
+                stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            } else {
+                std::thread::yield_now();
+            }
+        }
+        requests
+    });
+    // A CONNECT proxy observes the real HTTPS destination without contacting GitHub.
+    // Its transport refusal must still prevent the issue from being written.
+    let output = plan
+        .sandbox
+        .subprocess(binary())
+        .args(["document", "copy", "notes:D", "--to", "board", "--json"])
+        .envs(clock.client_env(0))
+        .env("HTTPS_PROXY", format!("http://{proxy_address}"))
+        .env("https_proxy", format!("http://{proxy_address}"))
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .output()
+        .unwrap();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let requests = server.join().unwrap();
+    assert_eq!(
+        requests.len(),
+        1,
+        "the GitHub storage redirect was refused before reaching its HTTPS boundary"
+    );
+    assert!(
+        requests[0]
+            .starts_with("CONNECT github-production-user-asset-6210df.s3.amazonaws.com:443 ")
+    );
+    assert!(
+        !requests[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer")
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("shot-0.png"));
+    assert!(
+        !plan
+            .github
+            .documents()
+            .iter()
+            .any(|query| query.contains("createIssue(input:"))
+    );
 }

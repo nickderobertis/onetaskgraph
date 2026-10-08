@@ -20,8 +20,13 @@ pub(super) fn client(endpoint: &Url) -> Result<Client, SourceError> {
                 || (url.scheme() == "https"
                     && url.port_or_known_default() == Some(443)
                     && url.host_str().is_some_and(|host| {
-                        matches!(host, "github.com" | "api.github.com" | "uploads.github.com")
-                            || host.ends_with(".githubusercontent.com")
+                        matches!(
+                            host,
+                            "github.com"
+                                | "api.github.com"
+                                | "uploads.github.com"
+                                | "github-production-user-asset-6210df.s3.amazonaws.com"
+                        ) || host.ends_with(".githubusercontent.com")
                     }));
             if !trusted || !url.username().is_empty() || url.password().is_some() {
                 attempt.error("attachment redirect destination is not trusted")
