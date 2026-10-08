@@ -524,6 +524,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_REWRITE, true),
         (graphql::ISSUE_LABEL, false),
         (graphql::PROJECT_LABEL, false),
+        (graphql::FILE_UPLOAD, true),
         (graphql::ISSUE_CREATE, true),
         (graphql::ISSUE_UPDATE, true),
         (graphql::ISSUE_PRIORITY_UPDATE, true),
@@ -3285,7 +3286,8 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
         let (endpoint, _) = server(status, "", r#"{}"#);
         let error = source(&endpoint).health().await.unwrap_err();
         assert!(match expected {
-            "auth" => matches!(error, SourceError::Auth { .. }),
+            "auth" =>
+                matches!(error, SourceError::Auth { ref message } if message.contains(status)),
             _ => matches!(error, SourceError::Unavailable { .. }),
         });
     }

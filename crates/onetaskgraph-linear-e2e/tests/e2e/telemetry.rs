@@ -10,6 +10,7 @@
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
 
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 pub use onetaskgraph_e2e_support::telemetry::{file_in, record_in};
@@ -43,6 +44,21 @@ pub fn record(budget: &str, value: usize, detail: &str) {
     record_in(&directory(), budget, value, detail);
 }
 
+/// Record an asset workload beside its observed figure; the analyser validates its weight.
+pub fn record_assets(budget: &str, value: f64, sizes: &[usize], copies: usize) {
+    let directory = directory();
+    std::fs::create_dir_all(&directory).expect("the telemetry directory is writable");
+    std::fs::write(
+        file_in(&directory, budget),
+        json!({
+            "value": value, "detail": "counted at the Linear loopback in simulated time",
+            "workload": {"sizes": sizes, "copies": copies}
+        })
+        .to_string(),
+    )
+    .expect("the telemetry file is writable");
+}
+
 /// The figure and the detail `budget`'s journey recorded, or why there is none to read.
 ///
 /// `budget` comes from the environment, so it is held to onebudgetspec's own grammar for an id
@@ -68,13 +84,56 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
     })?;
     let recorded: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("{budget}: {} is not JSON ({error})", path.display()))?;
-    // A count of requests, so a negative or fractional figure cannot pass a maximum.
-    let value = recorded["value"].as_u64().ok_or_else(|| {
-        format!(
-            "{budget}: {} records no `value` that is a whole number of requests: {text}",
-            path.display()
-        )
-    })? as f64;
+    let value = if budget.starts_with("linear-asset-") || budget.starts_with("linear-concurrent-") {
+        let concurrent = budget.ends_with("copies-refused");
+        let large = concurrent || budget.ends_with("copy-seconds");
+        let expected = if concurrent {
+            72
+        } else if large {
+            24
+        } else {
+            8
+        };
+        let copies = if concurrent || budget.ends_with("unchanged-asset") {
+            3
+        } else {
+            1
+        };
+        let sizes = recorded["workload"]["sizes"]
+            .as_array()
+            .ok_or_else(|| format!("{budget}: missing asset workload"))?;
+        let minimum = if large { 450_000 } else { 50_000 };
+        if sizes.len() != expected
+            || recorded["workload"]["copies"] != copies
+            || sizes.iter().any(|size| {
+                size.as_u64()
+                    .is_none_or(|size| !(minimum..=500_000).contains(&size))
+            })
+            || !sizes
+                .iter()
+                .any(|size| size.as_u64().is_some_and(|size| size >= 450_000))
+        {
+            return Err(format!(
+                "{budget}: asset workload differs: expected {expected} images, {copies} copies, each {minimum}..=500000 bytes, including a 450000..=500000 byte image"
+            ));
+        }
+        recorded["value"]
+            .as_f64()
+            .filter(|value| {
+                value.is_finite()
+                    && *value >= 0.0
+                    && (!budget.ends_with("copies-refused")
+                        || (value.fract() == 0.0 && *value <= f64::from(copies)))
+            })
+            .ok_or_else(|| format!("{budget}: missing non-negative observed value"))?
+    } else {
+        recorded["value"].as_u64().ok_or_else(|| {
+            format!(
+                "{budget}: {} records no `value` that is a whole number of requests: {text}",
+                path.display()
+            )
+        })? as f64
+    };
     let detail = match &recorded["detail"] {
         serde_json::Value::Null => None,
         serde_json::Value::String(detail) => Some(detail.clone()),

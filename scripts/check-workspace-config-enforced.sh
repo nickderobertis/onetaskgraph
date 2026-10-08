@@ -314,9 +314,9 @@ expect check-nx-graph.sh "an e2e suite's Cargo dependency that is neither an edg
   "onetaskgraph-linear-e2e -> onetaskgraph-linear: a Cargo dependency of an e2e suite that is neither an Nx edge nor a default input"
 restore "$LINEAR_E2E_PROJECT"
 
-mutate "$LINEAR_E2E_PROJECT" 'document["implicitDependencies"].append("onetaskgraph-live")'
+mutate "$LINEAR_E2E_PROJECT" 'document["implicitDependencies"].append("onetaskgraph-github-projects-e2e")'
 expect check-nx-graph.sh "an e2e suite's edge to a crate it neither depends on nor reaches through the binary" \
-  "onetaskgraph-linear-e2e -> onetaskgraph-live: an Nx edge of an e2e suite to a crate it neither depends on nor reaches through the binary"
+  "onetaskgraph-linear-e2e -> onetaskgraph-github-projects-e2e: an Nx edge of an e2e suite to a crate it neither depends on nor reaches through the binary"
 restore "$LINEAR_E2E_PROJECT"
 
 # --- Every spawner refuses, naming the build target, when the binary is not there. The
