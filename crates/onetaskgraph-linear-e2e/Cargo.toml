@@ -29,3 +29,7 @@ serde_json.workspace = true
 # Reads budgets.yaml in the test holding its commands to what every runner can start.
 serde_norway.workspace = true
 tokio.workspace = true
+
+# The asset live journey opens the same credential gate as the plugin lane.
+onetaskgraph-live.workspace = true
+reqwest.workspace = true

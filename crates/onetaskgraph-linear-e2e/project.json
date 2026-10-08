@@ -4,7 +4,7 @@
   "projectType": "application",
   "tags": ["lang:rust", "layer:e2e"],
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
-  "implicitDependencies": ["onetaskgraph-linear", "onetaskgraph-plugin-api"],
+  "implicitDependencies": ["onetaskgraph-linear", "onetaskgraph-plugin-api", "onetaskgraph-live"],
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
@@ -59,8 +59,15 @@
         "command": "cargo test --quiet -p onetaskgraph-linear-e2e --all-features --locked"
       },
       "dependsOn": ["onetaskgraph:build"],
-      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e"],
-      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the budget journeys record, which `budgets` reads, so a cache hit restores it."
+      "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] AGENTS.md requires real Linear journeys in the ordinary affected test target: an advisory lane let an API-invalid query merge, so third-party outages now deliberately block merges. These credential inputs prevent an uncredentialed cache hit from replacing that required run. Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the budget journeys record, which `budgets` reads, so a cache hit restores it.",
+      "inputs": [
+        "default",
+        "^default",
+        { "env": "LINEAR_API_KEY" },
+        { "env": "LINEAR_WRITE_TEAM" },
+        { "env": "ONETASKGRAPH_LIVE_REQUIRED" }
+      ],
+      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e"]
     },
     "budgets": {
       "executor": "nx:run-commands",

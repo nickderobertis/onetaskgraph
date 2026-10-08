@@ -125,6 +125,7 @@ type Query {
   projectStatuses(first: Int, after: String): ProjectStatusConnection!
 }
 type Mutation {
+  fileUpload(contentType: String!, filename: String!, size: Int!): UploadPayload!
   issueCreate(input: IssueCreateInput!): IssuePayload!
   issueUpdate(id: String!, input: IssueUpdateInput!): IssuePayload!
   projectCreate(input: ProjectCreateInput!): ProjectPayload!
@@ -571,3 +572,19 @@ input ProjectRelationCreateInput {
 }
 scalar DateTime
 scalar DateTimeOrDuration
+
+# fileUpload is pinned 2026-10-07 from https://linear.app/developers/how-to-upload-a-file-to-linear;
+# the live asset journey observed this exact operation succeeding with these returned fields.
+type UploadPayload {
+  success: Boolean!
+  uploadFile: UploadFile
+}
+type UploadFile {
+  uploadUrl: String!
+  assetUrl: String!
+  headers: [UploadHeader!]!
+}
+type UploadHeader {
+  key: String!
+  value: String!
+}

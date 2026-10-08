@@ -29,7 +29,7 @@
 //! | `projects` | **Supported and proven.** `issues(filter:{project:{id:{eq:…}}})`. |
 //! | `documents` | **Supported and proven.** Linear's own first-class `Document`, read through `documents(first:,after:,filter:)` and `document(id:)`, written through `documentCreate`/`documentUpdate` and taken back by `documentDelete`. See the ruling below on what a Linear document cannot hold. |
 //! | `comments` | **Supported and proven,** as the issue's own comments: read oldest first through `issue(id:){comments(last:,before:)}`, added with `commentCreate`, edited with `commentUpdate` and removed with `commentDelete` — each of the last two only once `comment(id:)` has placed the comment on that very issue. See the ruling below on the order and on the author. |
-//! | `assets` | **Unsupported — unimplemented.** A copy of a record carrying an image asset into a Linear workspace is refused, naming the source, the record and the asset, before anything is written for that record. Uploading the bytes to Linear's own file storage is tracked in `docs/follow-ups.md`. |
+//! | `assets` | **Supported and proven.** Native asset support: Images are uploaded through Linear's `fileUpload` flow, verified by an authenticated GET, and their Markdown references rewritten before content is written. Matching recorded SHA-256 values reuse their URLs. Images are visible to authenticated members of the workspace; see [`assets`] for the mechanism and bounded retries. |
 //! | `priority` | **Supported,** as Linear's own `Issue.priority`: read on every issue, written by `issueCreate`/`issueUpdate` through `IssueCreateInput.priority`/`IssueUpdateInput.priority`, and set on its own by an `issueUpdate` carrying nothing else. See the ruling below on the scale. |
 //! | `filter_by_priority` | **Supported and proven.** `issues(filter:{priority:{in:[…]}})` over Linear's own `0`–`4` scale, confirmed against each issue read. |
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
@@ -355,6 +355,9 @@
 //! failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
+/// The image upload mechanism and its bounded verification rule.
+pub mod assets;
+
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
@@ -400,6 +403,9 @@ const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 /// Fixture servers consume these constants so their recognized contract cannot drift
 /// from the production requests.
 pub mod graphql {
+    /// Request Linear's signed upload URL, private asset URL, and required PUT headers.
+    pub const FILE_UPLOAD: &str = "mutation AssetUpload($contentType:String!,$filename:String!,$size:Int!){fileUpload(contentType:$contentType,filename:$filename,size:$size){success uploadFile{uploadUrl assetUrl headers{key value}}}}";
+
     /// Linear's missing-issue error, reconciled with the service by the live status journey.
     pub const ISSUE_NOT_FOUND_MESSAGE: &str = "Entity not found: Issue";
     /// Its user-facing alternative; the loopback fixture shares this contract.
@@ -1004,11 +1010,27 @@ impl SourcePlugin for Plugin {
         config: &Value,
         secrets: &dyn SecretResolver,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_with_clock(
+            name,
+            config,
+            secrets,
+            onetaskgraph_plugin_api::system_clock(),
+        )
+    }
+    fn build_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        clock: onetaskgraph_plugin_api::SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: LinearConfig =
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
-        Ok(Box::new(LinearSource::new(name, config, secrets)?))
+        let mut source = LinearSource::new(name, config, secrets)?;
+        source.clock = clock;
+        Ok(Box::new(source))
     }
 }
 
@@ -1204,6 +1226,7 @@ pub async fn status_names(
 }
 
 struct LinearSource {
+    clock: onetaskgraph_plugin_api::SharedClock,
     client: reqwest::Client,
     endpoint: Endpoint,
     key: SecretString,
@@ -1243,6 +1266,7 @@ impl LinearSource {
                 message: format!("set environment variable {}", config.api_key_env.0),
             })?;
         Ok(Self {
+            clock: onetaskgraph_plugin_api::system_clock(),
             client: reqwest::Client::new(),
             endpoint: config.endpoint,
             key,
@@ -1368,6 +1392,16 @@ struct GqlExtensions {
     retry_after: Option<u64>,
 }
 impl GqlError {
+    fn rate_limited(&self, retry: Option<u64>, status: reqwest::StatusCode) -> Option<SourceError> {
+        let extensions = self
+            .coded()
+            .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))?;
+        Some(SourceError::RateLimited {
+            retry_after_seconds: retry.or(extensions.retry_after),
+            message: Some(format!("Linear returned HTTP {status}")),
+        })
+    }
+
     /// The rate-limit shape of [`Self::extensions`], when it has one.
     fn coded(&self) -> Option<GqlExtensions> {
         self.extensions
@@ -1523,8 +1557,25 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
-        let response = self
-            .client
+        match self.answer_using(&self.client, query, variables).await {
+            Err(SourceError::RateLimited {
+                retry_after_seconds,
+                ..
+            }) => Err(SourceError::RateLimited {
+                retry_after_seconds,
+                message: None,
+            }),
+            result => result,
+        }
+    }
+
+    async fn answer_using(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+        variables: Value,
+    ) -> Result<Result<Value, Refusal>, SourceError> {
+        let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
             .json(&json!({"query": query, "variables": variables}))
@@ -1534,23 +1585,19 @@ impl LinearSource {
                 message: e.to_string(),
             })?;
         let status = response.status();
-        let retry = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
+        let retry = reset_wait(response.headers()).map(|wait| {
+            wait.as_secs()
+                .saturating_add(u64::from(wait.subsec_nanos() > 0))
+        });
         if status.as_u16() == 429 {
             return Err(SourceError::RateLimited {
                 retry_after_seconds: retry,
-                // Linear has one rate limiter and the status is the whole of what it said,
-                // so there is nothing to add beyond the kind — which is what an absent
-                // message means.
-                message: None,
+                message: Some(format!("Linear returned HTTP {status}")),
             });
         }
         if status.as_u16() == 401 || status.as_u16() == 403 {
             return Err(SourceError::Auth {
-                message: "Linear rejected the configured credential".into(),
+                message: format!("Linear rejected the configured credential: HTTP {status}"),
             });
         }
         if !status.is_success() {
@@ -1559,6 +1606,13 @@ impl LinearSource {
             // body is Linear's answer to this request and holds no credential; it is cut
             // because a proxy in front of Linear can answer with a page.
             let text = response.text().await.unwrap_or_default();
+            if let Some(limited) = serde_json::from_str::<Envelope>(&text)
+                .ok()
+                .and_then(|body| body.errors.into_iter().next())
+                .and_then(|error| error.rate_limited(retry, status))
+            {
+                return Err(limited);
+            }
             // An id naming nothing is the one refusal a caller acts on rather than reports,
             // so it reads the same whichever status Linear sends it under.
             if let Some(missing) = serde_json::from_str::<Envelope>(&text)
@@ -1579,17 +1633,11 @@ impl LinearSource {
             });
         }
         let body: Envelope = response.json().await.map_err(|e| SourceError::Malformed {
-            message: e.to_string(),
+            message: format!("HTTP {status}: {e}"),
         })?;
         if let Some(error) = body.errors.into_iter().next() {
-            if let Some(extensions) = error
-                .coded()
-                .filter(|extensions| matches!(extensions.code, GqlErrorCode::RateLimited))
-            {
-                return Err(SourceError::RateLimited {
-                    retry_after_seconds: extensions.retry_after.or(retry),
-                    message: None,
-                });
+            if let Some(limited) = error.rate_limited(retry, status) {
+                return Err(limited);
             }
             return Ok(Err(Refusal(error)));
         }
@@ -2679,7 +2727,7 @@ impl TaskSource for LinearSource {
             projects: Support::Native,
             documents: Support::Native,
             comments: Support::Native,
-            assets: Support::Unsupported,
+            assets: Support::Native,
             priority: Support::Native,
             filter_by_priority: Support::Native,
             filter_by_comment_activity: Support::Native,
@@ -3014,6 +3062,46 @@ impl TaskSource for LinearSource {
                 });
             }
         }
+    }
+    async fn write_task_with_assets(
+        &self,
+        write: &ItemWrite<Task>,
+        _answers: Option<&std::collections::BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let mut write = write.clone();
+        let uploads = self.upload_assets(assets).await?;
+        let content = onetaskgraph_plugin_api::serve_asset_references(
+            write.item.content.as_deref().unwrap_or_default(),
+            &mut write.item.metadata,
+            &uploads,
+        );
+        write.item.content = write.item.content.as_ref().map(|_| content);
+        let id = self.write_task(&write).await?;
+        Ok(onetaskgraph_plugin_api::AssetsWritten {
+            id,
+            content: write.item.content,
+        })
+    }
+    async fn write_document_with_assets(
+        &self,
+        write: &ItemWrite<Document>,
+        _answers: Option<&std::collections::BTreeMap<String, Value>>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let mut write = write.clone();
+        let uploads = self.upload_assets(assets).await?;
+        let content = onetaskgraph_plugin_api::serve_asset_references(
+            write.item.content.as_deref().unwrap_or_default(),
+            &mut write.item.metadata,
+            &uploads,
+        );
+        write.item.content = write.item.content.as_ref().map(|_| content);
+        let id = self.write_document(&write).await?;
+        Ok(onetaskgraph_plugin_api::AssetsWritten {
+            id,
+            content: write.item.content,
+        })
     }
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
         // Two refusals by name rather than two silent drops. Linear's own document type
@@ -3496,6 +3584,54 @@ impl TaskSource for LinearSource {
                 .await?;
         }
         Ok(Some(()))
+    }
+    async fn set_task_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        let Some((item, held)) = self.issue_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut metadata) = metadata_description(held)?;
+        metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let uploads = self.upload_assets(assets).await?;
+        let content =
+            onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
+        let written = Self::described(Some(&content), &metadata)?;
+        self.write_description_alone(&item.id, written.as_deref())
+            .await?;
+        Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
+            id: item.id,
+            content: Some(content),
+        }))
+    }
+    async fn set_document_rendering_with_assets(
+        &self,
+        id: &NativeId,
+        content: &str,
+        provenance: &Value,
+        _answers: &std::collections::BTreeMap<String, Value>,
+        assets: &onetaskgraph_plugin_api::AssetWrite,
+    ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
+        let Some((item, held)) = self.document_held(id).await? else {
+            return Ok(None);
+        };
+        let (_, mut metadata) = metadata_description(held)?;
+        metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        let uploads = self.upload_assets(assets).await?;
+        let content =
+            onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
+        let written = Self::described(Some(&content), &metadata)?;
+        self.write_document_content(&item.id, written.as_deref())
+            .await?;
+        Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
+            id: item.id,
+            content: Some(content),
+        }))
     }
     /// One project's rendering, on the terms of `set_task_rendering`, through one
     /// `projectUpdate` carrying the content alone.
@@ -4751,3 +4887,32 @@ fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     let cursor = str_at(info, "endCursor")?;
     Ok(Some(Cursor(cursor.into())))
 }
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] https://linear.app/developers/rate-limiting documents these headers and epoch milliseconds, but Linear publishes no machine-readable definition of its codes and headers. One shared parser serves GraphQL and asset HTTP requests; the loopback rate-limit journeys and live asset journey hold the documented response contract.
+fn reset_wait(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    use std::time::Duration;
+    let reset = [
+        "x-ratelimit-endpoint-requests-reset",
+        "x-ratelimit-requests-reset",
+        "x-ratelimit-complexity-reset",
+    ]
+    .iter()
+    .filter_map(|name| headers.get(*name)?.to_str().ok()?.parse::<u64>().ok())
+    .max();
+    reset
+        .map(|reset| {
+            Duration::from_millis(reset.saturating_sub(
+                u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default(),
+            ))
+        })
+        .or_else(|| {
+            headers
+                .get("retry-after")?
+                .to_str()
+                .ok()?
+                .parse::<u64>()
+                .ok()
+                .map(Duration::from_secs)
+        })
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
