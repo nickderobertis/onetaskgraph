@@ -3286,7 +3286,8 @@ async fn item_reads_and_transport_error_boundaries_are_exercised() {
         let (endpoint, _) = server(status, "", r#"{}"#);
         let error = source(&endpoint).health().await.unwrap_err();
         assert!(match expected {
-            "auth" => matches!(error, SourceError::Auth { .. }),
+            "auth" =>
+                matches!(error, SourceError::Auth { ref message } if message.contains(status)),
             _ => matches!(error, SourceError::Unavailable { .. }),
         });
     }
