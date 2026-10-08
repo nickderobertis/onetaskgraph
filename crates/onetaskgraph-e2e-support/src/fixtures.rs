@@ -1194,11 +1194,6 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().find(&json!(id))["body"] = json!(body);
     }
 
-    /// Transfer an issue to another repository without changing its board membership.
-    pub fn transfer_issue(&self, id: &str, repository: &str) {
-        self.board.lock().unwrap().find(&json!(id))["repo"] = json!(repository);
-    }
-
     /// Move one item's card to the `Status` option named `name`, as a person dragging it on
     /// the board would.
     pub fn move_card(&self, id: &str, name: &str) {

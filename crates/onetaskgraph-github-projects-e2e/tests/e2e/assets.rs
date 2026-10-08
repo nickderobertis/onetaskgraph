@@ -1689,7 +1689,7 @@ fn changed_assets_follow_the_existing_issues_repository_after_a_transfer() {
             .unwrap()
             .strip_prefix("board:")
             .unwrap();
-        plan.github.transfer_issue(target, "fixture/transferred");
+        plan.board.transfer_issue(target, "fixture/transferred");
         let bytes = plan.author(kind, id, false, &[480_000], 102);
         let before = plan.board.calls().len();
         let report = plan.copy(kind, id);

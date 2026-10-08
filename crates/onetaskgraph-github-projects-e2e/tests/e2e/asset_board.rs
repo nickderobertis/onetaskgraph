@@ -42,6 +42,7 @@ pub(super) struct Call {
 #[derive(Default)]
 struct State {
     calls: Vec<Call>,
+    transferred: BTreeMap<String, String>,
     assets: BTreeMap<String, Vec<u8>>,
     refusal: Option<Refusal>,
     disconnect: Option<Stage>,
@@ -232,6 +233,19 @@ impl Board {
                     connection.write_all(&raw).unwrap();
                     let mut response = Vec::new();
                     connection.read_to_end(&mut response).unwrap();
+                    let transfers = held.lock().unwrap().transferred.clone();
+                    if !transfers.is_empty() {
+                        let body = response
+                            .windows(4)
+                            .position(|part| part == b"\r\n\r\n")
+                            .unwrap()
+                            + 4;
+                        let mut value: Value = serde_json::from_slice(&response[body..]).unwrap();
+                        transfer_repositories(&mut value, &transfers);
+                        let body = serde_json::to_vec(&value).unwrap();
+                        response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                        response.extend(body);
+                    }
                     Some(response)
                 } else {
                     None
@@ -260,6 +274,13 @@ impl Board {
     pub fn calls(&self) -> Vec<Call> {
         self.state.lock().unwrap().calls.clone()
     }
+    pub fn transfer_issue(&self, id: &str, repository: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .transferred
+            .insert(id.into(), repository.into());
+    }
     pub fn refuse(&self, refusal: Refusal) {
         self.state.lock().unwrap().refusal = Some(refusal);
     }
@@ -271,6 +292,29 @@ impl Board {
     }
     pub fn enforce_limit(&self) {
         self.state.lock().unwrap().enforce_limit = true;
+    }
+}
+fn transfer_repositories(value: &mut Value, transfers: &BTreeMap<String, String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(repository) = object
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| transfers.get(id))
+                && object.contains_key("repository")
+            {
+                object.insert("repository".into(), json!({"nameWithOwner": repository}));
+            }
+            for value in object.values_mut() {
+                transfer_repositories(value, transfers);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                transfer_repositories(value, transfers);
+            }
+        }
+        _ => {}
     }
 }
 impl Drop for Board {
