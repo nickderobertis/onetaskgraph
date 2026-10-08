@@ -101,6 +101,7 @@ fn validate(value: &Value, expected: Workload) -> Result<(), String> {
     Ok(())
 }
 // Each registered command selects its workload by exact filter; telemetry cannot select it.
+// llmlint: ignore-block[tests_assert_real_behavior] These four functions are report-only command entry points selected by budgets.yaml, using the landed test-harness runner convention. Ordinary tests must not report without ONEBUDGETSPEC_BUDGET_ID. The real_report_boundary journey below invokes this executable and asserts success, refusal, and whether a figure was written, including mismatched workloads; these entry points themselves are not behavioral tests.
 #[test]
 fn report_new() {
     report_expected(Workload::New);
@@ -117,6 +118,7 @@ fn report_single() {
 fn report_concurrent() {
     report_expected(Workload::Concurrent);
 }
+// llmlint: ignore-end[tests_assert_real_behavior]
 
 fn report_expected(expected: Workload) {
     let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
