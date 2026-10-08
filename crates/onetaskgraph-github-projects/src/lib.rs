@@ -593,17 +593,17 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task, TaskDetailRead,
-    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UnmappedStatus, UpdatedField, WriteSupport,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SharedClock,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -1940,7 +1940,7 @@ pub struct PacingConfig {
 /// a wait budget beyond it is the unbounded wait this whole mechanism exists to replace,
 /// and an interval beyond it is a command that never sends its second mutation. It also
 /// keeps the clock arithmetic in [`GitHubProjectsSource::reserve_mutation_slot`] inside
-/// what an `Instant` can hold on every platform.
+/// what a `Duration` can hold on every platform.
 pub const MAX_PACING_MS: u64 = 3_600_000;
 
 /// [`PacingConfig`] with every default resolved and every value checked, which is what the
@@ -2015,6 +2015,16 @@ impl SourcePlugin for Plugin {
     ) -> Result<Box<dyn TaskSource>, SourceError> {
         self.build_recording_into(name, config, secrets, Arc::new(Accounting::new()))
     }
+
+    fn build_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        clock: SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_recording_with_clock(name, config, secrets, Arc::new(Accounting::new()), clock)
+    }
 }
 
 impl Plugin {
@@ -2037,13 +2047,24 @@ impl Plugin {
         secrets: &dyn SecretResolver,
         ledger: Arc<Accounting>,
     ) -> Result<Box<dyn TaskSource>, SourceError> {
+        self.build_recording_with_clock(name, config, secrets, ledger, system_clock())
+    }
+
+    fn build_recording_with_clock(
+        &self,
+        name: &SourceName,
+        config: &Value,
+        secrets: &dyn SecretResolver,
+        ledger: Arc<Accounting>,
+        clock: SharedClock,
+    ) -> Result<Box<dyn TaskSource>, SourceError> {
         let config: GitHubProjectsConfig =
             serde_json::from_value(config.clone()).map_err(|e| SourceError::Config {
                 message: format!("source {name}: {e}"),
             })?;
         let prefix = format!("source {name}: ");
-        let source = GitHubProjectsSource::recording_into(name, config, secrets, ledger).map_err(
-            |error| match error {
+        let mut source = GitHubProjectsSource::recording_into(name, config, secrets, ledger)
+            .map_err(|error| match error {
                 // The shared `StatusMapping::distinct` names the source itself.
                 SourceError::Config { message } if message.starts_with(&prefix) => {
                     SourceError::Config { message }
@@ -2055,8 +2076,8 @@ impl Plugin {
                     message: format!("source {name}: {message}"),
                 },
                 other => other,
-            },
-        )?;
+            })?;
+        source.clock = clock;
         Ok(Box::new(source))
     }
 }
@@ -2460,7 +2481,8 @@ pub struct GitHubProjectsSource {
     /// spaced from that. See [`MIN_MUTATION_INTERVAL_MS`] for the interval and
     /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
     /// what it is measured from.
-    last_mutation: Mutex<Option<Instant>>,
+    last_mutation: Mutex<Option<Duration>>,
+    clock: SharedClock,
     /// The board as this process last read it, for the length of one command — dropped by
     /// [`TaskSource::end_command`].
     ///
@@ -3464,6 +3486,7 @@ impl GitHubProjectsSource {
             commented: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
+            clock: system_clock(),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
@@ -3528,7 +3551,7 @@ impl GitHubProjectsSource {
             if is_mutation(query) {
                 let spacing = self.reserve_mutation_slot();
                 if !spacing.is_zero() {
-                    tokio::time::sleep(spacing).await;
+                    self.clock.sleep(spacing).await;
                 }
             }
             let attempt = self.send_once(query, &variables).await;
@@ -3560,7 +3583,7 @@ impl GitHubProjectsSource {
                     self.pacing.retry_budget,
                 ));
             }
-            tokio::time::sleep(wait).await;
+            self.clock.sleep(wait).await;
             waited += wait;
             waits += 1;
             backoff = backoff.saturating_mul(2);
@@ -3587,8 +3610,8 @@ impl GitHubProjectsSource {
             .last_mutation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = Instant::now();
-        // `checked_add` rather than `+`: `Instant + Duration` panics on overflow, and
+        let now = self.clock.now();
+        // `checked_add` rather than `+`: adding durations can panic on overflow, and
         // pacing is not worth a panic even at a bound `MAX_PACING_MS` already rules out.
         let at = last.map_or(now, |previous| {
             previous
@@ -3596,7 +3619,7 @@ impl GitHubProjectsSource {
                 .map_or(now, |earliest| earliest.max(now))
         });
         *last = Some(at);
-        at.saturating_duration_since(now)
+        at.saturating_sub(now)
     }
 
     /// Record that a content-creating mutation has finished, so the next one is spaced
@@ -3630,7 +3653,7 @@ impl GitHubProjectsSource {
             .last_mutation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = Instant::now();
+        let now = self.clock.now();
         // `max` rather than an assignment: a concurrent caller may already have reserved a
         // slot further out, and completing this request must never pull that slot back in.
         *last = Some(last.map_or(now, |reserved| reserved.max(now)));

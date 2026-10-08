@@ -17664,3 +17664,82 @@ async fn a_refused_field_write_whose_restore_is_refused_does_not_claim_the_origi
     assert_eq!(held.body.as_deref(), Some("as it stood"));
     assert_eq!(held.title, "one");
 }
+
+/// A clock that completes each wait in virtual time while the source drives real HTTP.
+#[derive(Default)]
+struct AdvancingClock {
+    waits: Mutex<Vec<Duration>>,
+}
+
+impl onetaskgraph_plugin_api::Clock for AdvancingClock {
+    fn now(&self) -> Duration {
+        self.waits.lock().unwrap().iter().sum()
+    }
+
+    fn sleep(
+        &self,
+        duration: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        self.waits.lock().unwrap().push(duration);
+        Box::pin(std::future::ready(()))
+    }
+}
+
+#[tokio::test]
+async fn the_supplied_clock_spaces_writes_and_bounds_rate_limit_recovery() {
+    let fixture = board(vec![]);
+    let clock = Arc::new(AdvancingClock::default());
+    let source = Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(&fixture.endpoint, &json!({"pacing": null})),
+            &Secrets,
+            clock.clone(),
+        )
+        .unwrap();
+    source
+        .write_task(&write(task(
+            "T-clock",
+            "Clock",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(
+        *clock.waits.lock().unwrap(),
+        vec![Duration::from_millis(750); 2]
+    );
+    source
+        .query_tasks(&TaskQuery::default(), &page(10))
+        .await
+        .unwrap();
+    assert_eq!(clock.waits.lock().unwrap().len(), 2, "reads take no slot");
+
+    let endpoint = always(&Refusal::secondary_forbidden().after(0));
+    let clock = Arc::new(AdvancingClock::default());
+    let source = Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &endpoint,
+                &json!({"pacing": {
+                    "min_mutation_interval_ms": 0, "retry_backoff_ms": 50,
+                    "retry_budget_ms": 200
+                }}),
+            ),
+            &Secrets,
+            clock.clone(),
+        )
+        .unwrap();
+    let message = refusal(
+        source
+            .query_tasks(&TaskQuery::default(), &page(10))
+            .await
+            .unwrap_err(),
+    );
+    assert!(message.contains("secondary rate limit"), "{message}");
+    assert_eq!(
+        *clock.waits.lock().unwrap(),
+        vec![Duration::from_millis(50), Duration::from_millis(100)]
+    );
+}
