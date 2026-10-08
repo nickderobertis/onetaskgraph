@@ -4888,7 +4888,7 @@ fn page_next(c: &Value) -> Result<Option<Cursor>, SourceError> {
     Ok(Some(Cursor(cursor.into())))
 }
 
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] https://linear.app/developers/rate-limiting documents these headers and epoch milliseconds, but Linear publishes no machine-readable definition of its codes and headers. One shared parser serves GraphQL and asset HTTP requests; the loopback rate-limit journeys and live asset journey hold the documented response contract.
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] https://linear.app/developers/rate-limiting documents these headers and epoch milliseconds, but Linear publishes no machine-readable definition of its codes and headers. One shared parser serves GraphQL and asset HTTP requests; the loopback rate-limit journeys and live asset journey hold the documented response contract.
 fn reset_wait(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
     use std::time::Duration;
     let reset = [
@@ -4915,3 +4915,4 @@ fn reset_wait(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duratio
                 .map(Duration::from_secs)
         })
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
