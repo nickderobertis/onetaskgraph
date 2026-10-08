@@ -688,6 +688,10 @@ fn hosted_asset_reads_and_rendering_updates_cross_the_real_source_boundary() {
             assert_eq!(list.len(),1);assert_eq!(list[0].sha256,asset_sha256(&bytes[0]));assert!(list[0].path.is_none());
             let image=if kind=="task" {source.task_asset(&id,&list[0].name).await} else {source.document_asset(&id,&list[0].name).await}.unwrap();
             assert_eq!(image.as_ref(),Some(&bytes[0]));
+            let before_wrong_kind=attachment_reads(&plan.board.calls());
+            let wrong_kind=if kind=="task" {source.document_asset(&id,&list[0].name).await} else {source.task_asset(&id,&list[0].name).await}.unwrap();
+            assert!(wrong_kind.is_none());
+            assert_eq!(attachment_reads(&plan.board.calls()),before_wrong_kind,"wrong-kind read fetched an attachment");
             let missing=NativeId("no-such-issue".into());let absent=AssetName::new("absent.png").unwrap();
             if kind=="task" {
                 assert!(source.task_assets(&missing).await.unwrap().is_empty());
@@ -754,6 +758,9 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
         InvalidUrl,
         ForeignUrl,
         ForeignPort,
+        HttpUrl,
+        UnrelatedPath,
+        EmptyPath,
         UsernameUrl,
         PasswordUrl,
         Truncated,
@@ -784,7 +791,7 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
             .build()
             .unwrap();
         runtime.block_on(async {
-            for fault in [Fault::Digest,Fault::Bytes,Fault::RepositoryJson,Fault::RepositoryId,Fault::RepositoryZero,Fault::RepositoryTransport,Fault::RepositoryTruncated,Fault::UploadJson,Fault::MissingUrl,Fault::InvalidUrl,Fault::ForeignUrl,Fault::ForeignPort,Fault::UsernameUrl,Fault::PasswordUrl,Fault::Truncated,Fault::ReusedUrl,Fault::Transport] {
+            for fault in [Fault::Digest,Fault::Bytes,Fault::RepositoryJson,Fault::RepositoryId,Fault::RepositoryZero,Fault::RepositoryTransport,Fault::RepositoryTruncated,Fault::UploadJson,Fault::MissingUrl,Fault::InvalidUrl,Fault::ForeignUrl,Fault::ForeignPort,Fault::HttpUrl,Fault::UnrelatedPath,Fault::EmptyPath,Fault::UsernameUrl,Fault::PasswordUrl,Fault::Truncated,Fault::ReusedUrl,Fault::Transport] {
                 let source=onetaskgraph_github_projects::Plugin.build_with_clock(&SourceName::new("board").unwrap(),&plan.config,&Secrets,shared.clone()).unwrap();
                 let content="![Unwritten change](./next.png)";
                 let task=if kind=="task" {let mut item=source.get_task(&target).await.unwrap().unwrap();item.content=Some(content.into());Some(item)} else {None};
@@ -803,7 +810,7 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                 let assets=AssetWrite {assets:vec![payload],recorded_assets};
                 for rendering in [false,true] {
                     match fault {
-                        Fault::RepositoryJson|Fault::RepositoryId|Fault::RepositoryZero|Fault::UploadJson|Fault::MissingUrl|Fault::InvalidUrl|Fault::ForeignUrl|Fault::ForeignPort|Fault::UsernameUrl|Fault::PasswordUrl=>{
+                        Fault::RepositoryJson|Fault::RepositoryId|Fault::RepositoryZero|Fault::UploadJson|Fault::MissingUrl|Fault::InvalidUrl|Fault::ForeignUrl|Fault::ForeignPort|Fault::HttpUrl|Fault::UnrelatedPath|Fault::EmptyPath|Fault::UsernameUrl|Fault::PasswordUrl=>{
                             let (stage,body)=match fault {
                                 Fault::RepositoryJson=>(Stage::Repository,"not json"),
                                 Fault::RepositoryId=>(Stage::Repository,"{\"id\":\"opaque\"}"),
@@ -813,6 +820,9 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                                 Fault::InvalidUrl=>(Stage::Upload,"{\"url\":\"not-a-url\"}"),
                                 Fault::ForeignUrl=>(Stage::Upload,"{\"url\":\"https://example.invalid/image.png\"}"),
                                 Fault::ForeignPort=>(Stage::Upload,r#"{"url":"https://github.com:8443/user-attachments/assets/example"}"#),
+                                Fault::HttpUrl=>(Stage::Upload,r#"{"url":"http://github.com/user-attachments/assets/example"}"#),
+                                Fault::UnrelatedPath=>(Stage::Upload,r#"{"url":"https://github.com/unrelated/example"}"#),
+                                Fault::EmptyPath=>(Stage::Upload,r#"{"url":"https://github.com/user-attachments/assets/"}"#),
                                 Fault::UsernameUrl=>(Stage::Upload,"{\"url\":\"https://user@github.com/user-attachments/assets/example\"}"),
                                 Fault::PasswordUrl=>(Stage::Upload,"{\"url\":\"https://:secret@github.com/user-attachments/assets/example\"}"),
                                 _=>unreachable!(),
@@ -840,7 +850,7 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                         source.write_document_with_assets(&ItemWrite {target:Some(target.clone()),item:document.as_ref().unwrap().clone(),depends_on:vec![]},None,&assets).await.unwrap_err()
                     };
                     assert!(error.to_string().contains("next.png"),"{error}");
-                    if matches!(fault,Fault::ForeignPort|Fault::UsernameUrl|Fault::PasswordUrl) {assert!(error.to_string().contains("unexpected attachment URL"),"{error}");}
+                    if matches!(fault,Fault::ForeignPort|Fault::HttpUrl|Fault::UnrelatedPath|Fault::EmptyPath|Fault::UsernameUrl|Fault::PasswordUrl) {assert!(error.to_string().contains("unexpected attachment URL"),"{error}");}
                     if matches!(fault,Fault::Truncated|Fault::RepositoryTruncated) {assert!(error.to_string().contains("response could not be read"),"{error}");}
                     assert_eq!(plan.github.body(&target.0),before,"a preparation refusal changed the issue");
                 }
