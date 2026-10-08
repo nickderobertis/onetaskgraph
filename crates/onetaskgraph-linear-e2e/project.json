@@ -60,7 +60,13 @@
       },
       "dependsOn": ["onetaskgraph:build"],
       "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] AGENTS.md requires real Linear journeys in the ordinary affected test target: an advisory lane let an API-invalid query merge, so third-party outages now deliberately block merges. These credential inputs prevent an uncredentialed cache hit from replacing that required run. Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the budget journeys record, which `budgets` reads, so a cache hit restores it.",
-      "inputs": ["default", "^default", { "env": "LINEAR_API_KEY" }, { "env": "LINEAR_WRITE_TEAM" }, { "env": "ONETASKGRAPH_LIVE_REQUIRED" }],
+      "inputs": [
+        "default",
+        "^default",
+        { "env": "LINEAR_API_KEY" },
+        { "env": "LINEAR_WRITE_TEAM" },
+        { "env": "ONETASKGRAPH_LIVE_REQUIRED" }
+      ],
       "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e"]
     },
     "budgets": {
