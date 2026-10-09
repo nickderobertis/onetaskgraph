@@ -79,7 +79,10 @@ it is a command of your own against that qualified id.
 `metadata` keys beginning `onetaskgraph.` and `onepipeline.` are reserved; see
 [`metadata.md`](./metadata.md). Two of them are written into this block by a copy:
 `onetaskgraph.origin` on an item a copy wrote here, and `onetaskgraph.copies` on an item a
-copy read from here, naming where it landed. The second is written the way `metadata set`
+copy read from here, naming where it landed. A copy over a file this folder already holds
+removes no caller's key from this block: a key only the file holds stays, and a key the copied
+item also carries takes its value. A stale `onetaskgraph.template` or `onetaskgraph.item_kind`
+the copied item does not carry is the exception, for the reason `metadata.md` gives. The second is written the way `metadata set`
 writes one key, so a file whose `metadata:` is written on one line is copied from without it
 and the copy reports the link `unrecorded`.
 

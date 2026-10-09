@@ -457,14 +457,20 @@ read, nothing is written, and each item is reported with the action it would hav
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journey
      `every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_intact`,
-     which asserts the written fields equal and `url` and `key` absent on every copy. -->
+     which asserts the written fields equal and `url` and `key` absent on every copy, and by
+     `a_re_copy_keeps_a_key_only_the_destination_holds_and_changes_nothing_else` beside it,
+     which holds the destination's own key through an unchanged and an updating re-copy. -->
 Every field a copy read is written — title, content, status, labels, project,
 repositories, metadata and the edges — except `url`, `location`, `key`, `created_at` and
 `updated_at`, which are the destination's own: the short handle a backend shows people is
 issued by that backend, so the one the source wore is not the one the destination does. Nothing is silently dropped: a field the destination cannot
 represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
 deletes work either, so a destination item the source no longer holds is left exactly as it
-is and reported as `orphaned`.
+is and reported as `orphaned` — and a copy over an item the destination already holds never
+deletes a caller's metadata key that item holds: a key only the destination holds stays, a
+key both hold takes the source's value, and a re-copy that changes nothing else is
+`unchanged`. Which reserved keys are whose, and the two an update drops when they no longer
+describe the item, are in [`docs/metadata.md`](docs/metadata.md).
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **A copy either completes or leaves the destination as it found it.** A copy that cannot
