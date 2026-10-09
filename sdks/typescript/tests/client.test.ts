@@ -1132,6 +1132,8 @@ test("a project's graph is read through the real binary as its JSON form, groupe
     await expect(refused).rejects.toMatchObject({ exitCode: 1 });
     await expect(refused).rejects.toThrow("work:T-3");
     expect(() => client.projectGraph("work:P-1", { groupBy: "" })).toThrow(TypeError);
+    // A caller outside TypeScript's checks can hand over any value, so the type is bypassed
+    // on purpose here: the refusal under test is the runtime one.
     expect(() =>
       client.projectGraph("work:P-1", { groupBy: 7 } as unknown as { groupBy: string }),
     ).toThrow(TypeError);
