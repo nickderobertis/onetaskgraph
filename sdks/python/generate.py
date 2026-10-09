@@ -112,6 +112,14 @@ CONTRACT_ROOTS = {
     "UpdatedField",
     "LinearConfig",
     "StatusMapping",
+    # The public boundary's shapes, so a caller configuring a store or implementing a policy
+    # models each by name, exactly as the TypeScript SDK and the Rust engine do.
+    "Classification",
+    "SourceVisibility",
+    "WritePolicyConfig",
+    "RepositoryVisibility",
+    "PublicWriteInput",
+    "WriteVerdict",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -136,6 +144,7 @@ OPTION_TYPES = {
     "asset": "list[str] | tuple[str, ...]",
     "author": "str",
     "body_file": "str",
+    "classification": "choices",
     "commented_since": "str",
     "origin": "GlobalId | str",
     "dry_run": "bool",
@@ -175,6 +184,10 @@ OPTION_TYPES = {
     "status_name": "str",
     "template": "str",
     "template_loader": "str",
+    # The repositories a write's public-boundary check derives private terms from: a list
+    # names them, an empty list names none — `--term-scope-empty` — and `None` leaves the check
+    # its policy's every one. See `Client._invoke`.
+    "term_scope": "list[str] | tuple[str, ...]",
     "title": "str",
     "to": "str",
     "unset": "list[str] | tuple[str, ...]",
@@ -188,6 +201,7 @@ OPTION_PLACEHOLDERS = {
     "asset": "PATH",
     "author": "NAME",
     "body_file": "PATH",
+    "classification": "CLASSIFICATION",
     "commented_since": "RFC3339",
     "origin": "SOURCE:ID",
     "dry_run": None,
@@ -227,6 +241,7 @@ OPTION_PLACEHOLDERS = {
     "status_name": "NAME",
     "template": "FILE",
     "template_loader": "FILE",
+    "term_scope": "REPOSITORY",
     "title": "TITLE",
     "to": "SOURCE",
     "unset": "NAME",
@@ -270,7 +285,9 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
 # Global flags no generated method takes: `--json` and `--output`, because the client always
 # asks for machine output, and `--interactive` / `--no-interactive`, because the client always
 # passes `--no-interactive` — a library call must never wait on a prompt nobody can answer.
-UNEXPOSED_OPTIONS = {"help", "json", "output", "interactive", "no_interactive"}
+# `--term-scope-empty` is `term_scope=[]`: one keyword says a list, an empty list or none, so a
+# caller cannot pass both spellings of a scope at once.
+UNEXPOSED_OPTIONS = {"help", "json", "output", "interactive", "no_interactive", "term_scope_empty"}
 
 
 class SchemaBundle(TypedDict):
@@ -741,7 +758,15 @@ TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
 
 # The repeated options generated methods check are strings before the binary is started: see
 # `_strings` below.
-TEMPLATE_STRING_LISTS = {"search_path", "var", "unset", "metadata", "repository", "remove_metadata"}
+TEMPLATE_STRING_LISTS = {
+    "search_path",
+    "var",
+    "unset",
+    "metadata",
+    "repository",
+    "remove_metadata",
+    "term_scope",
+}
 
 
 def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:

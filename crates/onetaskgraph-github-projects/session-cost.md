@@ -983,3 +983,18 @@ first comment-activity read, taken before any activity after the instant, now re
 issue it commented on before the instant by its node and walks that issue's comments. That
 walk is what confirms the comment is older than the instant, and the poll still selects
 nothing. The estimate in `tests/journey/budget.rs` moves with the record, as it is built to.
+
+## Reading whether the board is private, and what that moved
+
+A source a configuration declares private is held, at every write, to its board's own answer:
+its Project's `public` field and the visibility of the repository the issue lives in, read
+together and never remembered. `graphql::PROJECT_VISIBILITY` is the first of those two, and a
+new entry of `graphql::DOCUMENTS`. A source declaring nothing never sends it, so the live
+journey — which declares nothing — writes exactly what it wrote before.
+
+**`session-cost.txt`** moves only on its request total, 121 → 122, by one line of its own:
+the reconciliation step sends its `rateLimit(dryRun: true)` probe for every read document of
+`graphql::DOCUMENTS`, so the new document is priced against GitHub's own `cost` like every
+other, at 0 worst-case nodes. Nothing the journey writes or reads besides that probe moved.
+What the reads cost a private board's copy is the `visibility-write-requests` budget's, in
+`crates/onetaskgraph-github-projects-e2e/budgets.yaml`.

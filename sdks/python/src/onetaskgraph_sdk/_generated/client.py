@@ -244,6 +244,7 @@ class GeneratedClient:
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph document copy``."""
@@ -257,6 +258,7 @@ class GeneratedClient:
             page_size=page_size,
             recreate=recreate,
             set=set,
+            term_scope=_strings("document_copy", "term_scope", term_scope),
             to=to,
         )
 
@@ -268,6 +270,7 @@ class GeneratedClient:
         *,
         asset: list[str] | tuple[str, ...] | None = None,
         body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         id: str | None = None,
         label: list[str] | tuple[str, ...] | None = None,
@@ -278,6 +281,7 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -291,6 +295,7 @@ class GeneratedClient:
             title=title,
             asset=asset,
             body_file=body_file,
+            classification=classification,
             default_sources=default_sources,
             id=id,
             label=label,
@@ -301,6 +306,7 @@ class GeneratedClient:
             set=set,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("document_create", "term_scope", term_scope),
             var=_strings("document_create", "var", var),
             answers=None if answers is None else "-",
             stdin=_stdin(
@@ -358,6 +364,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
         """Run ``onetaskgraph document metadata set``."""
         return await self._invoke(
@@ -369,6 +376,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("document_metadata_set", "term_scope", term_scope),
         )
 
     async def document_render(
@@ -383,6 +391,7 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -400,6 +409,7 @@ class GeneratedClient:
             set=set,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("document_render", "term_scope", term_scope),
             unset=_strings("document_render", "unset", unset),
             var=_strings("document_render", "var", var),
             answers=None if answers is None else "-",
@@ -484,6 +494,7 @@ class GeneratedClient:
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph project copy``."""
@@ -499,6 +510,7 @@ class GeneratedClient:
             page_size=page_size,
             recreate=recreate,
             set=set,
+            term_scope=_strings("project_copy", "term_scope", term_scope),
             to=to,
         )
 
@@ -509,6 +521,7 @@ class GeneratedClient:
         title: str,
         *,
         body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
@@ -522,6 +535,7 @@ class GeneratedClient:
         | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -534,6 +548,7 @@ class GeneratedClient:
             id=id,
             title=title,
             body_file=body_file,
+            classification=classification,
             default_sources=default_sources,
             label=label,
             metadata=_strings("project_create", "metadata", metadata),
@@ -544,6 +559,7 @@ class GeneratedClient:
             status=status,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("project_create", "term_scope", term_scope),
             var=_strings("project_create", "var", var),
             answers=None if answers is None else "-",
             stdin=_stdin(
@@ -638,6 +654,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
         """Run ``onetaskgraph project metadata set``."""
         return await self._invoke(
@@ -649,6 +666,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("project_metadata_set", "term_scope", term_scope),
         )
 
     async def project_render(
@@ -662,6 +680,7 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -678,6 +697,7 @@ class GeneratedClient:
             set=set,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("project_render", "term_scope", term_scope),
             unset=_strings("project_render", "unset", unset),
             var=_strings("project_render", "var", var),
             answers=None if answers is None else "-",
@@ -778,6 +798,7 @@ class GeneratedClient:
         self,
         source: SourceName | str,
         *,
+        classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         repository: list[str] | tuple[str, ...] | None = None,
@@ -788,6 +809,7 @@ class GeneratedClient:
             ["sources", "route"],
             SourceRoute,
             source=source,
+            classification=classification,
             default_sources=default_sources,
             page_size=page_size,
             repository=_strings("sources_route", "repository", repository),
@@ -841,6 +863,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
     ) -> Comment:
         """Run ``onetaskgraph task comment add``."""
@@ -853,6 +876,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_comment_add", "term_scope", term_scope),
             stdin=body,
         )
 
@@ -885,6 +909,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
     ) -> Comment:
         """Run ``onetaskgraph task comment edit``."""
@@ -897,6 +922,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_comment_edit", "term_scope", term_scope),
             stdin=body,
         )
 
@@ -926,6 +952,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskContentSet:
         """Run ``onetaskgraph task content set``."""
         return await self._invoke(
@@ -936,6 +963,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_content_set", "term_scope", term_scope),
         )
 
     async def task_copy(
@@ -949,6 +977,7 @@ class GeneratedClient:
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph task copy``."""
@@ -963,6 +992,7 @@ class GeneratedClient:
             page_size=page_size,
             recreate=recreate,
             set=set,
+            term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )
 
@@ -974,6 +1004,7 @@ class GeneratedClient:
         *,
         asset: list[str] | tuple[str, ...] | None = None,
         body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
@@ -989,6 +1020,7 @@ class GeneratedClient:
         | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -1002,6 +1034,7 @@ class GeneratedClient:
             title=title,
             asset=asset,
             body_file=body_file,
+            classification=classification,
             default_sources=default_sources,
             delivers=delivers,
             depends_on=depends_on,
@@ -1014,6 +1047,7 @@ class GeneratedClient:
             status=status,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("task_create", "term_scope", term_scope),
             var=_strings("task_create", "var", var),
             answers=None if answers is None else "-",
             stdin=_stdin(
@@ -1124,6 +1158,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
         """Run ``onetaskgraph task metadata set``."""
         return await self._invoke(
@@ -1135,6 +1170,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_metadata_set", "term_scope", term_scope),
         )
 
     async def task_priority_set(
@@ -1145,6 +1181,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskPrioritySet:
         """Run ``onetaskgraph task priority set``."""
         return await self._invoke(
@@ -1155,6 +1192,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_priority_set", "term_scope", term_scope),
         )
 
     async def task_render(
@@ -1169,6 +1207,7 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
         template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
@@ -1186,6 +1225,7 @@ class GeneratedClient:
             set=set,
             template=template,
             template_loader=template_loader,
+            term_scope=_strings("task_render", "term_scope", term_scope),
             unset=_strings("task_render", "unset", unset),
             var=_strings("task_render", "var", var),
             answers=None if answers is None else "-",
@@ -1244,6 +1284,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskStatusSet:
         """Run ``onetaskgraph task status set``."""
         return await self._invoke(
@@ -1254,6 +1295,7 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             set=set,
+            term_scope=_strings("task_status_set", "term_scope", term_scope),
         )
 
     async def task_update(
@@ -1276,6 +1318,7 @@ class GeneratedClient:
         ]
         | None = None,
         status_name: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
     ) -> TaskUpdated:
         """Run ``onetaskgraph task update``."""
@@ -1296,6 +1339,7 @@ class GeneratedClient:
             set=set,
             status=status,
             status_name=status_name,
+            term_scope=_strings("task_update", "term_scope", term_scope),
             title=title,
         )
 

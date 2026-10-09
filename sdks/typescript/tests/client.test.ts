@@ -794,8 +794,9 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
         removeMetadata: ["myapp.b"],
         delivers: ["work:T-2"],
         dependsOn: ["work:T-3"],
+        termScope: ["github.com/example-org/widget"],
       }),
-      ...taskUpdateFlags({ delivers: [], dependsOn: [] }),
+      ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);

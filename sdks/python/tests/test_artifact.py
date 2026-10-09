@@ -271,7 +271,24 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 32
+    assert emitted_bundle["version"] == 33
+    # Version 33 published the public boundary: `classification` on a task, a project and a
+    # document, and the shapes a store's `write_policy` and a caller's policy exchange.
+    for root in ("Task", "Project", "Document"):
+        assert "classification" in emitted_bundle["roots"][root]["properties"], root
+    for root in (
+        "Classification",
+        "SourceVisibility",
+        "WritePolicyConfig",
+        "RepositoryVisibility",
+        "PublicWriteInput",
+        "WriteVerdict",
+    ):
+        assert root in bundle["roots"], root
+    from onetaskgraph_sdk._generated.public_write_input import PublicWriteInput
+
+    defaulted = PublicWriteInput.model_validate({"destination": "public"})
+    assert (defaulted.text, defaulted.paths, defaulted.metadata) == ([], [], [])
     # Version 32 published the image assets a task and a document hold: `assets` beside a task
     # in what `task show` answers, the `DocumentDetail` `document show` and `document create`
     # now answer with, and the asset roots the stdio plugin protocol carries beside a write.

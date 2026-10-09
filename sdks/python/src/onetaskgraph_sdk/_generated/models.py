@@ -1,4 +1,5 @@
 # ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.
+from .classification import Classification as Classification
 from .comment import Comment as Comment
 from .comment_list import CommentList as CommentList
 from .copy_report import CopyReport as CopyReport
@@ -19,6 +20,7 @@ from .metadata_set import MetadataSet as MetadataSet
 from .native_id import NativeId as NativeId
 from .page_of_document import Page as PageOfDocument
 from .priority import Priority as Priority
+from .public_write_input import PublicWriteInput as PublicWriteInput
 from .query_plan import QueryPlan as QueryPlan
 from .query_response_of_qualified_document import QueryResponse as QueryResponseOfQualifiedDocument
 from .query_response_of_qualified_edge import QueryResponse as QueryResponseOfQualifiedEdge
@@ -28,10 +30,12 @@ from .query_response_of_qualified_task import QueryResponse as QueryResponseOfQu
 from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearchHit
 from .regenerated import Regenerated as Regenerated
 from .rendered_template import RenderedTemplate as RenderedTemplate
+from .repository_visibility import RepositoryVisibility as RepositoryVisibility
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
 from .source_route import SourceRoute as SourceRoute
+from .source_visibility import SourceVisibility as SourceVisibility
 from .status_category import StatusCategory as StatusCategory
 from .status_mapping import StatusMapping as StatusMapping
 from .status_names_report import StatusNamesReport as StatusNamesReport
@@ -49,6 +53,8 @@ from .template_variable import TemplateVariable as TemplateVariable
 from .template_variables import TemplateVariables as TemplateVariables
 from .updated_field import UpdatedField as UpdatedField
 from .variable_type import VariableType as VariableType
+from .write_policy_config import WritePolicyConfig as WritePolicyConfig
+from .write_verdict import WriteVerdict as WriteVerdict
 
 # Every root is named here rather than left to the `import X as X` form alone: a
 # root whose generated class carries another name — every `QueryResponseOf…`, and
@@ -56,6 +62,7 @@ from .variable_type import VariableType as VariableType
 # private to this module rather than as a re-export. This list is what makes the
 # whole set public to one, here and through the package's own `import *`.
 __all__ = [
+    "Classification",
     "Comment",
     "CommentList",
     "CopyReport",
@@ -76,6 +83,7 @@ __all__ = [
     "NativeId",
     "PageOfDocument",
     "Priority",
+    "PublicWriteInput",
     "QueryPlan",
     "QueryResponseOfQualifiedDocument",
     "QueryResponseOfQualifiedEdge",
@@ -85,10 +93,12 @@ __all__ = [
     "QueryResponseOfSearchHit",
     "Regenerated",
     "RenderedTemplate",
+    "RepositoryVisibility",
     "SourceFailure",
     "SourceListing",
     "SourceName",
     "SourceRoute",
+    "SourceVisibility",
     "StatusCategory",
     "StatusMapping",
     "StatusNamesReport",
@@ -106,4 +116,6 @@ __all__ = [
     "TemplateVariables",
     "UpdatedField",
     "VariableType",
+    "WritePolicyConfig",
+    "WriteVerdict",
 ]

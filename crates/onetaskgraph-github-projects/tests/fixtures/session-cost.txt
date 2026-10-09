@@ -1,4 +1,4 @@
-requests 121
+requests 122
 node count 234562
 
 requests per call
@@ -34,6 +34,7 @@ requests per call
     1      50  node-count and point-cost reconciliation while reading the board's fields
     1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
+    1       0  node-count and point-cost reconciliation while reading whether the board's project is public
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
     1   20400  node-count and point-cost reconciliation while searching this board's issues
     1    5150  node-count and point-cost reconciliation while snapshotting board Status options and assignments
