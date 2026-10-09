@@ -994,6 +994,15 @@ struct GitHubBoard {
     /// journey asserting these are byte-identical after a copy fails when something
     /// writes them, instead of passing because nothing could have.
     own: Value,
+    /// Whether the board's Project answers `public: true`. Private unless a journey says so.
+    project_public: bool,
+    /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
+    /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
+    project_scope_withheld: bool,
+    /// Each repository's visibility by `owner/name`, as `GET /repos/{owner}/{name}` answers
+    /// it — `private` for one no journey named, and a repository named `None` is one the
+    /// token cannot see, answered 404.
+    repository_visibility: std::collections::BTreeMap<String, Option<&'static str>>,
 }
 
 /// A read-only handle on one fixture board's own fields.
@@ -1028,6 +1037,26 @@ impl GitHubBoardFields {
             .cloned()
             .zip(board.variables.iter().cloned())
             .collect()
+    }
+
+    /// Make the board's Project public, or private again.
+    pub fn set_project_public(&self, public: bool) {
+        self.board.lock().unwrap().project_public = public;
+    }
+
+    /// Withhold `read:project` from the token, so the Project's `public` field is refused.
+    pub fn withhold_project_scope(&self) {
+        self.board.lock().unwrap().project_scope_withheld = true;
+    }
+
+    /// Answer `owner/name`'s visibility as `visibility` — `public`, `private` or `internal` —
+    /// or, given `None`, as a repository the token cannot see.
+    pub fn set_repository_visibility(&self, slug: &str, visibility: Option<&'static str>) {
+        self.board
+            .lock()
+            .unwrap()
+            .repository_visibility
+            .insert(slug.to_owned(), visibility);
     }
 
     /// Refuse the next request carrying `operation`, once, from here on.
@@ -1839,13 +1868,52 @@ fn github_projects_board_at(
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
+        project_public: false,
+        project_scope_withheld: false,
+        repository_visibility: std::collections::BTreeMap::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
-            let request = read_http_json(&mut stream);
+            let (line, request) = read_http_request(&mut stream);
+            // The one REST read a write to a source declared private sends: the visibility of
+            // the repository an issue lives in. Recorded beside the GraphQL documents, so a
+            // journey counting what a write spent counts it too.
+            if let Some(slug) = line
+                .strip_prefix("GET /repos/")
+                .and_then(|rest| rest.split_whitespace().next())
+            {
+                let visibility = {
+                    let mut served = board.lock().unwrap();
+                    served.documents.push(format!("GET /repos/{slug}"));
+                    served.variables.push(Value::Null);
+                    served
+                        .repository_visibility
+                        .get(slug)
+                        .copied()
+                        .unwrap_or(Some("private"))
+                };
+                let (status, body) = match visibility {
+                    Some(visibility) => (
+                        "200 OK",
+                        json!({"id": 123_456, "full_name": slug,
+                               "private": visibility != "public", "visibility": visibility})
+                        .to_string(),
+                    ),
+                    None => ("404 Not Found", json!({"message": "Not Found"}).to_string()),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("GitHub fixture response");
+                continue;
+            }
+            let request = request.unwrap_or_else(|| panic!("a {line} carries no JSON body"));
             // Every one of these refuses a request the plugin should not have sent, and
             // each names the request it refused: a shape assumed silently here surfaces as
             // a journey failing about something else entirely.
@@ -2044,6 +2112,19 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
+        let mut held = board.lock().unwrap();
+        if held.project_scope_withheld {
+            held.owed_errors.push(
+                "Your token has not been granted the required scopes to execute this query. \
+                 The 'public' field requires one of the following scopes: ['read:project'], \
+                 but your token has only been granted the: ['repo'] scopes."
+                    .to_owned(),
+            );
+            return Value::Null;
+        }
+        return json!({"visibility": {"projectV2": {"public": held.project_public}}});
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         for (alias, variable, enabled, document, key) in [
@@ -2864,6 +2945,12 @@ fn search_words(text: &str) -> Vec<String> {
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
+    let (line, body) = read_http_request(stream);
+    body.unwrap_or_else(|| panic!("a {line} carries no JSON body"))
+}
+
+/// One request's line and, when it carries one, its JSON body.
+fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     loop {
@@ -2879,16 +2966,20 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         .position(|window| window == b"\r\n\r\n")
         .expect("HTTP header terminator")
         + 4;
-    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+    let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
     assert!(headers.contains("authorization: Bearer test-token"));
-    let length = headers
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("content-length: ")
-                .and_then(|value| value.parse::<usize>().ok())
-        })
-        .expect("Content-Length");
+    let line = headers.lines().next().unwrap_or_default().to_owned();
+    let Some(length) = headers.lines().find_map(|line| {
+        line.to_ascii_lowercase()
+            .strip_prefix("content-length: ")
+            .and_then(|value| value.parse::<usize>().ok())
+    }) else {
+        assert!(
+            line.starts_with("GET "),
+            "a {line} carries no Content-Length"
+        );
+        return (line, None);
+    };
     while bytes.len() - header_end < length {
         let count = stream.read(&mut chunk).expect("fixture request body");
         assert!(count > 0, "fixture request ended before its declared body");
@@ -2898,12 +2989,13 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     // Named rather than asserted away: this fixture's only client is the binary under
     // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
     // what says which one.
-    serde_json::from_slice(body).unwrap_or_else(|problem| {
+    let body = serde_json::from_slice(body).unwrap_or_else(|problem| {
         panic!(
             "fixture request body is not JSON ({problem}): {}",
             String::from_utf8_lossy(body)
         )
-    })
+    });
+    (line, Some(body))
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.

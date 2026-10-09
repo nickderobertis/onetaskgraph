@@ -2924,7 +2924,11 @@ impl Engine {
             };
             let outbound = Outbound {
                 item: item.source.to_string(),
-                classification: item.classification,
+                classification: item.classification.strictest(
+                    item.held
+                        .as_ref()
+                        .map_or(Classification::Public, |held| classification_of(&held.item)),
+                ),
                 target,
                 exposure: &exposure_of(item),
             };
@@ -4705,6 +4709,11 @@ fn outgoing(
 ) -> Item {
     let own = held.map(|held| described(&held.item).1);
     let carried = |metadata: &BTreeMap<String, Value>| carried(metadata, origin, own);
+    // Never looser than the destination already holds it: a project once private stays
+    // private after the members that made it so are gone, and so does anything else.
+    let classification = item
+        .classification
+        .strictest(held.map_or(Classification::Public, |held| classification_of(&held.item)));
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
@@ -4719,7 +4728,7 @@ fn outgoing(
                 Some(Item::Task(held)) => held.delivered_by.clone(),
                 _ => Vec::new(),
             },
-            classification: item.classification,
+            classification,
             ..(**task).clone()
         })),
         Item::Project(project) => Item::Project(Box::new(Project {
@@ -4729,7 +4738,7 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             metadata: carried(&project.metadata),
-            classification: item.classification,
+            classification,
             ..(**project).clone()
         })),
         Item::Document(document) => Item::Document(Box::new(Document {
@@ -4740,7 +4749,7 @@ fn outgoing(
             updated_at: None,
             project,
             metadata: carried(&document.metadata),
-            classification: item.classification,
+            classification,
             ..(**document).clone()
         })),
     }
@@ -4753,6 +4762,14 @@ fn outgoing(
 /// project rather than the source's. Any other id, and every update, is left as it is. The
 /// `a_project_copied_*` journeys in `crates/onetaskgraph-e2e/tests/e2e/copy.rs` hold the Markdown
 /// plugin's id shape to this rule.
+fn classification_of(item: &Item) -> Classification {
+    match item {
+        Item::Task(task) => task.classification,
+        Item::Project(project) => project.classification,
+        Item::Document(document) => document.classification,
+    }
+}
+
 fn repositories_of(item: &Item) -> &[Repository] {
     match item {
         Item::Task(task) => &task.repositories,

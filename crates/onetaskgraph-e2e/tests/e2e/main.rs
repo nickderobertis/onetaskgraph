@@ -25,6 +25,13 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 // no plugin crate's edge narrower than this suite's for it to sit behind, and the task that
 // added it places it here, as the suite for journeys not specific to one plugin.
 mod assets;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
+// every journey drives the binary against folders of Markdown and the released onevcs
+// boundary commands over an onevcs home this run owns, holding synthetic identities, in a few
+// seconds. Classification, routing by it and the write gate are the engine's and the
+// configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
+// depending on the engine at any depth.
+mod boundary;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the
 // deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.
