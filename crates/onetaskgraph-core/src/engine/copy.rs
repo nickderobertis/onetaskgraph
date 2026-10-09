@@ -4453,6 +4453,14 @@ fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
 /// `onetaskgraph.members` or `onetaskgraph.member_of` that ties it to its member projects or
 /// its home — kept as `own`, the destination item, holds them.
 ///
+/// An update starts from what `own` holds and lays the source's keys over it, so a key only
+/// the destination holds — an approval recorded on the copy, say — survives the copy and a
+/// key both hold takes the source's value: a copy never deletes a key the destination holds.
+/// `onetaskgraph.template` and `onetaskgraph.item_kind` are the exception, because they
+/// describe the item's content and kind rather than annotate it: they are the source's, and
+/// where the source has none the destination's is dropped rather than left stale. A create
+/// has no `own`, and carries exactly the source's keys.
+///
 /// The key is removed before it is settled rather than overwritten, because the item being
 /// copied carries an origin of its own and [`Origin::Keeps`] must not let it through. Its
 /// link is removed for the same reason: it names where *that* item was copied to, and on
@@ -4463,7 +4471,10 @@ fn carried(
     origin: &Origin,
     own: Option<&BTreeMap<String, Value>>,
 ) -> BTreeMap<String, Value> {
-    let mut carried = metadata.clone();
+    let mut carried = own.cloned().unwrap_or_default();
+    carried.remove(MetadataKey::TEMPLATE_KEY);
+    carried.remove(ItemKind::METADATA_KEY);
+    carried.extend(metadata.clone());
     carried.remove(Repository::METADATA_KEY);
     carried.remove(DependencyEdge::RECORDED_KEY);
     carried.remove(TaskRef::DELIVERS_KEY);

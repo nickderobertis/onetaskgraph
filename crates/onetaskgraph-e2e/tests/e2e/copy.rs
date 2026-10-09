@@ -884,6 +884,97 @@ fn every_source_kind_can_be_copied_into_a_folder_of_markdown_with_its_fields_int
     }
 }
 
+#[test]
+fn a_re_copy_keeps_a_key_only_the_destination_holds_and_changes_nothing_else() {
+    // The flow this rule exists for: a plan is copied out, somebody records an approval on
+    // the copy — the artifact they judged — and the plan is copied again. A copy never
+    // deletes a key the destination holds, so the approval outlives every re-copy, and one
+    // that changes nothing is not a write at all.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("remote");
+    for (relative, text) in [
+        (
+            "projects/P-1.md",
+            "---\ntitle: Engine\nstatus: doing\n---\nthe engine\n",
+        ),
+        (
+            "documents/D-1.md",
+            "---\ntitle: Engine design\nproject: P-1\nmetadata:\n  caller.flags: [true, null]\n\
+             ---\nthe design\n",
+        ),
+    ] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("a folder")).expect("a folder");
+        std::fs::write(path, text).expect("a record");
+    }
+    sandbox.project_document(&document(&json!({
+        "remote": {"plugin": "local-md", "config": empty_folder(&sandbox, "remote")},
+        NOTES: {"plugin": "local-md", "config": empty_folder(&sandbox, NOTES)},
+    })));
+    let copy_document = || {
+        reported(&ok(
+            &sandbox,
+            &["document", "copy", "remote:D-1", "--to", NOTES, "--json"],
+        ))
+    };
+
+    let project = ok(
+        &sandbox,
+        &["project", "copy", "remote:P-1", "--to", NOTES, "--json"],
+    );
+    assert_eq!(reported(&project)[0].2, "created");
+    let first = copy_document();
+    assert_eq!(first[0].2, "created");
+    let landed = first[0].1.as_str().expect("a destination id").to_owned();
+    assert_eq!(
+        shown(&sandbox, "document", &landed)["project"],
+        json!("P-1"),
+        "the document is filed under the project the copy before it landed"
+    );
+
+    let approval = json!({"approved_by": "a person", "body_digest": "sha256:ab"});
+    ok(
+        &sandbox,
+        &[
+            "document",
+            "metadata",
+            "set",
+            &landed,
+            "orchestrator.design-approval",
+            &approval.to_string(),
+        ],
+    );
+
+    // Copied again with nothing changed at the source: no write, and the approval stays.
+    assert_eq!(
+        copy_document(),
+        vec![(
+            "remote:D-1".to_owned(),
+            json!(landed),
+            "unchanged".to_owned()
+        )]
+    );
+    let held = shown(&sandbox, "document", &landed);
+    assert_eq!(held["metadata"]["orchestrator.design-approval"], approval);
+
+    // Copied again after the source's body changed: the body lands and the approval stays,
+    // beside every key the source carries and the origin the copy records.
+    let path = root.join("documents/D-1.md");
+    let edited = std::fs::read_to_string(&path)
+        .expect("the source document")
+        .replace("the design\n", "the design, revised\n");
+    std::fs::write(&path, edited).expect("an edit");
+    assert_eq!(
+        copy_document(),
+        vec![("remote:D-1".to_owned(), json!(landed), "updated".to_owned())]
+    );
+    let held = shown(&sandbox, "document", &landed);
+    assert_eq!(held["content"], json!("the design, revised"));
+    assert_eq!(held["metadata"]["orchestrator.design-approval"], approval);
+    assert_eq!(held["metadata"]["caller.flags"], json!([true, null]));
+    assert_eq!(held["metadata"]["onetaskgraph.origin"], json!("remote:D-1"));
+}
+
 /// The GitHub board every journey below copies into, beside the folder it copies from.
 fn board_with_plans(sandbox: &Sandbox, folder: &str) -> crate::fixtures::GitHubBoardFields {
     let (config, board) = github_projects_with_board(sandbox);
