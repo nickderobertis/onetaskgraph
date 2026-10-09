@@ -572,6 +572,15 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
+        self.withhold_private_references(
+            near,
+            "the new task",
+            request
+                .depends_on
+                .iter()
+                .chain(&request.delivers)
+                .map(|far| (far.source.as_str(), far.native.0.as_str())),
+        )?;
         if let Some(first) = carried.first() {
             assets::stores(source, &record, &first.name)?;
         }

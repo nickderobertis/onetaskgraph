@@ -253,17 +253,27 @@ impl Engine {
                 .iter()
                 .map(|other| TaskRef::qualified(&other.source, &other.native))
                 .collect();
-            if let Err(error) = self
-                .admit_known(
-                    source,
-                    &ticket.to_string(),
-                    &ticket.native,
-                    task.classification,
-                    &task.repositories,
-                    &Exposure::metadata(list.iter().map(ToString::to_string)),
-                )
-                .await
-            {
+            let admitted = match self.withhold_private_references(
+                &ticket.source,
+                &ticket.to_string(),
+                kept_by
+                    .iter()
+                    .map(|other| (other.source.as_str(), other.native.0.as_str())),
+            ) {
+                Ok(()) => {
+                    self.admit_known(
+                        source,
+                        &ticket.to_string(),
+                        &ticket.native,
+                        task.classification,
+                        &task.repositories,
+                        &Exposure::metadata(list.iter().map(ToString::to_string)),
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = admitted {
                 return entry(failed(Some(from), &error), Vec::new());
             }
             match source

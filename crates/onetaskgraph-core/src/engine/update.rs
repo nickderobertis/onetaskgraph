@@ -94,6 +94,27 @@ impl Engine {
                 .map(|edges| near_edges(edges, &id.native, &id.source)),
             ..update.clone()
         };
+        let near = id.source.as_str();
+        let references: Vec<(&str, &str)> = update
+            .depends_on
+            .iter()
+            .flatten()
+            .map(|edge| {
+                let far = edge.to.id();
+                match edge.to.source() {
+                    Some(source) => (source, &far[source.len() + 1..]),
+                    None => (near, far),
+                }
+            })
+            .chain(
+                update
+                    .delivers
+                    .iter()
+                    .flatten()
+                    .map(|entry| entry.parts(near)),
+            )
+            .collect();
+        self.withhold_private_references(&id.source, &id.to_string(), references)?;
         self.admit_existing(
             source,
             &id.to_string(),

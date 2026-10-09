@@ -1328,7 +1328,11 @@ before it is sent; a write refused part-way is undone, as a copy always is. A pr
 document is refused by a project held public rather than filed under it. A copy out of a source
 declared private into one that is not records no `onetaskgraph.origin` naming it, and a copy
 into a private source records no `onetaskgraph.copies` link naming that source on a source that
-is not private; the correspondence is kept on the private side instead.
+is not private; the correspondence is kept on the private side instead. A dependency's far
+end, a task delivered and a delivering task each name their item by its source, so a write to
+a source not declared private that would name an item of one that is — a dependency the copy
+does not carry along, a `--depends-on` or `--delivers`, a delivered task's `delivered_by` — is
+refused before anything is written, whether or not any term list knows that source's name.
 
 **Term scope.** Which private repositories a check derives terms from is the caller's to say.
 Every verb that writes takes `--term-scope <host/owner/name>`, repeatable, or
@@ -1338,7 +1342,8 @@ list, or none), and a program linking the engine sets it with `Engine::with_term
 
 The refusals name what happened and what to do: `not-private-destination`,
 `destination-not-private`, `visibility-unreadable`, `boundary-refused`,
-`boundary-unavailable` and `private-member` are their `--json` failure kinds.
+`boundary-unavailable`, `private-member` and `private-reference` are their `--json` failure
+kinds.
 
 A private source and its routes need no checkout to live in: the user-level document,
 `$XDG_CONFIG_HOME/onetaskgraph/config.yaml`, is read beneath every project document, so a

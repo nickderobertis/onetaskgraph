@@ -1803,6 +1803,7 @@ impl Engine {
             plans
                 .iter()
                 .flat_map(|(project, tasks)| std::iter::once(project).chain(tasks)),
+            &running.resolvable,
         )
         .await?;
         running.preflighted = true;
@@ -2636,7 +2637,8 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written.
         if !running.preflighted {
-            self.preflight_copy(request, planned.iter()).await?;
+            self.preflight_copy(request, planned.iter(), &running.resolvable)
+                .await?;
         }
 
         for item in &planned {
@@ -2911,9 +2913,42 @@ impl Engine {
         &self,
         request: &CopyRequest,
         planned: impl Iterator<Item = &'a Planned>,
+        resolvable: &[GlobalId],
     ) -> Result<(), EngineError> {
         let mut read: Vec<&SourceName> = Vec::new();
         for item in planned {
+            // A dependency or a delivery naming something this copy does not carry is written
+            // qualified, by its source: never one naming a private source onto a public one.
+            let near = item.source.source.as_str();
+            let mut references: Vec<(String, String)> = item
+                .edges
+                .iter()
+                .map(|edge| {
+                    let id = edge.to.id();
+                    match edge.to.source() {
+                        Some(source) => (source.to_owned(), id[source.len() + 1..].to_owned()),
+                        None => (near.to_owned(), id.to_owned()),
+                    }
+                })
+                .collect();
+            if let Item::Task(task) = &item.item {
+                references.extend(task.delivers.iter().map(|entry| {
+                    let (source, native) = entry.parts(near);
+                    (source.to_owned(), native.to_owned())
+                }));
+            }
+            references.retain(|(source, native)| {
+                !resolvable
+                    .iter()
+                    .any(|copied| copied.source.as_str() == source && copied.native.0 == *native)
+            });
+            self.withhold_private_references(
+                &item.to,
+                &item.source.to_string(),
+                references
+                    .iter()
+                    .map(|(source, native)| (source.as_str(), native.as_str())),
+            )?;
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
                 Target::Update { id, .. } => WriteTarget::Existing(id),

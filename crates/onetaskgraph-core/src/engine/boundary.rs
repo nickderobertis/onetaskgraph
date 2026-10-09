@@ -641,6 +641,43 @@ impl Engine {
         self.boundary.active
     }
 
+    /// Refuse a write to `destination` that would name an item of a source declared private —
+    /// a dependency's far end, a task it delivers, a task delivering it — when `destination`
+    /// is not itself declared private.
+    ///
+    /// Such a reference is a qualified id, `<source>:<id>`, and the source's name is in no
+    /// term list unless it happens to match a private repository: so it is refused here,
+    /// whatever the check would say, rather than written where it names somewhere private.
+    /// `references` are `(source, native id)` pairs; one naming `destination` itself is that
+    /// source's own item and names nothing elsewhere. While no source is declared private
+    /// nothing can be refused, which keeps an inactive store exactly as it was.
+    pub(crate) fn withhold_private_references<'a>(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        references: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<(), EngineError> {
+        if self.declared(destination) == SourceVisibility::Private {
+            return Ok(());
+        }
+        for (source, _) in references {
+            if source == destination.as_str() {
+                continue;
+            }
+            let Ok(named) = onetaskgraph_plugin_api::SourceName::new(source.to_owned()) else {
+                continue;
+            };
+            if self.declared(&named) == SourceVisibility::Private {
+                return Err(EngineError::PrivateReference {
+                    item: item.to_owned(),
+                    destination: destination.to_string(),
+                    named: source.to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Who `source` is declared readable by.
     pub(crate) fn declared(
         &self,

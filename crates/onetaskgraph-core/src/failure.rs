@@ -277,6 +277,11 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::PrivateReference { destination, .. } => (
+            "private-reference".to_owned(),
+            configured(destination),
+            None,
+        ),
         EngineError::PrivateMemberOfPublicProject { .. } => {
             ("private-member".to_owned(), None, None)
         }

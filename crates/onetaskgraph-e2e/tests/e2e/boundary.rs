@@ -1494,3 +1494,130 @@ fn a_term_carried_only_in_template_provenance_is_refused_onto_a_public_source() 
     assert_eq!(kind, "boundary-refused", "{said}");
     assert!(files_under(&store, "site").is_empty());
 }
+
+#[test]
+fn a_reference_naming_a_private_source_never_reaches_a_public_one() {
+    let store = Store::new(Some(registered), json!({}));
+    // `vault` names no repository and is in no term list: only its declaration keeps its
+    // name off `site`.
+    store.record(
+        "vault",
+        "tasks",
+        "hidden",
+        "title: Hidden\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "vault",
+        "tasks",
+        "example",
+        "title: Example\nstatus: todo\ndepends_on: [hidden]",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "deliverer",
+        "title: Deliverer\nstatus: todo\ndelivers: [vault:hidden]",
+        PLAIN,
+    );
+    store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
+    store.record(
+        "site",
+        "tasks",
+        "ticket",
+        "title: Ticket\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "vault",
+        "tasks",
+        "worker",
+        "title: Worker\nstatus: todo\ndelivers: [site:ticket]",
+        PLAIN,
+    );
+    let body = store.body(PLAIN);
+    let before = store.tree();
+    for arguments in [
+        // A dependency the copy does not carry would be written as `vault:hidden`.
+        vec!["task", "copy", "vault:example", "--to", "site"],
+        // So would a task it delivers.
+        vec!["task", "copy", "plan:deliverer", "--to", "site"],
+        vec![
+            "task",
+            "create",
+            "site",
+            "--project",
+            "p",
+            "--title",
+            "T",
+            "--body-file",
+            &body,
+            "--depends-on",
+            "vault:hidden",
+        ],
+        vec![
+            "task",
+            "create",
+            "site",
+            "--project",
+            "p",
+            "--title",
+            "T",
+            "--body-file",
+            &body,
+            "--delivers",
+            "vault:hidden",
+        ],
+        vec![
+            "task",
+            "update",
+            "site:fine",
+            "--depends-on",
+            "vault:hidden",
+        ],
+        vec!["task", "update", "site:fine", "--delivers", "vault:hidden"],
+    ] {
+        let (kind, said) = store.refused(&arguments);
+        assert_eq!(kind, "private-reference", "{arguments:?}: {said}");
+        assert!(said.contains("source vault"), "{said}");
+    }
+    assert_eq!(store.tree(), before, "no refused write left anything");
+    // A delivered task in a public source is not handed its private deliverer's id: the
+    // deliverer's own write lands in its private source, and keeping the ticket in step is
+    // reported failed rather than writing `vault:worker` onto it.
+    let ticket = std::fs::read(store.folder("site").join("tasks/ticket.md")).expect("the ticket");
+    let output = store.run(&[
+        "task",
+        "status",
+        "set",
+        "vault:worker",
+        "in-progress",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
+    assert_eq!(
+        set["delivered"][0]["failure"]["kind"], "private-reference",
+        "{set:#}"
+    );
+    assert_eq!(
+        std::fs::read(store.folder("site").join("tasks/ticket.md")).expect("the ticket"),
+        ticket,
+        "the public ticket is byte for byte as it was"
+    );
+    // Carried with the copy, a dependency names the destination's own item instead, and lands.
+    store.ok(&[
+        "task",
+        "copy",
+        "vault:hidden",
+        "vault:example",
+        "--to",
+        "site",
+    ]);
+    let landed: String = files_under(&store, "site")
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("a record"))
+        .collect();
+    assert!(!landed.contains("vault"), "{landed}");
+}
