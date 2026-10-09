@@ -191,7 +191,6 @@ impl GraphNode {
         }
     }
 
-    /// Whether the task is outside the project.
     const fn external(&self) -> bool {
         matches!(self.place, Place::External { .. })
     }

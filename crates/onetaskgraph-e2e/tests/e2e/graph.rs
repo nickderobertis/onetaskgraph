@@ -38,7 +38,6 @@ impl Store {
         Self { root }
     }
 
-    /// A project file.
     fn project(&self, id: &str, title: &str) -> &Self {
         std::fs::write(
             self.root.join(format!("projects/{id}.md")),
@@ -48,7 +47,6 @@ impl Store {
         self
     }
 
-    /// A task file.
     fn task(&self, task: &Task<'_>) -> &Self {
         let depends = if task.depends_on.is_empty() {
             String::new()
@@ -1233,4 +1231,38 @@ fn an_external_tasks_qualified_id_is_escaped_in_its_label_as_a_title_is() {
     let graph = parsed(&sandbox, &["project", "graph", "mem:P", "--format", "json"]);
     assert_eq!(graph["nodes"][1]["id"], format!("mem:{far}"));
     assert_eq!(graph["edges"][0]["from"], format!("mem:{far}"));
+}
+
+/// `/dev/full` accepts a write and then fails it with ENOSPC, the one way to make the real
+/// binary's stdout fail deterministically, and it is Linux-only, so this journey is too. The
+/// write is `emit`'s, whose failing paths `surface.rs` and the unit tests beside it hold on
+/// every platform.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_graph_that_cannot_be_written_exits_one_and_says_so() {
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new();
+    plan(&sandbox, "Plumb");
+    for format in ["mermaid", "json"] {
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("/dev/full exists on Linux");
+        let output = sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .current_dir(sandbox.project())
+            .args(["project", "graph", "plans:P", "--format", format])
+            .stdout(Stdio::from(full))
+            .stderr(Stdio::piped())
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(1));
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            said.contains("onetaskgraph: could not write the project graph"),
+            "{said}"
+        );
+        assert!(!said.contains("panicked"), "{said}");
+    }
 }

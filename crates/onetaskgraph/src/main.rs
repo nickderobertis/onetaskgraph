@@ -606,18 +606,16 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             // The verb's own `--format` decides the form, never the configured output: its
             // Mermaid bytes are a contract a consumer reads, and a configuration setting
             // `output = json` for every other verb must not turn them into something else.
+            // Both forms end in exactly one newline, which `emit` writes.
             let rendered = match args.format {
-                GraphFormat::Mermaid => graph.mermaid(),
-                GraphFormat::Json => format!("{}\n", json(&graph, "the project graph")?),
+                GraphFormat::Mermaid => {
+                    let mut text = graph.mermaid();
+                    text.pop();
+                    text
+                }
+                GraphFormat::Json => json(&graph, "the project graph")?,
             };
-            let unwritten = |error: io::Error| {
-                Failure::decided(
-                    "write",
-                    format!("could not write the project graph: {error}"),
-                )
-            };
-            out.write_all(rendered.as_bytes()).map_err(unwritten)?;
-            out.flush().map_err(unwritten)?;
+            emit(out, &rendered, "the project graph")?;
             Ok(EXIT_OK)
         }
 
