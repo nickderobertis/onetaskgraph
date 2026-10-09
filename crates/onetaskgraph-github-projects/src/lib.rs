@@ -2568,7 +2568,7 @@ pub struct GitHubProjectsSource {
     /// dies with the process, nothing is written down, a write this process makes updates or
     /// removes the entry here as it does there, and every answer is completed with this
     /// process's own writes each time it is given.
-    children_cache: Mutex<BTreeMap<NativeId, (NativeId, Vec<Resolved>)>>,
+    children_cache: Mutex<ProjectChildren>,
     /// The board's own id and field definitions as this process last read them on their
     /// own, for the length of one command — dropped by [`TaskSource::end_command`].
     ///
@@ -5286,10 +5286,7 @@ impl GitHubProjectsSource {
 
     /// This process's own record of each project's sub-issues, or the refusal a poisoned lock
     /// is.
-    fn children_cache(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<NativeId, (NativeId, Vec<Resolved>)>>, SourceError>
-    {
+    fn children_cache(&self) -> Result<std::sync::MutexGuard<'_, ProjectChildren>, SourceError> {
         self.children_cache
             .lock()
             .map_err(|_| SourceError::Unavailable {
@@ -9775,6 +9772,10 @@ impl TaskSource for GitHubProjectsSource {
         Ok(())
     }
 }
+
+/// Each project's sub-issues as one command read them, keyed by the selector they were asked
+/// for under, beside the project that selector named; see `children_cache`.
+type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 
 /// One issue comment as the contract carries it.
 ///
