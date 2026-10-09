@@ -239,6 +239,50 @@ fn a_project_prints_its_tasks_and_edges_as_the_contract_states() {
         ),
         CONTRACT
     );
+    // And machine output asked for every other way leaves the verb's own `--format` in
+    // control: its Mermaid bytes are what a consumer reads, whatever the configured output.
+    for asked in [
+        &["--json"][..],
+        &["--output", "json"][..],
+        &["--set", "output=json"][..],
+    ] {
+        let mut arguments = asked.to_vec();
+        arguments.extend(["project", "graph", "plans:P"]);
+        assert_eq!(printed(&sandbox, &arguments), CONTRACT, "{asked:?}");
+    }
+}
+
+#[test]
+fn every_spelling_of_a_line_break_is_one_space_in_a_label() {
+    let sandbox = Sandbox::new();
+    let store = Store::new(&sandbox, "plans");
+    store.project("P", "Breaks");
+    for (id, title) in [
+        ("a", "Windows\r\nline"),
+        ("b", "Old Mac\rline"),
+        ("c", "Unix\nline"),
+        ("d", "Two\r\n\r\nbreaks"),
+    ] {
+        store.task(&Task {
+            id,
+            title,
+            project: "P",
+            depends_on: &[],
+            extra: "",
+        });
+    }
+    configured(&sandbox, &[("plans", &store)]);
+    assert_eq!(
+        printed(&sandbox, &["project", "graph", "plans:P"]),
+        "flowchart LR\n  n1[\"Old Mac line\"]\n  n2[\"Two  breaks\"]\n  n3[\"Unix line\"]\n  n4[\"Windows line\"]\n"
+    );
+    // The JSON form keeps each title exactly as the source holds it.
+    let graph = parsed(
+        &sandbox,
+        &["project", "graph", "plans:P", "--format", "json"],
+    );
+    assert_eq!(graph["nodes"][0]["title"], "Old Mac\rline");
+    assert_eq!(graph["nodes"][3]["title"], "Windows\r\nline");
 }
 
 /// The README this repository documents its verbs in, read from the repository root.
@@ -711,6 +755,15 @@ fn group_by_draws_each_group_in_its_own_block_and_changes_nothing_else() {
             "the refusal names neither the task nor the key: {said}"
         );
     }
+    // An empty key names no metadata at all, and is refused as the invocation it is.
+    let output = run(&sandbox, &["project", "graph", "plans:P", "--group-by", ""]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert!(
+        stderr(&output).contains("a metadata key is not empty"),
+        "{}",
+        stderr(&output)
+    );
     // Ungrouped, the value is nobody's business.
     assert_eq!(
         printed(&sandbox, &["project", "graph", "plans:P"]),

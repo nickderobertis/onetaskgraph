@@ -1309,11 +1309,8 @@ pub struct DependencyArgs {
 #[derive(Debug, Args)]
 pub struct GraphArgs {
     /// The project's qualified id, `<source>:<native-id>`.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `DependencyArgs::id`: `qualified`
-    /// in `main` converts it through `GlobalId::from_str` immediately and refuses it in the
-    /// words `project show` and `project deps` refuse theirs in.
     #[arg(value_name = "ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] As `DependencyArgs::id`: a `GlobalId` here would refuse an unqualified id as a bad invocation, exit 2, in clap's words, where `qualified` in `main` converts it through `GlobalId::from_str` immediately and refuses it as `project show` and `project deps` refuse theirs — and `graph::an_empty_project_a_long_one_and_an_unknown_one` holds the graph's refusal to be `project show`'s, byte for byte.
     pub id: String,
 
     /// Which form to print.

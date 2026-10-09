@@ -144,9 +144,87 @@ pub struct ProjectGraph {
     links: Vec<(usize, usize)>,
 }
 
-/// One node of a [`ProjectGraph`]: one task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+/// One node of a [`ProjectGraph`]: one task, of the project or outside it.
+///
+/// Its JSON is [`GraphNodeWire`]'s — `key`, `id`, `title`, `external`, `group` — derived from
+/// where it sits, so a node outside the project can have no group and every key is a number
+/// of its kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphNode {
+    /// The task's qualified id.
+    id: GlobalId,
+    /// The task's title, exactly as its source reports it.
+    title: String,
+    /// Where the task sits, and what that gives it.
+    place: Place,
+}
+
+/// Where a [`GraphNode`]'s task sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Place {
+    /// A task of the project: the `n<number>` node, with its group, if any.
+    Own {
+        /// Its position among the project's tasks, from 1.
+        number: usize,
+        /// Its group under `group_by`.
+        group: Option<String>,
+    },
+    /// A task outside the project: the `x<number>` node, which never has a group.
+    External {
+        /// Its position among the tasks outside the project, from 1.
+        number: usize,
+    },
+}
+
+impl GraphNode {
+    /// The Mermaid form's node id.
+    fn key(&self) -> String {
+        match &self.place {
+            Place::Own { number, .. } => format!("n{number}"),
+            Place::External { number } => format!("x{number}"),
+        }
+    }
+
+    /// Whether the task is outside the project.
+    const fn external(&self) -> bool {
+        matches!(self.place, Place::External { .. })
+    }
+
+    /// The task's group, which only a task of the project can have.
+    fn group(&self) -> Option<&str> {
+        match &self.place {
+            Place::Own { group, .. } => group.as_deref(),
+            Place::External { .. } => None,
+        }
+    }
+}
+
+impl Serialize for GraphNode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        GraphNodeWire {
+            key: self.key(),
+            id: self.id.clone(),
+            title: self.title.clone(),
+            external: self.external(),
+            group: self.group().map(str::to_owned),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl JsonSchema for GraphNode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GraphNode".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        GraphNodeWire::json_schema(generator)
+    }
+}
+
+/// One node of a [`ProjectGraph`]: one task.
+#[derive(Serialize, JsonSchema)]
+struct GraphNodeWire {
     /// The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task
     /// outside it, each counted from 1.
     key: String,
@@ -183,35 +261,35 @@ impl ProjectGraph {
     #[must_use]
     pub fn mermaid(&self) -> String {
         let node_line = |node: &GraphNode, indent: &str| {
-            if node.external {
+            if node.external() {
                 format!(
                     "{indent}{}[\"{} ({})\"]:::external\n",
-                    node.key,
+                    node.key(),
                     label(&node.title),
                     node.id
                 )
             } else {
-                format!("{indent}{}[\"{}\"]\n", node.key, label(&node.title))
+                format!("{indent}{}[\"{}\"]\n", node.key(), label(&node.title))
             }
         };
         let edge_line = |&(from, to): &(usize, usize), indent: &str| {
             format!(
                 "{indent}{} --> {}\n",
-                self.nodes[from].key, self.nodes[to].key
+                self.nodes[from].key(),
+                self.nodes[to].key()
             )
         };
         // The group an edge sits inside: its two ends' group, when they share one.
         let inside = |&(from, to): &(usize, usize)| {
             self.nodes[from]
-                .group
-                .as_deref()
-                .filter(|group| self.nodes[to].group.as_deref() == Some(*group))
+                .group()
+                .filter(|group| self.nodes[to].group() == Some(*group))
         };
         let mut out = format!("flowchart {}\n", self.direction.mermaid());
         // Groups in the order their first member is drawn in, which is the order `nodes`
         // holds the project's tasks in.
         let mut groups: Vec<&str> = Vec::new();
-        for group in self.nodes.iter().filter_map(|node| node.group.as_deref()) {
+        for group in self.nodes.iter().filter_map(GraphNode::group) {
             if !groups.contains(&group) {
                 groups.push(group);
             }
@@ -222,11 +300,7 @@ impl ProjectGraph {
                 number + 1,
                 label(group)
             ));
-            for node in self
-                .nodes
-                .iter()
-                .filter(|node| node.group.as_deref() == Some(group))
-            {
+            for node in self.nodes.iter().filter(|node| node.group() == Some(group)) {
                 out.push_str(&node_line(node, "    "));
             }
             for link in self.links.iter().filter(|link| inside(link) == Some(group)) {
@@ -234,13 +308,13 @@ impl ProjectGraph {
             }
             out.push_str("  end\n");
         }
-        for node in self.nodes.iter().filter(|node| node.group.is_none()) {
+        for node in self.nodes.iter().filter(|node| node.group().is_none()) {
             out.push_str(&node_line(node, "  "));
         }
         for link in self.links.iter().filter(|link| inside(link).is_none()) {
             out.push_str(&edge_line(link, "  "));
         }
-        if self.nodes.iter().any(|node| node.external) {
+        if self.nodes.iter().any(GraphNode::external) {
             out.push_str("  classDef external stroke-dasharray: 5 5\n");
         }
         out
@@ -399,11 +473,12 @@ impl Engine {
             .iter()
             .enumerate()
             .map(|(position, &index)| GraphNode {
-                key: format!("n{}", position + 1),
                 id: tasks[index].id.clone(),
                 title: tasks[index].item.title.clone(),
-                external: false,
-                group: groups[index].clone(),
+                place: Place::Own {
+                    number: position + 1,
+                    group: groups[index].clone(),
+                },
             })
             .collect();
         nodes.extend(
@@ -411,11 +486,11 @@ impl Engine {
                 .into_iter()
                 .enumerate()
                 .map(|(position, (title, id))| GraphNode {
-                    key: format!("x{}", position + 1),
                     id,
                     title,
-                    external: true,
-                    group: None,
+                    place: Place::External {
+                        number: position + 1,
+                    },
                 }),
         );
         let position: HashMap<&GlobalId, usize> = nodes
