@@ -247,3 +247,26 @@ fn a_board_refusing_a_dependency_read_after_the_listing_prints_no_part_of_the_gr
         assert_eq!(crowded_edges, carried + 1);
     }
 }
+
+#[test]
+fn a_board_refusing_the_read_of_the_project_itself_prints_nothing() {
+    for format in ["mermaid", "json"] {
+        let (sandbox, board) = hosted(&tasks(3));
+        // The read of the project's own issue, which says whether it is a project at all.
+        board.refuse_once("boards:projectItems");
+        let (output, served) = graph(&sandbox, &board, &["--format", format]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "", "a graph was printed in part");
+        assert!(
+            stderr(&output).contains("source board could not do it")
+                && stderr(&output).contains("boards:projectItems"),
+            "the source's error is not reported: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            named(&served),
+            ["issue read"],
+            "nothing was read past the refused project read"
+        );
+    }
+}

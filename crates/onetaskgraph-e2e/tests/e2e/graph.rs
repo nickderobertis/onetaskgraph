@@ -1142,3 +1142,62 @@ fn each_refusal_of_a_graph_names_its_own_kind_to_a_program() {
         "no-such-item"
     );
 }
+
+#[test]
+fn a_task_of_another_source_is_drawn_by_its_own_title_and_a_source_that_cannot_answer_fails_the_graph()
+ {
+    let sandbox = Sandbox::new();
+    let plans = Store::new(&sandbox, "plans");
+    let other = Store::new(&sandbox, "other");
+    plans.project("P", "The plan");
+    other.project("Q", "Theirs");
+    other.task(&Task {
+        id: "far",
+        title: "Their \"part\"",
+        project: "Q",
+        depends_on: &[],
+        extra: "",
+    });
+    plans.task(&Task {
+        id: "near",
+        title: "Ours",
+        project: "P",
+        depends_on: &["{id: \"other:far\"}"],
+        extra: "",
+    });
+    plans.project("B", "Leans on a broken source");
+    plans.task(&Task {
+        id: "leaning",
+        title: "Leaning",
+        project: "B",
+        depends_on: &["{id: \"broken:X-1\"}"],
+        extra: "",
+    });
+    // `broken` is configured and cannot be built: a GitHub Projects source naming no board.
+    let mut sources = serde_json::Map::new();
+    sources.insert("plans".to_owned(), plans.source());
+    sources.insert("other".to_owned(), other.source());
+    sources.insert(
+        "broken".to_owned(),
+        json!({"plugin": "github-projects", "config": {}}),
+    );
+    sandbox.project_document(&document(&Value::Object(sources)));
+
+    assert_eq!(
+        printed(&sandbox, &["project", "graph", "plans:P"]),
+        "flowchart TD\n  n1[\"Ours\"]\n  x1[\"Their #quot;part#quot; (other:far)\"]:::external\n  x1 --> n1\n  classDef external stroke-dasharray: 5 5\n"
+    );
+    for format in ["mermaid", "json"] {
+        let output = run(
+            &sandbox,
+            &["project", "graph", "plans:B", "--format", format],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "", "a graph was printed in part");
+        assert!(
+            stderr(&output).contains("source broken"),
+            "the failing source is not named: {}",
+            stderr(&output)
+        );
+    }
+}
