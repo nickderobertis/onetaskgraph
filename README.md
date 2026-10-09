@@ -103,6 +103,8 @@ onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--sear
 onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
+onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
+                           [--group-by KEY]      # see "Drawing a project's dependency graph"
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
@@ -350,6 +352,109 @@ The folder filtered the rows itself; the other source returned the wider set and
 narrowed it. One query, two plans, and the same correct answer either way — which is what
 the capability declaration above buys you and why it is worth reading. `--json` carries the
 same plan as a field, so a script does not have to parse the prose.
+
+### Drawing a project's dependency graph
+
+`project graph <ID>` prints one project's tasks and the dependency edges between them as
+Mermaid flowchart text, for whatever renders Mermaid — it draws no picture itself. The bytes
+are a contract, stated here and in `onetaskgraph project graph --help`, and the journeys in
+`crates/onetaskgraph-e2e/tests/e2e/graph.rs` hold the binary to them:
+
+```text
+flowchart TD
+  n1["Lay the foundation"]
+  n2["Plumb"]
+  n3["Raise walls"]
+  n4["Wire #quot;main#quot; #35;2 #lt;panel#gt; and #gt;sockets"]
+  n5["Roof"]
+  n6["Paint"]
+  x1["Get the permit (plans:permit)"]:::external
+  n1 --> n2
+  n1 --> n3
+  n1 --> n4
+  n2 --> n6
+  n3 --> n5
+  n4 --> n5
+  n5 --> n6
+  x1 --> n5
+  classDef external stroke-dasharray: 5 5
+```
+
+- **The graph.** Every task of the project, across every page its source answers, and every
+  dependency a project task has on another task. A task's **rank** is 0 when it depends on
+  no task of the project, and otherwise one more than the highest rank among its
+  prerequisites in the project; a task outside the project has none. The **number of
+  ranks** is one more than the highest rank, or 0 for an empty project, and the **widest
+  rank** is the most project tasks sharing one rank.
+- **The first line** is `flowchart TD` (top-down) or `flowchart LR` (left to right).
+  `--direction auto`, the default, picks `LR` when the widest rank holds more tasks than
+  there are ranks and `TD` otherwise, because a graph much wider than it is deep is
+  unreadable once it is fitted to a page top-down: at an 880-pixel page a 48-task plan over
+  ranks 1/28/15/4 kept its smallest label at 1.6 pixels top-down and 11.5 left to right.
+  `--direction td` and `--direction lr` are taken as given.
+- **`n<k>` lines**, `  n<k>["<label>"]`, one per task of the project, in topological order:
+  each after every task of the project it depends on, ties broken by title and then by
+  qualified id, each compared byte by byte. `<k>` counts from 1.
+- **`x<k>` lines**, `  x<k>["<label> (<qualified id>)"]:::external`, one per task outside
+  the project that a project task depends on, ordered by title and then qualified id.
+- **Edge lines**, `  <prerequisite> --> <dependent>`: the arrow points from the task
+  depended on to the task that depends on it. Ordered by the prerequisite's position and then
+  the dependent's, every `n` node before every `x` node.
+- **Last**, only when an `x` node was printed: `  classDef external stroke-dasharray: 5 5`.
+  A project with no tasks prints the first line alone, `flowchart TD`.
+- **Labels.** A title with each line break (`\r\n`, `\n` or `\r`) written as one space, then
+  `#` written `#35;`, `"` written `#quot;`, `<` written `#lt;` and `>` written `#gt;`, in
+  that order; nothing else is altered.
+
+**`--group-by KEY`** draws each group of tasks in a Mermaid `subgraph`. A project task's
+group is what its metadata holds under `KEY` when that is a non-empty string; a task without
+the key, or holding `null` or `""` there, has none, and any other value is refused, naming
+the task's qualified id and the key, with nothing printed. A task outside the project never
+has a group. Groups go in the order of their first member, numbered `g<j>` from 1, and
+grouping changes no rank, direction, node number or edge order. The lines are rearranged:
+the first line; for each group, `  subgraph g<j>["<label of the group's value>"]`, its
+members' node lines indented by four spaces, every edge between two of its members indented
+by four spaces, and `  end`; then each ungrouped task's node line, the `x` lines, every
+remaining edge, and the `classDef` line. A group's edges are declared inside its block
+because mermaid 11's layout crashed on a hundred-task plan in 57 subgraphs whose edges all
+came after the blocks.
+
+**`--format json`** prints one document, then a newline, describing exactly the graph the
+Mermaid form draws — the form a program reads to know which task a node is, since a title
+is not unique and a label is not something to parse back:
+
+```json
+{
+  "schema_version": 1,
+  "project": "<qualified project id>",
+  "direction": "td",
+  "group_by": null,
+  "nodes": [
+    {"key": "n1", "id": "<qualified task id>", "title": "<the title, unescaped>",
+     "external": false, "group": null}
+  ],
+  "edges": [
+    {"from": "<qualified id of the prerequisite>", "to": "<qualified id of the dependent>"}
+  ]
+}
+```
+
+`direction` is `td` or `lr`, never `auto`; `group_by` is the key or `null`; `nodes` holds
+every `n` node and then every `x` node in the Mermaid form's order, `key` is its Mermaid
+node id, `external` is `true` exactly for the `x` nodes, and `group` is the task's group or
+`null` — always `null` for an external task and without `--group-by`. `edges` follows the
+Mermaid form's edge order. The schema bundle names this document `ProjectGraph`.
+
+The output is a function of the project's task titles, their edges, the qualified ids of
+the tasks outside it, the direction and, grouped, the key and each task's value under it, so
+two calls over an unchanged project print the same bytes — and so do two sources holding
+the same tasks and edges under other native ids, when no task outside the project is
+involved and no two titles are equal. An id naming no project, a source that cannot answer a
+read, a dependency naming a task its source does not hold, and tasks that depend on each
+other in a cycle each exit non-zero with nothing on standard output and the problem on
+standard error: a graph is never printed in part. The verb reads through each source's own
+task listing and dependency reads, and a GitHub Projects board answers a task's edges from
+the listing that reached it, so a graph costs one request per page of the project's tasks.
 
 ### Writing tasks: Markdown in, ticket out
 
