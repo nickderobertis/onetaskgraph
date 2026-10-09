@@ -5666,6 +5666,130 @@ export const runtimeSchemas = {
     "title": "Project",
     "type": "object"
   },
+  "ProjectGraph": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "GraphDirection": {
+        "description": "Which way a graph is laid out: top to bottom, or left to right.",
+        "oneOf": [
+          {
+            "const": "td",
+            "description": "Top to bottom: Mermaid's `flowchart TD`.",
+            "type": "string"
+          },
+          {
+            "const": "lr",
+            "description": "Left to right: Mermaid's `flowchart LR`.",
+            "type": "string"
+          }
+        ]
+      },
+      "GraphEdge": {
+        "description": "One edge of a [`ProjectGraph`], pointing from the task depended on to the task that\ndepends on it.",
+        "properties": {
+          "from": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The prerequisite: the task that has to finish first."
+          },
+          "to": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The dependent: the project task that waits on it."
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "GraphNode": {
+        "description": "One node of a [`ProjectGraph`]: one task.",
+        "properties": {
+          "external": {
+            "description": "Whether the task is outside the project: `true` exactly for the `x<k>` nodes.",
+            "type": "boolean"
+          },
+          "group": {
+            "description": "The task's group under `group_by`, or `null` — for a task with none, for every\nexternal task, and for every task when no key was given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The task's qualified id."
+          },
+          "key": {
+            "description": "The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task\noutside it, each counted from 1.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The task's title, exactly as its source reports it — unescaped and unaltered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "title",
+          "external"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One project's dependency graph, laid out: the document `project graph --format json`\nprints, and everything its Mermaid form is drawn from.",
+    "properties": {
+      "direction": {
+        "$ref": "#/$defs/GraphDirection",
+        "description": "The direction the graph is laid out in — `auto` already resolved."
+      },
+      "edges": {
+        "description": "Every dependency, ordered by its prerequisite's position and then its dependent's.",
+        "items": {
+          "$ref": "#/$defs/GraphEdge"
+        },
+        "type": "array"
+      },
+      "group_by": {
+        "description": "The `--group-by` key, or `null` when none was given.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nodes": {
+        "description": "Every task of the project in topological order, then every task outside it that one\nof them depends on, ordered by title and then qualified id.",
+        "items": {
+          "$ref": "#/$defs/GraphNode"
+        },
+        "type": "array"
+      },
+      "project": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The project whose tasks these are."
+      },
+      "schema_version": {
+        "description": "The version of this document's shape; `1`.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "schema_version",
+      "project",
+      "direction",
+      "nodes",
+      "edges"
+    ],
+    "title": "ProjectGraph",
+    "type": "object"
+  },
   "ProjectQuery": {
     "$defs": {
       "LabelFilter": {

@@ -1076,6 +1076,54 @@ test("a task list is narrowed to a metadata value and to a copy origin through t
   }
 });
 
+test("a project's graph is read through the real binary as its JSON form, grouped and refused", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-graph-"));
+  try {
+    mkdirSync(resolve(root, "work/tasks"), { recursive: true });
+    mkdirSync(resolve(root, "work/projects"), { recursive: true });
+    writeFileSync(resolve(root, "work/projects/P-1.md"), "---\ntitle: Engine\n---\n");
+    const task = (name: string, title: string, extra: string) =>
+      writeFileSync(
+        resolve(root, `work/tasks/${name}.md`),
+        `---\ntitle: ${title}\nproject: P-1\n${extra}---\n`,
+      );
+    task("T-1", "Design", "metadata:\n  unit: core\n");
+    task("T-2", "Build", "depends_on: [T-1]\nmetadata:\n  unit: core\n");
+    task("T-3", "Ship", "depends_on: [T-2]\n");
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: { work: { plugin: "local-md", config: { root: resolve(root, "work") } } },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    const graph = await client.projectGraph("work:P-1", { groupBy: "unit", direction: "lr" });
+    expect(graph.schema_version).toBe(1);
+    expect(graph.direction).toBe("lr");
+    expect(graph.group_by).toBe("unit");
+    expect(graph.nodes.map((node) => [node.key, node.id, node.title, node.group])).toEqual([
+      ["n1", "work:T-1", "Design", "core"],
+      ["n2", "work:T-2", "Build", "core"],
+      ["n3", "work:T-3", "Ship", null],
+    ]);
+    expect(graph.edges).toEqual([
+      { from: "work:T-1", to: "work:T-2" },
+      { from: "work:T-2", to: "work:T-3" },
+    ]);
+    expect((await client.projectGraph("work:P-1")).direction).toBe("td");
+
+    task("T-3", "Ship", "metadata:\n  unit: 3\n");
+    const refused = client.projectGraph("work:P-1", { groupBy: "unit" });
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+    await expect(refused).rejects.toThrow("work:T-3");
+    expect(() => client.projectGraph("work:P-1", { groupBy: "" })).toThrow(TypeError);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a task's content is replaced from a file through the real binary, and nothing else", async () => {
   const contentRoot = priorityFolder();
   try {
