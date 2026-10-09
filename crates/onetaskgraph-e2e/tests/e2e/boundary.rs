@@ -903,9 +903,47 @@ fn every_narrow_write_to_a_private_item_held_by_a_public_source_is_refused() {
         PLAIN,
     );
     store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
+    store.record(
+        "site",
+        "projects",
+        "stray-project",
+        "title: Stray project\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "documents",
+        "stray-document",
+        "title: Stray document\nclassification: private",
+        PLAIN,
+    );
     let content = store.body(PLAIN);
+    let template = store.sandbox.config_home().join("plain-template.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables: {}\n---\nRendered afresh.\n",
+    )
+    .expect("a template");
+    let template = template.display().to_string();
     let before = store.tree();
     for arguments in [
+        vec!["task", "render", "site:stray", "--template", &template],
+        vec![
+            "project",
+            "metadata",
+            "set",
+            "site:stray-project",
+            "team.note",
+            "\"x\"",
+        ],
+        vec![
+            "document",
+            "metadata",
+            "set",
+            "site:stray-document",
+            "team.note",
+            "\"x\"",
+        ],
         vec!["task", "status", "set", "site:stray", "done"],
         vec!["task", "priority", "set", "site:stray", "high"],
         vec!["task", "content", "set", "site:stray", "--file", &content],
@@ -1332,4 +1370,127 @@ fn the_boundary_payloads_reconcile_with_the_released_onevcs_schema() {
             WriteVerdict::Unavailable { .. }
         ));
     }
+}
+
+#[test]
+fn a_standalone_private_document_or_project_is_refused_onto_a_public_source() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "plan",
+        "documents",
+        "secret-design",
+        "title: Secret design\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "projects",
+        "secret-goal",
+        "title: Secret goal\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    let before = store.tree();
+    for arguments in [
+        vec!["document", "copy", "plan:secret-design", "--to", "site"],
+        vec!["project", "copy", "plan:secret-goal", "--to", "site"],
+        vec![
+            "project",
+            "copy",
+            "plan:secret-goal",
+            "--to",
+            "site",
+            "--dry-run",
+        ],
+    ] {
+        let (kind, said) = store.refused(&arguments);
+        assert_eq!(kind, "not-private-destination", "{arguments:?}: {said}");
+    }
+    assert_eq!(store.tree(), before);
+    store.ok(&["document", "copy", "plan:secret-design", "--to", "vault"]);
+    store.ok(&["project", "copy", "plan:secret-goal", "--to", "vault"]);
+}
+
+#[test]
+fn a_private_task_copied_on_its_own_is_refused_by_the_public_project_it_would_join() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "plan",
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\nproject: goal",
+        PLAIN,
+    );
+    // The project lands in the private vault while everything in it is public.
+    store.ok(&["project", "copy", "plan:goal", "--to", "vault"]);
+    let landed = one_file(&store, "vault", "projects");
+    assert!(!landed.contains("classification"), "{landed}");
+    // A private task is added at the source, and copied on its own.
+    store.record(
+        "plan",
+        "tasks",
+        "closed",
+        "title: Closed\nstatus: todo\nproject: goal\nclassification: private",
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["task", "copy", "plan:closed", "--to", "vault"]);
+    assert_eq!(kind, "private-member", "{said}");
+    assert_eq!(store.tree(), before, "nothing was written");
+    // Copying the whole project again classifies it private, and its new member lands with it.
+    store.ok(&["project", "copy", "plan:goal", "--to", "vault"]);
+    let landed = one_file(&store, "vault", "projects");
+    assert!(landed.contains("classification: private"), "{landed}");
+}
+
+#[test]
+fn a_term_carried_only_in_template_provenance_is_refused_onto_a_public_source() {
+    let store = Store::new(Some(registered), json!({}));
+    // A template kept under a directory named after a private repository: the rendered task
+    // says nothing private, but the provenance it records names the template's path.
+    let directory = store.sandbox.config_home().join("quietharbor");
+    std::fs::create_dir_all(&directory).expect("the template directory");
+    let template = directory.join("task.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables: {}\n---\nA generic step.\n",
+    )
+    .expect("a template");
+    store.record(
+        "plan",
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo",
+        PLAIN,
+    );
+    store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "goal",
+        "--title",
+        "Rendered",
+        "--template",
+        &template.display().to_string(),
+    ]);
+    let created = files_under(&store, "plan")
+        .into_iter()
+        .find(|path| path.contains("rendered"))
+        .expect("the rendered task");
+    let id = Path::new(&created)
+        .strip_prefix(store.folder("plan").join("tasks"))
+        .expect("under tasks")
+        .with_extension("")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let (kind, said) = store.refused(&["task", "copy", &format!("plan:{id}"), "--to", "site"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(files_under(&store, "site").is_empty());
 }
