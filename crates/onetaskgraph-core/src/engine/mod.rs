@@ -728,23 +728,24 @@ pub enum EngineError {
     )]
     GraphGroupNotText {
         /// The qualified id of the task holding it.
-        task: String,
+        task: GlobalId,
         /// The `--group-by` key.
-        key: String,
-        /// The value it holds, as JSON.
-        value: String,
+        key: graph::GroupKey,
+        /// The value it holds.
+        value: serde_json::Value,
     },
 
     /// `project graph` met tasks of the project that depend on each other in a cycle, which
     /// no order can put each after what it depends on.
     #[error(
-        "the tasks {tasks} depend on each other in a cycle, so they have no order to draw\n\
+        "the tasks {} depend on each other in a cycle, so they have no order to draw\n\
          next: read each one's edges with `onetaskgraph task deps <ID>` and remove the \
-         dependency that closes the cycle."
+         dependency that closes the cycle.",
+        .tasks.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     DependencyCycle {
-        /// The qualified ids of every task the cycle leaves unordered, comma-separated.
-        tasks: String,
+        /// The qualified ids of every task the cycle leaves unordered, in order.
+        tasks: Vec<GlobalId>,
     },
 
     /// A comment verb named a task its source does not hold.

@@ -99,6 +99,12 @@ impl GroupKey {
     }
 }
 
+impl std::fmt::Display for GroupKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 impl From<GroupKey> for String {
     fn from(key: GroupKey) -> Self {
         key.0
@@ -266,7 +272,9 @@ impl ProjectGraph {
                     "{indent}{}[\"{} ({})\"]:::external\n",
                     node.key(),
                     label(&node.title),
-                    node.id
+                    // A native id is whatever its source issued, so it is escaped as a
+                    // title is: a quote or a line break in it would otherwise end the label.
+                    label(&node.id.to_string())
                 )
             } else {
                 format!("{indent}{}[\"{}\"]\n", node.key(), label(&node.title))
@@ -343,9 +351,9 @@ fn group_of(task: &Qualified<Task>, key: &GroupKey) -> Result<Option<String>, En
         Some(Value::String(value)) if value.is_empty() => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(other) => Err(EngineError::GraphGroupNotText {
-            task: task.id.to_string(),
-            key: key.as_str().to_owned(),
-            value: other.to_string(),
+            task: task.id.clone(),
+            key: key.clone(),
+            value: other.clone(),
         }),
     }
 }
@@ -577,14 +585,12 @@ fn topological(
         }
     }
     if order.len() < tasks.len() {
-        let mut stuck: Vec<String> = (0..tasks.len())
+        let mut stuck: Vec<GlobalId> = (0..tasks.len())
             .filter(|index| !order.contains(index))
-            .map(|index| tasks[index].id.to_string())
+            .map(|index| tasks[index].id.clone())
             .collect();
-        stuck.sort();
-        return Err(EngineError::DependencyCycle {
-            tasks: stuck.join(", "),
-        });
+        stuck.sort_by_key(ToString::to_string);
+        return Err(EngineError::DependencyCycle { tasks: stuck });
     }
     Ok(order)
 }

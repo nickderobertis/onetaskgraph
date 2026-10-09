@@ -3068,9 +3068,14 @@ async fn a_projects_tasks_are_read_once_a_command_and_kept_in_step_with_its_own_
         1,
         "the second read of the same project asked GitHub nothing"
     );
+    // The project a task is moved into, read before the move, so its list is held too.
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p2").await,
+        titled(&[("I_p2t1", "Step 2.1"), ("I_p2t2", "Step 2.2")])
+    );
 
     // Created under it, retitled in it, moved out of it and deleted: each is what the next
-    // read of the project reports, without asking GitHub for its tasks again.
+    // read of either project reports, without asking GitHub for its tasks again.
     let filed = source
         .write_task(&ItemWrite {
             target: None,
@@ -3102,6 +3107,15 @@ async fn a_projects_tasks_are_read_once_a_command_and_kept_in_step_with_its_own_
         project_titles(source.as_ref(), "I_p1").await,
         titled(&[("I_p1t1", "Renamed"), (filed.0.as_str(), "Step 1.3")])
     );
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p2").await,
+        titled(&[
+            ("I_p2t1", "Step 2.1"),
+            ("I_p2t2", "Step 2.2"),
+            ("I_p1t2", "Step 1.2")
+        ]),
+        "the task moved in is in the project it moved to"
+    );
     // Deleted: one the project held before this command, so the answer is the held list's
     // own rather than the record of what this source created.
     source
@@ -3114,8 +3128,8 @@ async fn a_projects_tasks_are_read_once_a_command_and_kept_in_step_with_its_own_
     );
     assert_eq!(
         reads(),
-        1,
-        "every one of those answers came from the held list"
+        2,
+        "every one of those answers came from the two held lists"
     );
 
     // A person retitles a task on GitHub. This command does not see it; the next does.
@@ -3139,7 +3153,7 @@ async fn a_projects_tasks_are_read_once_a_command_and_kept_in_step_with_its_own_
     );
     assert_eq!(
         reads(),
-        2,
+        3,
         "the next command read the project's tasks again"
     );
 }

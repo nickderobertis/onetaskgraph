@@ -1388,7 +1388,7 @@ Mermaid form (the default), UTF-8, every line ending in a newline:
      qualified id, each compared byte by byte. <k> counts from 1 in that order.
   3. One line `  x<k>[\"<label> (<qualified id>)\"]:::external` per task outside the
      project that a project task depends on, ordered by title and then qualified id, <k>
-     counting from 1.
+     counting from 1. The qualified id there is escaped as a label is.
   4. One line `  <prerequisite> --> <dependent>` per dependency, so an arrow points from the
      task depended on to the task that depends on it, ordered by the prerequisite's position
      and then the dependent's, every n node before every x node.
@@ -1415,7 +1415,8 @@ Grouped (--group-by <KEY>):
 Labels:
   A task's label is its title with each line break (\\r\\n, \\n or \\r) written as one space;
   then, in this order, # is written #35;, \" is written #quot;, < is written #lt; and > is
-  written #gt;. Nothing else is altered. A group's label is its value, escaped the same way.
+  written #gt;. Nothing else is altered. A group's label is its value escaped the same way,
+  and the qualified id in an x line is escaped the same way too.
 
 JSON form (--format json): one document and a newline, describing exactly the graph the
 Mermaid form draws, and the form to read when a program has to know which task a node is:

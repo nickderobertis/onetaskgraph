@@ -1201,3 +1201,36 @@ fn a_task_of_another_source_is_drawn_by_its_own_title_and_a_source_that_cannot_a
         );
     }
 }
+
+#[test]
+fn an_external_tasks_qualified_id_is_escaped_in_its_label_as_a_title_is() {
+    // A native id is whatever its source issued: an in-memory source issues any text, so its
+    // id can hold every character a label escapes and a line break besides.
+    let far = "ext \"1\" #2 <a>\nb";
+    let task = |id: &str, title: &str, project: &str| {
+        json!({"id": id, "title": title, "status": {"category": "todo", "name": "Todo"},
+               "labels": [], "project": project})
+    };
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(
+        &json!({"mem": {"plugin": "in-memory", "config": {
+            "projects": [
+                {"id": "P", "title": "Ours", "status": {"category": "todo", "name": "Todo"},
+                 "labels": []},
+                {"id": "Q", "title": "Theirs", "status": {"category": "todo", "name": "Todo"},
+                 "labels": []}
+            ],
+            "tasks": [task("near", "Near", "P"), task(far, "Far", "Q")],
+            "task_dependencies": [{"from": "near", "to": far, "kind": "blocks"}]
+        }}}),
+    ));
+
+    assert_eq!(
+        printed(&sandbox, &["project", "graph", "mem:P"]),
+        "flowchart TD\n  n1[\"Near\"]\n  x1[\"Far (mem:ext #quot;1#quot; #35;2 #lt;a#gt; b)\"]:::external\n  x1 --> n1\n  classDef external stroke-dasharray: 5 5\n"
+    );
+    // The JSON form names it exactly, for a program to read back.
+    let graph = parsed(&sandbox, &["project", "graph", "mem:P", "--format", "json"]);
+    assert_eq!(graph["nodes"][1]["id"], format!("mem:{far}"));
+    assert_eq!(graph["edges"][0]["from"], format!("mem:{far}"));
+}
