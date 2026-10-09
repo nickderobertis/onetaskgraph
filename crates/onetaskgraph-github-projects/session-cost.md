@@ -983,3 +983,27 @@ first comment-activity read, taken before any activity after the instant, now re
 issue it commented on before the instant by its node and walks that issue's comments. That
 walk is what confirms the comment is older than the instant, and the poll still selects
 nothing. The estimate in `tests/journey/budget.rs` moves with the record, as it is built to.
+
+## A project's tasks carry what blocks them, and what that moved
+
+`project graph` reads a project's tasks and then each task's forward edges. Against a board
+that was one `ISSUE_DEPENDENCIES` per task, so the requests a graph cost grew with its tasks
+and its edges rather than with the pages they were listed on. `SUB_ISSUES` now selects a page
+of `$nestedFirst` blockers beside each issue, and a task blocked by no more than that answers
+its forward edges from the listing that reached it, exactly as a read of it by its own node
+already did; only a task blocked by more is asked on its own. The same change keeps each
+project's sub-issues for the rest of the command, because a caller pages through a project's
+tasks one engine page at a time and every engine page used to walk every listing page again —
+a project of `n` listing pages cost `n²` requests to read once.
+`a_plans_requests_grow_with_its_listing_pages_and_not_with_its_tasks_or_edges` in
+`crates/onetaskgraph-github-projects-e2e/tests/e2e/graph.rs` holds both: one read of the
+project and one request per listing page, at three listing pages and at four.
+
+**`SUB_ISSUES`** goes from 20,400 worst-case nodes to **25,400** — a hundred issues times fifty
+blockers — and from 5 points to **6**, one more nested connection per page. `SEARCH_ISSUES`
+does not move: its pages answer questions that never read an edge.
+
+**`session-cost.txt`** moves only on its two `reading a project's tasks` lines, by those 5,000
+nodes per request — 20,400 → 25,400 for the reconciliation and 40,800 → 50,800 for the
+journey's two reads — and its total with them, 234,562 → 249,562. Its request count does not
+move: the journey reads each project's tasks once per source.

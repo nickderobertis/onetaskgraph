@@ -945,6 +945,9 @@ struct GitHubBoard {
     /// Operations this board refuses, each once, named after it was built — so a journey
     /// can set a board up through the same operations and only then have one refused.
     refusing: Vec<&'static str>,
+    /// Operations this board refuses once after answering that many requests carrying them —
+    /// so a journey can let a read's first pages land and refuse a later one.
+    refusing_after: Vec<(&'static str, usize)>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
@@ -1033,6 +1036,26 @@ impl GitHubBoardFields {
     /// Refuse the next request carrying `operation`, once, from here on.
     pub fn refuse_once(&self, operation: &'static str) {
         self.board.lock().unwrap().refusing.push(operation);
+    }
+
+    /// Answer the next `answered` requests carrying `operation`, then refuse the one after
+    /// them, once — the second page of a read, say, after its first landed.
+    pub fn refuse_after(&self, operation: &'static str, answered: usize) {
+        self.board
+            .lock()
+            .unwrap()
+            .refusing_after
+            .push((operation, answered));
+    }
+
+    /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
+    /// blocks it.
+    pub fn block(&self, id: &str, blockers: &[String]) {
+        let mut board = self.board.lock().unwrap();
+        match board.blocked_by.iter_mut().find(|(near, _)| near == id) {
+            Some((_, held)) => held.extend(blockers.iter().cloned()),
+            None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
+        }
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -1680,6 +1703,45 @@ pub fn github_projects_with_tasks(sandbox: &Sandbox, count: usize) -> (Value, Gi
     github_projects_board_at(sandbox, None, &[], 0, extra)
 }
 
+/// One task of the plan [`github_projects_with_plan`] files under its project: its native id,
+/// its title, and the ids of the issues blocking it.
+pub struct PlanIssue {
+    /// The issue's node id.
+    pub id: String,
+    /// Its title.
+    pub title: String,
+    /// The node ids of the issues it is blocked by.
+    pub blocked_by: Vec<String>,
+}
+
+/// The shared board plus one project issue, `project`, and `tasks` filed under it as its
+/// sub-issues, each blocked by the issues it names — a plan of any size, whose listing spans
+/// as many pages of `subIssues` as its tasks need.
+pub fn github_projects_with_plan(
+    sandbox: &Sandbox,
+    project: &str,
+    tasks: &[PlanIssue],
+) -> (Value, GitHubBoardFields) {
+    let issue = |id: &str, title: &str, parent: Option<&str>| {
+        json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,
+            "body":format!("{title}."),"state":"OPEN","reason":null,"parent":parent,
+            "repo":"nickderobertis/onetaskgraph","status":"Todo","origin":"","labels":[]})
+    };
+    let mut extra = vec![issue(project, "The plan", None)];
+    extra.extend(
+        tasks
+            .iter()
+            .map(|task| issue(&task.id, &task.title, Some(project))),
+    );
+    let (config, board) = github_projects_board_at(sandbox, None, &[], 0, extra);
+    for task in tasks {
+        if !task.blocked_by.is_empty() {
+            board.block(&task.id, &task.blocked_by);
+        }
+    }
+    (config, board)
+}
+
 /// The same board, with a handle on the fields this source must never write.
 pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardFields) {
     github_projects_board(sandbox, None, &[])
@@ -1793,6 +1855,7 @@ fn github_projects_board_at(
         failing_alias: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
+        refusing_after: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
@@ -1868,14 +1931,33 @@ fn github_projects_board_at(
                 let mut held = board.lock().unwrap();
                 owed_failures.append(&mut held.refusing);
             }
-            let owed = owed_failures
-                .iter()
-                .position(|operation| query.contains(operation));
-            let body = if let Some(at) = owed {
+            let late = {
+                let mut held = board.lock().unwrap();
+                let due = held
+                    .refusing_after
+                    .iter()
+                    .position(|(operation, _)| query.contains(operation));
+                match due {
+                    Some(at) if held.refusing_after[at].1 == 0 => {
+                        Some(held.refusing_after.remove(at).0)
+                    }
+                    Some(at) => {
+                        held.refusing_after[at].1 -= 1;
+                        None
+                    }
+                    None => None,
+                }
+            };
+            let owed = late.or_else(|| {
+                owed_failures
+                    .iter()
+                    .position(|operation| query.contains(operation))
+                    .map(|at| owed_failures.remove(at))
+            });
+            let body = if let Some(operation) = owed {
                 // The operation is named in the message so a journey can tell *which*
                 // failure reached the caller — a copy whose write failed and whose tidy-up
                 // then failed too has two, and which one it reports is the behaviour.
-                let operation = owed_failures.remove(at);
                 json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
@@ -2654,9 +2736,26 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .cloned()
             .collect::<Vec<_>>();
         let end = (offset + first).min(children.len());
+        // What blocks each sub-issue, when the read asks for it beside the issue: a page of
+        // `$nestedFirst`, saying whether more follow, as GitHub pages a nested connection.
+        let blocked_first = query.contains("blockedBy(first:$nestedFirst)").then(|| {
+            usize::try_from(variables["nestedFirst"].as_u64().expect("nestedFirst"))
+                .expect("nestedFirst fits usize")
+        });
         let nodes = children[offset.min(end)..end]
             .iter()
-            .map(|item| board.as_issue(item))
+            .map(|item| {
+                let mut issue = board.as_issue(item);
+                if let Some(page) = blocked_first {
+                    let all = board.related(item["id"].as_str().expect("an id"), false);
+                    let all = all.as_array().expect("related issues");
+                    issue["blockedBy"] = json!({
+                        "nodes": all.iter().take(page).collect::<Vec<_>>(),
+                        "pageInfo": {"hasNextPage": all.len() > page,
+                                     "endCursor": page.min(all.len()).to_string()}});
+                }
+                issue
+            })
             .collect::<Vec<_>>();
         return json!({"node":{"__typename":"Issue",
             "subIssues":{"nodes":nodes,

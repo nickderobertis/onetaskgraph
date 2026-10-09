@@ -14,6 +14,7 @@ use onetaskgraph_e2e_support::{common, fixtures};
 mod copy_cost;
 mod fields;
 mod github_status_by_kind;
+mod graph;
 mod write_order;
 
 mod asset_board;
