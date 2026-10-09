@@ -12,7 +12,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::document;
+use crate::fixtures::{document, github_projects_with_board};
 use crate::machine::{bundle, validates};
 
 /// One task file: its native id, title, project, prerequisites and front-matter extras.
@@ -1264,5 +1264,44 @@ fn a_graph_that_cannot_be_written_exits_one_and_says_so() {
             "{said}"
         );
         assert!(!said.contains("panicked"), "{said}");
+    }
+}
+
+#[test]
+fn an_external_task_on_a_board_is_drawn_by_its_title_and_a_refused_read_of_it_fails_the_graph() {
+    let sandbox = Sandbox::new();
+    let plans = Store::new(&sandbox, "plans");
+    plans.project("P", "The plan");
+    plans.task(&Task {
+        id: "near",
+        title: "Ours",
+        project: "P",
+        depends_on: &["{id: \"board:T-1\"}"],
+        extra: "",
+    });
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plans": plans.source(),
+        "board": {"plugin": "github-projects", "config": config},
+    })));
+
+    assert_eq!(
+        printed(&sandbox, &["project", "graph", "plans:P"]),
+        "flowchart TD\n  n1[\"Ours\"]\n  x1[\"Alpha engine (board:T-1)\"]:::external\n  x1 --> n1\n  classDef external stroke-dasharray: 5 5\n"
+    );
+    for format in ["mermaid", "json"] {
+        // The board is built and answers; the read of that one task is what it refuses.
+        board.refuse_once("boards:projectItems");
+        let output = run(
+            &sandbox,
+            &["project", "graph", "plans:P", "--format", format],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "", "a graph was printed in part");
+        let said = stderr(&output);
+        assert!(
+            said.contains("source board could not do it") && said.contains("boards:projectItems"),
+            "the refusing source is not named: {said}"
+        );
     }
 }

@@ -1132,6 +1132,9 @@ test("a project's graph is read through the real binary as its JSON form, groupe
     await expect(refused).rejects.toMatchObject({ exitCode: 1 });
     await expect(refused).rejects.toThrow("work:T-3");
     expect(() => client.projectGraph("work:P-1", { groupBy: "" })).toThrow(TypeError);
+    expect(() =>
+      client.projectGraph("work:P-1", { groupBy: 7 } as unknown as { groupBy: string }),
+    ).toThrow(TypeError);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
