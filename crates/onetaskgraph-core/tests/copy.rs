@@ -358,6 +358,106 @@ async fn an_updating_copy_keeps_every_key_only_the_destination_holds() {
     }
 }
 
+/// The reserved-key table of `docs/metadata.md`, as `(key, owner)` pairs: the backticked keys
+/// of each row's first cell, against the first words of its second.
+fn reserved_key_owners() -> Vec<(String, String)> {
+    let page = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+    let table = page
+        .split("| Key | Owner on an update |")
+        .nth(1)
+        .expect("docs/metadata.md carries the reserved-key table");
+    let mut owners = Vec::new();
+    for row in table
+        .lines()
+        .skip(2)
+        .take_while(|line| line.starts_with('|'))
+    {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let owner = ["the copy", "the destination", "the source", "neither"]
+            .into_iter()
+            .find(|owner| cells[2].starts_with(owner))
+            .unwrap_or_else(|| panic!("a row naming no owner this test knows: {row}"));
+        for key in cells[1].split('`').skip(1).step_by(2) {
+            owners.push((key.to_owned(), owner.to_owned()));
+        }
+    }
+    owners
+}
+
+/// A value of the shape `key` holds, told apart by which end `end` holds it: the engine reads
+/// the asset record it keeps, so that one is an asset record rather than a string.
+fn reserved_value(key: &str, end: &str) -> Value {
+    if key == "onetaskgraph.assets" {
+        return json!({format!("{end}.png"): {
+            "sha256": "a".repeat(64),
+            "url": format!("https://{end}.example/{end}.png"),
+        }});
+    }
+    json!(format!("{key} at the {end}"))
+}
+
+#[tokio::test]
+async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
+    // The drift gate of that table: each row is put to a real updating copy, so the page and
+    // the engine cannot disagree about a key without this failing. A key the destination owns
+    // is held at both ends and must keep the destination's value; one the source owns is
+    // held at the destination alone and must be dropped; one neither owns is held at both
+    // and must be in neither's metadata; and the copy's own is the id it copied from.
+    let owners = reserved_key_owners();
+    assert!(owners.len() >= 11, "the table was read whole: {owners:?}");
+    let mut source = serde_json::Map::new();
+    let mut destination = serde_json::Map::new();
+    destination.insert(GlobalId::ORIGIN_KEY.to_owned(), json!("from:T-1"));
+    for (key, owner) in &owners {
+        match owner.as_str() {
+            "the destination" | "neither" => {
+                source.insert(key.clone(), reserved_value(key, "source"));
+                destination.insert(key.clone(), reserved_value(key, "destination"));
+            }
+            "the source" => {
+                destination.insert(key.clone(), reserved_value(key, "destination"));
+            }
+            _ => {}
+        }
+    }
+    let status = json!({"category": "todo", "name": "Todo"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [{"id": "T-1",
+            "title": "Renamed", "status": status, "labels": [], "metadata": source}]}},
+        "into": {"plugin": "in-memory", "config": {"tasks": [{"id": "T-1",
+            "title": "As it was", "status": status, "labels": [], "metadata": destination}]}},
+    }));
+
+    let copied = engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    assert_eq!(
+        landed(&copied.items[0]),
+        (Some("into:T-1".to_owned()), "updated".to_owned())
+    );
+    let metadata = engine
+        .task(&id("into:T-1"))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item
+        .metadata
+        .clone();
+    for (key, owner) in &owners {
+        let expected = match owner.as_str() {
+            "the copy" => Some(json!("from:T-1")),
+            "the destination" => Some(reserved_value(key, "destination")),
+            _ => None,
+        };
+        assert_eq!(
+            metadata.get(key),
+            expected.as_ref(),
+            "docs/metadata.md says {owner} owns {key} on an update"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_rust_caller_copying_back_leaves_the_destination_its_own_origin() {
     // The write-back a settled run makes, as the Rust caller that links this crate makes

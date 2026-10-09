@@ -395,12 +395,17 @@ the source's link still names the item deleted.
 
 The reserved keys keep the owners they had:
 
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `every_reserved_key_has_the_owner_docs_metadata_states_on_an_update` in
+     `crates/onetaskgraph-core/tests/copy.rs` reads this table out of this page and puts every
+     row to a real updating copy, failing naming the key whose owner the engine disagrees with. -->
 | Key | Owner on an update |
 | --- | --- |
 | `onetaskgraph.origin` | the copy, which records the id it copied from — or, on a copy back, keeps the destination's own (above) |
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |
 | `onetaskgraph.template`, `onetaskgraph.item_kind` | the source: where the source holds none, the destination's is dropped, so provenance that no longer describes the content does not survive it |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### `onetaskgraph.copies`: where a copied item landed
 
