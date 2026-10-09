@@ -1751,6 +1751,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -1772,6 +1773,7 @@ fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -1799,6 +1801,7 @@ fn artifact_task(
         repositories: vec![],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 

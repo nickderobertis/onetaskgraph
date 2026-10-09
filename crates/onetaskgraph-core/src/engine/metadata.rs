@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::boundary::{Exposure, Held};
 use super::delivery::source_failed;
 use super::{Engine, EngineError};
 use crate::GlobalId;
@@ -51,6 +52,14 @@ impl Engine {
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Task)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::of_entry(key.as_str(), value),
+        )
+        .await?;
         let task = source
             .source()
             .set_task_metadata(&id.native, key, value)
@@ -73,6 +82,14 @@ impl Engine {
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Project)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Project,
+            &Exposure::of_entry(key.as_str(), value),
+        )
+        .await?;
         let project = source
             .source()
             .set_project_metadata(&id.native, key, value)
@@ -96,6 +113,14 @@ impl Engine {
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Document)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Document,
+            &Exposure::of_entry(key.as_str(), value),
+        )
+        .await?;
         let document = source
             .source()
             .set_document_metadata(&id.native, key, value)

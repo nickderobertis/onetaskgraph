@@ -71,7 +71,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `TaskRef`,
   `Repository`,
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
-  `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
+  `Direction`, `NativeId`, `SourceName`, `Classification`; the destination-reality types
+  `Visibility` and `WriteTarget`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,

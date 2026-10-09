@@ -3807,7 +3807,13 @@ fn linear_response(
         } else {
             json!([])
         };
-        return Ok(json!({"teams":{"nodes":teams},
+        // The workspace the credential belongs to, which a source declared private is verified
+        // against; a journey withholding it sets `_linear_organization` to null.
+        let organization = match data.get("_linear_organization") {
+            None => json!({"id":"ORG-1"}),
+            Some(held) => held.clone(),
+        };
+        return Ok(json!({"organization":organization,"teams":{"nodes":teams},
             "projectStatuses":{"nodes":data["_linear_project_statuses"],
                 "pageInfo":{"hasNextPage":false}}}));
     }

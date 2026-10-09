@@ -19,6 +19,7 @@ use onetaskgraph_plugin_api::{SourceError, SourceName, Status, StatusCategory, T
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::boundary::{Exposure, Held};
 use super::{ConfiguredSource, Engine, EngineError, Qualified};
 use crate::resolve::ResolvedSource;
 use crate::{Failure, GlobalId};
@@ -114,6 +115,14 @@ impl Engine {
         category: StatusCategory,
     ) -> Result<TaskStatusSet, EngineError> {
         let source = self.status_writable(&id.source)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::metadata([category_name(category)]),
+        )
+        .await?;
         let no_such_task = || EngineError::NoSuchTask { id: id.to_string() };
         // One call answering the task as it now reads, rather than a read and then a write: a
         // source whose status write answers the whole task saves the read, and every other
@@ -244,6 +253,19 @@ impl Engine {
                 .iter()
                 .map(|other| TaskRef::qualified(&other.source, &other.native))
                 .collect();
+            if let Err(error) = self
+                .admit_known(
+                    source,
+                    &ticket.to_string(),
+                    &ticket.native,
+                    task.classification,
+                    &task.repositories,
+                    &Exposure::metadata(list.iter().map(ToString::to_string)),
+                )
+                .await
+            {
+                return entry(failed(Some(from), &error), Vec::new());
+            }
             match source
                 .source()
                 .set_delivered_by(&ticket.native, &list)
@@ -268,6 +290,19 @@ impl Engine {
         let Some(to) = settled(&categories).filter(|to| *to != from) else {
             return entry(DeliveryOutcome::Unchanged { from }, pruned);
         };
+        if let Err(error) = self
+            .admit_known(
+                source,
+                &ticket.to_string(),
+                &ticket.native,
+                task.classification,
+                &task.repositories,
+                &Exposure::metadata([category_name(to)]),
+            )
+            .await
+        {
+            return entry(failed(Some(from), &error), pruned);
+        }
         match source.source().set_task_status(&ticket.native, to).await {
             Ok(Some(status)) => entry(
                 DeliveryOutcome::Written {
@@ -404,4 +439,12 @@ pub(super) fn source_failed(source: &ResolvedSource, error: SourceError) -> Engi
         name: source.name().to_string(),
         error,
     }
+}
+
+/// A category as the wire spells it, for a check reading what a status write carries.
+fn category_name(category: StatusCategory) -> String {
+    serde_json::to_value(category)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }

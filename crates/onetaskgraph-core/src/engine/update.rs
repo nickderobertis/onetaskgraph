@@ -18,6 +18,7 @@ use onetaskgraph_plugin_api::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::boundary::{Exposure, Held};
 use super::copy::{Spent, readings, spent_between};
 use super::delivery::{Delivered, qualified_task, source_failed, targets};
 use super::narrow::holds_priority;
@@ -93,6 +94,14 @@ impl Engine {
                 .map(|edges| near_edges(edges, &id.native, &id.source)),
             ..update.clone()
         };
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::of_update(&update),
+        )
+        .await?;
         let before = readings(&[source]).await;
         let outcome = source
             .source()

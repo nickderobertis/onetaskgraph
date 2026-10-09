@@ -8,16 +8,20 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
-    AssetsWritten, Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind,
-    Direction, Document, DocumentQuery, Health, ItemKind, Label, Location, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectQuery, Repository, SourceError, SourceName,
-    Status, StatusCategory, StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    TextFields, UpdatedField,
+    AssetsWritten, Capabilities, Classification, Comment, DependencyEdge, DependencyEndpoint,
+    DependencyKind, Direction, Document, DocumentQuery, Health, ItemKind, Label, Location,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery, Repository,
+    SourceError, SourceName, Status, StatusCategory, StatusMapping, Task, TaskQuery, TaskRef,
+    TaskUpdate, TaskUpdateOutcome, TextFields, UpdatedField,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
-use crate::config::{EffectiveConfig, Origin, OutputFormat, Placement, Setting, SourceRoute};
+use crate::boundary::{PublicWriteInput, RepositoryVisibility, WriteVerdict};
+use crate::config::{
+    EffectiveConfig, Origin, OutputFormat, Placement, Setting, SourceRoute, SourceVisibility,
+    WritePolicyConfig,
+};
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::template::{
@@ -45,7 +49,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 32;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 33;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -236,6 +240,15 @@ pub fn schema_bundle() -> Value {
     roots.insert("SecretsReport", schema_for!(SecretsReport));
     roots.insert("ResolvedCredential", schema_for!(ResolvedCredential));
     roots.insert("CredentialLayer", schema_for!(CredentialLayer));
+    // The public boundary's shapes: who may read an item, who a source is declared readable
+    // by, the commands a store asks, and what those commands exchange — named, because a
+    // caller writing a configuration or implementing a policy models each of them by name.
+    roots.insert("Classification", schema_for!(Classification));
+    roots.insert("SourceVisibility", schema_for!(SourceVisibility));
+    roots.insert("WritePolicyConfig", schema_for!(WritePolicyConfig));
+    roots.insert("RepositoryVisibility", schema_for!(RepositoryVisibility));
+    roots.insert("PublicWriteInput", schema_for!(PublicWriteInput));
+    roots.insert("WriteVerdict", schema_for!(WriteVerdict));
 
     // A `linear` source's configuration, as a root of its own as well as under
     // `plugin_config`: both SDKs are generated from the roots, and a caller writing a

@@ -13,7 +13,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{GlobalId, OutputFormat, PluginKind, SearchKind};
 use onetaskgraph_plugin_api::{
-    Direction, MetadataMatch, NativeId, Priority, Repository, StatusCategory, TextFields,
+    Classification, Direction, MetadataMatch, NativeId, Priority, Repository, StatusCategory,
+    TextFields,
 };
 use serde_json::Value;
 
@@ -269,6 +270,10 @@ pub struct RouteArgs {
     /// for several; none at all matches no route.
     #[arg(long = "repository", value_name = "R", value_parser = repository)]
     pub repository: Vec<Repository>,
+    /// The item's classification: `public` (the default) or `private`. A private item is
+    /// placed only where it may be written — a source declared private.
+    #[arg(long = "classification", value_name = "CLASSIFICATION")]
+    pub classification: Option<ClassificationArg>,
 }
 
 /// A repository origin as a command line hands one over.
@@ -451,6 +456,14 @@ pub struct CreateItemArgs {
     #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
     pub metadata: Vec<String>,
 
+    /// Who may read it: `public` or `private`. Its repositories and its project tighten it,
+    /// and nothing loosens it — a project already private stays private.
+    #[arg(long = "classification", value_name = "CLASSIFICATION")]
+    pub classification: Option<ClassificationArg>,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+
     #[command(flatten)]
     pub body: CreateBodyArgs,
 }
@@ -570,6 +583,14 @@ pub struct ProjectCreateArgs {
     #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
     pub metadata: Vec<String>,
 
+    /// Who may read it: `public` or `private`. Its repositories and its project tighten it,
+    /// and nothing loosens it — a project already private stays private.
+    #[arg(long = "classification", value_name = "CLASSIFICATION")]
+    pub classification: Option<ClassificationArg>,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+
     #[command(flatten)]
     pub body: CreateBodyArgs,
 }
@@ -622,6 +643,9 @@ pub struct RenderArgs {
     /// Render and report, and write nothing.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 // llmlint: ignore-end[invalid_states_unrepresentable]
 
@@ -713,6 +737,9 @@ pub struct TaskUpdateArgs {
     /// Replace its dependencies with none.
     #[arg(long = "no-depends-on")]
     pub no_depends_on: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 // llmlint: ignore-end[invalid_states_unrepresentable]
 
@@ -737,6 +764,9 @@ pub struct PrioritySetArgs {
     /// The priority to set.
     #[arg(value_name = "PRIORITY")]
     pub priority: PriorityArg,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// What `onetaskgraph task content` can do.
@@ -761,6 +791,9 @@ pub struct ContentSetArgs {
     /// Read the new content from this file, byte for byte.
     #[arg(long, value_name = "PATH")]
     pub file: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// What `onetaskgraph task metadata`, `project metadata` and `document metadata` can do.
@@ -802,6 +835,9 @@ pub struct MetadataSetArgs {
     /// `main` parses it before anything is built, naming the parse error and the next action.
     #[arg(value_name = "VALUE", allow_hyphen_values = true)]
     pub value: String,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// What `onetaskgraph task status` can do.
@@ -825,6 +861,9 @@ pub struct StatusSetArgs {
     /// The status category to set.
     #[arg(value_name = "CATEGORY")]
     pub category: StatusArg,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// What `onetaskgraph task comment` can do.
@@ -866,6 +905,9 @@ pub struct CommentAddArgs {
     /// source refuses what it cannot record, naming why, as `NewComment::author` records.
     #[arg(long, value_name = "NAME")]
     pub author: Option<String>,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// `onetaskgraph task comment list`.
@@ -894,6 +936,9 @@ pub struct CommentEditArgs {
     /// Read the new body from this file rather than from standard input, byte for byte.
     #[arg(long = "body-file", value_name = "PATH")]
     pub body_file: Option<std::path::PathBuf>,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// `onetaskgraph task comment delete`.
@@ -1329,6 +1374,9 @@ pub struct CopyArgs {
     /// which says nothing about whether any delivered task would have moved.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// `onetaskgraph task copy`.
@@ -1489,6 +1537,60 @@ impl PriorityArg {
             Self::High => Priority::High,
             Self::Medium => Priority::Medium,
             Self::Low => Priority::Low,
+        }
+    }
+}
+
+/// A classification, as the command line spells it.
+///
+/// A command-line mirror of [`Classification`] rather than that type itself, for the reason
+/// [`StatusArg`] is one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ClassificationArg {
+    /// Anybody who may read the destination may read it.
+    Public,
+    /// Written only to a source declared private whose backend agrees.
+    Private,
+}
+
+impl ClassificationArg {
+    /// The contract's own classification.
+    #[must_use]
+    pub fn classification(self) -> Classification {
+        match self {
+            Self::Public => Classification::Public,
+            Self::Private => Classification::Private,
+        }
+    }
+}
+
+/// Which private repositories a writing verb's public-boundary check derives its terms from.
+// llmlint: ignore-block[invalid_states_unrepresentable] clap's derive has no one-field spelling for "a list, or explicitly none": `conflicts_with` refuses both flags at once where they are typed (exit 2), and `scope` maps them to the one `Option<Vec<String>>` the engine takes before anything reads them.
+#[derive(Debug, Default, Args)]
+pub struct TermScopeArgs {
+    /// Derive the public-boundary check's private terms only from this repository
+    /// (`host/owner/name`). Repeat for several; left out, the check derives them from every
+    /// private repository its policy knows of.
+    #[arg(long = "term-scope", value_name = "REPOSITORY")]
+    pub term_scope: Vec<String>,
+
+    /// Derive no private terms at all.
+    #[arg(long = "term-scope-empty", conflicts_with = "term_scope")]
+    pub term_scope_empty: bool,
+}
+// llmlint: ignore-end[invalid_states_unrepresentable]
+
+impl TermScopeArgs {
+    /// The scope the engine takes: `None` when neither flag is given, an empty list for
+    /// `--term-scope-empty`, and the repositories named otherwise.
+    #[must_use]
+    pub fn scope(&self) -> Option<Vec<String>> {
+        if self.term_scope_empty {
+            Some(Vec::new())
+        } else if self.term_scope.is_empty() {
+            None
+        } else {
+            Some(self.term_scope.clone())
         }
     }
 }

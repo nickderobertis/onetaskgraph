@@ -101,6 +101,16 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub delivered_by: Vec<TaskRef>,
+    /// Who may read this task, as it was declared (see [`Classification`]).
+    ///
+    /// Defaulted and left out of the wire while `public`, so a task written before this
+    /// field existed reads as public and a reader written before it reads what it always
+    /// read. It is the *declared* classification: the engine tightens it by the task's
+    /// repositories and its project before it decides where the task may be written, and
+    /// nothing written here can loosen either.
+    #[serde(default, skip_serializing_if = "Classification::is_public")]
+    #[schemars(!skip_serializing_if)]
+    pub classification: Classification,
 }
 
 /// A grouping of tasks, shaped like a [`Task`] without a parent of its own.
@@ -135,6 +145,12 @@ pub struct Project {
     /// repeats.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+    /// Who may read this project, as it was declared, on the terms of
+    /// [`Task::classification`]. A project holding a private task or document is private
+    /// however this reads, and the engine records it so when it writes the project.
+    #[serde(default, skip_serializing_if = "Classification::is_public")]
+    #[schemars(!skip_serializing_if)]
+    pub classification: Classification,
 }
 
 /// One piece of information that lives in a project and is not work.
@@ -180,6 +196,124 @@ pub struct Document {
     /// repeats, as a [`Task`]'s.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+    /// Who may read this document, as it was declared, on the terms of
+    /// [`Task::classification`].
+    #[serde(default, skip_serializing_if = "Classification::is_public")]
+    #[schemars(!skip_serializing_if)]
+    pub classification: Classification,
+}
+
+/// Who may read an item: anybody, or only those who may read where it is kept.
+///
+/// Two values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of
+/// any two is the one an item they both describe carries. Nothing combines them any other
+/// way, which is what makes an explicit `public` unable to loosen a private repository or a
+/// private project — a classification only ever tightens.
+///
+/// It is recorded on the item and travels with it. A source whose backend has no notion of
+/// its own records it under [`Self::METADATA_KEY`], exactly as it records
+/// [`Repository::METADATA_KEY`], and only while it is `private`: an item without it is
+/// public, so every item written before this existed reads as it did.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Classification {
+    /// Anybody who may read the destination may read it.
+    #[default]
+    Public,
+    /// It may be written only to a destination verified private, and nothing of it may
+    /// reach a public one.
+    Private,
+}
+
+impl Classification {
+    /// The reserved metadata key a source records a private classification under when its
+    /// backend has no notion of its own.
+    ///
+    /// Spelled once, here, for the reason [`Repository::METADATA_KEY`] is.
+    pub const METADATA_KEY: &'static str = "onetaskgraph.classification";
+
+    /// Whether this is [`Public`](Self::Public) — the value left out of the wire.
+    #[must_use]
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_public(&self) -> bool {
+        *self == Self::Public
+    }
+
+    /// The stricter of the two.
+    #[must_use]
+    pub fn strictest(self, other: Self) -> Self {
+        self.max(other)
+    }
+
+    /// The value as the wire spells it: `public` or `private`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+
+    /// The classification a source records under [`Self::METADATA_KEY`], or `public` when
+    /// it records none.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the key holds anything but one of the two spellings.
+    pub fn from_metadata(metadata: &BTreeMap<String, Value>) -> Result<Self, String> {
+        match metadata.get(Self::METADATA_KEY) {
+            None => Ok(Self::Public),
+            Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
+                format!(
+                    "{} is {value}; it accepts only \"public\" or \"private\"",
+                    Self::METADATA_KEY
+                )
+            }),
+        }
+    }
+
+    /// Record this classification in `metadata` under [`Self::METADATA_KEY`]: present while
+    /// private, absent while public.
+    pub fn record(self, metadata: &mut BTreeMap<String, Value>) {
+        if self.is_public() {
+            metadata.remove(Self::METADATA_KEY);
+        } else {
+            metadata.insert(Self::METADATA_KEY.to_owned(), Value::from(self.as_str()));
+        }
+    }
+}
+
+impl std::fmt::Display for Classification {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Classification {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "public" => Ok(Self::Public),
+            "private" => Ok(Self::Private),
+            _ => Err(format!(
+                "{value:?} is not a classification; a classification is public or private"
+            )),
+        }
+    }
 }
 
 /// Where an entity is, in the one form a consumer can act on without knowing the backend.

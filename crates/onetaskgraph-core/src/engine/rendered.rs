@@ -18,15 +18,16 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use onetaskgraph_plugin_api::{
-    Asset, AssetPayload, AssetUploads, DependencyEdge, DependencyEndpoint, DependencyKind,
-    Document, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, NativeId, Priority, Project,
-    Repository, SourceName, Status, StatusCategory, Task, TaskRef,
+    Asset, AssetPayload, AssetUploads, Classification, DependencyEdge, DependencyEndpoint,
+    DependencyKind, Document, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, NativeId,
+    Priority, Project, Repository, SourceName, Status, StatusCategory, Task, TaskRef, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::assets;
+use super::boundary::{Exposure, Held, Outbound};
 use super::copy::{Level, forward_edges};
 use super::delivery::{qualified_task, source_failed, targets};
 use super::{Delivered, Engine, EngineError, Qualified};
@@ -157,6 +158,9 @@ pub struct TaskCreate {
     /// The image assets it holds, each referenced by its content as `./<name>`; none for a
     /// task whose content references none.
     pub assets: Vec<AssetPayload>,
+    /// Who may read it, as declared. It is tightened by its repositories and its project
+    /// before it is placed, and a private one filed under a project held public is refused.
+    pub classification: Classification,
 }
 
 /// One project document to create, or replace, in one source.
@@ -183,6 +187,9 @@ pub struct DocumentCreate {
     /// The image assets it holds, each referenced by its content as `./<name>` — exactly
     /// these, so a document it replaces keeps none this does not name.
     pub assets: Vec<AssetPayload>,
+    /// Who may read it, as declared, on the terms of [`TaskCreate::classification`]. A
+    /// document it replaces never becomes less private than it was.
+    pub classification: Classification,
 }
 
 /// One project to create, or replace, in one source.
@@ -214,6 +221,10 @@ pub struct ProjectCreate {
     pub repositories: Option<Vec<Repository>>,
     /// The caller's own metadata keys, each set over what a project being replaced holds.
     pub metadata: BTreeMap<MetadataKey, Value>,
+    /// Who may read it, as declared: public for a new project when not given, and what it
+    /// holds for one being replaced — which this can tighten and never loosen, because a
+    /// project once private stays private after the members that made it so are gone.
+    pub classification: Option<Classification>,
 }
 
 /// What creating a task came to: the task as its source reads it back, and every task it
@@ -544,31 +555,26 @@ impl Engine {
             &request.assets,
             &[],
         )?;
-        // A task goes where its repositories route it from the source named. Routed away, it
-        // is filed under the named project's member project in the source it lands in.
-        let placement = self.place(&request.source, &request.repositories);
+        // Who may read it, settled before it is placed: its declaration, its repositories and
+        // the project it is filed under, a private task under a public project refused.
+        let named = self.creatable(&request.source, MetadataRecord::Task)?;
+        let classification = self
+            .classify(request.classification, &request.repositories)
+            .await;
+        let classification = self
+            .filed_under(named, &request.project, "the new task", classification)
+            .await?;
+        // A task goes where its classification and its repositories route it from the source
+        // named. Routed away, it is filed under the named project's member project in the
+        // source it lands in.
+        let placement =
+            self.routes
+                .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
         if let Some(first) = carried.first() {
             assets::stores(source, &record, &first.name)?;
         }
-        let filed = if near == &request.source {
-            None
-        } else {
-            let home = GlobalId::new(request.source.clone(), request.project.clone());
-            self.creatable(&request.source, MetadataRecord::Task)?;
-            let filed = self.member_project(&home, near).await?;
-            if filed.project.is_none() {
-                return Err(EngineError::NoSuchProject {
-                    id: home.to_string(),
-                });
-            }
-            Some(filed)
-        };
-        let project = filed
-            .as_ref()
-            .and_then(|filed| filed.project.clone())
-            .unwrap_or_else(|| request.project.clone());
         let Parts {
             content,
             metadata,
@@ -585,7 +591,7 @@ impl Engine {
                 kind: DependencyKind::Blocks,
             })
             .collect();
-        let write = ItemWrite {
+        let mut write = ItemWrite {
             target: None,
             item: Task {
                 id,
@@ -598,7 +604,7 @@ impl Engine {
                 },
                 priority: Priority::None,
                 labels: labels(&request.labels),
-                project: Some(project),
+                project: Some(request.project.clone()),
                 url: None,
                 location: None,
                 created_at: None,
@@ -611,9 +617,42 @@ impl Engine {
                     .map(|task| TaskRef::qualified(&task.source, &task.native))
                     .collect(),
                 delivered_by: Vec::new(),
+                classification,
             },
             depends_on,
         };
+        self.admit(
+            source,
+            &Outbound {
+                item: "the new task".to_owned(),
+                classification,
+                target: WriteTarget::New {
+                    repositories: &request.repositories,
+                    project: (near == &request.source).then_some(&request.project),
+                },
+                exposure: &Exposure::of_task(&write.item)
+                    .assets(&carried)
+                    .answers(answers),
+            },
+        )
+        .await?;
+        // Only once it is admitted: a routed task's member project is itself a write.
+        let filed = if near == &request.source {
+            None
+        } else {
+            let home = GlobalId::new(request.source.clone(), request.project.clone());
+            self.creatable(&request.source, MetadataRecord::Task)?;
+            let filed = self.member_project(&home, near).await?;
+            if filed.project.is_none() {
+                return Err(EngineError::NoSuchProject {
+                    id: home.to_string(),
+                });
+            }
+            Some(filed)
+        };
+        if let Some(member) = filed.as_ref().and_then(|filed| filed.project.clone()) {
+            write.item.project = Some(member);
+        }
         let written = match match (answers, carried.is_empty()) {
             (answers, false) => source
                 .source()
@@ -703,6 +742,14 @@ impl Engine {
             metadata,
             answers,
         } = request.body.parts(&request.metadata);
+        let declared = request.classification.strictest(
+            held.as_ref()
+                .map_or(Classification::Public, |held| held.classification),
+        );
+        let classification = self.classify(declared, &request.repositories).await;
+        let classification = self
+            .filed_under(source, &request.project, "the document", classification)
+            .await?;
         let write = ItemWrite {
             target,
             item: Document {
@@ -720,9 +767,31 @@ impl Engine {
                 updated_at: None,
                 metadata,
                 repositories: request.repositories.clone(),
+                classification,
             },
             depends_on: Vec::new(),
         };
+        self.admit(
+            source,
+            &Outbound {
+                item: write.target.as_ref().map_or_else(
+                    || "the new document".to_owned(),
+                    |id| format!("{}:{id}", request.source),
+                ),
+                classification,
+                target: match &write.target {
+                    Some(id) => WriteTarget::Existing(id),
+                    None => WriteTarget::New {
+                        repositories: &request.repositories,
+                        project: Some(&request.project),
+                    },
+                },
+                exposure: &Exposure::of_document(&write.item)
+                    .assets(&carried)
+                    .answers(answers),
+            },
+        )
+        .await?;
         let written = match (
             answers,
             carried.is_empty() && !assets::holds_any(&held_assets, recorded.as_ref()),
@@ -780,6 +849,9 @@ impl Engine {
             metadata: given,
             answers,
         } = request.body.parts(&request.metadata);
+        let held_classification = held
+            .as_ref()
+            .map_or(Classification::Public, |held| held.classification);
         let (target, depends_on, mut metadata, status, labels, repositories) = match held {
             Some(held) => {
                 let edges = forward_edges(source, &held.id, Level::Project).await?;
@@ -814,6 +886,16 @@ impl Engine {
             category,
             name: category_word(category),
         });
+        let repositories = request.repositories.clone().unwrap_or(repositories);
+        let classification = self
+            .classify(
+                request
+                    .classification
+                    .unwrap_or_default()
+                    .strictest(held_classification),
+                &repositories,
+            )
+            .await;
         let write = ItemWrite {
             target,
             item: Project {
@@ -827,10 +909,27 @@ impl Engine {
                 created_at: None,
                 updated_at: None,
                 metadata,
-                repositories: request.repositories.clone().unwrap_or(repositories),
+                repositories,
+                classification,
             },
             depends_on,
         };
+        self.admit(
+            source,
+            &Outbound {
+                item: format!("project {}:{}", request.source, request.id),
+                classification,
+                target: match &write.target {
+                    Some(id) => WriteTarget::Existing(id),
+                    None => WriteTarget::New {
+                        repositories: &write.item.repositories,
+                        project: None,
+                    },
+                },
+                exposure: &Exposure::of_project(&write.item).answers(answers),
+            },
+        )
+        .await?;
         let written = match answers {
             Some(answers) => {
                 source
@@ -1048,6 +1147,21 @@ impl Engine {
                 });
             }
             let value = provenance.to_value();
+            self.admit_existing(
+                source,
+                &id.to_string(),
+                &id.native,
+                match regeneration.record {
+                    RenderedRecord::Task => Held::Task,
+                    RenderedRecord::Project => Held::Project,
+                    RenderedRecord::Document => Held::Document,
+                },
+                &Exposure::text(rendered.body.clone())
+                    .and(Exposure::of_entry(TemplateProvenance::KEY, &value))
+                    .answers(Some(&rendered.answers))
+                    .assets(&carried),
+            )
+            .await?;
             match (regeneration.record, with_assets) {
                 (RenderedRecord::Task, true) => source
                     .source()

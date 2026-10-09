@@ -2651,6 +2651,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         repositories: vec![],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -2667,6 +2668,7 @@ fn project(id: &str, title: &str, status: Status) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -2687,6 +2689,7 @@ fn document(id: &str, title: &str) -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 

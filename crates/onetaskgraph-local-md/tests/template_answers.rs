@@ -101,6 +101,7 @@ fn task(title: &str, content: &str, metadata: Value) -> Task {
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -530,6 +531,7 @@ async fn documents_store_answers_and_take_a_rendering_on_the_same_terms() {
         updated_at: None,
         metadata: answers(json!({MetadataKey::TEMPLATE_KEY: provenance("/d.md")})),
         repositories: Vec::new(),
+        classification: Default::default(),
     };
     let native = source
         .write_document_rendered(
@@ -611,6 +613,7 @@ fn project(title: &str, content: &str, category: StatusCategory, metadata: Value
         updated_at: None,
         metadata: serde_json::from_value(metadata).unwrap(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 
