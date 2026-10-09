@@ -40,6 +40,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::SEARCH_ISSUES, 5),
     (graphql::ISSUE, 1),
     (graphql::ISSUE_BOARD_ITEMS, 1),
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The price is the instrument, not a threshold: the module documentation records that GitHub publishes no per-call point limit to sweep against, so the pin is the check that a document's price moved. This change moved it deliberately, and `session-cost.md` says why.
     (graphql::SUB_ISSUES, 6),
     (graphql::BOARD, 2),
     (graphql::ORIGIN_LOOKUP, 1),
