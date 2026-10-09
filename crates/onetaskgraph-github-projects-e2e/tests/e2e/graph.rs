@@ -159,9 +159,18 @@ fn a_plans_requests_grow_with_its_listing_pages_and_not_with_its_tasks_or_edges(
             assert_eq!(printed["edges"].as_array().unwrap().len(), edges);
         }
     }
-    // A listing page more — a hundred tasks, nearly two hundred edges — is one request more,
-    // grouped or not.
-    assert_eq!(costs, [4, 4, 5, 5]);
+    // A listing page more — a hundred tasks, nearly two hundred edges — costs what one
+    // listing page costs and nothing per task or edge, and grouping costs nothing.
+    let [three_plain, three_grouped, four_plain, four_grouped] = costs[..] else {
+        panic!("one cost per size and grouping: {costs:?}");
+    };
+    assert_eq!(three_grouped, three_plain, "grouping adds no read");
+    assert_eq!(four_grouped, four_plain, "grouping adds no read");
+    assert_eq!(
+        four_plain - three_plain,
+        1,
+        "a further page costs one listing page"
+    );
 }
 
 /// How many of an issue's blockers one listing carries beside it: the `nestedFirst` this
