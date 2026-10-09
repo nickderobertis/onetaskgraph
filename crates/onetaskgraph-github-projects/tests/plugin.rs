@@ -3021,6 +3021,129 @@ fn board_of(projects: usize, tasks: usize) -> Fixture {
     board(items)
 }
 
+/// The title of each task one project-scoped read reports, in its order.
+async fn project_titles(source: &dyn TaskSource, project: &str) -> Vec<(String, String)> {
+    source
+        .query_tasks(
+            &TaskQuery {
+                project: ProjectFilter::Is(NativeId(project.to_owned())),
+                ..TaskQuery::default()
+            },
+            &page(10),
+        )
+        .await
+        .expect("the board answers a task query")
+        .items
+        .into_iter()
+        .map(|task| (task.id.0, task.title))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_projects_tasks_are_read_once_a_command_and_kept_in_step_with_its_own_writes() {
+    // A caller pages through a project's tasks one page at a time, and each page is cut from
+    // the whole list, so the list is read once a command and held — which is only right while
+    // what is held keeps up with what this source writes, and is let go of when the command
+    // ends, so the next one reads what a person has changed since.
+    let fixture = board_of(2, 2);
+    let source = source(&fixture);
+    let reads = || fixture.requests("projectTasks");
+    let titled = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(id, title)| ((*id).to_owned(), (*title).to_owned()))
+            .collect()
+    };
+
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[("I_p1t1", "Step 1.1"), ("I_p1t2", "Step 1.2")])
+    );
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[("I_p1t1", "Step 1.1"), ("I_p1t2", "Step 1.2")])
+    );
+    assert_eq!(
+        reads(),
+        1,
+        "the second read of the same project asked GitHub nothing"
+    );
+
+    // Created under it, retitled in it, moved out of it and deleted: each is what the next
+    // read of the project reports, without asking GitHub for its tasks again.
+    let filed = source
+        .write_task(&ItemWrite {
+            target: None,
+            item: Task {
+                project: Some(NativeId("I_p1".to_owned())),
+                ..task("ignored", "Step 1.3", status(StatusCategory::Todo, "Todo"))
+            },
+            depends_on: vec![],
+        })
+        .await
+        .expect("a task this board accepts");
+    for (id, title, project) in [
+        ("I_p1t1", "Renamed", "I_p1"),
+        ("I_p1t2", "Step 1.2", "I_p2"),
+    ] {
+        source
+            .write_task(&ItemWrite {
+                target: Some(NativeId(id.to_owned())),
+                item: Task {
+                    project: Some(NativeId(project.to_owned())),
+                    ..task(id, title, status(StatusCategory::Todo, "Todo"))
+                },
+                depends_on: vec![],
+            })
+            .await
+            .expect("an update this board accepts");
+    }
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[("I_p1t1", "Renamed"), (filed.0.as_str(), "Step 1.3")])
+    );
+    // Deleted: one the project held before this command, so the answer is the held list's
+    // own rather than the record of what this source created.
+    source
+        .delete_task(&NativeId("I_p1t1".to_owned()))
+        .await
+        .expect("a task this board holds");
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[(filed.0.as_str(), "Step 1.3")])
+    );
+    assert_eq!(
+        reads(),
+        1,
+        "every one of those answers came from the held list"
+    );
+
+    // A person retitles a task on GitHub. This command does not see it; the next does.
+    fixture
+        .state
+        .lock()
+        .unwrap()
+        .items
+        .iter_mut()
+        .find(|item| item.content_id == filed.0)
+        .expect("the fixture holds the task")
+        .title = "Renamed by a person".to_owned();
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[(filed.0.as_str(), "Step 1.3")])
+    );
+    source.end_command().await.expect("a command ends");
+    assert_eq!(
+        project_titles(source.as_ref(), "I_p1").await,
+        titled(&[(filed.0.as_str(), "Renamed by a person")])
+    );
+    assert_eq!(
+        reads(),
+        2,
+        "the next command read the project's tasks again"
+    );
+}
+
 #[tokio::test]
 async fn one_projects_tasks_come_from_that_project_and_never_from_the_boards_items() {
     // The read this whole shape exists for. A board read is charged for what its nested

@@ -20,6 +20,7 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  projectGraphDirections,
   taskUpdateFlags,
   taskUpdateOptionFlags,
 } from "../src/index.ts";
@@ -1074,6 +1075,18 @@ test("a task list is narrowed to a metadata value and to a copy origin through t
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("projectGraph offers exactly the directions the binary's project graph accepts", () => {
+  // Every verb validates the configuration it is handed, `--help` included, so none of the
+  // ambient configuration reaches it.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith(CONFIGURATION_PREFIX)),
+  );
+  const help = spawnSync(binary, ["project", "graph", "--help"], { encoding: "utf8", env }).stdout;
+  const block = help.slice(help.indexOf("--direction <DIRECTION>"), help.indexOf("--group-by"));
+  const offered = [...block.matchAll(/^\s+- ([a-z]+):/gm)].map(([, value]) => value);
+  expect(offered).toEqual([...projectGraphDirections]);
 });
 
 test("a project's graph is read through the real binary as its JSON form, grouped and refused", async () => {

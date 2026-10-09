@@ -50,9 +50,11 @@ export type DependencyOptions = Omit<QueryOptions, "sources"> & {
   direction?: "depends-on" | "depended-on-by";
 };
 // `project graph` lays the graph out `auto`matically unless told which way, and groups its tasks
-// only when given the metadata key to group them by.
+// only when given the metadata key to group them by. The directions are the binary's own
+// `--direction` vocabulary, which tests/client.test.ts reads back from its `--help`.
+export const projectGraphDirections = ["auto", "td", "lr"] as const;
 export type ProjectGraphOptions = {
-  direction?: "auto" | "td" | "lr";
+  direction?: (typeof projectGraphDirections)[number];
   groupBy?: string;
 };
 export type FilterOptions = QueryOptions & {

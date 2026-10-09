@@ -1088,3 +1088,57 @@ fn a_cycle_and_a_dependency_on_a_missing_task_are_refused_whole() {
         );
     }
 }
+
+/// The failure document one refused invocation under `--json` writes: what a program reads to
+/// tell one refusal from another without parsing prose.
+fn failure_kind(sandbox: &Sandbox, arguments: &[&str]) -> Value {
+    let mut asked = vec!["--json"];
+    asked.extend_from_slice(arguments);
+    let output = run(sandbox, &asked);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let document: Value =
+        serde_json::from_str(&stdout(&output)).expect("a failure document under --json");
+    validates(
+        &bundle(sandbox),
+        "FailureDocument",
+        &document,
+        &asked.join(" "),
+    );
+    document["failure"]["kind"].clone()
+}
+
+#[test]
+fn each_refusal_of_a_graph_names_its_own_kind_to_a_program() {
+    let sandbox = Sandbox::new();
+    let store = grouped(&sandbox);
+    std::fs::write(
+        store.path().join("tasks/announce.md"),
+        format!("---\ntitle: Announce\nproject: P\nmetadata:\n  {UNIT}: [a, b]\n---\n"),
+    )
+    .expect("the task rewritten");
+    store.project("loop", "Loops");
+    for (id, before) in [("r1", "r2"), ("r2", "r1")] {
+        store.task(&Task {
+            id,
+            title: id,
+            project: "loop",
+            depends_on: &[before],
+            extra: "",
+        });
+    }
+    assert_eq!(
+        failure_kind(
+            &sandbox,
+            &["project", "graph", "plans:P", "--group-by", UNIT]
+        ),
+        "graph-group"
+    );
+    assert_eq!(
+        failure_kind(&sandbox, &["project", "graph", "plans:loop"]),
+        "dependency-cycle"
+    );
+    assert_eq!(
+        failure_kind(&sandbox, &["project", "graph", "plans:nowhere"]),
+        "no-such-item"
+    );
+}

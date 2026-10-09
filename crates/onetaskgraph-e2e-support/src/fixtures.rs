@@ -1711,6 +1711,7 @@ pub fn github_projects_with_tasks(sandbox: &Sandbox, count: usize) -> (Value, Gi
 ///
 /// What a suite of one plugin builds a board of its own shape from: the item shape is the
 /// board's, so it is spelled here, and the shape of the plan it adds is the suite's.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback board's only constructor, `github_projects_board_at`, and its private state live here for the reason `GitHubBoard` records, so a board of a shape one suite needs can only be opened through an entry point beside it; the shape itself — the plan a GitHub Projects journey draws — is built in that suite, `crates/onetaskgraph-github-projects-e2e/tests/e2e/graph.rs`, as `github_projects_with_tasks` serves the engine's.
 pub fn github_projects_with_items(
     sandbox: &Sandbox,
     items: Vec<Value>,
