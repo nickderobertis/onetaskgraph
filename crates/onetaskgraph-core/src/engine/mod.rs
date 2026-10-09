@@ -20,6 +20,7 @@ mod comment;
 mod copy;
 mod delivery;
 mod fetch;
+mod graph;
 mod join;
 mod local;
 mod metadata;
@@ -60,6 +61,10 @@ pub use copy::{
     CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
+pub use graph::{
+    GraphDirection, GraphEdge, GraphNode, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
+    ProjectGraphRequest, label as graph_label,
+};
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{TaskContentSet, TaskPrioritySet};
@@ -711,6 +716,35 @@ pub enum EngineError {
     NoSuchDocument {
         /// The qualified id that named nothing.
         id: String,
+    },
+
+    /// `project graph --group-by` met a task whose value under the key is neither a string
+    /// nor `null`, so it names no group a picture could draw.
+    #[error(
+        "task {task} holds {value} under {key}, which is not a group: a group is a non-empty \
+         string, and a task with none holds nothing, null or \"\" there\n\
+         next: write a string under {key} on {task} — `onetaskgraph task metadata set {task} \
+         {key} '\"<group>\"'` — or group by another key."
+    )]
+    GraphGroupNotText {
+        /// The qualified id of the task holding it.
+        task: String,
+        /// The `--group-by` key.
+        key: String,
+        /// The value it holds, as JSON.
+        value: String,
+    },
+
+    /// `project graph` met tasks of the project that depend on each other in a cycle, which
+    /// no order can put each after what it depends on.
+    #[error(
+        "the tasks {tasks} depend on each other in a cycle, so they have no order to draw\n\
+         next: read each one's edges with `onetaskgraph task deps <ID>` and remove the \
+         dependency that closes the cycle."
+    )]
+    DependencyCycle {
+        /// The qualified ids of every task the cycle leaves unordered, comma-separated.
+        tasks: String,
     },
 
     /// A comment verb named a task its source does not hold.

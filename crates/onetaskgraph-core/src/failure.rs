@@ -229,6 +229,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         | EngineError::NoSuchProject { .. }
         | EngineError::NoSuchDocument { .. } => ("no-such-item".to_owned(), None, None),
         EngineError::NoSuchComment { .. } => ("no-such-comment".to_owned(), None, None),
+        EngineError::GraphGroupNotText { .. } => ("graph-group".to_owned(), None, None),
+        EngineError::DependencyCycle { .. } => ("dependency-cycle".to_owned(), None, None),
         EngineError::NotCreatable { name, .. } | EngineError::RenderingNotWritable { name, .. } => {
             ("not-writable".to_owned(), configured(name), None)
         }
