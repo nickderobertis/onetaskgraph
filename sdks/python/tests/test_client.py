@@ -535,7 +535,8 @@ def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     assert isinstance(graph, ProjectGraph)
     assert graph.schema_version == 1
     assert graph.direction.value == "lr"
-    assert graph.group_by == "unit"
+    assert graph.group_by is not None
+    assert graph.group_by.root == "unit"
     assert [(node.key, node.id.root, node.title, node.group) for node in graph.nodes] == [
         ("n1", "from:T-1", "Design", "core"),
         ("n2", "from:T-2", "Build", "core"),

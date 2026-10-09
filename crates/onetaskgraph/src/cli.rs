@@ -1326,19 +1326,12 @@ pub struct GraphArgs {
 
     /// Group the project's tasks by the non-empty string each holds under this metadata key.
     #[arg(long = "group-by", value_name = "KEY", value_parser = group_key)]
-    pub group_by: Option<String>,
+    pub group_by: Option<onetaskgraph_core::GroupKey>,
 }
 
 /// A `--group-by` key, refused when it is empty: an empty key names no metadata at all.
-fn group_key(value: &str) -> Result<String, String> {
-    if value.is_empty() {
-        return Err(
-            "a metadata key is not empty; name the key whose value groups a task, \
-                    for example `orchestrator.unit`"
-                .to_owned(),
-        );
-    }
-    Ok(value.to_owned())
+fn group_key(value: &str) -> Result<onetaskgraph_core::GroupKey, String> {
+    onetaskgraph_core::GroupKey::new(value)
 }
 
 /// The two forms `project graph` prints.
@@ -1375,8 +1368,9 @@ impl GraphDirectionArg {
 }
 
 /// What `project graph` prints, stated whole: the contract every consumer of the verb builds
-/// against. The README's "Drawing a project's dependency graph" states the same, and the
-/// journeys in `crates/onetaskgraph-e2e/tests/e2e/graph.rs` hold both to the bytes printed.
+/// against, and its one statement. The README's "Drawing a project's dependency graph"
+/// carries this text verbatim, and the journeys in `crates/onetaskgraph-e2e/tests/e2e/graph.rs`
+/// hold the binary to it and the README to this text.
 const GRAPH_CONTRACT: &str = "\
 The graph:
   Every task of the project is drawn, across every page its source answers, with each

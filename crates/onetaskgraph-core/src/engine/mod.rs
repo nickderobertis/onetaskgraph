@@ -62,7 +62,7 @@ pub use copy::{
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use graph::{
-    GraphDirection, GraphEdge, GraphNode, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
+    GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
     ProjectGraphRequest, label as graph_label,
 };
 pub use local::ProjectSelector;

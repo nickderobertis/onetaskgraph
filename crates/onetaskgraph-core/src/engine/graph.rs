@@ -1,43 +1,36 @@
 //! `project graph`: one project's tasks and the dependency edges between them, laid out
 //! once and handed back in the two forms the verb prints.
 //!
-//! The layout is the contract, and it is stated whole in the verb's own `--help` and in the
-//! README's "Drawing a project's dependency graph": the order the nodes come in, how they
-//! are numbered, the order of the edges, which way `auto` lays the graph out, how a group is
-//! read off a task's metadata and how a label is escaped. Everything below is a function of
-//! what the project's source reports and of the request, so two calls over an unchanged
-//! project agree byte for byte.
+//! The layout is the contract, and it is stated whole in the verb's own `--help`, which the
+//! README carries verbatim: the order the nodes come in, how they are numbered, the order of
+//! the edges, which way `auto` lays the graph out, how a group is read off a task's metadata
+//! and how a label is escaped. Everything below is a function of what the project's source
+//! reports and of the request, so two calls over an unchanged project agree byte for byte.
 //!
 //! Nothing is written down: the tasks are read through the source's own project listing and
 //! each task's forward edges through its own dependency read, exactly as `task list
 //! --project` and `task deps` read them, and the whole graph lives for one call.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::num::NonZeroU32;
 
 use onetaskgraph_plugin_api::{ItemKind, Task};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::copy::{Level, forward_edges};
-use super::{
-    Engine, EngineError, Filters, Paging, ProjectSelector, Qualified, TaskRequest, qualify_endpoint,
-};
+use super::{Engine, EngineError, Qualified, qualify_endpoint};
 use crate::GlobalId;
-
-/// How many of a project's tasks one engine page asks for while the graph is read.
-///
-/// The widest page any bundled source serves, so a source answering from one listing of the
-/// project is asked as few times as it can be.
-const GRAPH_PAGE: NonZeroU32 = NonZeroU32::new(100).expect("100 is not zero");
 
 /// The version of the document [`ProjectGraph`] serialises to, which its consumers read
 /// before anything else in it.
 pub const PROJECT_GRAPH_SCHEMA_VERSION: u32 = 1;
 
+/// What a walk of a project's members says it was for, when a source refuses it.
+const FOR_A_GRAPH: &str = "for a graph";
+
 /// Which way a graph is laid out: top to bottom, or left to right.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum GraphDirection {
     /// Top to bottom: Mermaid's `flowchart TD`.
@@ -70,6 +63,48 @@ impl GraphDirection {
     }
 }
 
+/// The task metadata key `project graph --group-by` groups by: any key a record may hold,
+/// and never the empty string, which names none.
+///
+/// Not a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may
+/// name, which keeps out this product's own namespace and a key with no dot. A read groups
+/// by whatever a task holds, so a folder of Markdown's `unit:` is as good a key as
+/// `orchestrator.unit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct GroupKey(#[schemars(length(min = 1))] String);
+
+impl GroupKey {
+    /// `key`, refused when it is empty.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, worded for the command line, when `key` is empty.
+    pub fn new(key: impl Into<String>) -> Result<Self, String> {
+        let key = key.into();
+        if key.is_empty() {
+            return Err(
+                "a metadata key is not empty; name the key whose value groups a task, \
+                        for example `orchestrator.unit`"
+                    .to_owned(),
+            );
+        }
+        Ok(Self(key))
+    }
+
+    /// The key as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<GroupKey> for String {
+    fn from(key: GroupKey) -> Self {
+        key.0
+    }
+}
+
 /// What `project graph` is asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectGraphRequest {
@@ -77,55 +112,63 @@ pub struct ProjectGraphRequest {
     pub project: GlobalId,
     /// The direction to lay it out in, or `None` for `auto`.
     pub direction: Option<GraphDirection>,
-    /// The task metadata key whose non-empty string value groups the project's tasks, or
-    /// `None` for no groups.
-    pub group_by: Option<String>,
+    /// The key whose non-empty string value groups the project's tasks, or `None` for none.
+    pub group_by: Option<GroupKey>,
 }
 
 /// One project's dependency graph, laid out: the document `project graph --format json`
 /// prints, and everything its Mermaid form is drawn from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// Built by [`Engine::project_graph`] alone, so every edge names a node it holds, an `n`
+/// node is never external and an `x` node never has a group: nothing outside this module can
+/// put one together any other way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ProjectGraph {
     /// The version of this document's shape; `1`.
-    pub schema_version: u32,
+    schema_version: u32,
     /// The project whose tasks these are.
-    pub project: GlobalId,
+    project: GlobalId,
     /// The direction the graph is laid out in — `auto` already resolved.
-    pub direction: GraphDirection,
+    direction: GraphDirection,
     /// The `--group-by` key, or `null` when none was given.
-    pub group_by: Option<String>,
+    group_by: Option<GroupKey>,
     /// Every task of the project in topological order, then every task outside it that one
     /// of them depends on, ordered by title and then qualified id.
-    pub nodes: Vec<GraphNode>,
+    nodes: Vec<GraphNode>,
     /// Every dependency, ordered by its prerequisite's position and then its dependent's.
-    pub edges: Vec<GraphEdge>,
+    edges: Vec<GraphEdge>,
+    /// Each edge as the positions in `nodes` of its prerequisite and its dependent, in the
+    /// order of `edges` — what the Mermaid form names each end by.
+    #[serde(skip)]
+    #[schemars(skip)]
+    links: Vec<(usize, usize)>,
 }
 
 /// One node of a [`ProjectGraph`]: one task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct GraphNode {
     /// The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task
     /// outside it, each counted from 1.
-    pub key: String,
+    key: String,
     /// The task's qualified id.
-    pub id: GlobalId,
+    id: GlobalId,
     /// The task's title, exactly as its source reports it — unescaped and unaltered.
-    pub title: String,
+    title: String,
     /// Whether the task is outside the project: `true` exactly for the `x<k>` nodes.
-    pub external: bool,
+    external: bool,
     /// The task's group under `group_by`, or `null` — for a task with none, for every
     /// external task, and for every task when no key was given.
-    pub group: Option<String>,
+    group: Option<String>,
 }
 
 /// One edge of a [`ProjectGraph`], pointing from the task depended on to the task that
 /// depends on it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct GraphEdge {
     /// The prerequisite: the task that has to finish first.
-    pub from: GlobalId,
+    from: GlobalId,
     /// The dependent: the project task that waits on it.
-    pub to: GlobalId,
+    to: GlobalId,
 }
 
 impl ProjectGraph {
@@ -139,8 +182,6 @@ impl ProjectGraph {
     /// blocks, and rendered the same graph with each block's own edges declared inside it.
     #[must_use]
     pub fn mermaid(&self) -> String {
-        let key: HashMap<&GlobalId, &GraphNode> =
-            self.nodes.iter().map(|node| (&node.id, node)).collect();
         let node_line = |node: &GraphNode, indent: &str| {
             if node.external {
                 format!(
@@ -153,13 +194,19 @@ impl ProjectGraph {
                 format!("{indent}{}[\"{}\"]\n", node.key, label(&node.title))
             }
         };
-        let edge_line = |edge: &GraphEdge, indent: &str| {
+        let edge_line = |&(from, to): &(usize, usize), indent: &str| {
             format!(
                 "{indent}{} --> {}\n",
-                key[&edge.from].key, key[&edge.to].key
+                self.nodes[from].key, self.nodes[to].key
             )
         };
-        let group_of = |id: &GlobalId| key[id].group.as_deref();
+        // The group an edge sits inside: its two ends' group, when they share one.
+        let inside = |&(from, to): &(usize, usize)| {
+            self.nodes[from]
+                .group
+                .as_deref()
+                .filter(|group| self.nodes[to].group.as_deref() == Some(*group))
+        };
         let mut out = format!("flowchart {}\n", self.direction.mermaid());
         // Groups in the order their first member is drawn in, which is the order `nodes`
         // holds the project's tasks in.
@@ -169,9 +216,6 @@ impl ProjectGraph {
                 groups.push(group);
             }
         }
-        let inside = |edge: &GraphEdge| {
-            group_of(&edge.from).is_some() && group_of(&edge.from) == group_of(&edge.to)
-        };
         for (number, group) in groups.iter().enumerate() {
             out.push_str(&format!(
                 "  subgraph g{}[\"{}\"]\n",
@@ -185,20 +229,16 @@ impl ProjectGraph {
             {
                 out.push_str(&node_line(node, "    "));
             }
-            for edge in self
-                .edges
-                .iter()
-                .filter(|edge| inside(edge) && group_of(&edge.from) == Some(group))
-            {
-                out.push_str(&edge_line(edge, "    "));
+            for link in self.links.iter().filter(|link| inside(link) == Some(group)) {
+                out.push_str(&edge_line(link, "    "));
             }
             out.push_str("  end\n");
         }
         for node in self.nodes.iter().filter(|node| node.group.is_none()) {
             out.push_str(&node_line(node, "  "));
         }
-        for edge in self.edges.iter().filter(|edge| !inside(edge)) {
-            out.push_str(&edge_line(edge, "  "));
+        for link in self.links.iter().filter(|link| inside(link).is_none()) {
+            out.push_str(&edge_line(link, "  "));
         }
         if self.nodes.iter().any(|node| node.external) {
             out.push_str("  classDef external stroke-dasharray: 5 5\n");
@@ -223,14 +263,14 @@ pub fn label(text: &str) -> String {
 /// A task's group under `key`: its metadata value there when that is a non-empty string,
 /// none when it is absent, `null` or `""`, and a refusal naming the task and the key for any
 /// other JSON value.
-fn group_of(task: &Qualified<Task>, key: &str) -> Result<Option<String>, EngineError> {
-    match task.item.metadata.get(key) {
+fn group_of(task: &Qualified<Task>, key: &GroupKey) -> Result<Option<String>, EngineError> {
+    match task.item.metadata.get(key.as_str()) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) if value.is_empty() => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(other) => Err(EngineError::GraphGroupNotText {
             task: task.id.to_string(),
-            key: key.to_owned(),
+            key: key.as_str().to_owned(),
             value: other.to_string(),
         }),
     }
@@ -239,6 +279,15 @@ fn group_of(task: &Qualified<Task>, key: &str) -> Result<Option<String>, EngineE
 /// The order a title tie is broken in: the title, then the qualified id, each by its bytes.
 fn tie(title: &str, id: &GlobalId) -> (String, String) {
     (title.to_owned(), id.to_string())
+}
+
+/// A source's refusal as the failure of a read, which is what a graph's reads are: the
+/// shared walks name it as a copy's, whose next action is to copy again.
+fn failed_read(error: EngineError) -> EngineError {
+    match error {
+        EngineError::SourceRefused { name, error } => EngineError::SourceFailed { name, error },
+        other => other,
+    }
 }
 
 impl Engine {
@@ -263,21 +312,23 @@ impl Engine {
     ) -> Result<ProjectGraph, EngineError> {
         let source = self.built(&request.project.source)?;
         let name = source.name().clone();
-        let failed = |error| EngineError::SourceFailed {
-            name: name.to_string(),
-            error,
-        };
         let held = source
             .source()
             .get_project(&request.project.native)
             .await
-            .map_err(failed)?;
+            .map_err(|error| EngineError::SourceFailed {
+                name: name.to_string(),
+                error,
+            })?;
         if held.is_none() {
             return Err(EngineError::NoSuchProject {
                 id: request.project.to_string(),
             });
         }
-        let tasks = self.graph_tasks(&request.project).await?;
+        let tasks = self
+            .project_member_tasks(&request.project, FOR_A_GRAPH)
+            .await
+            .map_err(failed_read)?;
         let groups = match &request.group_by {
             Some(key) => tasks
                 .iter()
@@ -287,17 +338,13 @@ impl Engine {
         };
 
         // Every dependency, as (prerequisite, dependent). A set, because a source reporting
-        // one relationship twice still has one edge to draw.
+        // one relationship twice — as two kinds of edge between the same two tasks, say —
+        // still has one edge to draw.
         let mut edges: HashSet<(GlobalId, GlobalId)> = HashSet::new();
         for task in &tasks {
             let read = forward_edges(source, &task.id.native, Level::Task)
                 .await
-                .map_err(|error| match error {
-                    EngineError::SourceRefused { name, error } => {
-                        EngineError::SourceFailed { name, error }
-                    }
-                    other => other,
-                })?;
+                .map_err(failed_read)?;
             for edge in read {
                 let to = qualify_endpoint(&name, edge.to);
                 // A task that depends on a whole project is not drawn: the graph is of tasks.
@@ -376,14 +423,21 @@ impl Engine {
             .enumerate()
             .map(|(at, node)| (&node.id, at))
             .collect();
-        let mut drawn: Vec<GraphEdge> = edges
+        // Every end of every edge is a node: a project task, or an external one read above.
+        let mut links: Vec<(usize, usize)> = edges
             .iter()
-            .map(|(prerequisite, dependent)| GraphEdge {
-                from: prerequisite.clone(),
-                to: dependent.clone(),
+            .filter_map(|(prerequisite, dependent)| {
+                Some((*position.get(prerequisite)?, *position.get(dependent)?))
             })
             .collect();
-        drawn.sort_by_key(|edge| (position[&edge.from], position[&edge.to]));
+        links.sort_unstable();
+        let edges = links
+            .iter()
+            .map(|&(from, to)| GraphEdge {
+                from: nodes[from].id.clone(),
+                to: nodes[to].id.clone(),
+            })
+            .collect();
 
         Ok(ProjectGraph {
             schema_version: PROJECT_GRAPH_SCHEMA_VERSION,
@@ -391,56 +445,9 @@ impl Engine {
             direction,
             group_by: request.group_by.clone(),
             nodes,
-            edges: drawn,
+            edges,
+            links,
         })
-    }
-
-    /// Every task the source holds in `project`, across every page it answers.
-    ///
-    /// Paged by this engine's own token, as a copy reads a project's tasks; a source failing
-    /// any page fails the graph.
-    async fn graph_tasks(&self, project: &GlobalId) -> Result<Vec<Qualified<Task>>, EngineError> {
-        let mut request = TaskRequest {
-            sources: vec![project.source.clone()],
-            filters: Filters::default(),
-            project: ProjectSelector::Qualified(project.clone()),
-            priorities: Vec::new(),
-            commented_since: None,
-            metadata: Vec::new(),
-            origin: None,
-            include_members: false,
-            paging: Paging {
-                limit: GRAPH_PAGE,
-                token: None,
-            },
-        };
-        let mut tasks = Vec::new();
-        loop {
-            let response = self.tasks(&request).await?;
-            if let Some(failure) = response.errors.into_iter().next() {
-                return Err(EngineError::SourceFailed {
-                    name: failure.source.to_string(),
-                    error: failure.error,
-                });
-            }
-            tasks.extend(response.items);
-            match response.next {
-                Some(token) if Some(&token) != request.paging.token.as_ref() => {
-                    request.paging.token = Some(token);
-                }
-                Some(_) => {
-                    return Err(EngineError::SourceFailed {
-                        name: project.source.to_string(),
-                        error: onetaskgraph_plugin_api::SourceError::Malformed {
-                            message: "the tasks of a project were being read for a graph, and \
-                                      the source answered the same page twice"
-                                .into(),
-                        },
-                    });
-                }
-                None => return Ok(tasks),
-            }
-        }
     }
 
     /// The title of one task outside the project, read from its own source.
@@ -509,7 +516,7 @@ fn topological(
 
 #[cfg(test)]
 mod tests {
-    use super::label;
+    use super::{GroupKey, label};
 
     /// Every line break is one space, whichever of the three spellings it is, and the four
     /// escaped characters are escaped once each — `#` first, so no entity is escaped twice.
@@ -523,5 +530,17 @@ mod tests {
             "nothing but the four is altered"
         );
         assert_eq!(label("plain ünïcode"), "plain ünïcode");
+    }
+
+    /// A group key is any key but the empty one.
+    #[test]
+    fn a_group_key_is_refused_only_when_it_is_empty() {
+        assert!(GroupKey::new("").is_err());
+        for key in ["unit", "orchestrator.unit", "onetaskgraph.origin"] {
+            assert_eq!(
+                GroupKey::new(key).map(|key| key.as_str().to_owned()),
+                Ok(key.to_owned())
+            );
+        }
     }
 }

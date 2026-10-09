@@ -13,16 +13,44 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, PlanIssue, document, github_projects_with_plan};
+use crate::fixtures::{GitHubBoardFields, document, github_projects_with_items};
+
+/// One task of a plan: its issue's node id, its title, and the ids of the issues blocking it.
+struct PlanIssue {
+    id: String,
+    title: String,
+    blocked_by: Vec<String>,
+}
+
+/// The shared board plus the project issue [`PLAN`] and `tasks` filed under it as its
+/// sub-issues, each blocked by the issues it names — a plan of any size, whose listing spans
+/// as many pages of `subIssues` as its tasks need.
+fn github_projects_with_plan(sandbox: &Sandbox, tasks: &[PlanIssue]) -> (Value, GitHubBoardFields) {
+    let issue = |id: &str, title: &str, parent: Option<&str>| {
+        json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,
+            "body":format!("{title}."),"state":"OPEN","reason":null,"parent":parent,
+            "repo":"nickderobertis/onetaskgraph","status":"Todo","origin":"","labels":[]})
+    };
+    let mut items = vec![issue(PLAN, "The plan", None)];
+    items.extend(
+        tasks
+            .iter()
+            .map(|task| issue(&task.id, &task.title, Some(PLAN))),
+    );
+    let (config, board) = github_projects_with_items(sandbox, items);
+    for task in tasks {
+        if !task.blocked_by.is_empty() {
+            board.block(&task.id, &task.blocked_by);
+        }
+    }
+    (config, board)
+}
 
 /// The project issue every plan below files its tasks under.
 const PLAN: &str = "PLAN-1";
 
 /// How many sub-issues one page of GitHub's `subIssues` holds as this source asks for them.
 const LISTING_PAGE: usize = onetaskgraph_github_projects::MAX_PAGE_SIZE as usize;
-
-/// How many of an issue's blockers one listing carries beside it: `$nestedFirst`.
-const CARRIED_BLOCKERS: usize = 50;
 
 /// A plan of `count` tasks, most with one or two edges: each task after the first is blocked by
 /// the one before it, every third by the one before that too, and every tenth by nothing.
@@ -48,7 +76,7 @@ fn tasks(count: usize) -> Vec<PlanIssue> {
 /// A sandbox configuring the board holding `plan` as source `board`.
 fn hosted(plan: &[PlanIssue]) -> (Sandbox, GitHubBoardFields) {
     let sandbox = Sandbox::new();
-    let (config, board) = github_projects_with_plan(&sandbox, PLAN, plan);
+    let (config, board) = github_projects_with_plan(&sandbox, plan);
     sandbox.project_document(&document(&json!({
         "board": {"plugin": "github-projects", "config": config}
     })));
@@ -131,9 +159,25 @@ fn a_plans_requests_grow_with_its_listing_pages_and_not_with_its_tasks_or_edges(
             assert_eq!(printed["edges"].as_array().unwrap().len(), edges);
         }
     }
+    // A listing page more — a hundred tasks, nearly two hundred edges — is one request more,
+    // grouped or not.
     assert_eq!(costs, [4, 4, 5, 5]);
-    // A listing page more — a hundred tasks, nearly two hundred edges — is one request more.
-    assert!(costs[2] - costs[0] <= 1 && costs[3] - costs[1] <= 1);
+}
+
+/// How many of an issue's blockers one listing carries beside it: the `nestedFirst` this
+/// source sends with its sub-issue read, read off a request it really sent rather than
+/// restated here.
+fn carried_blockers() -> usize {
+    let (sandbox, board) = hosted(&tasks(1));
+    let (output, _) = graph(&sandbox, &board, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    board
+        .served()
+        .iter()
+        .find(|(query, _)| query.contains("subIssues(first:$first"))
+        .and_then(|(_, variables)| variables["nestedFirst"].as_u64())
+        .and_then(|page| usize::try_from(page).ok())
+        .expect("the sub-issue read names how many blockers it carries")
 }
 
 #[test]
@@ -154,19 +198,18 @@ fn a_board_refusing_a_later_listing_page_prints_no_part_of_the_graph() {
             .into_iter()
             .filter(|name| *name == "subIssues page")
             .count();
-        assert!(listing >= 2, "{:?}", named(&served));
+        assert_eq!(listing, 2, "{:?}", named(&served));
     }
 }
 
 #[test]
 fn a_board_refusing_a_dependency_read_after_the_listing_prints_no_part_of_the_graph() {
+    let carried = carried_blockers();
     for format in ["mermaid", "json"] {
         // One task blocked by more issues than a listing carries beside it, so its edges are
         // read on their own after the listing — and that read is refused.
-        let mut plan = tasks(CARRIED_BLOCKERS + 10);
-        let crowded = (0..=CARRIED_BLOCKERS)
-            .map(|index| format!("S-{index:03}"))
-            .collect();
+        let mut plan = tasks(carried + 10);
+        let crowded = (0..=carried).map(|index| format!("S-{index:03}")).collect();
         plan.push(PlanIssue {
             id: "S-999".into(),
             title: "Blocked by many".into(),
@@ -201,6 +244,6 @@ fn a_board_refusing_a_dependency_read_after_the_listing_prints_no_part_of_the_gr
             .iter()
             .filter(|edge| edge["to"] == "board:S-999")
             .count();
-        assert_eq!(crowded_edges, CARRIED_BLOCKERS + 1);
+        assert_eq!(crowded_edges, carried + 1);
     }
 }

@@ -241,6 +241,34 @@ fn a_project_prints_its_tasks_and_edges_as_the_contract_states() {
     );
 }
 
+/// The README this repository documents its verbs in, read from the repository root.
+fn readme() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+    std::fs::read_to_string(path).expect("the README sits at the repository root")
+}
+
+#[test]
+fn the_readme_carries_the_contract_as_help_states_it_and_the_example_as_the_binary_prints_it() {
+    // The contract is stated once, in `--help`; the README carries that text verbatim, so a
+    // change to either without the other fails here rather than leaving a reader two answers.
+    let sandbox = Sandbox::new();
+    let help = printed(&sandbox, &["project", "graph", "--help"]);
+    let contract = &help[help
+        .find("The graph:\n")
+        .expect("`--help` states the contract")..];
+    let readme = readme();
+    assert!(
+        readme.contains(&format!("```text\n{contract}```\n")),
+        "the README's copy of the contract is not what `project graph --help` prints:\n{contract}"
+    );
+    // And its example is the contract fixture's output, which the journey below holds the
+    // binary to byte for byte.
+    assert!(
+        readme.contains(&format!("```text\n{CONTRACT}```\n")),
+        "the README's example is not what the contract fixture prints"
+    );
+}
+
 #[test]
 fn the_json_form_describes_the_graph_the_mermaid_form_draws() {
     let sandbox = Sandbox::new();
@@ -759,8 +787,8 @@ fn an_empty_project_a_long_one_and_an_unknown_one() {
     store
         .project("empty", "Nothing yet")
         .project("long", "Long");
-    // More tasks than one page of the folder's listing holds, as one chain plus strays, so
-    // the order says every page was read and read in order.
+    // More tasks than one page of the folder's listing holds, as one chain, so the order and
+    // the edges say every page was read.
     let count: usize = 250;
     for index in 0..count {
         let before = index.checked_sub(1).map(|before| format!("t{before:03}"));
@@ -817,4 +845,193 @@ fn an_empty_project_a_long_one_and_an_unknown_one() {
     assert_ne!(graph.status.code(), Some(0));
     assert_eq!(stdout(&graph), "");
     assert_eq!(stderr(&graph), stderr(&show));
+}
+
+#[test]
+fn an_edge_is_drawn_once_a_project_end_is_not_drawn_and_externals_tie_on_their_id() {
+    let sandbox = Sandbox::new();
+    let store = Store::new(&sandbox, "plans");
+    store.project("P", "The plan").project("Q", "Elsewhere");
+    let unit = |value: &str| format!("metadata:\n  {UNIT}: {value}\n");
+    for task in [
+        Task {
+            id: "a",
+            title: "Alpha",
+            project: "P",
+            depends_on: &[],
+            extra: &unit("core"),
+        },
+        // `a` twice, as two kinds of edge, and the whole project `Q`.
+        Task {
+            id: "b",
+            title: "Beta",
+            project: "P",
+            depends_on: &["a", "{id: a, kind: related}", "{id: Q, item: project}"],
+            extra: &unit("null"),
+        },
+        // Three tasks outside the project, two of them titled alike.
+        Task {
+            id: "c",
+            title: "Gamma",
+            project: "P",
+            depends_on: &["q-b", "q-c", "q-a"],
+            extra: "",
+        },
+        Task {
+            id: "q-a",
+            title: "Same title",
+            project: "Q",
+            depends_on: &[],
+            extra: "",
+        },
+        Task {
+            id: "q-b",
+            title: "Same title",
+            project: "Q",
+            depends_on: &[],
+            extra: "",
+        },
+        Task {
+            id: "q-c",
+            title: "Another",
+            project: "Q",
+            depends_on: &[],
+            extra: "",
+        },
+    ] {
+        store.task(&task);
+    }
+    configured(&sandbox, &[("plans", &store)]);
+
+    // `a` and `c` are ready together and go by title; `b` waits on `a`. The externals go by
+    // title, and the two titled alike by qualified id.
+    assert_eq!(
+        printed(&sandbox, &["project", "graph", "plans:P"]),
+        "\
+flowchart TD
+  n1[\"Alpha\"]
+  n2[\"Beta\"]
+  n3[\"Gamma\"]
+  x1[\"Another (plans:q-c)\"]:::external
+  x2[\"Same title (plans:q-a)\"]:::external
+  x3[\"Same title (plans:q-b)\"]:::external
+  n1 --> n2
+  x1 --> n3
+  x2 --> n3
+  x3 --> n3
+  classDef external stroke-dasharray: 5 5
+"
+    );
+    // A `null` under the key is no group, any more than no key at all is.
+    let graph = parsed(
+        &sandbox,
+        &[
+            "project",
+            "graph",
+            "plans:P",
+            "--format",
+            "json",
+            "--group-by",
+            UNIT,
+        ],
+    );
+    let groups: Vec<&Value> = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| &node["group"])
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            &json!("core"),
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &Value::Null
+        ]
+    );
+    assert_eq!(
+        printed(
+            &sandbox,
+            &["project", "graph", "plans:P", "--group-by", UNIT]
+        )
+        .lines()
+        .take(4)
+        .collect::<Vec<_>>(),
+        [
+            "flowchart TD",
+            "  subgraph g1[\"core\"]",
+            "    n1[\"Alpha\"]",
+            "  end"
+        ]
+    );
+}
+
+#[test]
+fn a_cycle_and_a_dependency_on_a_missing_task_are_refused_whole() {
+    let sandbox = Sandbox::new();
+    let store = Store::new(&sandbox, "plans");
+    store.project("loop", "Loops").project("lost", "Lost");
+    for task in [
+        Task {
+            id: "r1",
+            title: "One",
+            project: "loop",
+            depends_on: &["r2"],
+            extra: "",
+        },
+        Task {
+            id: "r2",
+            title: "Two",
+            project: "loop",
+            depends_on: &["r1"],
+            extra: "",
+        },
+        Task {
+            id: "r3",
+            title: "Free",
+            project: "loop",
+            depends_on: &[],
+            extra: "",
+        },
+        Task {
+            id: "m1",
+            title: "Waits on nothing there",
+            project: "lost",
+            depends_on: &["ghost"],
+            extra: "",
+        },
+    ] {
+        store.task(&task);
+    }
+    configured(&sandbox, &[("plans", &store)]);
+
+    for format in ["mermaid", "json"] {
+        let output = run(
+            &sandbox,
+            &["project", "graph", "plans:loop", "--format", format],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "", "a graph was printed in part");
+        assert!(
+            stderr(&output)
+                .contains("the tasks plans:r1, plans:r2 depend on each other in a cycle"),
+            "{}",
+            stderr(&output)
+        );
+
+        let output = run(
+            &sandbox,
+            &["project", "graph", "plans:lost", "--format", format],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "", "a graph was printed in part");
+        assert!(
+            stderr(&output).contains("no task with the id plans:ghost"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }

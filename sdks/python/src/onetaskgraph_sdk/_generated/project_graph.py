@@ -63,6 +63,16 @@ class GraphNode(BaseModel):
     ]
 
 
+class GroupKey(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The task metadata key `project graph --group-by` groups by: any key a record may hold,\nand never the empty string, which names none.\n\nNot a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may\nname, which keeps out this product's own namespace and a key with no dot. A read groups\nby whatever a task holds, so a folder of Markdown's `unit:` is as good a key as\n`orchestrator.unit`.",
+            min_length=1,
+        ),
+    ]
+
+
 class ProjectGraph(BaseModel):
     direction: Annotated[
         GraphDirection,
@@ -75,7 +85,7 @@ class ProjectGraph(BaseModel):
         ),
     ]
     group_by: Annotated[
-        str | None,
+        GroupKey | None,
         Field(description="The `--group-by` key, or `null` when none was given."),
     ] = None
     nodes: Annotated[

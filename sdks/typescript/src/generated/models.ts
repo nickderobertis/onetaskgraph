@@ -3302,8 +3302,23 @@ name: string
 export type Project = GeneratedProject.Project;
 export namespace GeneratedProjectGraph {
 /**
+ * The task metadata key `project graph --group-by` groups by: any key a record may hold,
+ * and never the empty string, which names none.
+ *
+ * Not a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may
+ * name, which keeps out this product's own namespace and a key with no dot. A read groups
+ * by whatever a task holds, so a folder of Markdown's `unit:` is as good a key as
+ * `orchestrator.unit`.
+ */
+export type GroupKey = string
+
+/**
  * One project's dependency graph, laid out: the document `project graph --format json`
  * prints, and everything its Mermaid form is drawn from.
+ *
+ * Built by [`Engine::project_graph`] alone, so every edge names a node it holds, an `n`
+ * node is never external and an `x` node never has a group: nothing outside this module can
+ * put one together any other way.
  */
 export interface ProjectGraph {
 /**
@@ -3317,7 +3332,7 @@ edges: GraphEdge[]
 /**
  * The `--group-by` key, or `null` when none was given.
  */
-group_by?: (string | null)
+group_by?: (GroupKey | null)
 /**
  * Every task of the project in topological order, then every task outside it that one
  * of them depends on, ordered by title and then qualified id.

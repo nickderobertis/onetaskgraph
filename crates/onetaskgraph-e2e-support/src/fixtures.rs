@@ -1040,6 +1040,7 @@ impl GitHubBoardFields {
 
     /// Answer the next `answered` requests carrying `operation`, then refuse the one after
     /// them, once — the second page of a read, say, after its first landed.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it refuses is read by the board's own request loop and held in its private state, so it can only be a method of this handle, beside `refuse_once`, and a suite of one plugin could not add it from outside.
     pub fn refuse_after(&self, operation: &'static str, answered: usize) {
         self.board
             .lock()
@@ -1050,6 +1051,7 @@ impl GitHubBoardFields {
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
     /// blocks it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own `blockedBy` graph, which every read of it answers from: that graph is the board's private state, so a suite naming who blocks whom can only do it through this handle, as `edit_body` and `move_card` change what the board holds.
     pub fn block(&self, id: &str, blockers: &[String]) {
         let mut board = self.board.lock().unwrap();
         match board.blocked_by.iter_mut().find(|(near, _)| near == id) {
@@ -1703,43 +1705,17 @@ pub fn github_projects_with_tasks(sandbox: &Sandbox, count: usize) -> (Value, Gi
     github_projects_board_at(sandbox, None, &[], 0, extra)
 }
 
-/// One task of the plan [`github_projects_with_plan`] files under its project: its native id,
-/// its title, and the ids of the issues blocking it.
-pub struct PlanIssue {
-    /// The issue's node id.
-    pub id: String,
-    /// Its title.
-    pub title: String,
-    /// The node ids of the issues it is blocked by.
-    pub blocked_by: Vec<String>,
-}
-
-/// The shared board plus one project issue, `project`, and `tasks` filed under it as its
-/// sub-issues, each blocked by the issues it names — a plan of any size, whose listing spans
-/// as many pages of `subIssues` as its tasks need.
-pub fn github_projects_with_plan(
+/// The shared board plus `items`, each spelled as the dataset spells a board item — `id`,
+/// `type`, `title`, `body`, `state`, `parent` and the rest — and put on the board after it, so
+/// every id the dataset holds is where it always was.
+///
+/// What a suite of one plugin builds a board of its own shape from: the item shape is the
+/// board's, so it is spelled here, and the shape of the plan it adds is the suite's.
+pub fn github_projects_with_items(
     sandbox: &Sandbox,
-    project: &str,
-    tasks: &[PlanIssue],
+    items: Vec<Value>,
 ) -> (Value, GitHubBoardFields) {
-    let issue = |id: &str, title: &str, parent: Option<&str>| {
-        json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,
-            "body":format!("{title}."),"state":"OPEN","reason":null,"parent":parent,
-            "repo":"nickderobertis/onetaskgraph","status":"Todo","origin":"","labels":[]})
-    };
-    let mut extra = vec![issue(project, "The plan", None)];
-    extra.extend(
-        tasks
-            .iter()
-            .map(|task| issue(&task.id, &task.title, Some(project))),
-    );
-    let (config, board) = github_projects_board_at(sandbox, None, &[], 0, extra);
-    for task in tasks {
-        if !task.blocked_by.is_empty() {
-            board.block(&task.id, &task.blocked_by);
-        }
-    }
-    (config, board)
+    github_projects_board_at(sandbox, None, &[], 0, items)
 }
 
 /// The same board, with a handle on the fields this source must never write.

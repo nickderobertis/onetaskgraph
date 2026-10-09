@@ -1829,7 +1829,7 @@ const THIRTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 106] = [
     ("Predicate", 0x716a40e358d48364),
     ("Priority", 0xef323286b7a05b23),
     ("Project", 0x71777d25b1c6b8c1),
-    ("ProjectGraph", 0xb20aadc444d3cefd),
+    ("ProjectGraph", 0x9c6781a1e40be26e),
     ("ProjectQuery", 0x65c1348867b92915),
     ("QualifiedDocument", 0x4e539a8ce7b72c47),
     ("QualifiedEdge", 0xe24f9b34b618df17),

@@ -5739,10 +5739,15 @@ export const runtimeSchemas = {
           "external"
         ],
         "type": "object"
+      },
+      "GroupKey": {
+        "description": "The task metadata key `project graph --group-by` groups by: any key a record may hold,\nand never the empty string, which names none.\n\nNot a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may\nname, which keeps out this product's own namespace and a key with no dot. A read groups\nby whatever a task holds, so a folder of Markdown's `unit:` is as good a key as\n`orchestrator.unit`.",
+        "minLength": 1,
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "One project's dependency graph, laid out: the document `project graph --format json`\nprints, and everything its Mermaid form is drawn from.",
+    "description": "One project's dependency graph, laid out: the document `project graph --format json`\nprints, and everything its Mermaid form is drawn from.\n\nBuilt by [`Engine::project_graph`] alone, so every edge names a node it holds, an `n`\nnode is never external and an `x` node never has a group: nothing outside this module can\nput one together any other way.",
     "properties": {
       "direction": {
         "$ref": "#/$defs/GraphDirection",
@@ -5756,11 +5761,15 @@ export const runtimeSchemas = {
         "type": "array"
       },
       "group_by": {
-        "description": "The `--group-by` key, or `null` when none was given.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GroupKey"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The `--group-by` key, or `null` when none was given."
       },
       "nodes": {
         "description": "Every task of the project in topological order, then every task outside it that one\nof them depends on, ordered by title and then qualified id.",
