@@ -4799,6 +4799,9 @@ fn exposure_of(item: &Planned) -> Exposure {
         Item::Document(document) => Exposure::of_document(document),
     }
     .assets(&item.assets)
+    .and(Exposure::metadata(
+        item.edges.iter().map(|edge| edge.to.id().to_owned()),
+    ))
 }
 
 fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {

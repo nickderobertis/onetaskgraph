@@ -652,4 +652,94 @@ mod tests {
         ]));
         assert!(!route.matches(&[]));
     }
+
+    fn name(text: &str) -> SourceName {
+        SourceName::new(text.to_owned()).expect("a name")
+    }
+
+    /// `plans` routes widgetco work to `team` first, then private items to `vault`; `vault` is
+    /// the one source declared private.
+    fn classified() -> Routes {
+        let configured = [name("plans"), name("team"), name("vault")];
+        Routes::new(
+            BTreeMap::from([(
+                name("plans"),
+                vec![(vec!["github.com/widgetco/*".to_owned()], name("team"))],
+            )]),
+            &configured,
+        )
+        .expect("repository routes")
+        .with_visibility(BTreeMap::from([(name("vault"), SourceVisibility::Private)]))
+        .classified(
+            name("plans"),
+            vec![(Classification::Private, name("vault"))],
+            &configured,
+        )
+        .expect("a classification route")
+    }
+
+    #[test]
+    fn safety_is_decided_before_any_repository_entry_matches() {
+        let routes = classified();
+        // A private widgetco item never follows the repository entry to a source not declared
+        // private, though that entry is written first: the classification entry places it.
+        assert_eq!(
+            routes.place_classified(
+                &name("plans"),
+                Classification::Private,
+                &[origin("github.com/widgetco/api")]
+            ),
+            Placement {
+                destination: name("vault"),
+                route: Some(0)
+            }
+        );
+        // A public one keeps the repository placement it always had.
+        assert_eq!(
+            routes.place_classified(
+                &name("plans"),
+                Classification::Public,
+                &[origin("github.com/widgetco/api")]
+            ),
+            Placement {
+                destination: name("team"),
+                route: Some(1)
+            }
+        );
+        assert_eq!(
+            routes.place(&name("plans"), &[]),
+            Placement {
+                destination: name("plans"),
+                route: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_private_item_with_no_private_destination_stays_where_it_was_sent() {
+        let routes = classified();
+        // `team` routes nothing and is not private: the item stays, and is refused there.
+        assert_eq!(
+            routes
+                .place_classified(&name("team"), Classification::Private, &[])
+                .destination,
+            name("team")
+        );
+    }
+
+    #[test]
+    fn a_private_classification_entry_naming_a_source_not_declared_private_is_refused() {
+        let configured = [name("plans"), name("team")];
+        let refused = Routes::default()
+            .classified(
+                name("plans"),
+                vec![(Classification::Private, name("team"))],
+                &configured,
+            )
+            .expect_err("team is not declared private");
+        assert!(
+            refused.to_string().contains("not declared private"),
+            "{refused}"
+        );
+    }
 }
