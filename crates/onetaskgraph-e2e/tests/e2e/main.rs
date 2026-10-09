@@ -56,6 +56,13 @@ mod document_store;
 // any depth; the protocol's half is proven in `onetaskgraph-core`'s own `tests/subprocess.rs`.
 mod end_command;
 mod failures;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown, with
+// no credential and no network, in a few seconds. `project graph` is the engine's and the
+// binary's — the layout lives in `onetaskgraph-core` — so it cannot sit behind a plugin crate's
+// edge, which AGENTS.md forbids depending on the engine at any depth; what the GitHub Projects
+// plugin owes it is proven behind that plugin's own edge, in its e2e suite.
+mod graph;
 mod journeys;
 mod machine;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no

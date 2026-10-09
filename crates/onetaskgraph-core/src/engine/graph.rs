@@ -506,3 +506,22 @@ fn topological(
     }
     Ok(order)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::label;
+
+    /// Every line break is one space, whichever of the three spellings it is, and the four
+    /// escaped characters are escaped once each — `#` first, so no entity is escaped twice.
+    #[test]
+    fn a_label_writes_each_line_break_as_one_space_and_escapes_four_characters_once() {
+        assert_eq!(label("a\r\nb\nc\rd"), "a b c d");
+        assert_eq!(label("\r\n\r\n"), "  ");
+        assert_eq!(
+            label("#\"<>&;"),
+            "#35;#quot;#lt;#gt;&;",
+            "nothing but the four is altered"
+        );
+        assert_eq!(label("plain ünïcode"), "plain ünïcode");
+    }
+}
