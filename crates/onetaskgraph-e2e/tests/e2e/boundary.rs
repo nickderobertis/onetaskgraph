@@ -1001,3 +1001,335 @@ fn a_hosted_plugin_is_never_verified_private_and_its_public_writes_are_still_che
     assert!(said.contains("reads unknown"), "{said}");
     assert!(tree(&store.folder("hosted")).is_empty());
 }
+
+/// A program linking the engine, implementing the policy itself over the released onevcs:
+/// each answer read through a file rather than standard input, its home named per command.
+struct LinkedOnevcs {
+    home: PathBuf,
+}
+
+impl LinkedOnevcs {
+    fn run(&self, arguments: &[&str], input: &Value) -> (Option<i32>, Vec<u8>) {
+        let file = tempfile::NamedTempFile::new().expect("an input file");
+        std::fs::write(file.path(), input.to_string()).expect("the input is written");
+        let output = std::process::Command::new(onetaskgraph_e2e_support::boundary::onevcs())
+            .args(arguments)
+            .arg("--input")
+            .arg(file.path())
+            .env("ONEVCS_HOME", &self.home)
+            .output()
+            .expect("onevcs runs");
+        (output.status.code(), output.stdout)
+    }
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for LinkedOnevcs {
+    async fn repository_visibility(
+        &self,
+        repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        let (code, answer) = self.run(
+            &["boundary", "inspect"],
+            &json!({"repository": repository.as_str()}),
+        );
+        let answer: Value = serde_json::from_slice(&answer).unwrap_or(Value::Null);
+        match (code, answer["visibility"].as_str()) {
+            (Some(0), Some("public")) => {
+                Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+            }
+            (Some(0), Some("private")) => {
+                Ok(onetaskgraph_core::boundary::RepositoryVisibility::Private)
+            }
+            _ => Ok(onetaskgraph_core::boundary::RepositoryVisibility::Unknown),
+        }
+    }
+
+    async fn check_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        let (code, answer) = self.run(
+            &["boundary", "check", "--destination", "public"],
+            &serde_json::to_value(input).expect("an input serializes"),
+        );
+        Ok(onetaskgraph_core::boundary::check_verdict(code, &answer))
+    }
+}
+
+/// A policy that cannot be asked at all.
+struct Unreachable;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Unreachable {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Err(onetaskgraph_core::boundary::PolicyError {
+            message: "the policy is not reachable".to_owned(),
+        })
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Err(onetaskgraph_core::boundary::PolicyError {
+            message: "the policy is not reachable".to_owned(),
+        })
+    }
+}
+
+/// An engine over a store's folders, as a linking caller builds one: from the configuration
+/// document, with no `write_policy` of its own.
+fn linked_engine(store: &Store) -> onetaskgraph_core::Engine {
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    let mut document = document;
+    document
+        .as_object_mut()
+        .expect("a document")
+        .remove("write_policy");
+    let config = onetaskgraph_core::Config::from_document(document).expect("a configuration");
+    let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs(
+        Vec::<(String, String)>::new(),
+    ))
+    .expect("no credentials");
+    onetaskgraph_core::Engine::build(&config, &secrets)
+}
+
+fn task_on_site(text: &str, repositories: &[&str]) -> onetaskgraph_core::TaskCreate {
+    onetaskgraph_core::TaskCreate {
+        source: onetaskgraph_plugin_api::SourceName::new("site").expect("a name"),
+        project: onetaskgraph_plugin_api::NativeId::from("p"),
+        title: "Linked".to_owned(),
+        body: onetaskgraph_core::Body::plain(text),
+        status: None,
+        labels: Vec::new(),
+        repositories: repositories
+            .iter()
+            .map(|origin| {
+                onetaskgraph_plugin_api::Repository::try_from((*origin).to_owned())
+                    .expect("an origin")
+            })
+            .collect(),
+        depends_on: Vec::new(),
+        delivers: Vec::new(),
+        metadata: BTreeMap::new(),
+        assets: Vec::new(),
+        classification: onetaskgraph_plugin_api::Classification::Public,
+    }
+}
+
+fn kind_of(error: &onetaskgraph_core::EngineError) -> String {
+    onetaskgraph_core::Failure::from(error).kind().to_owned()
+}
+
+#[tokio::test]
+async fn a_linking_caller_s_own_policy_and_term_scope_reach_the_verdicts_the_command_line_does() {
+    let store = Store::new(Some(registered), json!({}));
+    let home = store
+        .onevcs
+        .as_ref()
+        .expect("an onevcs home")
+        .path()
+        .to_path_buf();
+    let linked = || {
+        linked_engine(&store)
+            .with_write_policy(std::sync::Arc::new(LinkedOnevcs { home: home.clone() }))
+    };
+    // Scoped to A on the store itself.
+    let scoped = linked().with_term_scope(Some(vec![A.to_owned()]));
+    let refused = scoped
+        .create_task(&task_on_site(A_TEXT, &[]))
+        .await
+        .expect_err("A's owner/name is refused");
+    assert_eq!(kind_of(&refused), "boundary-refused");
+    scoped
+        .create_task(&task_on_site(B_TEXT, &[]))
+        .await
+        .expect("B's owner/name alone is written");
+    // Unscoped, both refuse; scoped to nothing, both are written.
+    for text in [A_TEXT, B_TEXT] {
+        let refused = linked()
+            .create_task(&task_on_site(text, &[]))
+            .await
+            .expect_err("every private identity's terms");
+        assert_eq!(kind_of(&refused), "boundary-refused");
+        linked()
+            .with_term_scope(Some(Vec::new()))
+            .create_task(&task_on_site(text, &[]))
+            .await
+            .expect("no terms derived");
+    }
+    // The repository answer is the policy's: a private one makes the task private.
+    let refused = linked()
+        .create_task(&task_on_site(PLAIN, &[A]))
+        .await
+        .expect_err("a private repository's task");
+    assert_eq!(kind_of(&refused), "not-private-destination");
+    linked()
+        .create_task(&task_on_site(PLAIN, &[OPEN]))
+        .await
+        .expect("a public repository's task");
+}
+
+#[tokio::test]
+async fn a_linking_caller_s_missing_or_unreachable_policy_never_approves_a_public_write() {
+    let store = Store::new(Some(registered), json!({}));
+    for engine in [
+        linked_engine(&store).with_write_policy(std::sync::Arc::new(
+            onetaskgraph_core::boundary::MissingWritePolicy,
+        )),
+        linked_engine(&store).with_write_policy(std::sync::Arc::new(Unreachable)),
+    ] {
+        assert!(engine.boundary_active());
+        let refused = engine
+            .create_task(&task_on_site(PLAIN, &[]))
+            .await
+            .expect_err("never approved");
+        assert_eq!(kind_of(&refused), "boundary-unavailable");
+        // An unanswered repository is private.
+        let refused = engine
+            .create_task(&task_on_site(PLAIN, &[OPEN]))
+            .await
+            .expect_err("unknown is private");
+        assert_eq!(kind_of(&refused), "not-private-destination");
+    }
+    assert!(files_under(&store, "site").is_empty());
+}
+
+#[test]
+fn the_boundary_payloads_reconcile_with_the_released_onevcs_schema() {
+    use onetaskgraph_core::boundary::{
+        ONEVCS_BOUNDARY_SCHEMA, ONEVCS_BOUNDARY_SCHEMA_VERSION, PublicWriteInput,
+        RepositoryVisibility, WriteVerdict, check_verdict,
+    };
+    let output = std::process::Command::new(onetaskgraph_e2e_support::boundary::onevcs())
+        .args(["boundary", "schema", "--json"])
+        .output()
+        .expect("onevcs runs");
+    assert!(output.status.success());
+    let released: Value = serde_json::from_slice(&output.stdout).expect("the schema is JSON");
+    let pinned: Value = serde_json::from_str(ONEVCS_BOUNDARY_SCHEMA).expect("JSON");
+    assert_eq!(
+        released, pinned,
+        "the schema the command adapter holds answers to is the one the pinned release prints; \
+         a moved pin re-pins it"
+    );
+    assert_eq!(
+        released["schema_version"],
+        json!(ONEVCS_BOUNDARY_SCHEMA_VERSION)
+    );
+
+    // What the store sends: every shape of a write's input, and an inspect request.
+    let check_input = jsonschema::validator_for(&released["check"]["input"]).expect("compiles");
+    for scope in [
+        None,
+        Some(Vec::new()),
+        Some(vec![A.to_owned(), B.to_owned()]),
+    ] {
+        let input = PublicWriteInput {
+            destination: RepositoryVisibility::Public,
+            text: vec![PLAIN.to_owned()],
+            paths: vec!["docs/shot.png".to_owned()],
+            metadata: vec!["Title".to_owned()],
+            scope: scope.clone(),
+        };
+        let sent = serde_json::to_value(&input).expect("serializes");
+        assert!(check_input.is_valid(&sent), "{sent}");
+        assert_eq!(
+            sent.get("scope").is_some(),
+            scope.is_some(),
+            "an absent scope is left out, which the check reads as its registry: {sent}"
+        );
+    }
+    let inspect_input = jsonschema::validator_for(&released["inspect"]["input"]).expect("compiles");
+    assert!(inspect_input.is_valid(&json!({"repository": A})));
+    // The defaults the store reads an omitted member as are the producer's.
+    // The store's own shape, as the bundle both SDKs are generated from emits it.
+    let ours = onetaskgraph_core::schema_bundle()["roots"]["PublicWriteInput"].clone();
+    let theirs = &released["check"]["input"];
+    let names = |schema: &Value| {
+        let mut names: Vec<String> = schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&ours), names(theirs));
+    assert_eq!(ours["required"], theirs["required"]);
+    for member in ["text", "paths", "metadata"] {
+        assert_eq!(theirs["properties"][member]["default"], json!([]));
+        assert_eq!(ours["properties"][member]["default"], json!([]));
+    }
+    let defaulted: PublicWriteInput =
+        serde_json::from_value(json!({"destination": "public"})).expect("the defaults read");
+    assert!(defaulted.text.is_empty() && defaulted.paths.is_empty());
+    assert!(defaulted.metadata.is_empty() && defaulted.scope.is_none());
+
+    // What it reads: every verdict the producer can answer, and nothing passes but a pass.
+    let verdicts = &released["check"]["output"];
+    let constants = |definition: &str| -> Vec<String> {
+        verdicts["$defs"][definition]["oneOf"]
+            .as_array()
+            .expect("a oneOf")
+            .iter()
+            .map(|variant| variant["const"].as_str().expect("a const").to_owned())
+            .collect()
+    };
+    assert_eq!(
+        check_verdict(Some(0), br#"{"verdict":"pass"}"#),
+        WriteVerdict::Pass
+    );
+    assert!(matches!(
+        check_verdict(Some(1), br#"{"verdict":"pass"}"#),
+        WriteVerdict::Unavailable { .. }
+    ));
+    for surface in constants("Surface") {
+        let answer = json!({"verdict": "refuse", "surface": surface}).to_string();
+        assert_eq!(
+            check_verdict(Some(1), answer.as_bytes()),
+            WriteVerdict::Refuse {
+                reason: format!("it carries a term of a private repository in its {surface}")
+            }
+        );
+        assert!(matches!(
+            check_verdict(Some(0), answer.as_bytes()),
+            WriteVerdict::Unavailable { .. }
+        ));
+    }
+    for reason in constants("Unavailability") {
+        let answer = json!({"verdict": "unavailable", "reason": reason}).to_string();
+        for code in [Some(2), Some(0), None] {
+            assert!(
+                matches!(
+                    check_verdict(code, answer.as_bytes()),
+                    WriteVerdict::Unavailable { .. }
+                ),
+                "{reason} under {code:?}"
+            );
+        }
+    }
+    for foreign in [&b"{}"[..], b"not json", br#"{"verdict":"maybe"}"#, b""] {
+        assert!(matches!(
+            check_verdict(Some(0), foreign),
+            WriteVerdict::Unavailable { .. }
+        ));
+    }
+}

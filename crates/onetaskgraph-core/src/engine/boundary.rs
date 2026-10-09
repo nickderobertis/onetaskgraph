@@ -336,41 +336,46 @@ impl WritePolicy for CommandWritePolicy {
             });
         }
         let (code, stdout) = run(command, &document).await?;
-        let answer = validated(&stdout, &VALIDATORS.check_output);
-        let verdict = answer
+        Ok(check_verdict(code, &stdout))
+    }
+}
+
+/// What a check command's exit `code` and standard output amount to — the one reading of a
+/// `boundary check` answer, held to the pinned schema.
+///
+/// **Only an explicit pass passes**: exit 0 with `{"verdict": "pass"}`. Exit 1 with a refusal
+/// is a refusal naming where the check stopped and never what it found; an `unavailable`
+/// answer, any other exit, a missing exit and anything the schema refuses are unavailable.
+#[must_use]
+pub fn check_verdict(code: Option<i32>, stdout: &[u8]) -> WriteVerdict {
+    let answer = validated(stdout, &VALIDATORS.check_output);
+    let field = |name: &str| {
+        answer
             .as_ref()
-            .and_then(|answer| answer.get("verdict"))
-            .and_then(Value::as_str);
-        Ok(match (code, verdict) {
-            (Some(0), Some("pass")) => WriteVerdict::Pass,
-            (Some(1), Some("refuse")) => WriteVerdict::Refuse {
-                reason: format!(
-                    "it carries a term of a private repository in its {}",
-                    answer
-                        .as_ref()
-                        .and_then(|answer| answer.get("surface"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("content")
-                ),
-            },
-            (_, Some("unavailable")) => WriteVerdict::Unavailable {
-                reason: format!(
-                    "the check could not decide ({})",
-                    answer
-                        .as_ref()
-                        .and_then(|answer| answer.get("reason"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("no reason given")
-                ),
-            },
-            (code, _) => WriteVerdict::Unavailable {
-                reason: format!(
-                    "the check command {} {} without a verdict this store believes",
-                    command.program(),
-                    code.map_or_else(|| "was stopped".to_owned(), |code| format!("exited {code}"))
-                ),
-            },
-        })
+            .and_then(|answer| answer.get(name))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    match (code, field("verdict").as_deref()) {
+        (Some(0), Some("pass")) => WriteVerdict::Pass,
+        (Some(1), Some("refuse")) => WriteVerdict::Refuse {
+            reason: format!(
+                "it carries a term of a private repository in its {}",
+                field("surface").unwrap_or_else(|| "content".to_owned())
+            ),
+        },
+        (_, Some("unavailable")) => WriteVerdict::Unavailable {
+            reason: format!(
+                "the check could not decide ({})",
+                field("reason").unwrap_or_else(|| "no reason given".to_owned())
+            ),
+        },
+        (code, _) => WriteVerdict::Unavailable {
+            reason: format!(
+                "the check command {} without a verdict this store believes",
+                code.map_or_else(|| "was stopped".to_owned(), |code| format!("exited {code}"))
+            ),
+        },
     }
 }
 
