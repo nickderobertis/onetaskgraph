@@ -19,6 +19,7 @@ from .metadata_set import MetadataSet as MetadataSet
 from .native_id import NativeId as NativeId
 from .page_of_document import Page as PageOfDocument
 from .priority import Priority as Priority
+from .project_graph import ProjectGraph as ProjectGraph
 from .query_plan import QueryPlan as QueryPlan
 from .query_response_of_qualified_document import QueryResponse as QueryResponseOfQualifiedDocument
 from .query_response_of_qualified_edge import QueryResponse as QueryResponseOfQualifiedEdge
@@ -76,6 +77,7 @@ __all__ = [
     "NativeId",
     "PageOfDocument",
     "Priority",
+    "ProjectGraph",
     "QueryPlan",
     "QueryResponseOfQualifiedDocument",
     "QueryResponseOfQualifiedEdge",

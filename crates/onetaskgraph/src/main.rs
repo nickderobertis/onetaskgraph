@@ -21,8 +21,9 @@ use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
     CopyItems, CopyRequest, CopyScope, Delivered, DeliveryOutcome, DependencyRequest,
     DocumentFilters, DocumentRequest, Engine, Environment, Failure, FailureDocument, Filters,
-    GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectRequest,
-    ProjectSelector, QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
+    GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest,
+    ProjectRequest, ProjectSelector, QueryResponse, RenderedRecord, SearchRequest, SourceFailure,
+    TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
@@ -35,7 +36,7 @@ use serde::Serialize;
 
 use crate::cli::{
     Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs, DependencyArgs,
-    DocumentCommand, DocumentFilterArgs, FilterArgs, LabelCommand, MetadataCommand,
+    DocumentCommand, DocumentFilterArgs, FilterArgs, GraphFormat, LabelCommand, MetadataCommand,
     MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand, SelectionArgs, ShowArgs,
     SourcesCommand, StatusCommand, TaskCommand,
 };
@@ -588,6 +589,34 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 &args.paging,
                 "dependencies",
             )
+        }
+
+        Command::Project {
+            command: ProjectCommand::Graph(args),
+        } => {
+            let request = ProjectGraphRequest {
+                project: qualified(&args.id)?,
+                direction: args.direction.direction(),
+                group_by: args.group_by.clone(),
+            };
+            let graph = engine(loaded)
+                .project_graph(&request)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            // The verb's own `--format` decides the form, never the configured output: its
+            // Mermaid bytes are a contract a consumer reads, and a configuration setting
+            // `output = json` for every other verb must not turn them into something else.
+            // Both forms end in exactly one newline, which `emit` writes.
+            let rendered = match args.format {
+                GraphFormat::Mermaid => {
+                    let mut text = graph.mermaid();
+                    text.pop();
+                    text
+                }
+                GraphFormat::Json => json(&graph, "the project graph")?,
+            };
+            emit(out, &rendered, "the project graph")?;
+            Ok(EXIT_OK)
         }
 
         Command::Document {
@@ -1561,6 +1590,7 @@ mod tests {
                 "project list",
                 "project show",
                 "project deps",
+                "project graph",
                 "project copy",
                 "project metadata set",
                 "project create",

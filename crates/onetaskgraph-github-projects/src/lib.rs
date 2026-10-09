@@ -927,19 +927,33 @@ pub mod graphql {
         related_issue!()
     );
 
-    /// One project's tasks: the sub-issues of the issue that project is.
+    /// One project's tasks: the sub-issues of the issue that project is, each with a page of
+    /// what blocks it.
     ///
     /// The work this costs is the project's own size. Nothing about it grows as the board
     /// gains projects, or as those projects gain tasks.
+    ///
+    /// **Why `blockedBy` rides here and on no other page of issues.** What reads a project's
+    /// tasks reads their edges next — `project graph` draws them, a copy carries them — and
+    /// without them here that is one [`ISSUE_DEPENDENCIES`] per task, so the requests a graph
+    /// costs grow with its tasks rather than with the pages of them. Carried here, a task
+    /// blocked by no more than `$nestedFirst` issues answers its forward edges from this read,
+    /// exactly as an [`ISSUE`] read of it does, and only one blocked by more is asked again.
+    /// It adds a connection under each issue of the page — one rate-limit point per page,
+    /// and `$nestedFirst` nodes per issue — and is kept off [`SEARCH_ISSUES`], whose pages
+    /// answer questions that never read an edge.
     pub const SUB_ISSUES: &str = concat!(
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
       node(id:$id){__typename
         ... on Issue{subIssues(first:$first,after:$after){
           pageInfo{hasNextPage endCursor}
-          nodes{__typename ...BoardIssue}
+          nodes{__typename ...BoardIssue ... on Issue{
+            blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}
+          }}
         }}}
     }"#,
-        board_issue!()
+        board_issue!(),
+        related_issue!()
     );
 
     /// What a read of the board's own `items` selects of each item's content.
@@ -2543,6 +2557,18 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::end_command`] drops every record, so a write in the next command reads
     /// its item as a person has since left it.
     resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
+    /// Each project's sub-issues as GitHub answered them, keyed by the selector they were
+    /// asked for under, with the project that selector named — for the length of one command,
+    /// dropped by [`TaskSource::end_command`].
+    ///
+    /// A caller pages through a project's tasks one engine page at a time, and every page
+    /// is cut from the whole list of them, so without this each page walked every
+    /// [`graphql::SUB_ISSUES`] page again and a project of `n` listing pages cost `n²`
+    /// requests to read once. Held on the terms [`Self::narrowed_cache`] is: it lives and
+    /// dies with the process, nothing is written down, a write this process makes updates or
+    /// removes the entry here as it does there, and every answer is completed with this
+    /// process's own writes each time it is given.
+    children_cache: Mutex<ProjectChildren>,
     /// The board's own id and field definitions as this process last read them on their
     /// own, for the length of one command — dropped by [`TaskSource::end_command`].
     ///
@@ -3512,6 +3538,7 @@ impl GitHubProjectsSource {
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
             resolved_cache: Mutex::new(BTreeMap::new()),
+            children_cache: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
@@ -4607,17 +4634,40 @@ impl GitHubProjectsSource {
     /// request, no search of any kind. Only a selector GitHub cannot resolve that way is
     /// read as a project *name*, which costs the one bounded search
     /// [`Self::project_by_name`] makes.
+    ///
+    /// What GitHub answered is held for the rest of the command — see [`Self::children_cache`]
+    /// — and each answer is still cut to the items whose parent is this project, so one this
+    /// process has since filed elsewhere is not reported here, and completed with what this
+    /// process filed under it.
     async fn project_children(&self, selector: &NativeId) -> Result<Vec<Resolved>, SourceError> {
-        let (project, children) = match self.sub_issues(selector).await? {
-            Some(children) => (selector.clone(), children),
-            None => match self.project_by_name(&selector.0).await? {
-                Some(project) => {
-                    let children = self.sub_issues(&project).await?.unwrap_or_default();
-                    (project, children)
-                }
-                None => return Ok(Vec::new()),
-            },
+        let held = self.children_cache()?.get(selector).cloned();
+        let (project, children) = match held {
+            Some(held) => held,
+            None => {
+                let answered = match self.sub_issues(selector).await? {
+                    Some(children) => (selector.clone(), children),
+                    None => match self.project_by_name(&selector.0).await? {
+                        Some(project) => {
+                            let children = self.sub_issues(&project).await?.unwrap_or_default();
+                            (project, children)
+                        }
+                        None => return Ok(Vec::new()),
+                    },
+                };
+                self.children_cache()?
+                    .insert(selector.clone(), answered.clone());
+                answered
+            }
         };
+        let mut children: Vec<Resolved> = children
+            .into_iter()
+            .filter(|child| child.parent.as_ref() == Some(&project))
+            .collect();
+        for own in self.updated()?.iter() {
+            if own.parent.as_ref() == Some(&project) && !children.iter().any(|c| c.id == own.id) {
+                children.push(own.clone());
+            }
+        }
         self.completed_with_written(children, |own| own.parent.as_ref() == Some(&project))
     }
 
@@ -5192,6 +5242,11 @@ impl GitHubProjectsSource {
                 *held = item.clone();
             }
         }
+        for (_, found) in self.children_cache()?.values_mut() {
+            if let Some(held) = found.iter_mut().find(|held| held.id == item.id) {
+                *held = item.clone();
+            }
+        }
         Ok(())
     }
 
@@ -5210,6 +5265,9 @@ impl GitHubProjectsSource {
         for found in self.narrowed_cache()?.values_mut() {
             found.retain(|item| item.id != *id);
         }
+        for (_, found) in self.children_cache()?.values_mut() {
+            found.retain(|item| item.id != *id);
+        }
         Ok(())
     }
 
@@ -5221,6 +5279,18 @@ impl GitHubProjectsSource {
             .lock()
             .map_err(|_| SourceError::Unavailable {
                 message: "this source's view of a narrowed read was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
+    }
+
+    /// This process's own record of each project's sub-issues, or the refusal a poisoned lock
+    /// is.
+    fn children_cache(&self) -> Result<std::sync::MutexGuard<'_, ProjectChildren>, SourceError> {
+        self.children_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of a project's tasks was left inconsistent by an \
                       earlier failure; next: run the command again"
                     .into(),
             })
@@ -9697,10 +9767,15 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.narrowed_cache);
         clear(&self.search_next);
         clear(&self.resolved_cache);
+        clear(&self.children_cache);
         clear(&self.fields_cache);
         Ok(())
     }
 }
+
+/// Each project's sub-issues as one command read them, keyed by the selector they were asked
+/// for under, beside the project that selector named; see `children_cache`.
+type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 
 /// One issue comment as the contract carries it.
 ///
@@ -10623,6 +10698,10 @@ mod end_command_tests {
             .lock()
             .unwrap()
             .insert("status:todo".into(), vec![item.clone()]);
+        source.children_cache.lock().unwrap().insert(
+            NativeId("P-1".into()),
+            (NativeId("P-1".into()), vec![item.clone()]),
+        );
         source
             .search_next
             .lock()
@@ -10650,6 +10729,10 @@ mod end_command_tests {
         assert!(source.board_cache().unwrap().is_none(), "board");
         assert!(source.search_cache.lock().unwrap().is_none(), "search");
         assert!(source.narrowed_cache.lock().unwrap().is_empty(), "narrowed");
+        assert!(
+            source.children_cache.lock().unwrap().is_empty(),
+            "project children"
+        );
         assert!(
             source.search_next.lock().unwrap().is_empty(),
             "search paging"

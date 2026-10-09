@@ -2017,7 +2017,7 @@ impl Engine {
         let mut carried = Vec::new();
         let mut unrecorded = Vec::new();
         for project in projects {
-            let held = self.project_member_tasks(project).await?;
+            let held = self.project_member_tasks(project, FOR_A_COPY).await?;
             let mut members: Vec<GlobalId> = Vec::new();
             for id in named.as_slice() {
                 if held.iter().any(|task| &task.id == id) && !members.contains(id) {
@@ -2068,7 +2068,7 @@ impl Engine {
     /// Every task the source holds in `project`, by qualified id.
     async fn project_members(&self, project: &GlobalId) -> Result<Vec<GlobalId>, EngineError> {
         Ok(self
-            .project_member_tasks(project)
+            .project_member_tasks(project, FOR_A_COPY)
             .await?
             .into_iter()
             .map(|task| task.id)
@@ -2078,10 +2078,13 @@ impl Engine {
     /// Every task the source holds in `project`, as the source reported it.
     ///
     /// The ids alone are what a copy files under a project; the whole task is what a
-    /// document's references need, because the location a reference names is a field of it.
-    async fn project_member_tasks(
+    /// document's references need, because the location a reference names is a field of it,
+    /// and what `project graph` draws. `reading` says which of those the walk was for, in the
+    /// refusal a source that cycles its cursors earns.
+    pub(super) async fn project_member_tasks(
         &self,
         project: &GlobalId,
+        reading: &str,
     ) -> Result<Vec<Qualified<Task>>, EngineError> {
         let mut request = TaskRequest {
             sources: vec![project.source.clone()],
@@ -2124,7 +2127,7 @@ impl Engine {
             unrepeated(
                 response.next.as_ref(),
                 asked.as_ref(),
-                "the tasks of a project were being read for a copy",
+                &format!("the tasks of a project were being read {reading}"),
             )
             .map_err(misbehaved)?;
             members.extend(response.items);
@@ -2327,7 +2330,7 @@ impl Engine {
                 &held.metadata,
             );
         }
-        for task in self.project_member_tasks(project).await? {
+        for task in self.project_member_tasks(project, FOR_A_COPY).await? {
             note(
                 &mut referents,
                 task.id,
@@ -3593,6 +3596,9 @@ impl Engine {
             .ok_or(EngineError::NoSources)
     }
 }
+
+/// What a copy's walk of a project's members says it was for, when a source refuses it.
+const FOR_A_COPY: &str = "for a copy";
 
 /// How many tasks of a project are read at once while walking it.
 const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");

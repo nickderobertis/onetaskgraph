@@ -965,6 +965,12 @@ them do; this is the inventory of what is owed, not a status board.
 84. The simulated clock advances only while every attached process and every loopback handler
     is waiting, never sleeps in real time, and gives the same virtual times on every run; the
     binary attaches to it as the client its environment names, and to nothing without it.
+85. `project graph` prints a project's tasks and edges as the Mermaid text and the JSON document
+    its `--help` and the README state, byte for byte: topological order with its title and id
+    tie-breaks, `n`/`x` numbering, edge order, label escapes, the direction `auto` picks on the
+    measured plan shapes, `--group-by`'s blocks and its refusal of a non-string group; the same
+    bytes twice and from another store; and over a GitHub board, one request per listing page
+    and no part of a graph when a later page or a dependency read is refused.
 
 ## What a copied document's references are pointed at
 
