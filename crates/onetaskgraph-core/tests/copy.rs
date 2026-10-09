@@ -195,6 +195,169 @@ async fn a_rust_caller_creates_then_updates_the_same_destination_item() {
     );
 }
 
+/// A provenance entry whose template is `template`, shaped as a render records one.
+fn provenance(template: &str) -> Value {
+    json!({
+        "template": template,
+        "digest": format!("sha256:{}", "0".repeat(64)),
+        "body_digest": format!("sha256:{}", "1".repeat(64)),
+        "answers_digest": format!("sha256:{}", "2".repeat(64)),
+    })
+}
+
+/// The metadata an earlier copy of `origin` left at the destination, before anybody there
+/// recorded something of their own on it: an approval only the destination holds, a key the
+/// source has since changed, a link to where the destination item was copied on to, and a
+/// provenance entry and a kind marker the source no longer carries.
+fn held_at_destination(origin: &str) -> Value {
+    json!({
+        GlobalId::ORIGIN_KEY: origin,
+        "orchestrator.design-approval": {"approved_by": "nick", "body_digest": "sha256:ab"},
+        "caller.shared": "the destination's",
+        "onetaskgraph.copies": [format!("{origin}-onward")],
+        "onetaskgraph.template": provenance("/stale/template.md"),
+        "onetaskgraph.item_kind": "task",
+    })
+}
+
+/// The metadata the source holds for the item `held_at_destination` copied: the shared key
+/// at its new value, and a copy link of its own that names where *it* went.
+fn held_at_source(template: Option<&str>) -> Value {
+    let mut metadata = json!({
+        "caller.shared": "the source's",
+        "caller.only-source": [1, 2],
+        "onetaskgraph.copies": ["elsewhere:X-9"],
+    });
+    if let Some(template) = template {
+        metadata["onetaskgraph.template"] = provenance(template);
+    }
+    metadata
+}
+
+#[tokio::test]
+async fn an_updating_copy_keeps_every_key_only_the_destination_holds() {
+    // A task, a project and a document, each already copied and since annotated at the
+    // destination. The re-copy changes a title, so every one of them is a real update — and
+    // an update merges: the destination's own keys stay, a key both hold takes the source's
+    // value, and the reserved keys keep the ownership `docs/metadata.md` states.
+    let status = json!({"category": "todo", "name": "Todo"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "tasks": [{"id": "T-1", "title": "Task, renamed", "status": status, "labels": [],
+                "metadata": held_at_source(None)}],
+            "projects": [{"id": "P-1", "title": "Project, renamed", "status": status,
+                "labels": [], "metadata": held_at_source(Some("/fresh/project.md"))}],
+            "documents": [{"id": "D-1", "title": "Document, renamed", "labels": [],
+                "content": "the design", "metadata": held_at_source(None)}],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "tasks": [{"id": "T-1", "title": "Task", "status": status, "labels": [],
+                "metadata": held_at_destination("from:T-1")}],
+            "projects": [{"id": "P-1", "title": "Project", "status": status, "labels": [],
+                "metadata": held_at_destination("from:P-1")}],
+            "documents": [{"id": "D-1", "title": "Document", "labels": [],
+                "content": "the design", "metadata": held_at_destination("from:D-1")}],
+        }},
+    }));
+    let requests = [
+        ("into:T-1", many(&["from:T-1"], CopyScope::Tasks)),
+        (
+            "into:P-1",
+            many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+        ),
+        ("into:D-1", many(&["from:D-1"], CopyScope::Documents)),
+    ];
+
+    for (landing, request) in &requests {
+        let copied = engine.copy(request).await.expect("the copy runs");
+        assert_eq!(
+            landed(&copied.items[0]),
+            (Some((*landing).to_owned()), "updated".to_owned())
+        );
+    }
+
+    let metadata = [
+        engine
+            .task(&id("into:T-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .metadata
+            .clone(),
+        engine
+            .project(&id("into:P-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .metadata
+            .clone(),
+        engine
+            .document(&id("into:D-1"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .metadata
+            .clone(),
+    ];
+    for ((landing, _), metadata) in requests.iter().zip(&metadata) {
+        let origin = landing.replace("into:", "from:");
+        assert_eq!(
+            metadata.get("orchestrator.design-approval"),
+            Some(&json!({"approved_by": "nick", "body_digest": "sha256:ab"})),
+            "{landing}: a key only the destination holds survives the copy"
+        );
+        assert_eq!(
+            metadata["caller.shared"],
+            json!("the source's"),
+            "{landing}: a key both hold takes the source's value"
+        );
+        assert_eq!(metadata["caller.only-source"], json!([1, 2]), "{landing}");
+        assert_eq!(
+            metadata[GlobalId::ORIGIN_KEY],
+            json!(origin),
+            "{landing}: the origin is the one the copy records"
+        );
+        assert_eq!(
+            metadata["onetaskgraph.copies"],
+            json!([format!("{origin}-onward")]),
+            "{landing}: the copy link stays the destination's"
+        );
+        assert!(
+            !metadata.contains_key("onetaskgraph.item_kind"),
+            "{landing}: a kind marker the source does not carry is dropped"
+        );
+    }
+    // Provenance is the source's: dropped where the source carries none, replaced where it
+    // carries its own.
+    assert!(
+        !metadata[0].contains_key("onetaskgraph.template"),
+        "a task's stale provenance does not survive a copy from a source with none"
+    );
+    assert!(
+        !metadata[2].contains_key("onetaskgraph.template"),
+        "a document's stale provenance does not survive a copy from a source with none"
+    );
+    assert_eq!(
+        metadata[1]["onetaskgraph.template"],
+        provenance("/fresh/project.md")
+    );
+
+    // And the merged item is what the destination now holds, so copying again is unchanged:
+    // the key the source does not hold no longer reads as a difference to write away.
+    for (landing, request) in &requests {
+        let again = engine.copy(request).await.expect("the copy runs");
+        assert_eq!(
+            landed(&again.items[0]),
+            (Some((*landing).to_owned()), "unchanged".to_owned())
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_rust_caller_copying_back_leaves_the_destination_its_own_origin() {
     // The write-back a settled run makes, as the Rust caller that links this crate makes
@@ -1813,18 +1976,19 @@ async fn a_copy_that_stops_part_way_through_an_update_puts_that_item_back_too() 
 #[tokio::test]
 async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copys_writing() {
     // The item a destination will not take back need not be one this copy created. `D-T2`
-    // was here before it started, carrying a key set at the destination that this source
-    // will not accept in a write — so the copy overwrites it happily, using metadata of
-    // its own, and cannot write the original back. `Gamma` then fails, and the undo that
-    // follows puts three of the four items back and is refused the fourth.
+    // was here before it started, carrying a provenance entry this source will not accept
+    // in a write. Provenance is the copied item's own, and the source's `T-2` carries none,
+    // so the copy overwrites it happily without the entry and cannot write the original
+    // back. `Gamma` then fails, and the undo that follows puts three of the four items back
+    // and is refused the fourth.
     //
     // Both halves have to reach the user: told only that the copy failed, they would copy
     // again over a destination holding one item's content from a run nobody described.
     let mut into = already_holding();
-    into["tasks"][1]["metadata"]["reviewed-by"] = json!("a person at the destination");
+    into["tasks"][1]["metadata"]["onetaskgraph.template"] = provenance("/at/the/destination.md");
     into["capabilities"] = json!({
         "uncreatable_titles": ["Gamma"],
-        "unwritable_metadata_keys": ["reviewed-by"],
+        "unwritable_metadata_keys": ["onetaskgraph.template"],
     });
     let engine = engine_over(json!({
         "from": interlinked(),
@@ -1856,7 +2020,7 @@ async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copy
     let rendered = refused.to_string();
     // Why the copy failed, why the undo failed, and the one item still holding its writing.
     assert!(rendered.contains("Gamma"), "{rendered}");
-    assert!(rendered.contains("reviewed-by"), "{rendered}");
+    assert!(rendered.contains("onetaskgraph.template"), "{rendered}");
     assert!(rendered.contains("into:D-T2"), "{rendered}");
 
     // And it is telling the truth about which item that is: everything else reads as it
