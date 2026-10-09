@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.9...onetaskgraph-core-v0.3.10) - 2026-10-09
+
+### Fixed
+
+- *(copy)* keep metadata only the destination holds when a copy updates it ([#3567](https://github.com/nickderobertis/onetaskgraph/pull/3567))
+
 ## [0.3.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.3.8...onetaskgraph-core-v0.3.9) - 2026-10-08
 
 ### Added
