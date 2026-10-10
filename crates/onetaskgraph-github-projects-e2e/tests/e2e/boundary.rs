@@ -874,3 +874,21 @@ fn a_board_made_public_after_a_routed_creates_member_project_refuses_the_task_an
     assert_eq!(created, 1, "the member project, and no task: {served:#?}");
     assert_eq!(deleted, 1, "the member project was taken back: {served:#?}");
 }
+
+#[test]
+fn a_project_read_refused_for_another_grant_is_not_reported_as_a_missing_scope() {
+    let setup = Setup::new();
+    // GitHub's refusal of a credential that lacks a grant other than `read:project`.
+    setup
+        .board
+        .refuse_project_visibility("Resource not accessible by personal access token");
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+    assert_eq!(kind, "visibility-unreadable", "{message}");
+    assert!(message.contains("Resource not accessible"), "{message}");
+    assert!(!message.contains("read:project"), "{message}");
+}

@@ -210,9 +210,17 @@ fn a_declaration_that_cannot_be_verified_is_refused_before_any_mutation() {
     // cannot send the resolution at all.
     let mut withheld = held();
     withheld["_linear_organization"] = Value::Null;
+    // And a workspace named without an id, or with one that is not a string: never read as
+    // whichever workspace the source might have meant.
+    let mut unnamed = held();
+    unnamed["_linear_organization"] = json!({});
+    let mut misnamed = held();
+    misnamed["_linear_organization"] = json!({"id": 7});
     for (dataset, team, said) in [
         (withheld, true, "named no workspace"),
         (held(), false, "cannot verify that it is private"),
+        (unnamed, true, "id"),
+        (misnamed, true, "id"),
     ] {
         let setup = Setup::new(Some("private"), dataset, team, 1);
         let (output, served) = setup.run(&["task", "copy", "plan:t-0", "--to", "linear", "--json"]);

@@ -80,14 +80,18 @@ impl GitHubProjectsSource {
             )
             .await
             .map_err(|error| match error {
-                SourceError::Auth { .. } => SourceError::Auth {
-                    message: format!(
-                        "source {} cannot read whether its project is public: the credential \
+                // Only GitHub's refusal of the scope is that scope's: a credential it rejects
+                // outright, or one missing another grant, keeps its own diagnosis.
+                SourceError::Auth { message } if message.contains("read:project") => {
+                    SourceError::Auth {
+                        message: format!(
+                            "source {} cannot read whether its project is public: the credential \
                          in {} lacks the `read:project` scope that read needs; next: grant that \
                          scope to that credential",
-                        self.name, self.credential_name
-                    ),
-                },
+                            self.name, self.credential_name
+                        ),
+                    }
+                }
                 other => other,
             })?;
         match answer.pointer("/visibility/projectV2/public") {

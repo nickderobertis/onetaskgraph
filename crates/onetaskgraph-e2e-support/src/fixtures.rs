@@ -1007,6 +1007,9 @@ struct GitHubBoard {
     /// What every read of the Project's `public` field is answered with as `projectV2`, in
     /// place of the board's own answer; `None` for the board's own.
     project_visibility_answer: Option<Value>,
+    /// The GraphQL error every read of the Project's `public` field is refused with, in place
+    /// of an answer; `None` to answer it.
+    project_visibility_error: Option<String>,
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
@@ -1135,6 +1138,11 @@ impl GitHubBoardFields {
     /// place of the board's own answer — a response GitHub's schema does not describe.
     pub fn malform_project_visibility(&self, project: Value) {
         self.board.lock().unwrap().project_visibility_answer = Some(project);
+    }
+
+    /// Refuse every read of the Project's `public` field with the GraphQL error `message`.
+    pub fn refuse_project_visibility(&self, message: &str) {
+        self.board.lock().unwrap().project_visibility_error = Some(message.to_owned());
     }
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
@@ -1988,6 +1996,7 @@ fn github_projects_board_at(
         project_public_after_reads: None,
         project_visibility_reads: 0,
         project_visibility_answer: None,
+        project_visibility_error: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
     }));
@@ -2254,6 +2263,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             return Value::Null;
         }
         held.project_visibility_reads += 1;
+        if let Some(error) = held.project_visibility_error.clone() {
+            held.owed_errors.push(error);
+            return Value::Null;
+        }
         if let Some(project) = &held.project_visibility_answer {
             return json!({"visibility": {"projectV2": project}});
         }
