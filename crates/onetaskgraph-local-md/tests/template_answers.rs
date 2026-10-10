@@ -306,6 +306,7 @@ async fn a_rendering_replaces_content_provenance_and_answers_and_nothing_else() 
         Task {
             content: before.content.clone(),
             metadata: before.metadata.clone(),
+            version: before.version.clone(),
             ..after
         },
         before,

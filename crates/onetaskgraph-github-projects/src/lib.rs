@@ -629,6 +629,7 @@ use serde_json::{Value, json};
 
 pub mod accounting;
 mod assets;
+pub mod change_token;
 
 use accounting::Accounting;
 
@@ -861,9 +862,9 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
+                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
-      projectItems(first:$boardItems){nodes{id project{id number}
+      projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
                 board_item_values!(),
                 r#"}pageInfo{hasNextPage endCursor}}}"#
@@ -964,7 +965,7 @@ pub mod graphql {
     macro_rules! board_item_content {
         () => {
             r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }"#
@@ -982,7 +983,7 @@ pub mod graphql {
         ... on ProjectV2SingleSelectField{__typename id name options{id name}}
         ... on ProjectV2Field{__typename id name}
       }pageInfo{hasNextPage}}
-      items(first:$first,after:$after){nodes{id "#,
+      items(first:$first,after:$after){nodes{id updatedAt "#,
         board_item_values!(),
         board_item_content!(),
         r#"} pageInfo{hasNextPage endCursor}}
@@ -1019,7 +1020,7 @@ pub mod graphql {
         r#"query($owner:String!,$number:Int!,$filter:String!,$search:String!,$type:SearchType!,$originFirst:Int!,$itemsAfter:String,$searchAfter:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
       originItems:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){
-          items(first:$originFirst,after:$itemsAfter,query:$filter){nodes{id "#,
+          items(first:$originFirst,after:$itemsAfter,query:$filter){nodes{id updatedAt "#,
         board_item_values!(),
         board_item_content!(),
         r#"} pageInfo{hasNextPage endCursor}}
@@ -1094,7 +1095,7 @@ pub mod graphql {
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){
       node(id:$id){
         ... on Issue{projectItems(first:$first,after:$after){
-          nodes{id project{id number}
+          nodes{id updatedAt project{id number}
         "#,
         board_item_values!(),
         r#"}
@@ -5514,6 +5515,10 @@ impl GitHubProjectsSource {
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
+            item_updated_at: optional_time(item, "updatedAt")?,
+            comment_count: content
+                .pointer("/commentCount/totalCount")
+                .and_then(Value::as_u64),
             own_repository,
             repositories,
             slot,
@@ -7371,6 +7376,10 @@ impl GitHubProjectsSource {
             url,
             created_at: existing.and_then(|item| item.created_at),
             updated_at: existing.and_then(|item| item.updated_at),
+            // What this write moved is GitHub's to say, so a record of it gives no token until
+            // it is read again.
+            item_updated_at: None,
+            comment_count: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
             slot,
@@ -8536,6 +8545,11 @@ struct Resolved {
     url: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    /// When the board item itself last changed — what a board field write moves — when the
+    /// read that reached it said.
+    item_updated_at: Option<DateTime<Utc>>,
+    /// How many comments the issue holds, when the read that reached it said.
+    comment_count: Option<u64>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     slot: BTreeMap<String, Value>,
@@ -8638,6 +8652,19 @@ impl Resolved {
         self.number.map(|number| number.to_string())
     }
 
+    /// This item's change token — see [`change_token`] — or `None` when the read that
+    /// reached it did not carry all three of its parts, which a draft never does.
+    fn version(&self) -> Option<String> {
+        match self.content_kind {
+            ContentKind::Issue => Some(change_token::spell(
+                self.updated_at?,
+                self.item_updated_at?,
+                self.comment_count?,
+            )),
+            ContentKind::DraftIssue => None,
+        }
+    }
+
     /// Whether its `Priority` field holds a value at all, mapped or not.
     fn holds_priority(&self) -> bool {
         self.priority != HeldPriority::Read(Priority::None)
@@ -8667,7 +8694,7 @@ impl Resolved {
             }
         };
         Ok(Task {
-            version: None,
+            version: self.version(),
             id: self.id.clone(),
             key: self.key(),
             title: self.title.clone(),

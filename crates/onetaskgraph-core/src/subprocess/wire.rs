@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use onetaskgraph_plugin_api::{
-    AssetWrite, Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite,
-    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate,
-    TaskUpdateOutcome, WriteSupport,
+    AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
+    DocumentQuery, ItemWrite, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef,
+    TaskUpdate, TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -309,6 +309,13 @@ pub(crate) struct InitializeResult {
     /// what it wrote before the member existed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) ends_commands: bool,
+    /// Whether this plugin answers `write_comment_copy` (§3.12).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// comment a copy carries to it is written through `add_comment` and `edit_comment` with
+    /// the origin's hidden marker appended to its body (§4.16a). Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) comment_copies: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -581,6 +588,18 @@ pub(crate) struct EditCommentParams {
     pub(crate) comment: NativeId,
     /// Its new body.
     pub(crate) body: CommentBody,
+}
+
+/// `write_comment_copy` parameters (§4.16a).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommentCopyParams {
+    /// The task the comment is on.
+    pub(crate) task: NativeId,
+    /// The comment a copy wrote before and now makes say `copy`, or `null` for a new one.
+    #[serde(default)]
+    pub(crate) existing: Option<NativeId>,
+    /// What it says, and the comment it is a copy of.
+    pub(crate) copy: CommentCopy,
 }
 
 /// `delete_comment` parameters (§4.16).

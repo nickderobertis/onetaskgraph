@@ -24,12 +24,12 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentsParams, ContentParams, DeleteCommentParams, DeleteParams,
-    DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams, EditCommentParams,
-    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
-    PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
-    ServedWriteParams, StatusParams, TaskQueryParams, UpdateParams, after_the_first_vocabulary,
-    knows_every_category, vocabulary,
+    AddCommentParams, CommentCopyParams, CommentsParams, ContentParams, DeleteCommentParams,
+    DeleteParams, DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams,
+    EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
+    LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
+    ProjectWriteParams, Request, Response, ServedWriteParams, StatusParams, TaskQueryParams,
+    UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -269,6 +269,9 @@ async fn initialize(
                 // And the end of a command: this host forwards it to whichever plugin it
                 // serves, which drops what it holds or holds nothing and does nothing.
                 ends_commands: true,
+                // And a copied comment: every plugin of this build stores its origin natively
+                // or through the contract's default marker.
+                comment_copies: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -581,6 +584,14 @@ async fn dispatch(
             encode(json!({
                 "comment": source
                     .edit_comment(&params.task, &params.comment, &params.body)
+                    .await?
+            }))
+        }
+        "write_comment_copy" => {
+            let params: CommentCopyParams = decode(method, params)?;
+            encode(json!({
+                "comment": source
+                    .write_comment_copy(&params.task, params.existing.as_ref(), &params.copy)
                     .await?
             }))
         }

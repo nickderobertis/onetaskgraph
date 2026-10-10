@@ -326,10 +326,12 @@ async fn a_priority_set_rewrites_the_priority_entry_and_not_one_other_byte() {
             "only the priority entry moves"
         );
         let after = source.get_task(&id("a")).await.unwrap().expect("held");
+        assert_ne!(after.version, before.version, "the change token moves");
         assert_eq!(
             after,
             Task {
                 priority,
+                version: after.version.clone(),
                 ..before.clone()
             }
         );

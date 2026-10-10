@@ -107,8 +107,16 @@ fn a_task_version_is_left_off_the_wire_when_absent() {
         "labels": [], "project": null, "url": null, "created_at": null, "updated_at": null
     }))
     .unwrap();
-    assert_eq!(task.version, None, "a plugin that sends none is read as giving none");
-    assert!(serde_json::to_value(&task).unwrap().get("version").is_none());
+    assert_eq!(
+        task.version, None,
+        "a plugin that sends none is read as giving none"
+    );
+    assert!(
+        serde_json::to_value(&task)
+            .unwrap()
+            .get("version")
+            .is_none()
+    );
     let versioned = Task {
         version: Some("gh1:x".to_owned()),
         ..task
@@ -246,7 +254,11 @@ async fn the_default_comment_copy_writes_the_marker_and_answers_without_it() {
     assert_eq!(written.body, "Copied text.\n");
     assert_eq!(written.origin, Some(origin()));
     let stored = source.comments.lock().unwrap()[0].body.clone();
-    assert_eq!(stored, origin().mark("Copied text.\n"), "the source holds the marker");
+    assert_eq!(
+        stored,
+        origin().mark("Copied text.\n"),
+        "the source holds the marker"
+    );
 
     let edited = CommentCopy {
         body: CommentBody::new("Edited at the origin.").unwrap(),
@@ -262,7 +274,11 @@ async fn the_default_comment_copy_writes_the_marker_and_answers_without_it() {
         .expect("the comment is there");
     assert_eq!(written.body, "Edited at the origin.");
     assert_eq!(written.origin, Some(edited.origin.clone()));
-    assert_eq!(source.comments.lock().unwrap().len(), 1, "an edit adds nothing");
+    assert_eq!(
+        source.comments.lock().unwrap().len(),
+        1,
+        "an edit adds nothing"
+    );
 
     let missing = source
         .write_comment_copy(&task, Some(&NativeId("gone".to_owned())), &edited)

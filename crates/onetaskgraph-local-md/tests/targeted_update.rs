@@ -290,6 +290,7 @@ async fn a_targeted_update_of_another_field_leaves_each_writer_layout_byte_for_b
                 wanted.status = read.status.clone();
                 wanted.content = read.content.clone();
                 wanted.metadata = read.metadata.clone();
+                wanted.version.clone_from(&read.version);
                 assert_eq!(
                     read, wanted,
                     "{layout}, {arrangement:?}, {field:?}: nothing unnamed moved"
@@ -434,7 +435,9 @@ async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
         wanted
             .metadata
             .insert(arrangement.value.to_owned(), replacement.clone());
-        assert_eq!(source.get_task(&id).await.unwrap(), Some(wanted.clone()));
+        let read = source.get_task(&id).await.unwrap().expect("held");
+        wanted.version.clone_from(&read.version);
+        assert_eq!(read, wanted.clone());
 
         let removed = source
             .update_task(
@@ -449,7 +452,9 @@ async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
             .expect("held");
         assert_eq!(removed.written, BTreeSet::from([UpdatedField::Metadata]));
         wanted.metadata.remove(arrangement.value);
-        assert_eq!(source.get_task(&id).await.unwrap(), Some(wanted));
+        let read = source.get_task(&id).await.unwrap().expect("held");
+        wanted.version.clone_from(&read.version);
+        assert_eq!(read, wanted);
     }
 
     for arrangement in ARRANGEMENTS {
@@ -467,7 +472,9 @@ async fn an_update_naming_the_key_that_holds_steps_replaces_or_removes_it() {
             .unwrap_or_else(|error| panic!("{arrangement:?}: {error:?}"))
             .expect("held");
         wanted.metadata.remove(arrangement.value);
-        assert_eq!(source.get_task(&id).await.unwrap(), Some(wanted));
+        let read = source.get_task(&id).await.unwrap().expect("held");
+        wanted.version.clone_from(&read.version);
+        assert_eq!(read, wanted);
     }
 }
 

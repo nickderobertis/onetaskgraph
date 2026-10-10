@@ -555,3 +555,105 @@ async fn a_file_whose_comments_share_an_id_is_refused_naming_the_file_and_the_id
     assert!(message.contains("release.md"), "{message}");
     assert!(message.contains("same"), "{message}");
 }
+
+/// The origin a copy of board comment `IC_7` carries.
+fn board_origin(updated: &str) -> onetaskgraph_plugin_api::CommentOrigin {
+    onetaskgraph_plugin_api::CommentOrigin {
+        task: "board:I_kw1".to_owned(),
+        id: id("IC_7"),
+        author: Some("ada".to_owned()),
+        created_at: Some("2026-09-01T00:00:01Z".parse().unwrap()),
+        updated_at: Some(updated.parse().unwrap()),
+        url: Some("https://example.invalid/I_kw1#IC_7".to_owned()),
+    }
+}
+
+#[tokio::test]
+async fn a_copied_comment_takes_its_origins_id_author_and_times_and_records_the_rest() {
+    let (root, source) = folder(&[("tasks/release.md", TASK)]);
+    add(source.as_ref(), "release", "Written here.", Some("grace")).await;
+    let copy = onetaskgraph_plugin_api::CommentCopy {
+        body: body("From the board.\n"),
+        origin: board_origin("2026-09-01T00:00:02Z"),
+    };
+    let written = source
+        .write_comment_copy(&id("release"), None, &copy)
+        .await
+        .unwrap()
+        .expect("the task is held");
+    assert_eq!(written.id, id("IC_7"), "the origin's own id");
+    assert_eq!(written.author.as_deref(), Some("ada"));
+    assert_eq!(stamped(written.created_at.unwrap()), "2026-09-01T00:00:01Z");
+    assert_eq!(stamped(written.updated_at.unwrap()), "2026-09-01T00:00:02Z");
+    assert_eq!(written.origin, Some(copy.origin.clone()));
+    let text = read(root.path(), "tasks/release.md");
+    assert!(
+        text.contains(
+            "<!-- onetaskgraph:comment id=\"IC_7\" author=\"ada\" \
+             created_at=\"2026-09-01T00:00:01Z\" updated_at=\"2026-09-01T00:00:02Z\" \
+             origin_task=\"board:I_kw1\" origin_url=\"https://example.invalid/I_kw1#IC_7\" -->\n\
+             ### ada — 2026-09-01T00:00:01Z\n\nFrom the board.\n\n"
+        ),
+        "the origin is stored on the marker line:\n{text}"
+    );
+    let read_back = listed(source.as_ref(), "release").await;
+    assert_eq!(read_back.len(), 2);
+    assert_eq!(read_back[0].origin, None, "a comment written here has none");
+    assert_eq!(read_back[1], written, "the copy reads back as written");
+
+    // Re-written: the body and the origin's times move, the id stays.
+    let edited = onetaskgraph_plugin_api::CommentCopy {
+        body: body("Edited on the board."),
+        origin: board_origin("2026-09-02T00:00:00Z"),
+    };
+    let rewritten = source
+        .write_comment_copy(&id("release"), Some(&id("IC_7")), &edited)
+        .await
+        .unwrap()
+        .expect("the comment is held");
+    assert_eq!(rewritten.id, id("IC_7"));
+    assert_eq!(rewritten.body, "Edited on the board.");
+    assert_eq!(
+        stamped(rewritten.updated_at.unwrap()),
+        "2026-09-02T00:00:00Z"
+    );
+    assert_eq!(listed(source.as_ref(), "release").await[1], rewritten);
+    assert_eq!(
+        source
+            .write_comment_copy(&id("release"), Some(&id("gone")), &edited)
+            .await
+            .unwrap(),
+        None,
+        "a comment the task does not hold is answered as none"
+    );
+}
+
+#[tokio::test]
+async fn a_copied_comment_whose_origin_id_is_taken_mints_one_and_records_the_origins() {
+    let at = "2026-09-13T15:11:07Z";
+    let (root, source) = folder(&[(
+        "tasks/release.md",
+        &format!(
+            "{TASK}\n{COMMENTS_HEADING}\n\n{}",
+            block("IC_7", at, "Mine.")
+        ),
+    )]);
+    let copy = onetaskgraph_plugin_api::CommentCopy {
+        body: body("From the board."),
+        origin: board_origin("2026-09-01T00:00:02Z"),
+    };
+    let written = source
+        .write_comment_copy(&id("release"), None, &copy)
+        .await
+        .unwrap()
+        .expect("the task is held");
+    assert_ne!(written.id, id("IC_7"), "the id already held is not reused");
+    assert_eq!(
+        written.origin.as_ref().map(|origin| &origin.id),
+        Some(&id("IC_7"))
+    );
+    assert!(read(root.path(), "tasks/release.md").contains(" origin_id=\"IC_7\""));
+    let read_back = listed(source.as_ref(), "release").await;
+    assert_eq!(read_back[0].origin, None);
+    assert_eq!(read_back[1], written);
+}

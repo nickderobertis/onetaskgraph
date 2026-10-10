@@ -104,6 +104,11 @@ async fn task_edit(before: &str, name: &str, value: Value, after: &str) {
     let reread = source.get_task(&id("a")).await.unwrap().expect("held");
     assert_eq!(answered, reread, "the answer is the record as read back");
     expected.metadata.insert(name.to_owned(), value);
+    assert_ne!(
+        reread.version, expected.version,
+        "the file's change token moves with the file"
+    );
+    expected.version.clone_from(&reread.version);
     assert_eq!(
         reread, expected,
         "only {name} moved, and every other field and key is as it was"

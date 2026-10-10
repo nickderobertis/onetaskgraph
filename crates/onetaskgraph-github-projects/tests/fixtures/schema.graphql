@@ -19,6 +19,12 @@
 # https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
 # Priority writes select that value from their mutation payload instead of reading the issue again.
 #
+# `ProjectV2Item.updatedAt: DateTime!` ("Identifies the date and time when the object was last
+# updated") and `IssueCommentConnection.totalCount: Int!` ("Identifies the total count of items in
+# the connection") are pinned from https://docs.github.com/en/graphql/reference/objects
+# (2026-10-10). They are two of the three parts of a task's change token; the third,
+# `Issue.updatedAt`, was already selected.
+#
 # `CreateIssueInput.projectV2Ids: [ID!]` — "An array of Node IDs for Projects V2 associated with
 # this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])` — was read from GitHub.com's own
 # published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
@@ -294,6 +300,7 @@ type ProjectV2FieldConfigurationConnection {
 }
 type ProjectV2Item implements Node {
   id: ID!
+  updatedAt: DateTime!
   project: ProjectV2!
   fieldValues(first: Int, after: String): ProjectV2ItemFieldValueConnection!
   fieldValueByName(name: String!): ProjectV2ItemFieldValue
@@ -371,6 +378,7 @@ type IssueComment implements Node {
   issue: Issue!
 }
 type IssueCommentConnection {
+  totalCount: Int!
   nodes: [IssueComment]
   pageInfo: PageInfo!
 }

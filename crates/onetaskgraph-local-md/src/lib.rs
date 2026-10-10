@@ -81,18 +81,19 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, Cursor,
-    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
-    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
-    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
-    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UpdatedField, WriteSupport,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
+    CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
 
 mod assets;
+pub mod change_token;
 #[cfg(windows)]
 mod probe;
 #[cfg(any(windows, test))]
@@ -409,6 +410,8 @@ struct Entry {
     /// Empty for a project, which delivers nothing and is delivered by nothing.
     delivers: Vec<TaskRef>,
     delivered_by: Vec<TaskRef>,
+    /// The file's change token, for a task; `None` for a project.
+    version: Option<String>,
 }
 
 /// What every Markdown file of this source carries, whichever folder it is in.
@@ -880,6 +883,7 @@ impl LocalMdSource {
             dependencies,
             delivers,
             delivered_by,
+            version: matches!(kind, WorkKind::Task).then(|| change_token::spell(text.as_bytes())),
         })
     }
 
@@ -1390,14 +1394,29 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Task>, SourceError> {
-        self.set_metadata(
+        // Compared without the file's change token, which any edit moves, and answered with
+        // the token of the file as it was written.
+        let Some(written) = self.set_metadata(
             Kind::Task,
             id,
             key,
             value,
-            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |path, text| {
+                self.parse_text(WorkKind::Task, path, text)
+                    .map(task)
+                    .map(unversioned)
+            },
             |task| &mut task.metadata,
-        )
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Task {
+            version: self
+                .find(WorkKind::Task, id)?
+                .and_then(|entry| entry.version),
+            ..written
+        }))
     }
 
     /// Edit every entry of the task file the update names — each front-matter key, each
@@ -1484,7 +1503,7 @@ impl TaskSource for LocalMdSource {
         let edges_landed = edges.as_ref().is_none_or(|edges| {
             edges.len() == edges_after.len() && edges.iter().all(|edge| edges_after.contains(edge))
         });
-        if task(reread) != wanted || (edges_differ && !edges_landed) {
+        if unversioned(task(reread)) != unversioned(wanted) || (edges_differ && !edges_landed) {
             return Err(SourceError::Refused {
                 message: format!(
                     "{}: cannot update this task without changing more than the update names: \
@@ -1699,7 +1718,11 @@ impl TaskSource for LocalMdSource {
                 provenance,
                 answers,
             },
-            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |path, text| {
+                self.parse_text(WorkKind::Task, path, text)
+                    .map(task)
+                    .map(unversioned)
+            },
             |task, content, provenance| {
                 task.content = (!content.is_empty()).then(|| content.to_owned());
                 task.metadata
@@ -1831,6 +1854,58 @@ impl TaskSource for LocalMdSource {
         file.comments.remove(at);
         file.rewrite()?;
         Ok(Some(comment.clone()))
+    }
+    /// Write a copied comment with its origin stored natively: the comment takes the origin's
+    /// own id, author and times, and its marker line records the origin's task and address.
+    ///
+    /// The origin's id is the comment's id unless another comment of this task already holds
+    /// it, when an id is minted as `add` mints one and the origin's is recorded beside it. A
+    /// time the origin did not give is this second's.
+    async fn write_comment_copy(
+        &self,
+        task: &NativeId,
+        existing: Option<&NativeId>,
+        copy: &CommentCopy,
+    ) -> Result<Option<Comment>, SourceError> {
+        if let Some(author) = &copy.origin.author {
+            representable_author(author)?;
+        }
+        representable_body(&copy.body)?;
+        let Some(mut file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        let now = this_second();
+        let written = |id: NativeId| Comment {
+            id,
+            author: copy.origin.author.clone(),
+            created_at: Some(copy.origin.created_at.unwrap_or(now)),
+            updated_at: Some(copy.origin.updated_at.unwrap_or(now)),
+            body: copy.body.as_str().to_owned(),
+            url: None,
+            origin: Some(copy.origin.clone()),
+        };
+        let held = match existing {
+            Some(existing) => {
+                let Some(held) = file.comments.iter_mut().find(|held| &held.id == existing) else {
+                    return Ok(None);
+                };
+                *held = written(existing.clone());
+                held.clone()
+            }
+            None => {
+                let taken = file.comments.iter().any(|held| held.id == copy.origin.id);
+                let id = if taken || copy.origin.id.as_str().is_empty() {
+                    minted_comment_id(now, &file.comments)
+                } else {
+                    copy.origin.id.clone()
+                };
+                let added = written(id);
+                file.comments.push(added.clone());
+                added
+            }
+        };
+        file.rewrite()?;
+        Ok(Some(held))
     }
 }
 
@@ -2433,12 +2508,18 @@ fn block(text: &str) -> Option<(Comment, &str)> {
     let mut author = None;
     let mut created_at = None;
     let mut updated_at = None;
+    let mut origin_task = None;
+    let mut origin_id = None;
+    let mut origin_url = None;
     for (name, value) in attributes {
         let slot = match name {
             "id" => &mut id,
             "author" => &mut author,
             "created_at" => &mut created_at,
             "updated_at" => &mut updated_at,
+            "origin_task" => &mut origin_task,
+            "origin_id" => &mut origin_id,
+            "origin_url" => &mut origin_url,
             _ => return None,
         };
         if slot.replace(value).is_some() {
@@ -2451,13 +2532,29 @@ fn block(text: &str) -> Option<(Comment, &str)> {
             .map(|at| at.with_timezone(&Utc))
     };
     let id = id.filter(|id| !id.is_empty())?;
+    let created_at = timestamp(created_at?)?;
+    let updated_at = timestamp(updated_at?)?;
+    // A copied comment: its own id, author and times are its origin's, and the marker line
+    // records the rest.
+    let origin = match origin_task {
+        Some(task) => Some(CommentOrigin {
+            task,
+            id: NativeId(origin_id.unwrap_or_else(|| id.clone())),
+            author: author.clone(),
+            created_at: Some(created_at),
+            updated_at: Some(updated_at),
+            url: origin_url,
+        }),
+        None if origin_id.is_some() || origin_url.is_some() => return None,
+        None => None,
+    };
     Some((
         Comment {
-            origin: None,
+            origin,
             id: NativeId(id),
             author,
-            created_at: Some(timestamp(created_at?)?),
-            updated_at: Some(timestamp(updated_at?)?),
+            created_at: Some(created_at),
+            updated_at: Some(updated_at),
             body: body.to_owned(),
             url: None,
         },
@@ -2547,10 +2644,20 @@ fn rendered_block(comment: &Comment) -> String {
     let created = comment.created_at.as_ref().map(stamped).unwrap_or_default();
     let updated = comment.updated_at.as_ref().map(stamped).unwrap_or_default();
     marker.push_str(&format!(
-        " created_at=\"{}\" updated_at=\"{}\"{MARKER_END}",
+        " created_at=\"{}\" updated_at=\"{}\"",
         escaped(&created),
         escaped(&updated)
     ));
+    if let Some(origin) = &comment.origin {
+        marker.push_str(&format!(" origin_task=\"{}\"", escaped(&origin.task)));
+        if origin.id != comment.id {
+            marker.push_str(&format!(" origin_id=\"{}\"", escaped(origin.id.as_str())));
+        }
+        if let Some(url) = &origin.url {
+            marker.push_str(&format!(" origin_url=\"{}\"", escaped(url)));
+        }
+    }
+    marker.push_str(MARKER_END);
     let who = comment.author.as_deref().unwrap_or("comment");
     format!(
         "{marker}\n### {who} — {created}\n\n{}\n\n{COMMENT_CLOSE}\n",
@@ -2622,9 +2729,17 @@ impl LocalMdSource {
         self.paginate(edges, p)
     }
 }
-fn task(d: Entry) -> Task {
+/// `task` without its change token, for comparing what a file reads as before and after an
+/// edit: the token is the file's digest, so it moves with any edit at all.
+fn unversioned(task: Task) -> Task {
     Task {
         version: None,
+        ..task
+    }
+}
+fn task(d: Entry) -> Task {
+    Task {
+        version: d.version,
         id: d.common.id,
         // A folder of Markdown has no handle of its own: a task's id *is* the path a
         // person reads it by, so a key here would be a second spelling of the id rather

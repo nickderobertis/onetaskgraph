@@ -67,3 +67,7 @@ required-features = ["linear"]
 [[test]]
 name = "subprocess"
 required-features = ["linear"]
+
+[[test]]
+name = "version"
+required-features = ["github-projects"]
