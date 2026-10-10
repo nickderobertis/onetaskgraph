@@ -773,3 +773,103 @@ fn a_create_routed_onto_the_board_is_held_to_the_repository_its_issue_lands_in()
         "{served:#?}"
     );
 }
+
+#[test]
+fn a_dry_run_reads_every_issue_repository_it_would_write_to() {
+    let setup = Setup::new();
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    setup.record(
+        "tasks",
+        "here",
+        "title: Here\nstatus: todo\nclassification: private",
+    );
+    setup.record(
+        "tasks",
+        "there",
+        "title: There\nstatus: todo\nclassification: private\n\
+         repositories: [github.com/nickderobertis/elsewhere]",
+    );
+    // The first issue's repository reads private; the second's does not, on the same board.
+    let (kind, _, served) = setup.refused(&[
+        "task",
+        "copy",
+        "plan:here",
+        "plan:there",
+        "--to",
+        "board",
+        "--dry-run",
+    ]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+}
+
+#[test]
+fn a_board_made_public_after_a_routed_creates_member_project_refuses_the_task_and_removes_it() {
+    let routed = || {
+        let setup = Setup::laid(github_projects_with_board, |_, configured| {
+            configured["sources"]["plan"]["routes"] = json!([{"repositories": ["github.com/nickderobertis/onetaskgraph"], "to": "board"}]);
+        });
+        setup.record(
+            "projects",
+            "home",
+            "title: Home\nstatus: todo\nclassification: private",
+        );
+        let body = setup.sandbox.config_home().join("body.md");
+        std::fs::write(&body, "A body.").expect("a body file");
+        (setup, body.to_str().expect("a UTF-8 path").to_owned())
+    };
+    let arguments = |body: &str| {
+        [
+            "task",
+            "create",
+            "plan",
+            "--project",
+            "home",
+            "--title",
+            "Routed",
+            "--body-file",
+            body,
+            "--repository",
+            "github.com/nickderobertis/onetaskgraph",
+        ]
+        .map(str::to_owned)
+    };
+    // How many times a create that lands reads the board's Project: the last is the task's own
+    // read after its member project was written.
+    let (landing, body) = routed();
+    let served = landing.ok(&arguments(&body).each_ref().map(String::as_str));
+    let reads = visibility_reads(&served)
+        .iter()
+        .filter(|read| **read == "project")
+        .count();
+    assert!(reads >= 2, "{served:#?}");
+    // The same create, with the board made public just before that last read.
+    let (setup, body) = routed();
+    setup.board.make_public_after_visibility_reads(reads - 1);
+    let (kind, _, served) = {
+        let arguments = arguments(&body);
+        let arguments = arguments.each_ref().map(String::as_str);
+        let mut with_json = arguments.to_vec();
+        with_json.push("--json");
+        let (output, served) = setup.run(&with_json);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        (failure["failure"]["kind"].clone(), (), served)
+    };
+    assert_eq!(kind, "destination-not-private");
+    let created = served
+        .iter()
+        .filter(|document| document.contains("createIssue(input:$input)"))
+        .count();
+    let deleted = served
+        .iter()
+        .filter(|document| document.contains("deleteIssue(input:$input)"))
+        .count();
+    assert_eq!(created, 1, "the member project, and no task: {served:#?}");
+    assert_eq!(deleted, 1, "the member project was taken back: {served:#?}");
+}

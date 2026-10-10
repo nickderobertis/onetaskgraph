@@ -2342,6 +2342,8 @@ fn a_targeted_update_puts_every_field_it_writes_in_front_of_the_check() {
         "in-progress",
         "--status-name",
         "in progress",
+        "--priority",
+        "high",
         "--metadata",
         "team.note=\"Metadata marker\"",
         "--delivers",
@@ -2371,6 +2373,7 @@ fn a_targeted_update_puts_every_field_it_writes_in_front_of_the_check() {
     for shown in [
         "Title marker",
         "in progress",
+        "high",
         "team.note",
         "Metadata marker",
         "dep",

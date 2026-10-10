@@ -2981,7 +2981,6 @@ impl Engine {
         request: &CopyRequest,
         planned: impl Iterator<Item = &'a Planned>,
     ) -> Result<(), EngineError> {
-        let mut read: Vec<&SourceName> = Vec::new();
         for item in planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
@@ -3002,8 +3001,9 @@ impl Engine {
                 exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &[])),
             };
             self.preflight(destination, &outbound).await?;
-            if request.dry_run && !read.contains(&&item.to) {
-                read.push(&item.to);
+            // Every item, not one per destination: who can read a write depends on where in
+            // the destination it lands — an issue's own repository on a board.
+            if request.dry_run {
                 self.at_write(destination, &outbound.item, &outbound.target)
                     .await?;
             }

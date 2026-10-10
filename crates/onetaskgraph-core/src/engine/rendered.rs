@@ -652,10 +652,25 @@ impl Engine {
             let home = GlobalId::new(request.source.clone(), request.project.clone());
             self.creatable(&request.source, MetadataRecord::Task)?;
             let filed = self.member_project(&home, near).await?;
-            if filed.project.is_none() {
+            let Some(member) = filed.project.clone() else {
                 return Err(EngineError::NoSuchProject {
                     id: home.to_string(),
                 });
+            };
+            // The member project was a write of its own, so the task's is held to the
+            // destination's reality again — where the task now lands, under that member.
+            if let Err(error) = self
+                .at_write(
+                    source,
+                    "the new task",
+                    &WriteTarget::New {
+                        repositories: &request.repositories,
+                        project: Some(&member),
+                    },
+                )
+                .await
+            {
+                return Err(self.unfile(filed, error).await);
             }
             Some(filed)
         };

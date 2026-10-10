@@ -495,6 +495,12 @@ impl Exposure {
         exposure
             .metadata
             .extend(update.status.iter().map(|status| status.name.clone()));
+        exposure.metadata.extend(
+            update
+                .priority
+                .iter()
+                .map(|priority| priority.as_str().to_owned()),
+        );
         for (key, value) in &update.metadata_set {
             exposure = exposure.and(Self::of_entry(key.as_str(), value));
         }
