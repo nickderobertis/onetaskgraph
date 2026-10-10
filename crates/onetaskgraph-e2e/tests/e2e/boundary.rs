@@ -2884,9 +2884,25 @@ fn a_copy_whose_external_reference_is_missing_or_unreadable_is_refused_before_an
         "title: Broken\nstatus: todo\nclassification: secret",
         PLAIN,
     );
+    // A task read whole whose project cannot be read is no more classified than one unread.
+    store.record(
+        "shelf",
+        "projects",
+        "broken-plan",
+        "title: Broken plan\nstatus: todo\nclassification: secret",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "filed",
+        "title: Filed\nstatus: todo\nproject: broken-plan",
+        PLAIN,
+    );
     for (id, far, why) in [
         ("missing", "shelf:gone-1", "holds no such item"),
         ("unreadable", "shelf:broken", "could not be read"),
+        ("unreadable-project", "shelf:filed", "classification"),
     ] {
         store.record(
             "plan",
@@ -2921,4 +2937,101 @@ fn a_copy_whose_external_reference_cannot_be_classified_is_refused_before_any_wr
     assert_eq!(store.tree(), before, "nothing was written");
     // A destination declared private needs no answer, and takes it.
     store.ok(&["task", "copy", "plan:open", "--to", "vault"]);
+}
+
+#[test]
+fn a_copy_withholds_an_external_reference_private_only_by_its_project_or_its_members() {
+    // `shelf` declares nothing, and none of the three referenced items is private by its own
+    // record: `legacy` is filed under a private project, `mixed` holds a private task, and
+    // `documented` a private document.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "projects",
+        "closed-plan",
+        "title: Closed plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "legacy",
+        "title: Legacy\nstatus: todo\nproject: closed-plan",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "inner",
+        "title: Inner\nstatus: todo\nproject: mixed\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "projects",
+        "documented",
+        "title: Documented\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "documents",
+        "notes",
+        "title: Notes\nproject: documented\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "projects",
+        "open-plan",
+        "title: Open plan\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo\nproject: open-plan",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\n\
+         depends_on: [{id: \"shelf:legacy\", item: task}, {id: \"shelf:mixed\", item: project}, \
+         {id: \"shelf:documented\", item: project}, {id: \"shelf:plain\", item: task}, \
+         {id: \"shelf:open-plan\", item: project}]",
+        PLAIN,
+    );
+    store.ok(&["task", "copy", "plan:open", "--to", "site"]);
+    let landed = held_text(&store, "site");
+    for private in ["shelf:legacy", "shelf:mixed", "shelf:documented"] {
+        assert!(!landed.contains(private), "{private}: {landed}");
+    }
+    // References to public items under a public project are written as before.
+    assert!(landed.contains("shelf:plain"), "{landed}");
+    assert!(landed.contains("shelf:open-plan"), "{landed}");
+    // A destination declared private keeps every one.
+    store.ok(&["task", "copy", "plan:open", "--to", "vault"]);
+    let kept = held_text(&store, "vault");
+    for named in [
+        "shelf:legacy",
+        "shelf:mixed",
+        "shelf:documented",
+        "shelf:plain",
+        "shelf:open-plan",
+    ] {
+        assert!(kept.contains(named), "{named}: {kept}");
+    }
 }

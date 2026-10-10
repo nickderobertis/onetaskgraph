@@ -3062,9 +3062,10 @@ impl Engine {
     /// An item of a source declared private, one of the destination itself, and one this copy
     /// carries need no read: the first is withheld by its source, the second names nothing
     /// elsewhere, and the third's classification is already known. Every other is read once
-    /// per command; one whose source is not configured, cannot be read, or holds no such item
-    /// is refused, because an id that cannot be shown public is never written where it would
-    /// name a private item.
+    /// per command, with what its classification inherits — a task's project, and a project's
+    /// tasks and documents. One whose source is not configured, or where any of those reads
+    /// fails or finds no such item, is refused, because an id that cannot be shown public is
+    /// never written where it would name a private item.
     async fn classify_references(
         &self,
         item: &Planned,
@@ -3109,29 +3110,60 @@ impl Engine {
                     "no source of that name is configured to read it from".to_owned(),
                 ));
             };
-            let read = match kind {
-                ItemKind::Task => source
-                    .source()
-                    .get_task(&far.native)
-                    .await
-                    .map(|task| task.map(|task| (task.classification, task.repositories))),
+            let unread =
+                |error: SourceError| unclassified(format!("its source could not be read: {error}"));
+            let missing = || unclassified("its source holds no such item".to_owned());
+            // Its effective classification: a task's tightened by the project it is filed
+            // under, and a project's by every task and document it holds — the same rule a
+            // copy of either applies to itself.
+            let class = match kind {
+                ItemKind::Task => {
+                    let task = source
+                        .source()
+                        .get_task(&far.native)
+                        .await
+                        .map_err(unread)?
+                        .ok_or_else(missing)?;
+                    let own = self.classify(task.classification, &task.repositories).await;
+                    match &task.project {
+                        Some(filed) => own.strictest(
+                            self.source_project_class(
+                                &GlobalId::new(far.source.clone(), filed.clone()),
+                                running,
+                            )
+                            .await
+                            .map_err(|error| unclassified(error.to_string()))?,
+                        ),
+                        None => own,
+                    }
+                }
                 ItemKind::Project => {
-                    source
+                    let held = source
                         .source()
                         .get_project(&far.native)
                         .await
-                        .map(|project| {
-                            project.map(|project| (project.classification, project.repositories))
-                        })
-                }
-            };
-            let class = match read {
-                Ok(Some((declared, repositories))) => self.classify(declared, &repositories).await,
-                Ok(None) => return Err(unclassified("its source holds no such item".to_owned())),
-                Err(error) => {
-                    return Err(unclassified(format!(
-                        "its source could not be read: {error}"
-                    )));
+                        .map_err(unread)?
+                        .ok_or_else(missing)?;
+                    match running.project_classes.get(&far) {
+                        Some(known) => *known,
+                        None => {
+                            let tasks = self
+                                .project_member_tasks(&far, FOR_A_COPY)
+                                .await
+                                .map_err(|error| unclassified(error.to_string()))?;
+                            let class = self
+                                .project_class(
+                                    source,
+                                    &far,
+                                    &held,
+                                    tasks.iter().map(|task| &task.item),
+                                )
+                                .await
+                                .map_err(|error| unclassified(error.to_string()))?;
+                            running.project_classes.insert(far.clone(), class);
+                            class
+                        }
+                    }
                 }
             };
             if class == Classification::Private {

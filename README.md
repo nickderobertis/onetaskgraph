@@ -1456,9 +1456,11 @@ source, or one classified private, in its
 own record. Between public items nothing is left out. While the boundary is active, a copy
 into a source not declared private first reads, once per command, every item outside the copy
 that a carried dependency or delivery names in a source not declared private, and withholds
-its id when that item is private by its own record or its repositories — whatever its source
-declares; a reference whose classification cannot be read — its source not configured, not
-readable, or holding no such item — is refused before anything is written. A `--depends-on` or
+its id when that item is private by its own record, its repositories, or what it inherits —
+a task the project it is filed under, a project every task and document it holds — whatever
+its source declares; a reference whose classification cannot be read — its source not
+configured, any of those reads failing, or no such item — is refused before anything is
+written. A `--depends-on` or
 `--delivers` naming such an item is the caller asking for it to be written, so that write is
 refused before anything is written rather than quietly answering something else.
 
