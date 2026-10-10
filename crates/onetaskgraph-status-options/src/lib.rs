@@ -12,7 +12,8 @@ use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName};
 
 pub use onetaskgraph_github_projects::{
     BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, MetadataFieldConfig,
-    MetadataFieldReport, SetupMode, StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
+    MetadataFieldReport, NonTextFieldType, SetupMode, StatusOptionsMode, StatusOptionsOutcome,
+    StatusOptionsReport,
 };
 
 /// Plan or apply the guarded setup of every board field one configured source names: its

@@ -3128,6 +3128,34 @@ pub struct FieldsReport {
     pub metadata_fields: Vec<MetadataFieldReport>,
 }
 
+/// The type of a board field that is not a text field, as GitHub names it — its `dataType`, or
+/// its GraphQL type when it has none — which is what a projected field's conflict reports.
+///
+/// Never blank and never `TEXT`: a text field of that name is no conflict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct NonTextFieldType(#[schemars(length(min = 1))] String);
+
+impl TryFrom<String> for NonTextFieldType {
+    type Error = String;
+
+    fn try_from(kind: String) -> Result<Self, Self::Error> {
+        if kind.trim().is_empty() {
+            return Err("a board field's type cannot be blank".to_owned());
+        }
+        if kind == "TEXT" {
+            return Err("a TEXT field is no conflict for a projected text field".to_owned());
+        }
+        Ok(Self(kind))
+    }
+}
+
+impl std::fmt::Display for NonTextFieldType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// One projected metadata text field's plan, or its verified outcome.
 ///
 /// The setup creates a missing one as a text field and never alters a field that is there:
@@ -3146,7 +3174,7 @@ pub struct MetadataFieldReport {
     /// The type of a field of that name that is not a text field, which the setup leaves as
     /// it is; absent — and left out of the JSON — when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conflict: Option<String>,
+    pub conflict: Option<NonTextFieldType>,
     /// What the requested operation did: `planned`; `created` for a field that was not
     /// there; `unchanged` for one that was, and for a conflict, which is never changed.
     pub outcome: FieldOutcome,
@@ -3631,14 +3659,23 @@ impl GitHubProjectsSource {
                     Some(field) => {
                         let typename = optional_str(field, "__typename")?;
                         let data_type = optional_str(field, "dataType")?;
-                        (typename != Some("ProjectV2Field") || data_type != Some("TEXT")).then(
-                            || {
-                                data_type
-                                    .or(typename)
-                                    .unwrap_or("field of another type")
-                                    .to_owned()
-                            },
-                        )
+                        if typename == Some("ProjectV2Field") && data_type == Some("TEXT") {
+                            None
+                        } else {
+                            let named = data_type
+                                .filter(|kind| *kind != "TEXT")
+                                .or(typename)
+                                .unwrap_or("field of another type");
+                            Some(NonTextFieldType::try_from(named.to_owned()).map_err(
+                                |message| SourceError::Malformed {
+                                    message: format!(
+                                        "GitHub answered the board's {} field with a type this \
+                                         setup cannot read: {message}",
+                                        &*projection.field
+                                    ),
+                                },
+                            )?)
+                        }
                     }
                 };
                 let exists =

@@ -2041,6 +2041,14 @@ source: (SourceName | null)
 export type FailureDocument = GeneratedFailureDocument.FailureDocument;
 export namespace GeneratedFieldsReport {
 /**
+ * The type of a board field that is not a text field, as GitHub names it — its `dataType`, or
+ * its GraphQL type when it has none — which is what a projected field's conflict reports.
+ *
+ * Never blank and never `TEXT`: a text field of that name is no conflict.
+ */
+export type NonTextFieldType = string
+
+/**
  * The plan and verified outcome of setting up every field a source's configuration names.
  */
 export interface FieldsReport {
@@ -2142,7 +2150,7 @@ export interface MetadataFieldReport {
  * The type of a field of that name that is not a text field, which the setup leaves as
  * it is; absent — and left out of the JSON — when there is none.
  */
-conflict?: (string | null)
+conflict?: (NonTextFieldType | null)
 /**
  * Whether the board had a text field of that name before the operation.
  */
@@ -2320,7 +2328,7 @@ team?: (LinearTeam | null)
  * configuration is read.
  */
 export interface StatusMapping {
-[k: string]: StatusNames | null
+[k: string]: (StatusNames | null)
 }
 
 }
@@ -6684,7 +6692,7 @@ export type StatusName = string
  * Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each.
  */
 export interface StatusMapping {
-[k: string]: StatusNames | null
+[k: string]: (StatusNames | null)
 }
 
 }

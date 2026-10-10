@@ -3657,11 +3657,15 @@ export const runtimeSchemas = {
         "description": "One projected metadata text field's plan, or its verified outcome.\n\nThe setup creates a missing one as a text field and never alters a field that is there:\na same-named field of another type is reported in `conflict` and left as it is.",
         "properties": {
           "conflict": {
-            "description": "The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NonTextFieldType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none."
           },
           "exists": {
             "description": "Whether the board had a text field of that name before the operation.",
@@ -3695,6 +3699,11 @@ export const runtimeSchemas = {
           "outcome"
         ],
         "type": "object"
+      },
+      "NonTextFieldType": {
+        "description": "The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever blank and never `TEXT`: a text field of that name is no conflict.",
+        "minLength": 1,
+        "type": "string"
       },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",

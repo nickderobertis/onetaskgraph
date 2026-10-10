@@ -1966,7 +1966,7 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
 /// What version 34 publishes beside the engine's roots.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] `SCHEMA_BUNDLE_VERSION` is one number for the whole document both SDKs are generated from, so the record that holds it — append-only, one row per version, no shape republished — has to be one table: split per owner, no table could tell whether a version republishes an earlier shape, which is the gap this row closes. Each entry is verified where it is emitted — the `plugin_config/` ones by this file, the `binary/` ones by `crates/onetaskgraph/src/main.rs` — and `schema.rs` registers the Linear configuration as a root under this rule's same suppression for the same reason.
 const THIRTY_FOURTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
-    ("binary/FieldsReport", 0xee8c65742783f508),
+    ("binary/FieldsReport", 0x7b3e3fb48abf8ed9),
     ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
     ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
     ("plugin_config/github-projects", 0x0766f20fcf444bfe),
