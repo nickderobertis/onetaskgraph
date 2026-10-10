@@ -360,12 +360,13 @@ pub mod assets;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, StatusMapping, StatusName, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
+    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName, Support, Task,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -459,7 +460,12 @@ pub mod graphql {
     /// still leaves this under 2580, about a quarter of the limit. Like [`super::MAX_PAGE_SIZE`],
     /// nothing offline can hold this — complexity appears in no schema — and the live journey
     /// is what guards it.
-    pub const RESOLUTION: &str = "query($key:String!){ teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
+    ///
+    /// `organization{id}` is the workspace this credential belongs to, read in the same request
+    /// rather than in one of its own: it is what a source declared private is verified
+    /// against, once per instance, and a cold write already sends this. It adds one object
+    /// and one property — 1.1 points by the model above — to the document's score.
+    pub const RESOLUTION: &str = "query($key:String!){ organization{id} teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Create a workflow state on the configured team, for `sources fields --apply`.
     pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";
     /// Create a workspace project status, for `sources fields --apply`.
@@ -859,6 +865,10 @@ fn held_name(node: &Value) -> Result<StatusName, SourceError> {
 /// nothing a failed call answered is held.
 #[derive(Debug, Clone)]
 struct Vocabulary {
+    /// The workspace the credential reached, which is what makes a declaration of this
+    /// source as private one that has been verified rather than taken on trust — `None` when
+    /// the answer named none, which verifies nothing and resolves everything else as before.
+    workspace: Option<NativeId>,
     team: NativeId,
     states: Vec<Held>,
     statuses: Vec<Held>,
@@ -900,6 +910,11 @@ impl Vocabulary {
                 })
         };
         let team = NativeId(backend_id(found, "id")?.into());
+        let workspace = data
+            .get("organization")
+            .filter(|organization| !organization.is_null())
+            .map(|organization| backend_id(organization, "id").map(|id| NativeId(id.into())))
+            .transpose()?;
         // Read whole or not at all: a name on a page this did not read would be refused as
         // missing, or a second name of that spelling would go unseen.
         for (more, held) in [
@@ -931,6 +946,7 @@ impl Vocabulary {
         }
         let statuses = nodes("/projectStatuses/nodes")?;
         Ok(Self {
+            workspace,
             team,
             states: nodes("/teams/nodes/0/states/nodes")?
                 .iter()
@@ -2093,6 +2109,7 @@ impl LinearSource {
         content: Option<&str>,
         metadata: &std::collections::BTreeMap<String, Value>,
         repositories: &[Repository],
+        classification: Classification,
         edges: &[DependencyEdge],
         kind: WriteKind,
     ) -> Result<Option<String>, SourceError> {
@@ -2100,6 +2117,7 @@ impl LinearSource {
             content,
             metadata,
             repositories,
+            classification,
             self.recorded_ends(edges, kind),
         )
     }
@@ -2396,9 +2414,11 @@ impl LinearSource {
         content: Option<&str>,
         metadata: &std::collections::BTreeMap<String, Value>,
         repositories: &[Repository],
+        classification: Classification,
         recorded: Vec<Value>,
     ) -> Result<Option<String>, SourceError> {
         let mut metadata = metadata.clone();
+        classification.record(&mut metadata);
         if repositories.is_empty() {
             metadata.remove(Repository::METADATA_KEY);
         } else {
@@ -2746,6 +2766,38 @@ impl TaskSource for LinearSource {
     fn writes(&self) -> WriteSupport {
         WriteSupport::Supported
     }
+    /// Private, once this instance's credential has reached its workspace: a Linear workspace
+    /// is readable by its members alone and no setting of Linear's makes it readable by
+    /// anybody else, so what is verified is that the workspace is really there to write into.
+    ///
+    /// Read inside the resolution a cold write sends anyway and held with it for this
+    /// instance's lifetime, so a source declared private spends no request on it: a cold write
+    /// sends what it always sent, and a warm one sends nothing more. A source with no `team`
+    /// cannot make that read, and refuses rather than answering on trust.
+    async fn visibility(
+        &self,
+        _target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
+        let (vocabulary, _) = self.vocabulary(false).await.map_err(|error| match error {
+            SourceError::Refused { message } => SourceError::Refused {
+                message: format!(
+                    "source {} cannot verify that it is private: {message}",
+                    self.name
+                ),
+            },
+            other => other,
+        })?;
+        if vocabulary.workspace.is_none() {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "source {} cannot verify that it is private: Linear named no workspace for \
+                     its credential",
+                    self.name
+                ),
+            });
+        }
+        Ok(onetaskgraph_plugin_api::Visibility::Private)
+    }
     async fn health(&self) -> Result<Health, SourceError> {
         let data = self.send(VIEWER, json!({})).await?;
         str_at(
@@ -2878,6 +2930,7 @@ impl TaskSource for LinearSource {
             write.item.content.as_deref(),
             &metadata,
             &write.item.repositories,
+            write.item.classification,
             &edges,
             WriteKind::Task,
         )?;
@@ -2948,6 +3001,7 @@ impl TaskSource for LinearSource {
             write.item.content.as_deref(),
             &write.item.metadata,
             &write.item.repositories,
+            write.item.classification,
             &edges,
             WriteKind::Project,
         )?;
@@ -3146,6 +3200,7 @@ impl TaskSource for LinearSource {
             write.item.content.as_deref(),
             &write.item.metadata,
             &write.item.repositories,
+            write.item.classification,
             Vec::new(),
         )?;
         let project = self.filed_in(write.item.project.as_ref(), "document")?;
@@ -4303,6 +4358,7 @@ fn map_task(v: &Value, source: &SourceName, statuses: &StatusMapping) -> Result<
     let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
+    let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     let id = NativeId(str_at(v, "id")?.into());
     // Taken out of the caller's metadata as they are read: a reserved key is this product's,
@@ -4337,6 +4393,7 @@ fn map_task(v: &Value, source: &SourceName, statuses: &StatusMapping) -> Result<
         repositories,
         delivers,
         delivered_by,
+        classification,
     })
 }
 /// A priority as Linear's `Issue.priority` and its two input members spell it.
@@ -4402,6 +4459,7 @@ fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceErr
     strip_delivery_keys(&mut metadata);
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
+    let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Project {
         id: NativeId(str_at(v, "id")?.into()),
@@ -4423,6 +4481,7 @@ fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceErr
         updated_at: time(v, "updatedAt")?,
         metadata,
         repositories,
+        classification,
     })
 }
 
@@ -4451,11 +4510,23 @@ fn filed_under(v: &Value) -> Result<Option<NativeId>, SourceError> {
     }
 }
 
+/// The classification an item's slot records, taken out of the caller's metadata as it is
+/// read: the key is this product's, and the item reports it as its own field.
+fn classification_of(
+    metadata: &mut std::collections::BTreeMap<String, Value>,
+) -> Result<Classification, SourceError> {
+    let classification = Classification::from_metadata(metadata)
+        .map_err(|message| SourceError::Malformed { message })?;
+    metadata.remove(Classification::METADATA_KEY);
+    Ok(classification)
+}
+
 fn map_document(v: &Value) -> Result<Document, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "content")?)?;
     strip_delivery_keys(&mut metadata);
     let repositories = Repository::from_metadata(&metadata)
         .map_err(|message| SourceError::Malformed { message })?;
+    let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Document {
         id: NativeId(str_at(v, "id")?.into()),
@@ -4475,6 +4546,7 @@ fn map_document(v: &Value) -> Result<Document, SourceError> {
         updated_at: time(v, "updatedAt")?,
         metadata,
         repositories,
+        classification,
     })
 }
 

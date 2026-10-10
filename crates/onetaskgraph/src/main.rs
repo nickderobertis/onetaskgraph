@@ -157,6 +157,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
     // and an arm nothing can reach is an arm nothing checks. The engine is built inside
     // the arms that need one, so `schema` and `config show` still answer on a host where
     // a source cannot be built at all.
+    let _ = TERM_SCOPE.set(term_scope(command));
     match command {
         Command::PluginServe { .. } => unreachable!("plugin serving is dispatched before config"),
         Command::Schema => {
@@ -191,7 +192,15 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: SourcesCommand::Route(args),
         } => {
             // Configuration alone: no engine is built, so no source is constructed or asked.
-            let route = source_route(loaded, &args.source, &args.repository)?;
+            let route = source_route(
+                loaded,
+                &args.source,
+                args.classification.map_or_else(
+                    Default::default,
+                    crate::cli::ClassificationArg::classification,
+                ),
+                &args.repository,
+            )?;
             let rendered = match loaded.config.output() {
                 OutputFormat::Text => render::source_route(&route),
                 OutputFormat::Json => json(&route, "the route")?,
@@ -727,12 +736,69 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
 /// The process's one clock, settled in `main` before any source is built.
 static CLOCK: OnceLock<SharedClock> = OnceLock::new();
 
+/// The term scope the one writing verb this process runs named, settled before it is
+/// dispatched: one command line is one process, so it is that command's, and every engine
+/// the command builds checks its writes against it.
+static TERM_SCOPE: OnceLock<Option<Vec<String>>> = OnceLock::new();
+
 fn engine(loaded: &Loaded) -> Engine {
     Engine::build_with_clock(
         &loaded.config,
         &loaded.secrets,
         CLOCK.get_or_init(system_clock),
     )
+    .with_term_scope(TERM_SCOPE.get().cloned().flatten())
+}
+
+/// The term scope `command` names, when it is a writing verb that takes one.
+fn term_scope(command: &Command) -> Option<Vec<String>> {
+    let named = match command {
+        Command::Task { command } => match command {
+            TaskCommand::Copy(args) => &args.copy.term_scope,
+            TaskCommand::Status {
+                command: StatusCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Priority {
+                command: PriorityCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Content {
+                command: ContentCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Metadata {
+                command: MetadataCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Update(args) => &args.term_scope,
+            TaskCommand::Create(args) => &args.item.term_scope,
+            TaskCommand::Render(args) => &args.render.term_scope,
+            TaskCommand::Comment {
+                command: CommentCommand::Add(args),
+            } => &args.term_scope,
+            TaskCommand::Comment {
+                command: CommentCommand::Edit(args),
+            } => &args.term_scope,
+            _ => return None,
+        },
+        Command::Project { command } => match command {
+            ProjectCommand::Copy(args) => &args.copy.term_scope,
+            ProjectCommand::Metadata {
+                command: MetadataCommand::Set(args),
+            } => &args.term_scope,
+            ProjectCommand::Create(args) => &args.term_scope,
+            ProjectCommand::Render(args) => &args.term_scope,
+            _ => return None,
+        },
+        Command::Document { command } => match command {
+            DocumentCommand::Copy(args) => &args.copy.term_scope,
+            DocumentCommand::Metadata {
+                command: MetadataCommand::Set(args),
+            } => &args.term_scope,
+            DocumentCommand::Create(args) => &args.item.term_scope,
+            DocumentCommand::Render(args) => &args.render.term_scope,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    named.scope()
 }
 
 /// Write one page, report the sources that could not contribute, and say what the run
@@ -825,6 +891,7 @@ fn show_rendered<T>(
 fn source_route(
     loaded: &Loaded,
     source: &str,
+    classification: onetaskgraph_plugin_api::Classification,
     repositories: &[onetaskgraph_plugin_api::Repository],
 ) -> Result<onetaskgraph_core::config::SourceRoute, Failure> {
     let unknown = || {
@@ -844,7 +911,10 @@ fn source_route(
         return Err(unknown());
     }
     Ok(onetaskgraph_core::config::SourceRoute {
-        placement: loaded.config.routes().place(&name, repositories),
+        placement: loaded
+            .config
+            .routes()
+            .place_classified(&name, classification, repositories),
         source: name,
     })
 }

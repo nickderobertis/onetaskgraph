@@ -76,6 +76,7 @@ fn task(content: &str) -> Task {
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -92,6 +93,7 @@ fn document(content: &str) -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -111,6 +113,7 @@ fn project(content: &str) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 

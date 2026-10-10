@@ -12,8 +12,9 @@ use crate::{
     DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
     MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless,
-    commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
+    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, Visibility, WriteSupport,
+    WriteTarget, assetless, commentless, documentless, unwritable, unwritable_field,
+    unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -1069,6 +1070,29 @@ pub trait TaskSource: Send + Sync {
     /// command on that source's earlier reads.
     async fn end_command(&self) -> Result<(), SourceError> {
         Ok(())
+    }
+
+    /// Who can read where `target` lands, read live from the backend.
+    ///
+    /// This is the destination's reality, which the engine holds a declaration against
+    /// before it lets a write through: a source a configuration declares private receives an
+    /// item that may only be written somewhere private only while this answers
+    /// [`Visibility::Private`]. The engine asks immediately before the write it is about, so
+    /// a source must not answer from anything it read for an earlier write unless its
+    /// backend's visibility cannot change in between.
+    ///
+    /// Defaulted to [`Visibility::Unknown`], which is the answer of a source that cannot say
+    /// and is never treated as private. A source on this machine answers `Private` — what it
+    /// writes stays on the host — and a hosted source reads its backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the backend could not be asked or would not answer —
+    /// a credential lacking the scope the read needs among them. An unreadable visibility is
+    /// never guessed: the engine refuses the write.
+    async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
+        let _ = target;
+        Ok(Visibility::Unknown)
     }
 }
 

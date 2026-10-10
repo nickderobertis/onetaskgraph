@@ -328,3 +328,9 @@ run had observed a project's `content` when it was pinned.
 issue/project relation connections; `documents.json` covers the `documents` connection,
 `Document` and its `project`. They are documentation-derived, not captured from a
 user workspace, and contain only invented identifiers and content.
+
+`Query.organization: Organization!` and `Organization.id` were pinned on **2026-10-09** from
+the same published SDK schema (`packages/sdk/src/schema.graphql` in `linear/linear`), which
+documents the query as "The user's organization." The resolution read selects that one id, so
+a source declared private is verified against the workspace its credential reaches inside the
+request a cold write already sends. That date is documentation-derived.

@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
+  Classification,
   Comment,
   CommentList,
   CopyReport,
@@ -26,6 +27,7 @@ import type {
   SourceListings,
   SourceRoute,
   StatusCategory,
+  StatusNamesReport,
   StatusOptionsReport,
   TaskContentSet,
   TaskDetail,
@@ -35,7 +37,6 @@ import type {
   TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
-  StatusNamesReport,
 } from "./generated/models.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -67,7 +68,11 @@ export type FilterOptions = QueryOptions & {
 // A document has no status, so a document list has no status filter — and this type is
 // what stops a caller writing one down for a verb the binary would refuse it on.
 export type DocumentFilterOptions = Omit<FilterOptions, "statuses">;
-export type CopyOptions = {
+// Which private repositories a write's public-boundary check derives terms from: the
+// repositories named, none at all for `[]`, and every one the store's policy knows of when left
+// out. Every verb that writes takes it, and passes it to the binary unchanged.
+export type WriteOptions = { termScope?: string[] };
+export type CopyOptions = WriteOptions & {
   matchBy?: string;
   recreate?: boolean;
   dryRun?: boolean;
@@ -77,7 +82,7 @@ export type CopyOptions = {
 export type TaskCopyOptions = CopyOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
-export type CommentBodyOptions = { body: string } | { bodyFile: string };
+export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) & WriteOptions;
 export type CommentAddOptions = CommentBodyOptions & { author?: string };
 // Where `extends`, `include` and `import` names resolve: these directories, in order, and never
 // the working directory unless it is one of them.
@@ -102,13 +107,16 @@ export type TemplateSourceOptions = TemplateOptions & {
 // What every create names about the item besides its title and project. `body` is written to
 // the binary's standard input and `bodyFile` read by it; neither beside a template, and never
 // a `body` beside `answers`, which would share that one standard input.
-export type CreateOptions = TemplateSourceOptions & {
-  body?: string;
-  bodyFile?: string;
-  labels?: string[];
-  repositories?: string[];
-  metadata?: Record<string, JsonValue>;
-};
+export type CreateOptions = TemplateSourceOptions &
+  WriteOptions & {
+    body?: string;
+    bodyFile?: string;
+    labels?: string[];
+    repositories?: string[];
+    metadata?: Record<string, JsonValue>;
+    // Who may read it. Its repositories and its project tighten it, and nothing loosens it.
+    classification?: Classification;
+  };
 // The image files a create or a render stores with a task or a document, each under its base
 // name, which the content references as `![alt](./<name>)`.
 export type AssetOptions = { assets?: string[] };
@@ -127,7 +135,7 @@ export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // binary byte for byte and replaces the content; `statusName` is the status's own word, for a
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
 // cleared — and one left out is not named.
-export type TaskUpdateOptions = {
+export type TaskUpdateOptions = WriteOptions & {
   title?: string;
   bodyFile?: string;
   status?: StatusCategory;
@@ -140,7 +148,8 @@ export type TaskUpdateOptions = {
 };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
-export type RenderOptions = TemplateSourceOptions & { unset?: string[]; dryRun?: boolean };
+export type RenderOptions = TemplateSourceOptions &
+  WriteOptions & { unset?: string[]; dryRun?: boolean };
 // A regenerate of a task or a document, which may store image assets with it.
 export type ItemRenderOptions = RenderOptions & AssetOptions;
 // A value JSON can carry, and so a value an answers document can hold.
@@ -439,6 +448,8 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   removeMetadata: "--remove-metadata",
   delivers: "--delivers",
   dependsOn: "--depends-on",
+  // `[]` is sent as `--term-scope-empty`, which is how an empty scope is spelled.
+  termScope: "--term-scope",
 };
 
 // A string option, refused unless it is one: anything else would reach the binary as its string
@@ -504,6 +515,7 @@ export function taskUpdateFlags(options: unknown): string[] {
     if (ids.length === 0) args.push(flag.replace("--", "--no-"));
     for (const id of ids) args.push(flag, id);
   }
+  args.push(...termScopeFlags(method, options));
   return args;
 }
 
@@ -584,6 +596,13 @@ function createArguments(
       args.push("--metadata", `${key}=${JSON.stringify(value)}`);
     }
   }
+  if (options.classification !== undefined) {
+    if (options.classification !== "public" && options.classification !== "private") {
+      throw new TypeError(`${method}: classification is "public" or "private"`);
+    }
+    args.push("--classification", options.classification);
+  }
+  args.push(...termScopeFlags(method, options));
   return { args, input };
 }
 
@@ -723,6 +742,7 @@ function renderInvocation(
     throw new TypeError(`${method}: dryRun is not a boolean; next: pass true or false`);
   }
   if (options.dryRun === true) args.push("--dry-run");
+  args.push(...termScopeFlags(method, options));
   return [command, [id, ...args], input];
 }
 
@@ -734,8 +754,19 @@ function assetFlags(method: string, options: AssetOptions): string[] {
   ]);
 }
 
+// `--term-scope` once per repository, `--term-scope-empty` for an empty scope, and nothing when
+// none is given, so the binary's check reads exactly the scope the caller passed. Its member is
+// read as `unknown` and checked here, so an options object not yet narrowed to `WriteOptions`
+// is refused member by member rather than trusted.
+function termScopeFlags(method: string, options: { termScope?: unknown }): string[] {
+  if (options.termScope === undefined) return [];
+  const scope = stringList(method, "termScope", options.termScope);
+  if (scope.length === 0) return ["--term-scope-empty"];
+  return scope.flatMap((repository) => ["--term-scope", repository]);
+}
+
 function copyFlags(options: CopyOptions): string[] {
-  const args: string[] = [];
+  const args: string[] = [...termScopeFlags("copy", options)];
   if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
   if (options.recreate) args.push("--recreate");
   if (options.dryRun) args.push("--dry-run");
@@ -784,10 +815,16 @@ export class OnetaskgraphClient {
   }
   // Where an item with these repositories, written to `source`, would land — from configuration
   // alone, never from a source.
-  sourcesRoute(source: string, options: { repositories?: string[] } = {}): Promise<SourceRoute> {
+  sourcesRoute(
+    source: string,
+    options: { repositories?: string[]; classification?: Classification } = {},
+  ): Promise<SourceRoute> {
     const args = [source];
     for (const repository of stringList("sourcesRoute", "repositories", options.repositories)) {
       args.push("--repository", repository);
+    }
+    if (options.classification !== undefined) {
+      args.push("--classification", options.classification);
     }
     return this.run("sources route", args);
   }
@@ -853,6 +890,7 @@ export class OnetaskgraphClient {
   taskCommentAdd(id: string, options: CommentAddOptions): Promise<Comment> {
     const { args, input } = bodyArguments(options);
     if (options.author !== undefined) args.push("--author", options.author);
+    args.push(...termScopeFlags("taskCommentAdd", options));
     return this.run("task comment add", [id, ...args], input);
   }
   taskCommentList(id: string): Promise<CommentList> {
@@ -860,24 +898,52 @@ export class OnetaskgraphClient {
   }
   taskCommentEdit(id: string, commentId: string, options: CommentBodyOptions): Promise<Comment> {
     const { args, input } = bodyArguments(options);
+    args.push(...termScopeFlags("taskCommentEdit", options));
     return this.run("task comment edit", [id, commentId, ...args], input);
   }
   taskCommentDelete(id: string, commentId: string): Promise<DeletedComment> {
     return this.run("task comment delete", [id, commentId]);
   }
-  taskStatusSet(id: string, category: StatusCategory): Promise<TaskStatusSet> {
-    return this.run("task status set", [id, category]);
+  taskStatusSet(
+    id: string,
+    category: StatusCategory,
+    options: WriteOptions = {},
+  ): Promise<TaskStatusSet> {
+    return this.run("task status set", [id, category, ...termScopeFlags("taskStatusSet", options)]);
   }
-  taskPrioritySet(id: string, priority: Priority): Promise<TaskPrioritySet> {
-    return this.run("task priority set", [id, priority]);
+  taskPrioritySet(
+    id: string,
+    priority: Priority,
+    options: WriteOptions = {},
+  ): Promise<TaskPrioritySet> {
+    return this.run("task priority set", [
+      id,
+      priority,
+      ...termScopeFlags("taskPrioritySet", options),
+    ]);
   }
   // `file` is read by the binary byte for byte, and its bytes replace the task's content.
-  taskContentSet(id: string, file: string): Promise<TaskContentSet> {
-    return this.run("task content set", [id, "--file", file]);
+  taskContentSet(id: string, file: string, options: WriteOptions = {}): Promise<TaskContentSet> {
+    return this.run("task content set", [
+      id,
+      "--file",
+      file,
+      ...termScopeFlags("taskContentSet", options),
+    ]);
   }
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
-  taskMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
-    return this.run("task metadata set", [id, key, value]);
+  taskMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options: WriteOptions = {},
+  ): Promise<MetadataSet> {
+    return this.run("task metadata set", [
+      id,
+      key,
+      value,
+      ...termScopeFlags("taskMetadataSet", options),
+    ]);
   }
   // One targeted update of one task: at least one field has to be named.
   taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated> {
@@ -941,8 +1007,18 @@ export class OnetaskgraphClient {
     for (const member of options.members ?? []) args.push("--member", member);
     return this.run("project copy", args);
   }
-  projectMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
-    return this.run("project metadata set", [id, key, value]);
+  projectMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options: WriteOptions = {},
+  ): Promise<MetadataSet> {
+    return this.run("project metadata set", [
+      id,
+      key,
+      value,
+      ...termScopeFlags("projectMetadataSet", options),
+    ]);
   }
   documentList(
     options: DocumentFilterOptions & { project?: string; noProject?: boolean } = {},
@@ -962,8 +1038,18 @@ export class OnetaskgraphClient {
   documentCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
     return this.run("document copy", [...ids, "--to", to, ...copyFlags(options)]);
   }
-  documentMetadataSet(id: string, key: string, value: string): Promise<MetadataSet> {
-    return this.run("document metadata set", [id, key, value]);
+  documentMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options: WriteOptions = {},
+  ): Promise<MetadataSet> {
+    return this.run("document metadata set", [
+      id,
+      key,
+      value,
+      ...termScopeFlags("documentMetadataSet", options),
+    ]);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];

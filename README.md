@@ -65,9 +65,9 @@ onetaskgraph sources fields <SOURCE> [--apply] [--json]
 # See "Status mapping" below.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 # The Status-only form of `sources fields`, which supersedes it; kept as it was.
-onetaskgraph sources route <SOURCE> [--repository R]... [--json]
-# Where an item with these repositories, written to SOURCE, would land by its routes —
-# read from configuration alone, never from a source. See "Routing" below.
+onetaskgraph sources route <SOURCE> [--repository R]... [--classification public|private] [--json]
+# Where an item with these repositories and this classification, written to SOURCE, would land
+# by its routes — read from configuration alone, never from a source. See "Routing" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--priority none|urgent|high|medium|low]...
@@ -91,15 +91,21 @@ onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
+                         [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--template FILE [--search-path DIR]... | --template-loader FILE
                           | --body-file PATH]      # none of the three: the body on stdin
                          [--answers FILE] [--var NAME=VALUE]... [--status CATEGORY]
                          [--label L]... [--repository R]... [--depends-on ID]...
                          [--delivers ID]... [--metadata KEY=JSON]... [--asset PATH]...
+                         [--classification public|private]
+                         [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
                          [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
-                         [--asset PATH]...
+                         [--asset PATH]... [--term-scope REPOSITORY... | --term-scope-empty]
+# Every verb that writes — every copy, create, render, update, `set` and comment add or
+# edit — takes --term-scope REPOSITORY (repeatable) or --term-scope-empty: see
+# "The public boundary" below.
 onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
@@ -109,8 +115,9 @@ onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
 onetaskgraph project create <SOURCE> --id NATIVE-ID --title TITLE [--status CATEGORY]
-                            ...                  # the body, label, repository and metadata
-                                                 # flags of `task create`
+                            ...                  # the body, label, repository, metadata,
+                                                 # classification and term-scope flags of
+                                                 # `task create`
 onetaskgraph project render <ID> ...             # the flags of `task render` but --asset
 onetaskgraph project answers <ID>
 
@@ -118,8 +125,9 @@ onetaskgraph document list / show                # the same flags, minus --statu
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph document metadata set <ID> <KEY> <VALUE>
 onetaskgraph document create <SOURCE> --project P --title TITLE [--id DOC]
-                             ...                 # the body, label, repository, metadata
-                                                 # and asset flags of `task create`
+                             ...                 # the body, label, repository, metadata,
+                                                 # asset, classification and term-scope
+                                                 # flags of `task create`
 onetaskgraph document render <ID> ...            # the flags of `task render`
 onetaskgraph document answers <ID>
 
@@ -1336,6 +1344,148 @@ on every request — nothing about them is kept — and a member that cannot be 
 in the response's errors, as any source failure is, never left out in silence. `project show`
 of a home prints its members, and of a member its home. The SDKs spell it
 `task_list(project=..., members=True)` and `taskList({ project, members: true })`.
+
+## The public boundary
+
+Private work may inform public work, but nothing of it may reach a public destination. Three
+things decide where an item may be written, and one decides what it may say there.
+
+**Who may read an item: its `classification`.** A task, a project and a document are each
+`public` or `private`. A folder of Markdown writes `classification: private` in the front
+matter and nothing while it is public; a hosted source keeps it under the reserved metadata key
+`onetaskgraph.classification`. An item written before it existed reads as public. It only ever
+tightens: an item naming a repository that is not public is private, an item filed under a
+private project is private, and an explicit `public` changes neither. A project is the strictest
+of its own classification, its tasks' and its documents', and a store writes it so — so a
+project stays private after the members that made it private are gone, and a copy never writes
+an item looser than the destination already holds it. `task create`, `document create` and
+`project create` take `--classification public|private`.
+
+**Who may read a source: its declared `visibility`.** `visibility` sits beside `plugin` and
+`config` and is `public`, `private` or `unknown`, the default. A private item is written only
+to a source declared `private` **whose backend agrees at that write**:
+
+- a folder of Markdown and an in-memory source are on this machine, so declaring one private
+  declares a host-local destination;
+- a GitHub board is private only while its Project and the repository the issue lives in are
+  both private. Both are read, with the source's own `token_env` credential, immediately before
+  every write — two reads per write, sent together, never remembered for the next. Reading a
+  Project's visibility needs the `read:project` scope, and a credential without it is refused
+  naming the scope;
+- a Linear workspace is readable by its members alone, which no setting changes, so a Linear
+  source is verified once per source instance: the workspace its credential reaches is read
+  inside the team and status read its first write sends anyway, and later writes send nothing
+  more. A Linear source with no `team` cannot be verified and is refused;
+- a source hosted over the stdio plugin protocol cannot answer, and is never private.
+
+A visibility that cannot be read is never guessed: the write is refused.
+
+**What it may say: `write_policy`.** A write to a destination not verified private is put to
+the caller's check, and a repository's visibility is the caller's answer too. The store derives
+no term and asks no host about a repository itself: it runs the two commands `write_policy`
+names, each handed one JSON document on standard input.
+
+```yaml
+write_policy:
+  visibility_command: [onevcs, boundary, inspect, --input, "-"]
+  check_command: [onevcs, boundary, check, --destination, public, --input, "-"]
+sources:
+  plans:
+    plugin: github-projects
+    config: { owner: example-org, project_number: 2, repository: example-org/plans }
+    visibility: public
+    routes:
+      - classification: private
+        to: private-plans
+  private-plans:
+    plugin: local-md
+    config: { root: ~/private-plans }
+    visibility: private
+```
+
+`visibility_command` is handed `{"repository": "github.com/owner/name"}` and answers
+`{"visibility": "public" | "private" | "unknown"}`; no command, a failure, or an answer outside
+onevcs's versioned boundary schema is `unknown`, which is private. `check_command` is handed
+the write — `{"destination", "text", "paths", "metadata", "scope"}`, titles, labels and
+metadata values among `metadata`, content among `text`, asset names and recorded template
+references among `paths` — and **passes it only by exiting 0 with `{"verdict": "pass"}`**. A
+refusal names where the check stopped and never what it found; no command, a failure, or any
+other answer is unavailable, which never passes.
+
+**When the boundary is active.** It is active when the configuration names a `write_policy`,
+when any source declares a `visibility`, or when a program linking the engine supplies its own
+policy. An inactive store still persists, copies and routes classification, and still refuses
+an explicitly private item anywhere not declared private — at a create, a copy, a route and a
+render — but it consults no repository's visibility, reads nothing extra before a narrow
+write, and does not read a project to learn whether an item filed under it inherits a private
+classification, so a store that has not opted in answers and spends exactly what it did before. **A
+store that wants repositories screened has to configure `write_policy` or declare a
+visibility.** Active:
+
+- a repository the policy does not answer `public` for makes an item private;
+- a write to a source not declared private — `unknown` included — is screened as public, and a
+  missing or failed check refuses it;
+- a narrow write (`task status set`, `priority set`, `content set`, `metadata set`, `update`,
+  `comment add` and `edit`, `render`) to an item of a source not verified private reads the
+  item for its classification, with what it inherits — a task's or a document's project, a
+  project's tasks and documents — and refuses a private one; to a source verified private it
+  reads nothing more.
+
+**Routing by classification.** A route entry may match on `classification` instead of
+`repositories`: `{classification: private, to: <source>}`, whose `to` must be declared private.
+Safety is decided before matching — a private item is only ever placed in a source declared
+private, classification entries are tried before repository entries, and otherwise the order
+is the one written. A project holding anything private goes, with every task and document in
+it, wholly to one private source, whatever its tasks' repositories would say; with none
+reachable, the whole copy is refused before anything is written. `sources route <SOURCE>
+--classification private` answers where such an item would go.
+
+**Every check runs before the first write.** A copy holds every item of every project to the
+boundary before it writes any, and each write reads its destination's reality immediately
+before it is sent; a write refused part-way is undone, as a copy always is. A private task or
+document is refused by a project held public rather than filed under it. A copy out of a source
+declared private into one that is not records no `onetaskgraph.origin` naming it, and a copy
+into a private source records no `onetaskgraph.copies` link naming that source on a source that
+is not private; the correspondence is kept on the private side instead. A dependency's far
+end, a task delivered and a delivering task each name their item by its source, so the same
+holds for them, whether or not any term list knows that source's name: a copy into a source
+not declared private leaves out every dependency edge and `delivers` entry naming an item of a
+source that is, or an item the copy carries classified private under any id it is known by,
+whatever its source declares — and a delivered task there is never given a deliverer of such a
+source, or one classified private, in its
+`delivered_by` — the rule still moves it, and the private item keeps the relationship in its
+own record. Between public items nothing is left out. While the boundary is active, a copy
+into a source not declared private first reads, once per command, every item outside the copy
+that a carried dependency or delivery names in a source not declared private, and withholds
+its id when that item is private by its own record, its repositories, or what it inherits —
+a task the project it is filed under, a project every task and document it holds — whatever
+its source declares; a reference whose classification cannot be read — its source not
+configured, any of those reads failing, no such item, or a task filed under a project its
+source does not hold or cannot read — is refused before anything is written. A `--depends-on` or
+`--delivers` naming such an item — or, while the boundary is active, an item of any other
+source read as private, with what it inherits, or one it cannot classify — is the caller asking
+for it to be written, so that write is refused before anything is written rather than quietly
+answering something else.
+
+**Term scope.** Which private repositories a check derives terms from is the caller's to say.
+Every verb that writes takes `--term-scope <host/owner/name>`, repeatable, or
+`--term-scope-empty`, refused together; neither means every private repository the policy
+knows of, and an empty scope derives none. The SDKs take it as `term_scope` (a list, an empty
+list, or none), and a program linking the engine sets it with `Engine::with_term_scope`.
+
+The refusals name what happened and what to do: `not-private-destination`,
+`destination-not-private`, `visibility-unreadable`, `boundary-refused`,
+`boundary-unavailable`, `private-member`, `private-reference`, `reference-unclassified` and
+`project-unclassified` are their `--json` failure kinds. While the boundary is active, an item
+filed under a project its source does not hold, or cannot read, is unclassified rather than
+public: it reaches a source declared private as private, and every other write of it — a create,
+a copy, a narrow write, a delivery — is refused as `project-unclassified` before anything is
+written. A project found public earlier in the same command is read again before that answer is
+used, so one deleted, made unreadable or made private part way through is never taken as public.
+
+A private source and its routes need no checkout to live in: the user-level document,
+`$XDG_CONFIG_HOME/onetaskgraph/config.yaml`, is read beneath every project document, so a
+private source configured there is never committed beside public work.
 
 ## Addressing
 

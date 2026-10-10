@@ -16,6 +16,7 @@
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
 mod assets;
+pub mod boundary;
 mod comment;
 mod copy;
 mod delivery;
@@ -353,6 +354,173 @@ pub enum EngineError {
          prints what each plugin accepts."
     )]
     NoSources,
+
+    /// A private item was to be written to a source not declared private.
+    #[error(
+        "{item} is private, and source {destination} is not declared private (it is \
+         declared {declared}); a private item is written only to a source declared private \
+         whose backend agrees\n\
+         next: write it to a source declared `visibility: private`, give {destination} a \
+         `{{classification: private, to: <source>}}` route to one, or declare {destination} \
+         private if its backend is."
+    )]
+    NotPrivateDestination {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// What its configuration declares.
+        declared: crate::config::SourceVisibility,
+    },
+
+    /// A source declared private answered, at the write, that it is not.
+    #[error(
+        "source {destination} is declared private, but its backend reads {reality} for \
+         {item}, so nothing was written\n\
+         next: make that backend private — for a GitHub board, both the project and the \
+         repository its issues are created in — or correct the source's `visibility`."
+    )]
+    DestinationNotPrivate {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// What its backend answered.
+        reality: onetaskgraph_plugin_api::Visibility,
+    },
+
+    /// A source declared private could not say, at the write, who can read it.
+    #[error(
+        "the visibility of source {destination} could not be read for {item}, and a \
+         visibility is never guessed, so nothing was written: {error}\n\
+         next: give the source's own credential what reading its visibility needs, then \
+         write again."
+    )]
+    VisibilityUnreadable {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// Why the read failed.
+        error: SourceError,
+    },
+
+    /// The caller's check refused a write to a destination not verified private.
+    #[error(
+        "{item} was not written to source {destination}, which is not verified private: \
+         {reason}\n\
+         next: take what names a private repository out of it, or write it to a source \
+         declared private."
+    )]
+    BoundaryRefused {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The check's neutral reason.
+        reason: String,
+    },
+
+    /// The caller's check could not decide about a write to a destination not verified
+    /// private, which is never a pass.
+    #[error(
+        "the public boundary check is unavailable, so {item} was not written to source \
+         {destination}: {reason}\n\
+         next: configure `write_policy.check_command`, or repair what it reports, then write \
+         again."
+    )]
+    BoundaryUnavailable {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The check's neutral reason.
+        reason: String,
+    },
+
+    /// A write to a source not declared private would name an item of one that is.
+    #[error(
+        "{item} names an item of source {named}, which is declared private, and source \
+         {destination} is not; a reference to a private source is never written where it \
+         would name it, so nothing was written\n\
+         next: copy what it names along with it, write it to a source declared private, or \
+         take the dependency or the delivery that names it off first."
+    )]
+    PrivateReference {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The private source a reference names.
+        named: String,
+    },
+
+    /// A write to a source not declared private would name an item classified private, though
+    /// its source is not declared private.
+    #[error(
+        "{item} names {reference}, which is private, and source {destination} is not declared \
+         private; a reference to a private item is never written where it would name it, so \
+         nothing was written\n\
+         next: write it to a source declared private, or take the dependency or the delivery \
+         that names it off first."
+    )]
+    PrivateItemReference {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The private item a reference names, qualified.
+        reference: String,
+    },
+
+    /// A write to a source not declared private would name an item whose classification
+    /// cannot be established.
+    #[error(
+        "{item} names {reference}, whose classification could not be established ({why}), and \
+         source {destination} is not declared private; an id that might name a private item is \
+         never written where it would name it, so nothing was written\n\
+         next: configure that item's source and make it readable, copy it along, take the \
+         reference off, or write to a source declared private."
+    )]
+    ReferenceUnclassified {
+        /// How the write named the item.
+        item: String,
+        /// The reference, qualified.
+        reference: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// Why its classification could not be established.
+        why: String,
+    },
+
+    /// While the boundary is active, an item was filed under a project whose classification
+    /// cannot be established, so it could not be written anywhere not declared private.
+    #[error(
+        "project {project} could not be classified ({why}), and while the boundary is active \
+         an item filed under it is never read as public, so nothing was written\n\
+         next: make that project readable at its source, file the item under a project its \
+         source holds, or write to a source declared private."
+    )]
+    ProjectUnclassified {
+        /// The project, qualified.
+        project: String,
+        /// Why its classification could not be established.
+        why: String,
+    },
+
+    /// A private item was to be filed under a project held public.
+    #[error(
+        "{item} is private, and project {project} it would be filed under is public; a \
+         public project never holds a private member, so nothing was written\n\
+         next: classify the project private first — `onetaskgraph project create --id \
+         <id> --classification private` over it — or file the item under a private project."
+    )]
+    PrivateMemberOfPublicProject {
+        /// How the write named the item.
+        item: String,
+        /// The project, qualified.
+        project: String,
+    },
 
     /// A copy named a destination whose plugin has no write side.
     #[error(
@@ -1077,6 +1245,8 @@ pub struct Engine {
     /// Where an item written to a source goes instead. Read from configuration and never
     /// from a source, so it holds nothing of anybody's work.
     routes: Routes,
+    /// How the public boundary stands: active or not, the policy it asks, the term scope.
+    boundary: boundary::Boundary,
 }
 
 impl Engine {
@@ -1111,6 +1281,10 @@ impl Engine {
             config.selected_sources(),
         )
         .with_routes(config.routes())
+        .with_boundary(boundary::Boundary::configured(
+            config.write_policy(),
+            &config.visibilities(),
+        ))
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
@@ -1121,7 +1295,13 @@ impl Engine {
             sources,
             selection,
             routes: Routes::default(),
+            boundary: boundary::Boundary::default(),
         }
+    }
+
+    fn with_boundary(mut self, boundary: boundary::Boundary) -> Self {
+        self.boundary = boundary;
+        self
     }
 
     /// The same engine, placing what is written to each source by `routes`.

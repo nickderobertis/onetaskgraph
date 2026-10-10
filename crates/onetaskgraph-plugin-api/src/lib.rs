@@ -26,6 +26,7 @@ mod query;
 mod source;
 mod status_mapping;
 mod update;
+mod visibility;
 mod work;
 mod write;
 
@@ -48,8 +49,10 @@ pub use query::{
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use status_mapping::{StatusMapping, StatusName, StatusNames, UnmappedStatus};
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};
+pub use visibility::{Visibility, WriteTarget};
 pub use work::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, ItemKind, Label,
-    Location, Priority, Project, Repository, Status, StatusCategory, Task, TaskRef,
+    Classification, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
+    ItemKind, Label, Location, Priority, Project, Repository, Status, StatusCategory, Task,
+    TaskRef,
 };
 pub use write::{ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};

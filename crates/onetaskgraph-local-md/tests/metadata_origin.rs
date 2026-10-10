@@ -194,6 +194,7 @@ async fn a_task_copied_in_is_found_by_its_origin_straight_after_the_write() {
                 repositories: Vec::new(),
                 delivers: Vec::new(),
                 delivered_by: Vec::new(),
+                classification: Default::default(),
             },
             depends_on: Vec::new(),
         })

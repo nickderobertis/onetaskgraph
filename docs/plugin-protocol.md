@@ -441,6 +441,14 @@ read of the assets a record holds — are not carried at all: a source hosted ov
 reports every record as holding none, so a copy *out of* one whose content references an asset
 is refused naming the record and the asset, as it is for any source that does not hold it.
 
+`visibility` — a live read of who can read where a write lands, which the engine holds a
+source declared `visibility: private` to before every write — is not carried either. A source
+hosted over this protocol answers `unknown`, which is never private: the engine refuses to
+write an item that may only be written somewhere private to it, whatever its configuration
+declares, and treats it as public for everything else. Its writes still cross only after the
+engine has applied the same classification and term checks it applies to every source, so a
+hosted plugin cannot be a way around them.
+
 ### 4.1 Common parameter shapes
 
 **`PageRequest`** — every paged method takes one under `page`:
@@ -952,8 +960,8 @@ status, so there is nothing for a status filter to compare against.
 A `Document` is a piece of information that lives in a project and is not work. It carries
 an `id`, a `title`, an optional `content`, an optional `project` — `null` is an orphan
 document — its `labels`, its `url`, its `location` (§4.13), its `created_at` and
-`updated_at`, its `metadata` and its `repositories`, each on the terms the `Task` member of
-the same name is read on. It carries **no status and no dependencies**, and both absences
+`updated_at`, its `metadata`, its `repositories` and its `classification` (§4.13c), each on
+the terms the `Task` member of the same name is read on. It carries **no status and no dependencies**, and both absences
 are the contract rather than an oversight: nothing may point at a document, which is why
 the endpoint kinds of §4.8 remain `"task"` and `"project"` alone.
 
@@ -1053,6 +1061,30 @@ It is written, unlike `key`: a `write_task` carries the priority the item should
 `"none"` clears one. A plugin that declared `priority` unsupported (§4.2) is never handed a
 task carrying another value, so it never has a priority to drop. A `Project` and a `Document`
 have no `priority` at all.
+
+### 4.13c A record's `classification`
+
+Who may read a task, a project or a document: `"public"` or `"private"`.
+
+```json
+{ "id": "ENG-1", "title": "Rotate the signing key", "classification": "private", "…": "…" }
+```
+
+The member is **optional** on all three, and an absent one means `"public"` — which is how
+every record written before it existed reads. The engine leaves it out of what it sends while
+the record is public, so a plugin written before it existed is sent exactly what it was sent
+before, and it is sent `"private"` only for a record that is. A plugin stores what it is sent
+and reports what it stored; a backend with no field of its own keeps it under the reserved
+metadata key `onetaskgraph.classification` while it is `"private"` and nowhere while it is
+public, and reports it as this member rather than as metadata.
+
+It is the record's *declared* classification. The engine tightens it before it writes — a
+record naming a private repository, or filed under a private project, is private however this
+member reads — and never loosens it. Where a private record may be written is the engine's to
+decide: it writes one only to a source declared `visibility: private` whose own live read,
+`TaskSource::visibility`, answers that it is private; a source hosted over this protocol
+answers `unknown` there (see the paragraph after the method table), so a private record is never
+written to one.
 
 ### 4.14 `metering`
 

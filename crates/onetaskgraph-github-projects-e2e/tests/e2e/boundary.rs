@@ -1,0 +1,945 @@
+//! A GitHub board declared private, held to its own live visibility at every write.
+//!
+//! The board is private for a write only when its Project and the repository the issue lives
+//! in are both private, and each write reads both, with the source's own credential, before
+//! its first mutation. Every journey spawns the binary against the loopback board and asserts
+//! on what it said and on every request the board was sent — a refused write is held to having
+//! sent no mutation at all.
+
+use std::path::PathBuf;
+use std::process::Output;
+
+use serde_json::{Value, json};
+
+use crate::common::{Sandbox, stderr, stdout};
+use crate::fixtures::{
+    GitHubBoardFields, RepositoryAnswer, document, github_projects_with_board,
+    github_projects_with_items,
+};
+
+/// The repository the fixture board creates an issue in when nothing else decides.
+const CONFIGURED: &str = "nickderobertis/onetaskgraph";
+
+/// One sandbox: a private folder of Markdown `plan`, and the fixture board declared private.
+struct Setup {
+    sandbox: Sandbox,
+    board: GitHubBoardFields,
+    root: PathBuf,
+}
+
+impl Setup {
+    fn new() -> Self {
+        Self::over(github_projects_with_board)
+    }
+
+    /// The same, over the board `board` opens.
+    fn over(board: impl FnOnce(&Sandbox) -> (Value, GitHubBoardFields)) -> Self {
+        Self::laid(board, |_, _| {})
+    }
+
+    /// The same, with `lay` given the configuration document to change before it is written —
+    /// a folder, a route or a policy of a journey's own.
+    fn laid(
+        board: impl FnOnce(&Sandbox) -> (Value, GitHubBoardFields),
+        lay: impl FnOnce(&Sandbox, &mut Value),
+    ) -> Self {
+        let sandbox = Sandbox::new();
+        let root = sandbox.subdirectory("plan");
+        let (config, board) = board(&sandbox);
+        let mut configured: Value = serde_json::from_str(&document(&json!({
+            "plan": {"plugin": "local-md", "config": {"root": root}, "visibility": "private"},
+            "board": {"plugin": "github-projects", "config": config, "visibility": "private"},
+        })))
+        .expect("a configuration document");
+        lay(&sandbox, &mut configured);
+        sandbox.project_document(&configured.to_string());
+        Self {
+            sandbox,
+            board,
+            root,
+        }
+    }
+
+    fn record(&self, kind: &str, id: &str, front: &str) {
+        let path = self.root.join(kind).join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
+        std::fs::write(&path, format!("---\n{front}\n---\nBody of {id}.\n")).expect("a record");
+    }
+
+    fn run(&self, arguments: &[&str]) -> (Output, Vec<String>) {
+        let before = self.board.served().len();
+        let output = self
+            .sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        let served = self.board.served()[before..]
+            .iter()
+            .map(|(document, _)| document.clone())
+            .collect();
+        (output, served)
+    }
+
+    fn ok(&self, arguments: &[&str]) -> Vec<String> {
+        let (output, served) = self.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`onetaskgraph {}` failed\n{}",
+            arguments.join(" "),
+            stderr(&output)
+        );
+        served
+    }
+
+    /// The failure document's kind and message of a run that had to be refused, having sent
+    /// the board no mutation.
+    fn refused(&self, arguments: &[&str]) -> (String, String, Vec<String>) {
+        let mut with_json = arguments.to_vec();
+        with_json.push("--json");
+        let (output, served) = self.run(&with_json);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`onetaskgraph {}` was expected to be refused\n{}{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(
+            !served.iter().any(|document| is_mutation(document)),
+            "a refused write sent the board a mutation: {served:#?}"
+        );
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        (
+            failure["failure"]["kind"]
+                .as_str()
+                .expect("a kind")
+                .to_owned(),
+            failure["failure"]["message"]
+                .as_str()
+                .expect("a message")
+                .to_owned(),
+            served,
+        )
+    }
+}
+
+fn is_mutation(document: &str) -> bool {
+    document.trim_start().starts_with("mutation")
+}
+
+/// The two reads a write to a board declared private spends learning who can read it.
+fn visibility_reads(served: &[String]) -> Vec<&str> {
+    served
+        .iter()
+        .filter_map(|document| {
+            if document == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
+                Some("project")
+            } else if document.starts_with("GET /repos/") {
+                Some("repository")
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn a_private_task_lands_on_a_board_whose_project_and_repository_are_both_private() {
+    let setup = Setup::new();
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let served = setup.ok(&["task", "copy", "plan:secret", "--to", "board"]);
+    let mut reads = visibility_reads(&served);
+    reads.sort_unstable();
+    assert_eq!(reads, ["project", "repository"], "{served:#?}");
+    let first_mutation = served
+        .iter()
+        .position(|document| is_mutation(document))
+        .expect("the copy wrote");
+    assert!(
+        served[..first_mutation]
+            .iter()
+            .filter(|document| visibility_reads(std::slice::from_ref(document)).len() == 1)
+            .count()
+            == 2,
+        "both reads come before the first mutation: {served:#?}"
+    );
+    assert!(served.contains(&format!("GET /repos/{CONFIGURED}")));
+}
+
+#[test]
+fn a_board_whose_project_or_issue_repository_is_public_is_refused_before_any_mutation() {
+    for (project_public, repository) in [
+        (false, RepositoryAnswer::Public),
+        (true, RepositoryAnswer::Private),
+    ] {
+        let setup = Setup::new();
+        setup.board.set_project_public(project_public);
+        setup
+            .board
+            .set_repository_visibility(CONFIGURED, repository);
+        setup.record(
+            "tasks",
+            "secret",
+            "title: Secret\nstatus: todo\nclassification: private",
+        );
+        let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+        assert_eq!(kind, "destination-not-private", "{message}");
+        assert!(message.contains("reads public"), "{message}");
+        // A public item is held to the declaration too: a board declared private that is not.
+        setup.record("tasks", "open", "title: Open\nstatus: todo");
+        let (kind, _, _) = setup.refused(&["task", "copy", "plan:open", "--to", "board"]);
+        assert_eq!(kind, "destination-not-private");
+    }
+}
+
+#[test]
+fn a_repository_named_by_the_task_is_the_one_whose_visibility_is_read() {
+    let setup = Setup::new();
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    setup.record(
+        "tasks",
+        "named",
+        "title: Named\nstatus: todo\nclassification: private\n\
+         repositories: [github.com/nickderobertis/elsewhere]",
+    );
+    let (kind, _, served) = setup.refused(&["task", "copy", "plan:named", "--to", "board"]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+}
+
+#[test]
+fn visibility_is_read_again_at_every_write_and_a_change_between_writes_never_passes() {
+    let setup = Setup::new();
+    setup.record(
+        "tasks",
+        "first",
+        "title: First\nstatus: todo\nclassification: private",
+    );
+    setup.record(
+        "tasks",
+        "second",
+        "title: Second\nstatus: todo\nclassification: private",
+    );
+    let served = setup.ok(&["task", "copy", "plan:first", "--to", "board"]);
+    assert_eq!(visibility_reads(&served).len(), 2);
+    // Somebody makes the board public between two writes.
+    setup.board.set_project_public(true);
+    let (kind, _, served) = setup.refused(&["task", "copy", "plan:second", "--to", "board"]);
+    assert_eq!(kind, "destination-not-private");
+    assert_eq!(
+        visibility_reads(&served).len(),
+        2,
+        "read again, not remembered"
+    );
+    // And a narrow write to the item already there is refused as well, before it is sent.
+    let landed: Value = serde_json::from_str(&stdout(
+        &setup.run(&["task", "show", "plan:first", "--json"]).0,
+    ))
+    .expect("the task");
+    let link = landed["items"][0]["item"]["metadata"]["onetaskgraph.copies"]["board"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the copy recorded where it landed: {landed:#}"))
+        .to_owned();
+    let (kind, _, served) = setup.refused(&["task", "status", "set", &link, "done"]);
+    assert_eq!(kind, "destination-not-private");
+    assert_eq!(visibility_reads(&served).len(), 2);
+}
+
+#[test]
+fn an_unreadable_visibility_is_never_guessed() {
+    let setup = Setup::new();
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    // A repository the credential cannot see, an answer that is not JSON, and one whose
+    // `visibility` is there but is not a visibility: none is read as either answer.
+    for answer in [
+        RepositoryAnswer::Unseen,
+        RepositoryAnswer::NotJson,
+        RepositoryAnswer::MalformedVisibility,
+        RepositoryAnswer::UnnamedVisibility,
+    ] {
+        setup.board.set_repository_visibility(CONFIGURED, answer);
+        let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+        assert_eq!(kind, "visibility-unreadable", "{answer:?}: {message}");
+        assert!(message.contains("never guessed"), "{answer:?}: {message}");
+    }
+}
+
+#[test]
+fn an_internal_repository_is_private_and_an_answer_without_a_visibility_reads_its_flag() {
+    for (answer, lands) in [
+        (RepositoryAnswer::Internal, true),
+        (RepositoryAnswer::FlagOnly { private: true }, true),
+        (RepositoryAnswer::FlagOnly { private: false }, false),
+    ] {
+        let setup = Setup::new();
+        setup.board.set_repository_visibility(CONFIGURED, answer);
+        setup.record(
+            "tasks",
+            "secret",
+            "title: Secret\nstatus: todo\nclassification: private",
+        );
+        let arguments = ["task", "copy", "plan:secret", "--to", "board"];
+        if lands {
+            let served = setup.ok(&arguments);
+            assert!(
+                served.iter().any(|document| is_mutation(document)),
+                "{answer:?}"
+            );
+        } else {
+            let (kind, message, _) = setup.refused(&arguments);
+            assert_eq!(kind, "destination-not-private", "{answer:?}: {message}");
+        }
+    }
+}
+
+#[test]
+fn a_draft_belongs_to_no_repository_so_the_board_alone_decides() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-SKETCH-1", "id": "SKETCH-1", "type": "DraftIssue",
+                "title": "Sketch", "body": "a draft", "state": "OPEN", "reason": null,
+                "parent": null, "repo": null, "status": "Todo", "origin": "", "labels": []}),
+            ],
+        )
+    });
+    let served = setup.ok(&["task", "status", "set", "board:SKETCH-1", "in-progress"]);
+    assert_eq!(visibility_reads(&served), ["project"], "{served:#?}");
+    setup.board.set_project_public(true);
+    let (kind, _, served) = setup.refused(&["task", "status", "set", "board:SKETCH-1", "todo"]);
+    assert_eq!(kind, "destination-not-private");
+    assert_eq!(visibility_reads(&served), ["project"], "{served:#?}");
+}
+
+#[test]
+fn a_new_task_filed_under_a_project_is_held_to_that_projects_repository() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-HOME-1", "id": "HOME-1", "type": "Issue",
+                "title": "Home", "body": "Home.", "state": "OPEN", "reason": null,
+                "parent": null, "repo": "nickderobertis/elsewhere", "status": "Todo",
+                "origin": "", "labels": []}),
+            ],
+        )
+    });
+    // The configured repository is private, so only the project's own repository can refuse.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let body = setup.sandbox.config_home().join("body.md");
+    std::fs::write(&body, "A body.").expect("a body file");
+    let (kind, _, served) = setup.refused(&[
+        "task",
+        "create",
+        "board",
+        "--project",
+        "HOME-1",
+        "--title",
+        "Filed",
+        "--body-file",
+        body.to_str().expect("a UTF-8 path"),
+    ]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        !served.contains(&format!("GET /repos/{CONFIGURED}")),
+        "{served:#?}"
+    );
+}
+
+#[test]
+fn a_credential_without_the_project_read_scope_refuses_naming_the_scope() {
+    let setup = Setup::new();
+    setup.board.withhold_project_scope();
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let (kind, message, served) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+    assert_eq!(kind, "visibility-unreadable", "{message}");
+    assert!(
+        message.contains("`read:project`") && message.contains("GITHUB_PROJECTS_FIXTURE_TOKEN"),
+        "names the missing scope and the credential it is missing from: {message}"
+    );
+    assert!(
+        !message.contains("test-token"),
+        "the credential's value is never said: {message}"
+    );
+    // Every request this run sent carried the source's own credential — the loopback board
+    // refuses any other — and none of them was a write.
+    assert!(served.iter().all(|document| !is_mutation(document)));
+}
+
+#[test]
+fn a_board_with_no_declared_visibility_spends_nothing_learning_it() {
+    // The inactive store: a board nothing declares is never asked who can read it.
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plan");
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "plan": {"plugin": "local-md", "config": {"root": root}},
+        "board": {"plugin": "github-projects", "config": config},
+    })));
+    std::fs::create_dir_all(root.join("tasks")).expect("the folder");
+    std::fs::write(
+        root.join("tasks/open.md"),
+        "---\ntitle: Open\nstatus: todo\n---\nBody.\n",
+    )
+    .expect("a record");
+    let output = sandbox
+        .command()
+        .args(["task", "copy", "plan:open", "--to", "board"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let served: Vec<String> = board
+        .served()
+        .into_iter()
+        .map(|(document, _)| document)
+        .collect();
+    assert!(visibility_reads(&served).is_empty(), "{served:#?}");
+}
+
+#[test]
+fn a_dry_run_reads_the_board_it_would_write_to_and_reports_the_refusal_its_copy_would_meet() {
+    let setup = Setup::new();
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let arguments = ["task", "copy", "plan:secret", "--to", "board", "--dry-run"];
+    // A board that reads private: the dry run reads it once, as the copy's write would, and
+    // writes nothing.
+    let served = setup.ok(&arguments);
+    let mut reads = visibility_reads(&served);
+    reads.sort_unstable();
+    assert_eq!(reads, ["project", "repository"], "{served:#?}");
+    assert!(
+        !served.iter().any(|document| is_mutation(document)),
+        "{served:#?}"
+    );
+    // One a person has made public: the dry run is refused exactly as the copy would be.
+    setup.board.set_project_public(true);
+    let (kind, _, served) = setup.refused(&arguments);
+    assert_eq!(kind, "destination-not-private");
+    assert!(!visibility_reads(&served).is_empty(), "{served:#?}");
+}
+
+#[test]
+fn a_board_made_public_part_way_through_a_copy_refuses_the_next_write_and_undoes_the_ones_before() {
+    let setup = Setup::new();
+    setup.record(
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nclassification: private",
+    );
+    for task in ["first", "second"] {
+        setup.record(
+            "tasks",
+            task,
+            &format!("title: {task}\nstatus: todo\nproject: goal\nclassification: private"),
+        );
+    }
+    // Everything the board holds, tasks and projects alike.
+    let listed = || {
+        ["task", "project"]
+            .iter()
+            .map(|kind| {
+                let (output, _) = setup.run(&[kind, "list", "--source", "board", "--json"]);
+                let listed: Value = serde_json::from_str(&stdout(&output)).expect("a listing");
+                listed["items"].as_array().expect("items").len()
+            })
+            .sum::<usize>()
+    };
+    let before = listed();
+    // The project's write reads private; a person makes the board public before the next.
+    setup.board.make_public_after_visibility_reads(1);
+    let (output, served) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "destination-not-private",
+        "{failure:#}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|document| document.contains("createIssue(input:$input)")),
+        "the first write landed before the change: {served:#?}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|document| document.contains("deleteIssue(input:$input)")),
+        "and was taken back: {served:#?}"
+    );
+    assert_eq!(
+        listed(),
+        before,
+        "the board holds nothing of the refused copy"
+    );
+}
+
+#[test]
+fn a_private_task_project_and_document_read_back_private_from_the_board() {
+    let setup = Setup::new();
+    setup.record(
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nclassification: private",
+    );
+    setup.record(
+        "tasks",
+        "step",
+        "title: Step\nstatus: todo\nproject: goal\nclassification: private",
+    );
+    setup.record(
+        "documents",
+        "design",
+        "title: Design\nproject: goal\nclassification: private",
+    );
+    let (output, _) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let (output, _) = setup.run(&["document", "copy", "plan:design", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document: Value = serde_json::from_str(&stdout(&output)).expect("a copy report");
+    let landed = |kind: &str, id: &str| {
+        let (output, _) = setup.run(&[kind, "show", id, "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let shown: Value = serde_json::from_str(&stdout(&output)).expect("a show");
+        shown["items"][0]["item"].clone()
+    };
+    let project = landed("project", "plan:goal");
+    let task = landed("task", "plan:step");
+    let copies = |item: &Value| {
+        item["metadata"]["onetaskgraph.copies"]["board"]
+            .as_str()
+            .unwrap_or_else(|| panic!("where it landed: {item:#}"))
+            .to_owned()
+    };
+    let document_at = document["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("where the document landed: {document:#}"))
+        .to_owned();
+    for (kind, id) in [
+        ("project", copies(&project)),
+        ("task", copies(&task)),
+        ("document", document_at),
+    ] {
+        let read = landed(kind, &id);
+        assert_eq!(read["classification"], "private", "{kind}: {read:#}");
+        // The reserved key is how the board keeps it, never the caller's own metadata.
+        assert!(
+            read["metadata"]
+                .get("onetaskgraph.classification")
+                .is_none(),
+            "{kind}: {read:#}"
+        );
+    }
+}
+
+#[test]
+fn a_board_item_whose_stored_classification_is_malformed_is_refused_rather_than_read_public() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![json!({"item": "ITEM-ODD-1", "id": "ODD-1", "type": "Issue",
+                "title": "Odd", "state": "OPEN", "reason": null, "parent": null,
+                "repo": "nickderobertis/onetaskgraph", "status": "Todo", "origin": "",
+                "labels": [],
+                "body": "Odd.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.classification\":\"secret\"}\n-->"})],
+        )
+    });
+    let (output, _) = setup.run(&["task", "show", "board:ODD-1"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.classification"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_project_visibility_answer_without_a_boolean_public_is_refused_before_any_mutation() {
+    for answer in [json!({}), json!({"public": "yes"}), json!(null)] {
+        let setup = Setup::new();
+        setup.board.malform_project_visibility(answer.clone());
+        setup.record(
+            "tasks",
+            "secret",
+            "title: Secret\nstatus: todo\nclassification: private",
+        );
+        let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+        assert_eq!(kind, "visibility-unreadable", "{answer}: {message}");
+    }
+}
+
+#[test]
+fn a_narrow_write_to_an_existing_issue_is_held_to_that_issues_own_repository() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-AWAY-1", "id": "AWAY-1", "type": "Issue",
+                "title": "Away", "body": "Away.", "state": "OPEN", "reason": null,
+                "parent": null, "repo": "nickderobertis/elsewhere", "status": "Todo",
+                "origin": "", "labels": []}),
+            ],
+        )
+    });
+    // The configured repository is private; the issue lives in a public one.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let (kind, _, served) =
+        setup.refused(&["task", "status", "set", "board:AWAY-1", "in-progress"]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        !served.contains(&format!("GET /repos/{CONFIGURED}")),
+        "{served:#?}"
+    );
+    // Once that repository reads private, the same write lands.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Private);
+    setup.ok(&["task", "status", "set", "board:AWAY-1", "in-progress"]);
+}
+
+/// Every file under `folder` of `setup`'s sandbox.
+fn files_in(setup: &Setup, folder: &str) -> Vec<PathBuf> {
+    fn walk(path: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&setup.sandbox.project().join(folder), &mut found);
+    found
+}
+
+#[test]
+fn a_copy_whose_link_back_to_a_board_made_public_is_refused_is_undone() {
+    let setup = Setup::new();
+    // The board is read from, and then written to only for the link recording where its item
+    // landed: that write is held to the board's reality like any other.
+    setup.board.set_project_public(true);
+    let (kind, message, served) = setup.refused(&["task", "copy", "board:T-3", "--to", "plan"]);
+    assert_eq!(kind, "destination-not-private", "{message}");
+    assert_eq!(visibility_reads(&served).len(), 2, "{served:#?}");
+    assert!(
+        files_in(&setup, "plan")
+            .iter()
+            .all(|path| !path.to_string_lossy().contains("tasks")),
+        "the copy into plan was undone: {:?}",
+        files_in(&setup, "plan")
+    );
+}
+
+#[test]
+fn a_routed_copy_whose_home_members_cannot_be_recorded_is_undone_on_both_sides() {
+    let setup = Setup::laid(github_projects_with_board, |sandbox, configured| {
+        configured["sources"]["vault"] = json!({"plugin": "local-md",
+            "config": {"root": sandbox.subdirectory("vault")}, "visibility": "private"});
+        configured["sources"]["board"]["routes"] =
+            json!([{"repositories": ["github.com/openco/*"], "to": "vault"}]);
+        // Every repository answered public, so no task is private and the repository route
+        // places the one naming `openco` in the vault rather than with a private project.
+        configured["write_policy"] = json!({"visibility_command": ["python3", "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"]});
+    });
+    setup.record("projects", "goal", "title: Goal\nstatus: todo");
+    setup.record(
+        "tasks",
+        "away",
+        "title: Away\nstatus: todo\nproject: goal\nrepositories: [github.com/openco/openwidget]",
+    );
+    setup.record("tasks", "home", "title: Home\nstatus: todo\nproject: goal");
+    // The home project's write and its task's read private; the board is made public before
+    // the write recording the home's member project in the vault.
+    setup.board.make_public_after_visibility_reads(2);
+    let (output, served) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "destination-not-private",
+        "{failure:#}"
+    );
+    let created = served
+        .iter()
+        .filter(|document| document.contains("createIssue(input:$input)"))
+        .count();
+    assert_eq!(
+        created, 2,
+        "the home and its task landed first: {served:#?}"
+    );
+    let deleted = served
+        .iter()
+        .filter(|document| document.contains("deleteIssue(input:$input)"))
+        .count();
+    assert_eq!(deleted, 2, "and both were taken back: {served:#?}");
+    assert!(
+        files_in(&setup, "vault").is_empty(),
+        "{:?}",
+        files_in(&setup, "vault")
+    );
+}
+
+#[test]
+fn a_create_routed_onto_the_board_is_held_to_the_repository_its_issue_lands_in() {
+    let setup = Setup::laid(github_projects_with_board, |_, configured| {
+        configured["sources"]["plan"]["routes"] =
+            json!([{"repositories": ["github.com/nickderobertis/elsewhere"], "to": "board"}]);
+    });
+    // No policy answers for the repository, so the task is private, and so is its home.
+    setup.record(
+        "projects",
+        "home",
+        "title: Home\nstatus: todo\nclassification: private",
+    );
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let body = setup.sandbox.config_home().join("body.md");
+    std::fs::write(&body, "A body.").expect("a body file");
+    let body = body.to_str().expect("a UTF-8 path").to_owned();
+    let arguments = [
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "home",
+        "--title",
+        "Routed",
+        "--body-file",
+        &body,
+        "--repository",
+        "github.com/nickderobertis/elsewhere",
+    ];
+    // Refused before the home's member project is created on the board.
+    let (kind, _, served) = setup.refused(&arguments);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    // Once that repository reads private, the same create lands, member project and all.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Private);
+    let served = setup.ok(&arguments);
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        served.iter().any(|document| is_mutation(document)),
+        "{served:#?}"
+    );
+}
+
+#[test]
+fn a_dry_run_reads_every_issue_repository_it_would_write_to() {
+    let setup = Setup::new();
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    setup.record(
+        "tasks",
+        "here",
+        "title: Here\nstatus: todo\nclassification: private",
+    );
+    setup.record(
+        "tasks",
+        "there",
+        "title: There\nstatus: todo\nclassification: private\n\
+         repositories: [github.com/nickderobertis/elsewhere]",
+    );
+    // The first issue's repository reads private; the second's does not, on the same board.
+    let (kind, _, served) = setup.refused(&[
+        "task",
+        "copy",
+        "plan:here",
+        "plan:there",
+        "--to",
+        "board",
+        "--dry-run",
+    ]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+}
+
+#[test]
+fn a_board_made_public_after_a_routed_creates_member_project_refuses_the_task_and_removes_it() {
+    let routed = || {
+        let setup = Setup::laid(github_projects_with_board, |_, configured| {
+            configured["sources"]["plan"]["routes"] = json!([{"repositories": ["github.com/nickderobertis/onetaskgraph"], "to": "board"}]);
+        });
+        setup.record(
+            "projects",
+            "home",
+            "title: Home\nstatus: todo\nclassification: private",
+        );
+        let body = setup.sandbox.config_home().join("body.md");
+        std::fs::write(&body, "A body.").expect("a body file");
+        (setup, body.to_str().expect("a UTF-8 path").to_owned())
+    };
+    let arguments = |body: &str| {
+        [
+            "task",
+            "create",
+            "plan",
+            "--project",
+            "home",
+            "--title",
+            "Routed",
+            "--body-file",
+            body,
+            "--repository",
+            "github.com/nickderobertis/onetaskgraph",
+        ]
+        .map(str::to_owned)
+    };
+    // How many times a create that lands reads the board's Project: the last is the task's own
+    // read after its member project was written.
+    let (landing, body) = routed();
+    let served = landing.ok(&arguments(&body).each_ref().map(String::as_str));
+    let reads = visibility_reads(&served)
+        .iter()
+        .filter(|read| **read == "project")
+        .count();
+    assert!(reads >= 2, "{served:#?}");
+    // The same create, with the board made public just before that last read.
+    let (setup, body) = routed();
+    setup.board.make_public_after_visibility_reads(reads - 1);
+    let (kind, _, served) = {
+        let arguments = arguments(&body);
+        let arguments = arguments.each_ref().map(String::as_str);
+        let mut with_json = arguments.to_vec();
+        with_json.push("--json");
+        let (output, served) = setup.run(&with_json);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        (failure["failure"]["kind"].clone(), (), served)
+    };
+    assert_eq!(kind, "destination-not-private");
+    let created = served
+        .iter()
+        .filter(|document| document.contains("createIssue(input:$input)"))
+        .count();
+    let deleted = served
+        .iter()
+        .filter(|document| document.contains("deleteIssue(input:$input)"))
+        .count();
+    assert_eq!(created, 1, "the member project, and no task: {served:#?}");
+    assert_eq!(deleted, 1, "the member project was taken back: {served:#?}");
+}
+
+#[test]
+fn a_project_read_refused_for_another_grant_is_not_reported_as_a_missing_scope() {
+    let setup = Setup::new();
+    // GitHub's refusal of a credential that lacks a grant other than `read:project`.
+    setup
+        .board
+        .refuse_project_visibility("Resource not accessible by personal access token");
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+    assert_eq!(kind, "visibility-unreadable", "{message}");
+    assert!(message.contains("Resource not accessible"), "{message}");
+    assert!(!message.contains("read:project"), "{message}");
+}
+
+#[test]
+fn a_board_item_two_carried_tasks_reference_is_read_once_for_its_classification() {
+    // Copying into a public folder from a board that declares nothing, so each reference into
+    // the board is read for its classification rather than withheld by the board's own.
+    let setup = Setup::laid(github_projects_with_board, |sandbox, configured| {
+        configured["sources"]["board"]
+            .as_object_mut()
+            .expect("the board")
+            .remove("visibility");
+        configured["sources"]["site"] = json!({"plugin": "local-md",
+            "config": {"root": sandbox.subdirectory("site")}, "visibility": "public"});
+        // Its repository answered public, so the item it names is public and its id is kept.
+        configured["write_policy"] = json!({
+            "check_command": ["python3", "-c",
+                "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"],
+            "visibility_command": ["python3", "-c",
+                "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"],
+        });
+    });
+    for id in ["first", "second"] {
+        setup.record(
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\ndepends_on: [{{id: \"board:T-3\", item: task}}]"),
+        );
+    }
+    let one = setup
+        .ok(&["task", "copy", "plan:first", "--to", "site"])
+        .len();
+    let setup_two = || {
+        let (output, served) =
+            setup.run(&["task", "copy", "plan:first", "plan:second", "--to", "site"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        served.len()
+    };
+    assert!(one > 0, "the reference was read");
+    assert_eq!(
+        setup_two(),
+        one,
+        "a second reference to it reads nothing more"
+    );
+    let landed = files_in(&setup, "site")
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("a record"))
+        .collect::<String>();
+    assert!(
+        landed.contains("board:T-3"),
+        "a public reference is kept: {landed}"
+    );
+}

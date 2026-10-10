@@ -16,6 +16,8 @@ authors.workspace = true
 # Every dependency is a dev-dependency: the package has no library or binary of its own.
 [dev-dependencies]
 assert_cmd.workspace = true
+# The linking caller's own `WritePolicy`, which the engine's trait spells with this macro.
+async-trait.workspace = true
 jsonschema.workspace = true
 # The journeys that drive the engine the binary links — a long-lived caller ending a command,
 # and the schema bundle the binary emits — with every plugin kind the binary registers.

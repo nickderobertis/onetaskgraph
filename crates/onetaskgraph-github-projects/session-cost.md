@@ -1007,3 +1007,18 @@ does not move: its pages answer questions that never read an edge.
 nodes per request — 20,400 → 25,400 for the reconciliation and 40,800 → 50,800 for the
 journey's two reads — and its total with them, 234,562 → 249,562. Its request count does not
 move: the journey reads each project's tasks once per source.
+
+## Reading whether the board is private, and what that moved
+
+A source a configuration declares private is held, at every write, to its board's own answer:
+its Project's `public` field and the visibility of the repository the issue lives in, read
+together and never remembered. `graphql::PROJECT_VISIBILITY` is the first of those two, and a
+new entry of `graphql::DOCUMENTS`. A source declaring nothing never sends it, so the live
+journey — which declares nothing — writes exactly what it wrote before.
+
+**`session-cost.txt`** moves only on its request total, 121 → 122, by one line of its own:
+the reconciliation step sends its `rateLimit(dryRun: true)` probe for every read document of
+`graphql::DOCUMENTS`, so the new document is priced against GitHub's own `cost` like every
+other, at 0 worst-case nodes. Nothing the journey writes or reads besides that probe moved.
+What the reads cost a private board's copy is the `visibility-write-requests` budget's, in
+`crates/onetaskgraph-github-projects-e2e/budgets.yaml`.
