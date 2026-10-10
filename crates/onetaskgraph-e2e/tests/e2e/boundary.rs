@@ -3465,3 +3465,47 @@ fn a_narrow_write_or_a_delivery_to_a_task_of_a_project_its_source_does_not_hold_
     assert_eq!(set["delivered"][0]["outcome"], "failed", "{set:#}");
     assert_eq!(site(), before, "nothing was written to site");
 }
+
+#[test]
+fn a_document_created_public_under_a_private_project_is_held_private_and_refused_onto_a_public_one()
+{
+    // A document inherits its project's classification on create: an explicit `public` cannot
+    // loosen it where it lands, and a public source refuses it before writing anything.
+    let store = Store::new(Some(registered), json!({}));
+    for folder in ["vault", "site"] {
+        store.record(
+            folder,
+            "projects",
+            "goal",
+            "title: Goal\nstatus: todo\nclassification: private",
+            PLAIN,
+        );
+    }
+    let body = store.body(PLAIN);
+    let create = |source: &'static str| {
+        vec![
+            "document",
+            "create",
+            source,
+            "--project",
+            "goal",
+            "--id",
+            "notes",
+            "--title",
+            "Notes",
+            "--body-file",
+            body.as_str(),
+            "--classification",
+            "public",
+        ]
+    };
+    store.ok(&create("vault"));
+    let held = std::fs::read_to_string(store.folder("vault").join("documents/notes.md"))
+        .expect("the created document");
+    assert!(held.contains("classification: private"), "{held}");
+
+    let before = store.tree();
+    let (kind, said) = store.refused(&create("site"));
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert_eq!(store.tree(), before, "nothing was written");
+}
