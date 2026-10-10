@@ -99,6 +99,41 @@ impl CommentOrigin {
     }
 }
 
+impl CommentOrigin {
+    /// `body`, carrying over the hidden marker the comment it replaces ends in — `held`, that
+    /// comment's body exactly as its source holds it — when `body` ends in none of its own.
+    ///
+    /// What a source that keeps a copied comment's origin as the marker answers an edit with:
+    /// an edit changes what a comment says and nothing else, so a comment a copy wrote is still
+    /// that copy afterwards, and the next copy keeps it in step rather than writing another
+    /// beside it. A `body` that ends in a marker of its own — a copy rewriting its own comment —
+    /// is left as it is.
+    ///
+    /// # Errors
+    ///
+    /// None in practice, because the body only grows: [`SourceError::Refused`] is what
+    /// [`CommentBody::new`] answers an empty text with.
+    pub fn kept(held: &str, body: &CommentBody) -> Result<CommentBody, SourceError> {
+        let origin_of = |text: &str| {
+            Comment {
+                id: NativeId(String::new()),
+                author: None,
+                created_at: None,
+                updated_at: None,
+                body: text.to_owned(),
+                url: None,
+                origin: None,
+            }
+            .unmarked()
+            .origin
+        };
+        match (origin_of(held), origin_of(body.as_str())) {
+            (Some(origin), None) => CommentBody::new(origin.mark(body.as_str())),
+            _ => Ok(body.clone()),
+        }
+    }
+}
+
 impl Comment {
     /// This comment with a marker [`CommentOrigin::mark`] wrote taken out of its body and
     /// reported as its [`origin`](Self::origin); unchanged when it carries an origin already

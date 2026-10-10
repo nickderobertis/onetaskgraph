@@ -1293,7 +1293,7 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
     // null node alone, and a comment id is read this way before anything is changed — so
     // that read is answered the way GitHub answers it. A `rateLimit(dryRun: true)` probe of
     // the same document is not executed, so nothing in it is resolved and nothing refuses.
-    if query.contains("on IssueComment{id issue{id}}") && board::strip_probe(query).is_none() {
+    if query.contains("on IssueComment{id body issue{id}}") && board::strip_probe(query).is_none() {
         let id = variables["id"].as_str().expect("a node id");
         if !state.comments.iter().any(|held| held.id == id)
             && !state.items.iter().any(|item| item.content_id == id)
@@ -1529,10 +1529,10 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.comments.retain(|held| held.id != id);
         return json!({"deleteIssueComment":{"clientMutationId":null}});
     }
-    if query.contains("on IssueComment{id issue{id}}") {
+    if query.contains("on IssueComment{id body issue{id}}") {
         let id = variables["id"].as_str().expect("a node id");
         if let Some(held) = state.comments.iter().find(|held| held.id == id) {
-            return json!({"node":{"__typename":"IssueComment","id":id,
+            return json!({"node":{"__typename":"IssueComment","id":id,"body":held.body,
                                   "issue":{"id":held.issue}}});
         }
         // `refused` has already answered an id naming nothing, so this one names an item.

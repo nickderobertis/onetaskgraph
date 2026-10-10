@@ -613,13 +613,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping,
-    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport,
+    system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -1291,7 +1292,7 @@ pub mod graphql {
     /// GitHub's comment mutations take the comment's id and nothing else, so without this a
     /// comment id given against the wrong task would change a comment on another issue.
     pub const COMMENT_ISSUE: &str =
-        r#"query($id:ID!){node(id:$id){__typename ... on IssueComment{id issue{id}}}}"#;
+        r#"query($id:ID!){node(id:$id){__typename ... on IssueComment{id body issue{id}}}}"#;
     /// Adds one comment to an issue, signed as the account the token belongs to.
     pub const ADD_COMMENT: &str = concat!(
         r#"mutation($input:AddCommentInput!){addComment(input:$input){subject{id} commentEdge{node{"#,
@@ -7742,24 +7743,40 @@ impl GitHubProjectsSource {
         issue: &NativeId,
         comment: &NativeId,
     ) -> Result<bool, SourceError> {
+        Ok(self.comment_on(issue, comment).await?.is_some())
+    }
+
+    /// The body the comment `comment` holds, exactly as GitHub holds it, when it is one of
+    /// `issue`'s own — the read [`Self::comment_is_on`] makes, answering with what it selected.
+    async fn comment_on(
+        &self,
+        issue: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<String>, SourceError> {
         let asked = self
             .graphql(graphql::COMMENT_ISSUE, json!({"id":comment.0}))
             .await;
         let data = match asked {
             Ok(data) => data,
-            Err(error) if unresolvable_node(&error) => return Ok(false),
+            Err(error) if unresolvable_node(&error) => return Ok(None),
             Err(error) => return Err(error),
         };
         let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
-            return Ok(false);
+            return Ok(None);
         };
         if optional_str(node, "__typename")? != Some("IssueComment") {
-            return Ok(false);
+            return Ok(None);
         }
         let on = node.get("issue").ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub issue comment {} names no issue", comment.0),
         })?;
-        Ok(required_str(on, "id")? == issue.0)
+        if required_str(on, "id")? != issue.0 {
+            return Ok(None);
+        }
+        // Selected, and so answered: an answer without one carries no marker to keep.
+        Ok(Some(
+            optional_str(node, "body")?.unwrap_or_default().to_owned(),
+        ))
     }
 
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
@@ -9738,9 +9755,11 @@ impl TaskSource for GitHubProjectsSource {
         let Some(issue) = self.commented_issue(task).await? else {
             return Ok(None);
         };
-        if !self.comment_is_on(&issue, comment).await? {
+        let Some(held) = self.comment_on(&issue, comment).await? else {
             return Ok(None);
-        }
+        };
+        // A comment a copy wrote keeps its origin through an edit: its marker is carried over.
+        let body = CommentOrigin::kept(&held, body)?;
         let data = self
             .graphql(
                 graphql::UPDATE_COMMENT,

@@ -360,13 +360,13 @@ pub mod assets;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName, Support, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UpdatedField, WriteSupport,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment,
+    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName,
+    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -556,7 +556,8 @@ pub mod graphql {
     ///
     /// `$id` is a nullable `String` because that is what `Query.comment` declares — it also
     /// takes a `hash` instead — and a variable has to be exactly its argument's type.
-    pub const COMMENT: &str = "query($id:String){ comment(id:$id){ id archivedAt issue{id} } }";
+    pub const COMMENT: &str =
+        "query($id:String){ comment(id:$id){ id body archivedAt issue{id} } }";
     /// Add a comment to an issue.
     pub const COMMENT_CREATE: &str = "mutation($input:CommentCreateInput!){ commentCreate(input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Replace a comment's body.
@@ -3354,9 +3355,11 @@ impl TaskSource for LinearSource {
         comment: &NativeId,
         body: &CommentBody,
     ) -> Result<Option<Comment>, SourceError> {
-        if !self.comment_is_on(task, comment).await? {
+        let Some(held) = self.comment_on(task, comment).await? else {
             return Ok(None);
-        }
+        };
+        // A comment a copy wrote keeps its origin through an edit: its marker is carried over.
+        let body = CommentOrigin::kept(&held, body)?;
         // `body` alone: the id, the author and the time it was written are the comment's
         // own, so nothing else is sent that Linear could move.
         let data = self
@@ -3862,11 +3865,33 @@ impl LinearSource {
         task: &NativeId,
         comment: &NativeId,
     ) -> Result<bool, SourceError> {
+        Ok(self.comment_on(task, comment).await?.is_some())
+    }
+
+    /// The body the comment `comment` holds, exactly as Linear holds it, when it is one of
+    /// `task`'s own — the read [`Self::comment_is_on`] makes, answering with what it selected.
+    async fn comment_on(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<String>, SourceError> {
         let Some(issue) = self.commented_issue(task).await? else {
-            return Ok(false);
+            return Ok(None);
         };
         let data = self.send(graphql::COMMENT, json!({"id":comment.0})).await?;
-        Ok(optional(&data, "comment", comment_issue)?.flatten() == Some(issue))
+        let held = optional(&data, "comment", |v| {
+            // Selected, and so answered: an answer without one carries no marker to keep.
+            Ok((
+                comment_issue(v)?,
+                v.get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            ))
+        })?;
+        Ok(held
+            .filter(|(on, _)| on.as_ref() == Some(&issue))
+            .map(|(_, body)| body))
     }
 }
 

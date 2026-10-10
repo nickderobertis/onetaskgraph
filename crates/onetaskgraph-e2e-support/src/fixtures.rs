@@ -1026,11 +1026,14 @@ struct GitHubBoard {
     hooks: Vec<BoardHook>,
 }
 
+/// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
+type RequestMatch = Box<dyn Fn(&str, &Value) -> bool + Send>;
+
 /// One change a journey has the board make part way through a command: after the
 /// `skip + 1`th request `matches` holds of, and before the board reads another.
 struct BoardHook {
-    /// Whether one request — its document and its variables — is one this hook counts.
-    matches: Box<dyn Fn(&str, &Value) -> bool + Send>,
+    /// Whether one request is one this hook counts.
+    matches: RequestMatch,
     /// How many matching requests to answer before making the change.
     skip: usize,
     /// The change, made through the same handle a journey makes one with.
@@ -1378,6 +1381,15 @@ impl GitHubBoardFields {
     pub fn edit_body(&self, id: &str, body: &str) {
         let mut board = self.board.lock().unwrap();
         board.find(&json!(id))["body"] = json!(body);
+        board.touch_issue(&json!(id));
+    }
+
+    /// Reopen one closed issue, as a person reopening it on GitHub would.
+    pub fn reopen(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        item["state"] = json!("OPEN");
+        item["reason"] = Value::Null;
         board.touch_issue(&json!(id));
     }
 
@@ -2830,10 +2842,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.comments.retain(|held| held["id"] != input["id"]);
         return json!({"deleteIssueComment":{"clientMutationId":null}});
     }
-    if query.contains("on IssueComment{id issue{id}}") {
+    if query.contains("on IssueComment{id body issue{id}}") {
         let id = variables["id"].clone();
         if let Some(held) = board.comments.iter().find(|held| held["id"] == id) {
-            return json!({"node":{"__typename":"IssueComment","id":id,
+            return json!({"node":{"__typename":"IssueComment","id":id,"body":held["body"],
                                   "issue":{"id":held["issue"]}}});
         }
         return match board.items.iter().find(|item| item["id"] == id) {
@@ -4912,7 +4924,10 @@ fn linear_comment_response(
                 .ok_or("fixture comments are not an array")?
                 .iter()
                 .find(|row| row["id"] == id)
-                .map(|row| json!({"id":row["id"],"archivedAt":null,"issue":{"id":row["issue"]}}));
+                .map(|row| {
+                    json!({"id":row["id"],"body":row["body"],"archivedAt":null,
+                                  "issue":{"id":row["issue"]}})
+                });
             Ok(json!({ "comment": placed }))
         })(),
         graphql::COMMENT_CREATE => (|| {
