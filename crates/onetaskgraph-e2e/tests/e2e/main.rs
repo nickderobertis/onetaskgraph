@@ -53,6 +53,11 @@ mod commented_since;
 mod change_tokens;
 mod comments;
 mod copy;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
+// Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
+// every pair of plugins, so no one plugin crate's edge is narrower.
+mod copy_comments;
 mod copy_link;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and a
