@@ -55,3 +55,21 @@ fn a_lease_holds_time_between_invocations_then_releases_a_finished_participant()
     assert_eq!(other.read(), "wake 1");
     assert_eq!(clock.now(), Duration::from_secs(10));
 }
+#[test]
+fn a_client_number_reattaches_straight_after_its_last_connection_closes() {
+    // A driver spawns its next process the moment the last one exits, and that one's
+    // connection may not have been read to its end yet: no lease, no wait in between.
+    let clock = SimulatedClock::start(1);
+    for attempt in 0..200 {
+        let client = Client::attach(&clock, 0);
+        assert!(client.is_some(), "attempt {attempt} was refused");
+        drop(client);
+    }
+}
+#[test]
+fn a_client_number_still_attached_is_refused() {
+    let clock = SimulatedClock::start(1).with_reattach_grace(Duration::from_millis(50));
+    let _held = Client::attach(&clock, 0).unwrap();
+    assert!(Client::attach(&clock, 0).is_none());
+    assert_eq!(clock.attached(), vec![0]);
+}
