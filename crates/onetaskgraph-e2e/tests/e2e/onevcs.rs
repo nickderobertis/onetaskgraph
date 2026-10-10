@@ -20,6 +20,7 @@ use crate::common::Sandbox;
 /// is moving the schema the reconciliation journey compares against.
 pub(crate) const ONEVCS_CLI: &str = "onevcs-cli==0.44.0";
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] uv provides the pinned release from its own cache, fetching it from PyPI at most once per host, and only the `boundary` journeys ask for it. Those journeys are the engine's and the configuration's — classification, routing by it and the write gate — so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine; the engine's suite is the narrowest edge they have.
 /// The pinned `onevcs` executable, resolved once per test process through `uv`.
 ///
 /// # Panics
@@ -55,6 +56,7 @@ pub(crate) fn onevcs() -> &'static Path {
         PathBuf::from(path)
     })
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// What a registered identity's rule declares about who can read it.
 #[derive(Clone, Copy)]

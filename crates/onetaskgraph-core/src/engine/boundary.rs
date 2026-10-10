@@ -451,7 +451,6 @@ impl Exposure {
         }
     }
 
-    /// This exposure and `other`'s.
     pub(crate) fn and(mut self, other: Self) -> Self {
         self.text.extend(other.text);
         self.paths.extend(other.paths);

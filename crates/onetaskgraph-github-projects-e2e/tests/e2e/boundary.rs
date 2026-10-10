@@ -34,13 +34,25 @@ impl Setup {
 
     /// The same, over the board `board` opens.
     fn over(board: impl FnOnce(&Sandbox) -> (Value, GitHubBoardFields)) -> Self {
+        Self::laid(board, |_, _| {})
+    }
+
+    /// The same, with `lay` given the configuration document to change before it is written —
+    /// a folder, a route or a policy of a journey's own.
+    fn laid(
+        board: impl FnOnce(&Sandbox) -> (Value, GitHubBoardFields),
+        lay: impl FnOnce(&Sandbox, &mut Value),
+    ) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("plan");
         let (config, board) = board(&sandbox);
-        sandbox.project_document(&document(&json!({
+        let mut configured: Value = serde_json::from_str(&document(&json!({
             "plan": {"plugin": "local-md", "config": {"root": root}, "visibility": "private"},
             "board": {"plugin": "github-projects", "config": config, "visibility": "private"},
-        })));
+        })))
+        .expect("a configuration document");
+        lay(&sandbox, &mut configured);
+        sandbox.project_document(&configured.to_string());
         Self {
             sandbox,
             board,
@@ -620,4 +632,144 @@ fn a_narrow_write_to_an_existing_issue_is_held_to_that_issues_own_repository() {
         .board
         .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Private);
     setup.ok(&["task", "status", "set", "board:AWAY-1", "in-progress"]);
+}
+
+/// Every file under `folder` of `setup`'s sandbox.
+fn files_in(setup: &Setup, folder: &str) -> Vec<PathBuf> {
+    fn walk(path: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&setup.sandbox.project().join(folder), &mut found);
+    found
+}
+
+#[test]
+fn a_copy_whose_link_back_to_a_board_made_public_is_refused_is_undone() {
+    let setup = Setup::new();
+    // The board is read from, and then written to only for the link recording where its item
+    // landed: that write is held to the board's reality like any other.
+    setup.board.set_project_public(true);
+    let (kind, message, served) = setup.refused(&["task", "copy", "board:T-3", "--to", "plan"]);
+    assert_eq!(kind, "destination-not-private", "{message}");
+    assert_eq!(visibility_reads(&served).len(), 2, "{served:#?}");
+    assert!(
+        files_in(&setup, "plan")
+            .iter()
+            .all(|path| !path.to_string_lossy().contains("tasks")),
+        "the copy into plan was undone: {:?}",
+        files_in(&setup, "plan")
+    );
+}
+
+#[test]
+fn a_routed_copy_whose_home_members_cannot_be_recorded_is_undone_on_both_sides() {
+    let setup = Setup::laid(github_projects_with_board, |sandbox, configured| {
+        configured["sources"]["vault"] = json!({"plugin": "local-md",
+            "config": {"root": sandbox.subdirectory("vault")}, "visibility": "private"});
+        configured["sources"]["board"]["routes"] =
+            json!([{"repositories": ["github.com/openco/*"], "to": "vault"}]);
+        // Every repository answered public, so no task is private and the repository route
+        // places the one naming `openco` in the vault rather than with a private project.
+        configured["write_policy"] = json!({"visibility_command": ["python3", "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"]});
+    });
+    setup.record("projects", "goal", "title: Goal\nstatus: todo");
+    setup.record(
+        "tasks",
+        "away",
+        "title: Away\nstatus: todo\nproject: goal\nrepositories: [github.com/openco/openwidget]",
+    );
+    setup.record("tasks", "home", "title: Home\nstatus: todo\nproject: goal");
+    // The home project's write and its task's read private; the board is made public before
+    // the write recording the home's member project in the vault.
+    setup.board.make_public_after_visibility_reads(2);
+    let (output, served) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "destination-not-private",
+        "{failure:#}"
+    );
+    let created = served
+        .iter()
+        .filter(|document| document.contains("createIssue(input:$input)"))
+        .count();
+    assert_eq!(
+        created, 2,
+        "the home and its task landed first: {served:#?}"
+    );
+    let deleted = served
+        .iter()
+        .filter(|document| document.contains("deleteIssue(input:$input)"))
+        .count();
+    assert_eq!(deleted, 2, "and both were taken back: {served:#?}");
+    assert!(
+        files_in(&setup, "vault").is_empty(),
+        "{:?}",
+        files_in(&setup, "vault")
+    );
+}
+
+#[test]
+fn a_create_routed_onto_the_board_is_held_to_the_repository_its_issue_lands_in() {
+    let setup = Setup::laid(github_projects_with_board, |_, configured| {
+        configured["sources"]["plan"]["routes"] =
+            json!([{"repositories": ["github.com/nickderobertis/elsewhere"], "to": "board"}]);
+    });
+    // No policy answers for the repository, so the task is private, and so is its home.
+    setup.record(
+        "projects",
+        "home",
+        "title: Home\nstatus: todo\nclassification: private",
+    );
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let body = setup.sandbox.config_home().join("body.md");
+    std::fs::write(&body, "A body.").expect("a body file");
+    let body = body.to_str().expect("a UTF-8 path").to_owned();
+    let arguments = [
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "home",
+        "--title",
+        "Routed",
+        "--body-file",
+        &body,
+        "--repository",
+        "github.com/nickderobertis/elsewhere",
+    ];
+    // Refused before the home's member project is created on the board.
+    let (kind, _, served) = setup.refused(&arguments);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    // Once that repository reads private, the same create lands, member project and all.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Private);
+    let served = setup.ok(&arguments);
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        served.iter().any(|document| is_mutation(document)),
+        "{served:#?}"
+    );
 }
