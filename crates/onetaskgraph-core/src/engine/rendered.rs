@@ -572,7 +572,7 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
-        self.withhold_private_references(
+        self.refuse_private_references(
             near,
             "the new task",
             request
@@ -689,7 +689,13 @@ impl Engine {
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
         let delivers = targets(&task.delivers, near);
         let delivered = self
-            .deliver(&id, task.status.category, &delivers, &[])
+            .deliver(
+                &id,
+                task.classification,
+                task.status.category,
+                &delivers,
+                &[],
+            )
             .await;
         Ok(TaskCreated {
             task: qualified_task(id, task),

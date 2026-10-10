@@ -988,9 +988,11 @@ them do; this is the inventory of what is owed, not a status board.
     never loosens an inherited classification; and a project stays private after its private
     members are removed.
 89. A copy out of a private source into a public one records no origin naming it, and keeps
-    its correspondence on the private side; a dependency, a `delivers` entry or a delivered
-    task's `delivered_by` that would name a private source on a public one is refused before
-    any write, whatever the term lists hold; a stdio-hosted source is never verified private.
+    its correspondence on the private side; a copy's dependency edges and `delivers` entries,
+    and a delivered task's `delivered_by`, leave out every id naming an item of a private
+    source on a public write — kept in the private store's own record, and unchanged between
+    public items — whatever the term lists hold, while a `--depends-on` or `--delivers` naming
+    one is refused before any write; a stdio-hosted source is never verified private.
 90. A GitHub board declared private is held, at every write, to its Project and the issue's
     repository both reading private, read with its own credential — a change between writes
     refused at the next, an unreadable read never guessed, a missing `read:project` named; and a

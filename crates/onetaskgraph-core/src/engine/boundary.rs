@@ -641,17 +641,20 @@ impl Engine {
         self.boundary.active
     }
 
-    /// Refuse a write to `destination` that would name an item of a source declared private —
-    /// a dependency's far end, a task it delivers, a task delivering it — when `destination`
-    /// is not itself declared private.
+    /// Refuse a write to `destination` that names, at the caller's own request, an item of a
+    /// source declared private — a `--depends-on` or a `--delivers` of a create or an update —
+    /// when `destination` is not itself declared private.
     ///
     /// Such a reference is a qualified id, `<source>:<id>`, and the source's name is in no
     /// term list unless it happens to match a private repository: so it is refused here,
     /// whatever the check would say, rather than written where it names somewhere private.
-    /// `references` are `(source, native id)` pairs; one naming `destination` itself is that
-    /// source's own item and names nothing elsewhere. While no source is declared private
-    /// nothing can be refused, which keeps an inactive store exactly as it was.
-    pub(crate) fn withhold_private_references<'a>(
+    /// A copy and a delivered task's back-reference withhold the same ids instead (see
+    /// [`Engine::withholds`]), because there the id is what the engine carries along rather
+    /// than what the caller asked to be written. `references` are `(source, native id)` pairs;
+    /// one naming `destination` itself is that source's own item and names nothing elsewhere.
+    /// While no source is declared private nothing can be refused, which keeps an inactive
+    /// store exactly as it was.
+    pub(crate) fn refuse_private_references<'a>(
         &self,
         destination: &onetaskgraph_plugin_api::SourceName,
         item: &str,
@@ -676,6 +679,26 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Whether a write to `destination` withholds an id naming `far`: an item of another source
+    /// declared private, or one of the items in `private` — those this command knows are
+    /// classified private — while `destination` is not itself declared private.
+    ///
+    /// A withheld id is left out of what that write carries — a dependency edge's far end, a
+    /// `delivers` entry a copy carries along, a delivered task's `delivered_by` — and stays
+    /// in the private store's own record, exactly as an `onetaskgraph.origin` or an
+    /// `onetaskgraph.copies` link naming a private source does. Nothing is withheld while no
+    /// source is declared private and no item is classified private.
+    pub(crate) fn withholds(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        far: &crate::GlobalId,
+        private: &[crate::GlobalId],
+    ) -> bool {
+        &far.source != destination
+            && self.declared(destination) != SourceVisibility::Private
+            && (self.declared(&far.source) == SourceVisibility::Private || private.contains(far))
     }
 
     /// Who `source` is declared readable by.

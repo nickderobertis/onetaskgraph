@@ -877,6 +877,10 @@ struct Running {
     /// Whether every item this command lands was already held to the public boundary, as a
     /// project copy does for all of them before it writes the first.
     preflighted: bool,
+    /// Every item this command knows is classified private, by its source id and by where it
+    /// landed: an id naming one is withheld from a write anywhere not declared private (see
+    /// [`Engine::withholds`]).
+    private: Vec<GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -996,11 +1000,14 @@ struct LandedTask {
     before: Vec<GlobalId>,
     /// Its status category, as the copy wrote it.
     category: StatusCategory,
+    /// Who may read it, as the copy wrote it.
+    classification: Classification,
 }
 
 /// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
 struct Deliverer {
     destination: GlobalId,
+    classification: Classification,
     category: StatusCategory,
     now: Vec<GlobalId>,
     before: Vec<GlobalId>,
@@ -1309,6 +1316,7 @@ impl Engine {
                     report.delivered.extend(
                         self.deliver(
                             &deliverer.destination,
+                            deliverer.classification,
                             deliverer.category,
                             &deliverer.now,
                             &deliverer.before,
@@ -1388,6 +1396,7 @@ impl Engine {
             .iter()
             .map(|task| Deliverer {
                 destination: task.destination.clone(),
+                classification: task.classification,
                 category: task.category,
                 now: targets(
                     &resolved_entries(&mapped_delivers(
@@ -1446,18 +1455,27 @@ impl Engine {
             resolvable,
             counterparts,
             deferred,
+            private,
             ..
         } = running;
         for entry in deferred {
             let destination = self.writable(&entry.item.to)?;
-            let edges = mapped_edges(
-                &entry.item.edges,
-                &entry.item.source.source,
+            let edges = self.shown_edges(
                 &entry.item.to,
-                &resolvable,
-                &counterparts,
+                mapped_edges(
+                    &entry.item.edges,
+                    &entry.item.source.source,
+                    &entry.item.to,
+                    &resolvable,
+                    &counterparts,
+                ),
+                &private,
             );
-            let delivers = delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts);
+            let delivers = self.shown_delivers(
+                &entry.item.to,
+                delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts),
+                &private,
+            );
             self.write(
                 destination,
                 &entry.item,
@@ -1803,10 +1821,14 @@ impl Engine {
             plans
                 .iter()
                 .flat_map(|(project, tasks)| std::iter::once(project).chain(tasks)),
-            &running.resolvable,
         )
         .await?;
         running.preflighted = true;
+        for (project, tasks) in &plans {
+            for item in std::iter::once(project).chain(tasks) {
+                note_private(running, item);
+            }
+        }
         let mut outcomes = Vec::new();
         for (project, tasks) in plans {
             outcomes.extend(
@@ -1945,19 +1967,27 @@ impl Engine {
         let home_source = project.to.clone();
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
-                let settled = mapped_edges(
-                    &project.edges,
-                    &id.source,
+                let settled = self.shown_edges(
                     &home_source,
-                    &running.resolvable,
-                    &running.counterparts,
+                    mapped_edges(
+                        &project.edges,
+                        &id.source,
+                        &home_source,
+                        &running.resolvable,
+                        &running.counterparts,
+                    ),
+                    &running.private,
                 );
-                let first = mapped_edges(
-                    &project.edges,
-                    &id.source,
+                let first = self.shown_edges(
                     &home_source,
-                    &running.resolvable,
-                    &before_members,
+                    mapped_edges(
+                        &project.edges,
+                        &id.source,
+                        &home_source,
+                        &running.resolvable,
+                        &before_members,
+                    ),
+                    &running.private,
                 );
                 let held = project.held.as_ref();
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
@@ -2640,8 +2670,7 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written.
         if !running.preflighted {
-            self.preflight_copy(request, planned.iter(), &running.resolvable)
-                .await?;
+            self.preflight_copy(request, planned.iter()).await?;
         }
 
         for item in &planned {
@@ -2700,19 +2729,31 @@ impl Engine {
             }
         }
 
+        for item in &planned {
+            note_private(running, item);
+        }
+
         let mut outcomes = Vec::new();
         let mut unresolved = Vec::new();
         let mut priors = Vec::new();
         for (index, item) in planned.iter().enumerate() {
             let destination = self.writable(&item.to)?;
-            let edges = mapped_edges(
-                &item.edges,
-                &item.source.source,
+            let edges = self.shown_edges(
                 &item.to,
-                &running.resolvable,
-                &running.counterparts,
+                mapped_edges(
+                    &item.edges,
+                    &item.source.source,
+                    &item.to,
+                    &running.resolvable,
+                    &running.counterparts,
+                ),
+                &running.private,
             );
-            let delivers = delivers_of(item, &item.to, &running.resolvable, &running.counterparts);
+            let delivers = self.shown_delivers(
+                &item.to,
+                delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                &running.private,
+            );
             if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
                 unresolved.push(index);
             }
@@ -2734,6 +2775,9 @@ impl Engine {
                 running
                     .counterparts
                     .insert(item.source.to_string(), id.clone());
+                if item.classification == Classification::Private && !running.private.contains(id) {
+                    running.private.push(id.clone());
+                }
                 if !request.dry_run {
                     running.linking.push(Linking {
                         item: item.source.clone(),
@@ -2759,6 +2803,7 @@ impl Engine {
                         _ => Vec::new(),
                     },
                     category: task.status.category,
+                    classification: item.classification,
                 });
             }
             outcomes.push(outcome);
@@ -2908,6 +2953,47 @@ impl Engine {
         Ok(class)
     }
 
+    /// `edges` as a write to `destination` carries them: without one whose far end that write
+    /// withholds (see [`Engine::withholds`]). One not resolvable yet stays `None`.
+    fn shown_edges(
+        &self,
+        destination: &SourceName,
+        edges: Vec<Option<DependencyEdge>>,
+        private: &[GlobalId],
+    ) -> Vec<Option<DependencyEdge>> {
+        edges
+            .into_iter()
+            .filter(|edge| {
+                !edge.as_ref().is_some_and(|edge| {
+                    far_end(&edge.to, destination)
+                        .is_some_and(|far| self.withholds(destination, &far, private))
+                })
+            })
+            .collect()
+    }
+
+    /// `delivers` as a write to `destination` carries them: without an entry naming a task
+    /// that write withholds. One not resolvable yet stays `None`.
+    fn shown_delivers(
+        &self,
+        destination: &SourceName,
+        delivers: Vec<Option<TaskRef>>,
+        private: &[GlobalId],
+    ) -> Vec<Option<TaskRef>> {
+        delivers
+            .into_iter()
+            .filter(|entry| {
+                !entry.as_ref().is_some_and(|entry| {
+                    entry
+                        .in_source(destination)
+                        .as_str()
+                        .parse::<GlobalId>()
+                        .is_ok_and(|far| self.withholds(destination, &far, private))
+                })
+            })
+            .collect()
+    }
+
     /// Hold every item a copy lands to the public boundary before any is written: a private
     /// one refused anywhere not declared private, and every one landing anywhere not declared
     /// private put to the caller's check. A dry run, which writes nothing, also reads each
@@ -2916,42 +3002,9 @@ impl Engine {
         &self,
         request: &CopyRequest,
         planned: impl Iterator<Item = &'a Planned>,
-        resolvable: &[GlobalId],
     ) -> Result<(), EngineError> {
         let mut read: Vec<&SourceName> = Vec::new();
         for item in planned {
-            // A dependency or a delivery naming something this copy does not carry is written
-            // qualified, by its source: never one naming a private source onto a public one.
-            let near = item.source.source.as_str();
-            let mut references: Vec<(String, String)> = item
-                .edges
-                .iter()
-                .map(|edge| {
-                    let id = edge.to.id();
-                    match edge.to.source() {
-                        Some(source) => (source.to_owned(), id[source.len() + 1..].to_owned()),
-                        None => (near.to_owned(), id.to_owned()),
-                    }
-                })
-                .collect();
-            if let Item::Task(task) = &item.item {
-                references.extend(task.delivers.iter().map(|entry| {
-                    let (source, native) = entry.parts(near);
-                    (source.to_owned(), native.to_owned())
-                }));
-            }
-            references.retain(|(source, native)| {
-                !resolvable
-                    .iter()
-                    .any(|copied| copied.source.as_str() == source && copied.native.0 == *native)
-            });
-            self.withhold_private_references(
-                &item.to,
-                &item.source.to_string(),
-                references
-                    .iter()
-                    .map(|(source, native)| (source.as_str(), native.as_str())),
-            )?;
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
                 Target::Update { id, .. } => WriteTarget::Existing(id),
@@ -2968,7 +3021,7 @@ impl Engine {
                         .map_or(Classification::Public, |held| classification_of(&held.item)),
                 ),
                 target,
-                exposure: &exposure_of(item),
+                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &[])),
             };
             self.preflight(destination, &outbound).await?;
             if request.dry_run && !read.contains(&&item.to) {
@@ -4821,9 +4874,19 @@ fn repositories_of(item: &Item) -> &[Repository] {
 
 /// What one planned item would put in front of a reader where it lands: everything it carries
 /// once its provenance is settled, and the names of its assets.
-fn exposure_of(item: &Planned) -> Exposure {
+///
+/// An id the write withholds is not part of what it exposes: `withheld` says which, by the far
+/// end's own id as the item's source names it.
+fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure {
+    let origin = &item.source.source;
+    let shown = |id: &str| id.parse::<GlobalId>().map_or(true, |far| !withheld(&far));
     let delivers = match &item.item {
-        Item::Task(task) => task.delivers.clone(),
+        Item::Task(task) => task
+            .delivers
+            .iter()
+            .filter(|entry| shown(entry.in_source(origin).as_str()))
+            .cloned()
+            .collect(),
         Item::Project(_) | Item::Document(_) => Vec::new(),
     };
     let preview = outgoing(
@@ -4841,7 +4904,10 @@ fn exposure_of(item: &Planned) -> Exposure {
     }
     .assets(&item.assets)
     .and(Exposure::metadata(
-        item.edges.iter().map(|edge| edge.to.id().to_owned()),
+        item.edges
+            .iter()
+            .filter(|edge| far_end(&edge.to, origin).is_none_or(|far| !withheld(&far)))
+            .map(|edge| edge.to.id().to_owned()),
     ))
 }
 
@@ -5154,6 +5220,36 @@ fn spelled_from(landed: &GlobalId, near: &SourceName) -> String {
         landed.native.0.clone()
     } else {
         landed.to_string()
+    }
+}
+
+/// Record `item` among those `running` knows are classified private, when it is: by its
+/// source id, and by its destination id when it already has one.
+fn note_private(running: &mut Running, item: &Planned) {
+    if item.classification != Classification::Private {
+        return;
+    }
+    let mut ids = vec![item.source.clone()];
+    if let Target::Update { id, .. } = &item.target {
+        ids.push(GlobalId::new(item.to.clone(), id.clone()));
+    }
+    for id in ids {
+        if !running.private.contains(&id) {
+            running.private.push(id);
+        }
+    }
+}
+
+/// The item `endpoint` names, read from an item of `origin`: a native id names one of
+/// `origin`'s own.
+fn far_end(endpoint: &DependencyEndpoint, origin: &SourceName) -> Option<GlobalId> {
+    if endpoint.is_qualified() {
+        endpoint.id().parse().ok()
+    } else {
+        Some(GlobalId::new(
+            origin.clone(),
+            NativeId(endpoint.id().to_owned()),
+        ))
     }
 }
 

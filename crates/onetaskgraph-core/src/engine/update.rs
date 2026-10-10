@@ -114,7 +114,7 @@ impl Engine {
                     .map(|entry| entry.parts(near)),
             )
             .collect();
-        self.withhold_private_references(&id.source, &id.to_string(), references)?;
+        self.refuse_private_references(&id.source, &id.to_string(), references)?;
         self.admit_existing(
             source,
             &id.to_string(),
@@ -133,8 +133,14 @@ impl Engine {
         let delivered = if update.status.is_some() || update.delivers.is_some() {
             let now = targets(&outcome.task.delivers, &id.source);
             let dropped = targets(&outcome.delivers_before, &id.source);
-            self.deliver(id, outcome.task.status.category, &now, &dropped)
-                .await
+            self.deliver(
+                id,
+                outcome.task.classification,
+                outcome.task.status.category,
+                &now,
+                &dropped,
+            )
+            .await
         } else {
             Vec::new()
         };

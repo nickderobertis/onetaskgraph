@@ -15,7 +15,9 @@
 //! plugins: `delivered_by` lives on the delivered task, in its own source, and every
 //! evaluation reads the deliverers afresh.
 
-use onetaskgraph_plugin_api::{SourceError, SourceName, Status, StatusCategory, Task, TaskRef};
+use onetaskgraph_plugin_api::{
+    Classification, SourceError, SourceName, Status, StatusCategory, Task, TaskRef,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -136,7 +138,13 @@ impl Engine {
         let status = task.status.clone();
         let delivers = targets(&task.delivers, &id.source);
         let delivered = self
-            .deliver(id, status.category, &delivers, &delivers)
+            .deliver(
+                id,
+                task.classification,
+                status.category,
+                &delivers,
+                &delivers,
+            )
             .await;
         Ok(TaskStatusSet {
             id: id.clone(),
@@ -147,9 +155,14 @@ impl Engine {
 
     /// Keep every task `deliverer` delivers `now`, and every one it delivered `before` and
     /// dropped, in step with it — one entry each, in that order.
+    ///
+    /// `classification` is the deliverer's own: a delivered task anywhere not declared private
+    /// is never handed the id of one classified private, nor of one in a source declared
+    /// private, in its `delivered_by` (see [`Engine::withholds`]).
     pub(crate) async fn deliver(
         &self,
         deliverer: &GlobalId,
+        classification: Classification,
         category: StatusCategory,
         now: &[GlobalId],
         before: &[GlobalId],
@@ -167,7 +180,10 @@ impl Engine {
         }
         let mut delivered = Vec::with_capacity(tickets.len());
         for (ticket, kept) in tickets {
-            delivered.push(self.evaluate(deliverer, category, ticket, kept).await);
+            delivered.push(
+                self.evaluate(deliverer, classification, category, ticket, kept)
+                    .await,
+            );
         }
         delivered
     }
@@ -177,6 +193,7 @@ impl Engine {
     async fn evaluate(
         &self,
         deliverer: &GlobalId,
+        classification: Classification,
         category: StatusCategory,
         ticket: &GlobalId,
         kept: bool,
@@ -248,32 +265,33 @@ impl Engine {
             .into_iter()
             .filter(|other| !pruned.contains(other))
             .collect();
-        if kept_by != held {
-            let list: Vec<TaskRef> = kept_by
+        // What the ticket's own record holds of them: a deliverer it withholds still counts
+        // toward the rule, and is kept only in the deliverer's own `delivers`.
+        let private = if classification == Classification::Private {
+            std::slice::from_ref(deliverer)
+        } else {
+            &[]
+        };
+        let written: Vec<&GlobalId> = kept_by
+            .iter()
+            .filter(|other| !self.withholds(&ticket.source, other, private))
+            .collect();
+        if !written.iter().copied().eq(&held) {
+            let list: Vec<TaskRef> = written
                 .iter()
                 .map(|other| TaskRef::qualified(&other.source, &other.native))
                 .collect();
-            let admitted = match self.withhold_private_references(
-                &ticket.source,
-                &ticket.to_string(),
-                kept_by
-                    .iter()
-                    .map(|other| (other.source.as_str(), other.native.0.as_str())),
-            ) {
-                Ok(()) => {
-                    self.admit_known(
-                        source,
-                        &ticket.to_string(),
-                        &ticket.native,
-                        task.classification,
-                        &task.repositories,
-                        &Exposure::metadata(list.iter().map(ToString::to_string)),
-                    )
-                    .await
-                }
-                Err(error) => Err(error),
-            };
-            if let Err(error) = admitted {
+            if let Err(error) = self
+                .admit_known(
+                    source,
+                    &ticket.to_string(),
+                    &ticket.native,
+                    task.classification,
+                    &task.repositories,
+                    &Exposure::metadata(list.iter().map(ToString::to_string)),
+                )
+                .await
+            {
                 return entry(failed(Some(from), &error), Vec::new());
             }
             match source

@@ -1445,10 +1445,14 @@ document is refused by a project held public rather than filed under it. A copy 
 declared private into one that is not records no `onetaskgraph.origin` naming it, and a copy
 into a private source records no `onetaskgraph.copies` link naming that source on a source that
 is not private; the correspondence is kept on the private side instead. A dependency's far
-end, a task delivered and a delivering task each name their item by its source, so a write to
-a source not declared private that would name an item of one that is — a dependency the copy
-does not carry along, a `--depends-on` or `--delivers`, a delivered task's `delivered_by` — is
-refused before anything is written, whether or not any term list knows that source's name.
+end, a task delivered and a delivering task each name their item by its source, so the same
+holds for them, whether or not any term list knows that source's name: a copy into a source
+not declared private leaves out every dependency edge and `delivers` entry naming an item of a
+source that is, or one classified private, and a delivered task there is never given such a
+deliverer in its `delivered_by` — the rule still moves it, and the private item keeps the
+relationship in its own record. Between public items nothing is left out. A `--depends-on` or
+`--delivers` naming such an item is the caller asking for it to be written, so that write is
+refused before anything is written rather than quietly answering something else.
 
 **Term scope.** Which private repositories a check derives terms from is the caller's to say.
 Every verb that writes takes `--term-scope <host/owner/name>`, repeatable, or

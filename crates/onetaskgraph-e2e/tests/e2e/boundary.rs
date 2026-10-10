@@ -42,7 +42,14 @@ impl Store {
     /// The folders `plan` (private), `vault` (private) and `site` (public), plus `extra`
     /// laid over them, under the policy `onevcs` answers — none at all when it is `None`.
     fn new(onevcs: Option<fn(&mut OnevcsHome)>, extra: Value) -> Self {
+        Self::laid(onevcs, |_| extra)
+    }
+
+    /// [`Store::new`], with `extra` built against the sandbox — so a journey can add a folder
+    /// of its own.
+    fn laid(onevcs: Option<fn(&mut OnevcsHome)>, extra: impl FnOnce(&Sandbox) -> Value) -> Self {
         let sandbox = Sandbox::new();
+        let extra = extra(&sandbox);
         let onevcs = onevcs.map(|register| {
             let mut home = OnevcsHome::new(&sandbox);
             register(&mut home);
@@ -1495,11 +1502,23 @@ fn a_term_carried_only_in_template_provenance_is_refused_onto_a_public_source() 
     assert!(files_under(&store, "site").is_empty());
 }
 
+/// Every file under `folder`, read and joined, for what a source holds as text.
+fn held_text(store: &Store, folder: &str) -> String {
+    files_under(store, folder)
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("a record"))
+        .collect()
+}
+
 #[test]
-fn a_reference_naming_a_private_source_never_reaches_a_public_one() {
-    let store = Store::new(Some(registered), json!({}));
-    // `vault` names no repository and is in no term list: only its declaration keeps its
-    // name off `site`.
+fn a_copy_withholds_an_id_naming_a_private_item_from_a_public_write_and_a_private_one_keeps_it() {
+    // `shelf` is a second public folder, so an edge between two public sources is in play.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({ "shelf": folder(sandbox, "shelf", "public") }),
+    );
+    // `vault` and `plan` name no repository and are in no term list: only their declarations
+    // keep their ids off `site`.
     store.record(
         "vault",
         "tasks",
@@ -1507,21 +1526,89 @@ fn a_reference_naming_a_private_source_never_reaches_a_public_one() {
         "title: Hidden\nstatus: todo",
         PLAIN,
     );
+    store.record("shelf", "tasks", "open", "title: Open\nstatus: todo", PLAIN);
+    store.record("plan", "tasks", "left", "title: Left\nstatus: todo", PLAIN);
     store.record(
-        "vault",
+        "plan",
         "tasks",
-        "example",
-        "title: Example\nstatus: todo\ndepends_on: [hidden]",
+        "sibling",
+        "title: Sibling\nstatus: todo",
         PLAIN,
     );
     store.record(
         "plan",
         "tasks",
-        "deliverer",
-        "title: Deliverer\nstatus: todo\ndelivers: [vault:hidden]",
+        "example",
+        "title: Example\nstatus: todo\n\
+         depends_on: [\"vault:hidden\", \"shelf:open\", left, sibling]\n\
+         delivers: [\"vault:hidden\", \"shelf:open\"]",
         PLAIN,
     );
-    store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
+
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "copy",
+        "plan:example",
+        "plan:sibling",
+        "--to",
+        "site",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let landed = held_text(&store, "site");
+    // A dependency on an item of a private source — one named by its source, and one the copy
+    // did not carry and would have qualified as `plan:left` — and a `delivers` entry naming
+    // one are all left off the public write.
+    assert!(!landed.contains("vault"), "{landed}");
+    assert!(!landed.contains("plan:"), "{landed}");
+    assert!(!landed.contains("hidden"), "{landed}");
+    // Between public items nothing moves: the edge into `shelf` and the delivery of a `shelf`
+    // task are written as before, and so is the edge to the sibling the copy carried along.
+    assert!(landed.contains("shelf:open"), "{landed}");
+    let example = report["items"]
+        .as_array()
+        .expect("the copied items")
+        .iter()
+        .find(|item| item["source"] == "plan:example")
+        .expect("the example's outcome");
+    let example_at = example["destination"]
+        .as_str()
+        .expect("where the example landed")
+        .to_owned();
+    let sibling_at = report["items"][1]["destination"]
+        .as_str()
+        .expect("where the sibling landed")
+        .to_owned();
+    let sibling_native = sibling_at.strip_prefix("site:").expect("a site id");
+    let example_file = std::fs::read_to_string(store.folder("site").join("tasks").join(format!(
+        "{}.md",
+        example_at.strip_prefix("site:").expect("a site id")
+    )))
+    .expect("the example's copy");
+    assert!(example_file.contains(sibling_native), "{example_file}");
+    // The private delivered task still learns who delivers it — in the private store's own
+    // record — and the public one is told exactly as before.
+    let hidden = std::fs::read_to_string(store.folder("vault").join("tasks/hidden.md"))
+        .expect("the hidden task");
+    assert!(hidden.contains(&example_at), "{hidden}");
+    let open = std::fs::read_to_string(store.folder("shelf").join("tasks/open.md"))
+        .expect("the open task");
+    assert!(open.contains(&example_at), "{open}");
+
+    // A destination declared private keeps every id: the dependency on `plan:left` and the
+    // `delivers` entry naming `vault:hidden` arrive as the copy read them.
+    store.ok(&["task", "copy", "plan:example", "--to", "vault"]);
+    let kept = held_text(&store, "vault");
+    assert!(kept.contains("plan:left"), "{kept}");
+    assert!(kept.contains("shelf:open"), "{kept}");
+}
+
+#[test]
+fn a_delivered_task_in_a_public_source_is_never_handed_its_private_deliverers_id() {
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({ "shelf": folder(sandbox, "shelf", "public") }),
+    );
     store.record(
         "site",
         "tasks",
@@ -1533,16 +1620,60 @@ fn a_reference_naming_a_private_source_never_reaches_a_public_one() {
         "vault",
         "tasks",
         "worker",
-        "title: Worker\nstatus: todo\ndelivers: [site:ticket]",
+        "title: Worker\nstatus: todo\ndelivers: [\"site:ticket\"]",
         PLAIN,
     );
+    store.record("site", "tasks", "pair", "title: Pair\nstatus: todo", PLAIN);
+    store.record(
+        "shelf",
+        "tasks",
+        "helper",
+        "title: Helper\nstatus: todo\ndelivers: [\"site:pair\"]",
+        PLAIN,
+    );
+
+    let set: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "status",
+        "set",
+        "vault:worker",
+        "in-progress",
+        "--json",
+    ]))
+    .expect("a status answer");
+    // The rule still follows the private deliverer — the ticket moves with it — but the
+    // ticket's own record names nobody, because the one deliverer it has is private.
+    assert_eq!(set["delivered"][0]["outcome"], "written", "{set:#}");
+    let ticket =
+        std::fs::read_to_string(store.folder("site").join("tasks/ticket.md")).expect("the ticket");
+    assert!(!ticket.contains("vault"), "{ticket}");
+    assert!(!ticket.contains("delivered_by"), "{ticket}");
+    assert!(ticket.contains("status: in progress"), "{ticket}");
+
+    // A public deliverer in another public source is named on the task it delivers, as ever.
+    store.ok(&["task", "status", "set", "shelf:helper", "in-progress"]);
+    let pair =
+        std::fs::read_to_string(store.folder("site").join("tasks/pair.md")).expect("the pair");
+    assert!(pair.contains("shelf:helper"), "{pair}");
+}
+
+#[test]
+fn a_reference_a_caller_names_to_a_private_source_is_refused_onto_a_public_one() {
+    // A copy and a delivery withhold such an id, because the engine carries it along; a
+    // `--depends-on` or a `--delivers` is the caller's own request to write it, so leaving it
+    // off would answer a different request — it is refused instead.
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "vault",
+        "tasks",
+        "hidden",
+        "title: Hidden\nstatus: todo",
+        PLAIN,
+    );
+    store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
     let body = store.body(PLAIN);
     let before = store.tree();
     for arguments in [
-        // A dependency the copy does not carry would be written as `vault:hidden`.
-        vec!["task", "copy", "vault:example", "--to", "site"],
-        // So would a task it delivers.
-        vec!["task", "copy", "plan:deliverer", "--to", "site"],
         vec![
             "task",
             "create",
@@ -1583,41 +1714,4 @@ fn a_reference_naming_a_private_source_never_reaches_a_public_one() {
         assert!(said.contains("source vault"), "{said}");
     }
     assert_eq!(store.tree(), before, "no refused write left anything");
-    // A delivered task in a public source is not handed its private deliverer's id: the
-    // deliverer's own write lands in its private source, and keeping the ticket in step is
-    // reported failed rather than writing `vault:worker` onto it.
-    let ticket = std::fs::read(store.folder("site").join("tasks/ticket.md")).expect("the ticket");
-    let output = store.run(&[
-        "task",
-        "status",
-        "set",
-        "vault:worker",
-        "in-progress",
-        "--json",
-    ]);
-    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
-    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
-    assert_eq!(
-        set["delivered"][0]["failure"]["kind"], "private-reference",
-        "{set:#}"
-    );
-    assert_eq!(
-        std::fs::read(store.folder("site").join("tasks/ticket.md")).expect("the ticket"),
-        ticket,
-        "the public ticket is byte for byte as it was"
-    );
-    // Carried with the copy, a dependency names the destination's own item instead, and lands.
-    store.ok(&[
-        "task",
-        "copy",
-        "vault:hidden",
-        "vault:example",
-        "--to",
-        "site",
-    ]);
-    let landed: String = files_under(&store, "site")
-        .iter()
-        .map(|path| std::fs::read_to_string(path).expect("a record"))
-        .collect();
-    assert!(!landed.contains("vault"), "{landed}");
 }
