@@ -324,6 +324,34 @@ fn an_inactive_store_still_refuses_an_explicitly_private_item_anywhere_not_decla
     store.ok(&["task", "copy", "plan:named", "--to", "notes"]);
     let landed = one_file(&store, "notes", "tasks");
     assert!(!landed.contains("classification"), "{landed}");
+    // Learning a project's classification is a read, which an inactive store does not spend:
+    // a task created public under a project only its own record calls private is written
+    // public, and is held to that project's classification only once the store opts in.
+    store.record(
+        "notes",
+        "projects",
+        "hand-made",
+        "title: Hand-made\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    let created: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "hand-made",
+        "--title",
+        "Filed",
+        "--body-file",
+        &body,
+        "--json",
+    ]))
+    .expect("a created task");
+    // Public is the classification the wire leaves out.
+    assert!(
+        created["items"][0]["item"].get("classification").is_none(),
+        "{created:#}"
+    );
 }
 
 #[test]
@@ -1783,8 +1811,14 @@ fn a_private_task_copied_on_its_own_is_refused_by_the_public_project_it_would_jo
         PLAIN,
     );
     let before = store.tree();
-    let (kind, said) = store.refused(&["task", "copy", "plan:closed", "--to", "vault"]);
-    assert_eq!(kind, "private-member", "{said}");
+    // A dry run reads the project it would join, so it meets the refusal its copy does.
+    for arguments in [
+        vec!["task", "copy", "plan:closed", "--to", "vault", "--dry-run"],
+        vec!["task", "copy", "plan:closed", "--to", "vault"],
+    ] {
+        let (kind, said) = store.refused(&arguments);
+        assert_eq!(kind, "private-member", "{arguments:?}: {said}");
+    }
     assert_eq!(store.tree(), before, "nothing was written");
     // Copying the whole project again classifies it private, and its new member lands with it.
     store.ok(&["project", "copy", "plan:goal", "--to", "vault"]);
@@ -2341,4 +2375,74 @@ fn a_targeted_update_puts_every_field_it_writes_in_front_of_the_check() {
         metadata.iter().any(|entry| entry.contains("other")),
         "the delivered task was not shown to the check: {update:#}"
     );
+}
+
+#[test]
+fn a_create_routed_by_classification_lands_in_the_private_source_and_a_refused_one_files_nothing() {
+    let store = Store::new(
+        Some(registered),
+        json!({
+            "plan": {"routes": [{"classification": "private", "to": "vault"}]},
+            "site": {"routes": [
+                {"repositories": ["github.com/openco/*"], "to": "elsewhere"},
+                {"classification": "private", "to": "vault"},
+            ]},
+            "elsewhere": {"plugin": "local-md", "config": {"root": "elsewhere"}, "visibility": "public"},
+        }),
+    );
+    std::fs::create_dir_all(store.folder("elsewhere")).expect("the folder");
+    store.record(
+        "plan",
+        "projects",
+        "home",
+        "title: Home\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record("site", "projects", "pub", "title: Pub\nstatus: todo", PLAIN);
+    let body = store.body(PLAIN);
+    // A private task created into `plan` goes where its classification routes it, under the
+    // home's member project there, ahead of any repository entry.
+    let created: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "home",
+        "--title",
+        "Secret",
+        "--body-file",
+        &body,
+        "--classification",
+        "private",
+        "--repository",
+        OPEN,
+        "--json",
+    ]))
+    .expect("a created task");
+    let id = created["task"]["id"]
+        .as_str()
+        .or_else(|| created["items"][0]["id"].as_str())
+        .unwrap_or_else(|| panic!("an id: {created:#}"))
+        .to_owned();
+    assert!(id.starts_with("vault:"), "{created:#}");
+    assert!(one_file(&store, "vault", "projects").contains("classification: private"));
+    // A routed create the check refuses is refused before its member project is written: the
+    // repository entry would send it to `elsewhere`, which then holds nothing at all.
+    let before = store.tree();
+    let (kind, said) = store.refused(&[
+        "task",
+        "create",
+        "site",
+        "--project",
+        "pub",
+        "--title",
+        "Port hiddenco/quietharbor",
+        "--body-file",
+        &body,
+        "--repository",
+        OPEN,
+    ]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(tree(&store.folder("elsewhere")).is_empty());
+    assert_eq!(store.tree(), before);
 }

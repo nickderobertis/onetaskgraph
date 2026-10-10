@@ -1416,8 +1416,9 @@ other answer is unavailable, which never passes.
 when any source declares a `visibility`, or when a program linking the engine supplies its own
 policy. An inactive store still persists, copies and routes classification, and still refuses
 an explicitly private item anywhere not declared private — at a create, a copy, a route and a
-render — but it consults no repository's visibility and reads nothing extra before a narrow
-write, so a store that has not opted in answers and spends exactly what it did before. **A
+render — but it consults no repository's visibility, reads nothing extra before a narrow
+write, and does not read a project to learn whether an item filed under it inherits a private
+classification, so a store that has not opted in answers and spends exactly what it did before. **A
 store that wants repositories screened has to configure `write_policy` or declare a
 visibility.** Active:
 
