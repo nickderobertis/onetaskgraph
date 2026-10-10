@@ -12,7 +12,10 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
+use crate::fixtures::{
+    GitHubBoardFields, RepositoryAnswer, document, github_projects_with_board,
+    github_projects_with_items,
+};
 
 /// The repository the fixture board creates an issue in when nothing else decides.
 const CONFIGURED: &str = "nickderobertis/onetaskgraph";
@@ -26,9 +29,14 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
+        Self::over(github_projects_with_board)
+    }
+
+    /// The same, over the board `board` opens.
+    fn over(board: impl FnOnce(&Sandbox) -> (Value, GitHubBoardFields)) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("plan");
-        let (config, board) = github_projects_with_board(&sandbox);
+        let (config, board) = board(&sandbox);
         sandbox.project_document(&document(&json!({
             "plan": {"plugin": "local-md", "config": {"root": root}, "visibility": "private"},
             "board": {"plugin": "github-projects", "config": config, "visibility": "private"},
@@ -156,12 +164,15 @@ fn a_private_task_lands_on_a_board_whose_project_and_repository_are_both_private
 
 #[test]
 fn a_board_whose_project_or_issue_repository_is_public_is_refused_before_any_mutation() {
-    for (project_public, repository) in [(false, "public"), (true, "private")] {
+    for (project_public, repository) in [
+        (false, RepositoryAnswer::Public),
+        (true, RepositoryAnswer::Private),
+    ] {
         let setup = Setup::new();
         setup.board.set_project_public(project_public);
         setup
             .board
-            .set_repository_visibility(CONFIGURED, Some(repository));
+            .set_repository_visibility(CONFIGURED, repository);
         setup.record(
             "tasks",
             "secret",
@@ -182,7 +193,7 @@ fn a_repository_named_by_the_task_is_the_one_whose_visibility_is_read() {
     let setup = Setup::new();
     setup
         .board
-        .set_repository_visibility("nickderobertis/elsewhere", Some("public"));
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
     setup.record(
         "tasks",
         "named",
@@ -238,15 +249,112 @@ fn visibility_is_read_again_at_every_write_and_a_change_between_writes_never_pas
 #[test]
 fn an_unreadable_visibility_is_never_guessed() {
     let setup = Setup::new();
-    setup.board.set_repository_visibility(CONFIGURED, None);
     setup.record(
         "tasks",
         "secret",
         "title: Secret\nstatus: todo\nclassification: private",
     );
-    let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
-    assert_eq!(kind, "visibility-unreadable", "{message}");
-    assert!(message.contains("never guessed"), "{message}");
+    // A repository the credential cannot see, an answer that is not JSON, and one whose
+    // `visibility` is there but is not a visibility: none is read as either answer.
+    for answer in [
+        RepositoryAnswer::Unseen,
+        RepositoryAnswer::NotJson,
+        RepositoryAnswer::MalformedVisibility,
+    ] {
+        setup.board.set_repository_visibility(CONFIGURED, answer);
+        let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+        assert_eq!(kind, "visibility-unreadable", "{answer:?}: {message}");
+        assert!(message.contains("never guessed"), "{answer:?}: {message}");
+    }
+}
+
+#[test]
+fn an_internal_repository_is_private_and_an_answer_without_a_visibility_reads_its_flag() {
+    for (answer, lands) in [
+        (RepositoryAnswer::Internal, true),
+        (RepositoryAnswer::FlagOnly { private: true }, true),
+        (RepositoryAnswer::FlagOnly { private: false }, false),
+    ] {
+        let setup = Setup::new();
+        setup.board.set_repository_visibility(CONFIGURED, answer);
+        setup.record(
+            "tasks",
+            "secret",
+            "title: Secret\nstatus: todo\nclassification: private",
+        );
+        let arguments = ["task", "copy", "plan:secret", "--to", "board"];
+        if lands {
+            let served = setup.ok(&arguments);
+            assert!(
+                served.iter().any(|document| is_mutation(document)),
+                "{answer:?}"
+            );
+        } else {
+            let (kind, message, _) = setup.refused(&arguments);
+            assert_eq!(kind, "destination-not-private", "{answer:?}: {message}");
+        }
+    }
+}
+
+#[test]
+fn a_draft_belongs_to_no_repository_so_the_board_alone_decides() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-SKETCH-1", "id": "SKETCH-1", "type": "DraftIssue",
+                "title": "Sketch", "body": "a draft", "state": "OPEN", "reason": null,
+                "parent": null, "repo": null, "status": "Todo", "origin": "", "labels": []}),
+            ],
+        )
+    });
+    let served = setup.ok(&["task", "status", "set", "board:SKETCH-1", "in-progress"]);
+    assert_eq!(visibility_reads(&served), ["project"], "{served:#?}");
+    setup.board.set_project_public(true);
+    let (kind, _, served) = setup.refused(&["task", "status", "set", "board:SKETCH-1", "todo"]);
+    assert_eq!(kind, "destination-not-private");
+    assert_eq!(visibility_reads(&served), ["project"], "{served:#?}");
+}
+
+#[test]
+fn a_new_task_filed_under_a_project_is_held_to_that_projects_repository() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-HOME-1", "id": "HOME-1", "type": "Issue",
+                "title": "Home", "body": "Home.", "state": "OPEN", "reason": null,
+                "parent": null, "repo": "nickderobertis/elsewhere", "status": "Todo",
+                "origin": "", "labels": []}),
+            ],
+        )
+    });
+    // The configured repository is private, so only the project's own repository can refuse.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let body = setup.sandbox.config_home().join("body.md");
+    std::fs::write(&body, "A body.").expect("a body file");
+    let (kind, _, served) = setup.refused(&[
+        "task",
+        "create",
+        "board",
+        "--project",
+        "HOME-1",
+        "--title",
+        "Filed",
+        "--body-file",
+        body.to_str().expect("a UTF-8 path"),
+    ]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        !served.contains(&format!("GET /repos/{CONFIGURED}")),
+        "{served:#?}"
+    );
 }
 
 #[test]

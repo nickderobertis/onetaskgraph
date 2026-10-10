@@ -1002,10 +1002,60 @@ struct GitHubBoard {
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
-    /// Each repository's visibility by `owner/name`, as `GET /repos/{owner}/{name}` answers
-    /// it — `private` for one no journey named, and a repository named `None` is one the
-    /// token cannot see, answered 404.
-    repository_visibility: std::collections::BTreeMap<String, Option<&'static str>>,
+    /// How `GET /repos/{owner}/{name}` answers for each repository by `owner/name` —
+    /// [`RepositoryAnswer::Private`] for one no journey named.
+    repository_visibility: std::collections::BTreeMap<String, RepositoryAnswer>,
+}
+
+/// How the loopback GitHub answers `GET /repos/{owner}/{name}`, the read a write to a board
+/// declared private sends for the repository an issue lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepositoryAnswer {
+    /// `"visibility": "public"`, beside the `private: false` GitHub sends with it.
+    Public,
+    /// `"visibility": "private"`, beside `private: true`.
+    Private,
+    /// `"visibility": "internal"` — readable across an enterprise, so never public — beside
+    /// `private: true`.
+    Internal,
+    /// The older answer: the `private` flag alone, with no `visibility` field.
+    FlagOnly {
+        /// The flag's value.
+        private: bool,
+    },
+    /// A `visibility` field present but not a string.
+    MalformedVisibility,
+    /// A `200` whose body is not JSON.
+    NotJson,
+    /// A repository the token cannot see: `404`.
+    Unseen,
+}
+
+impl RepositoryAnswer {
+    /// The status line and body this answer is served as, for the repository `slug`.
+    fn served(self, slug: &str) -> (&'static str, String) {
+        let named = |visibility: &str| {
+            json!({"id": 123_456, "full_name": slug,
+                   "private": visibility != "public", "visibility": visibility})
+            .to_string()
+        };
+        match self {
+            Self::Public => ("200 OK", named("public")),
+            Self::Private => ("200 OK", named("private")),
+            Self::Internal => ("200 OK", named("internal")),
+            Self::FlagOnly { private } => (
+                "200 OK",
+                json!({"id": 123_456, "full_name": slug, "private": private}).to_string(),
+            ),
+            Self::MalformedVisibility => (
+                "200 OK",
+                json!({"id": 123_456, "full_name": slug, "private": true, "visibility": 7})
+                    .to_string(),
+            ),
+            Self::NotJson => ("200 OK", "<html>not a repository</html>".to_owned()),
+            Self::Unseen => ("404 Not Found", json!({"message": "Not Found"}).to_string()),
+        }
+    }
 }
 
 /// A read-only handle on one fixture board's own fields.
@@ -1052,14 +1102,13 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().project_scope_withheld = true;
     }
 
-    /// Answer `owner/name`'s visibility as `visibility` — `public`, `private` or `internal` —
-    /// or, given `None`, as a repository the token cannot see.
-    pub fn set_repository_visibility(&self, slug: &str, visibility: Option<&'static str>) {
+    /// Answer `GET /repos/{owner}/{name}` for `owner/name` as `answer`.
+    pub fn set_repository_visibility(&self, slug: &str, answer: RepositoryAnswer) {
         self.board
             .lock()
             .unwrap()
             .repository_visibility
-            .insert(slug.to_owned(), visibility);
+            .insert(slug.to_owned(), answer);
     }
 
     /// Refuse the next request carrying `operation`, once, from here on.
@@ -1925,7 +1974,7 @@ fn github_projects_board_at(
                 .strip_prefix("GET /repos/")
                 .and_then(|rest| rest.split_whitespace().next())
             {
-                let visibility = {
+                let answer = {
                     let mut served = board.lock().unwrap();
                     served.documents.push(format!("GET /repos/{slug}"));
                     served.variables.push(Value::Null);
@@ -1933,17 +1982,9 @@ fn github_projects_board_at(
                         .repository_visibility
                         .get(slug)
                         .copied()
-                        .unwrap_or(Some("private"))
+                        .unwrap_or(RepositoryAnswer::Private)
                 };
-                let (status, body) = match visibility {
-                    Some(visibility) => (
-                        "200 OK",
-                        json!({"id": 123_456, "full_name": slug,
-                               "private": visibility != "public", "visibility": visibility})
-                        .to_string(),
-                    ),
-                    None => ("404 Not Found", json!({"message": "Not Found"}).to_string()),
-                };
+                let (status, body) = answer.served(slug);
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()

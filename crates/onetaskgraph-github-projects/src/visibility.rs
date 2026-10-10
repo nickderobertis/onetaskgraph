@@ -171,14 +171,19 @@ impl GitHubProjectsSource {
         }
         let value: Value =
             serde_json::from_slice(&body).map_err(|error| unreadable(error.to_string()))?;
-        match (
-            value.get("visibility").and_then(Value::as_str),
-            value.get("private"),
-        ) {
-            (Some("public"), _) | (None, Some(Value::Bool(false))) => Ok(Visibility::Public),
-            (Some("private" | "internal"), _) | (None, Some(Value::Bool(true))) => {
-                Ok(Visibility::Private)
-            }
+        // `visibility` is the answer; the older `private` flag is read only where it is absent.
+        // A field present in any other shape is a malformed answer, never a fallback.
+        match (value.get("visibility"), value.get("private")) {
+            (Some(Value::String(named)), _) => match named.as_str() {
+                "public" => Ok(Visibility::Public),
+                "private" | "internal" => Ok(Visibility::Private),
+                other => Err(unreadable(format!(
+                    "its answer named the visibility {other:?}, which is none of public, private \
+                     and internal"
+                ))),
+            },
+            (None, Some(Value::Bool(false))) => Ok(Visibility::Public),
+            (None, Some(Value::Bool(true))) => Ok(Visibility::Private),
             _ => Err(unreadable("its answer named no visibility".to_owned())),
         }
     }
