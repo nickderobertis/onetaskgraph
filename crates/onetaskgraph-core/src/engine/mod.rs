@@ -493,6 +493,21 @@ pub enum EngineError {
         why: String,
     },
 
+    /// While the boundary is active, an item was filed under a project whose classification
+    /// cannot be established, so it could not be written anywhere not declared private.
+    #[error(
+        "project {project} could not be classified ({why}), and while the boundary is active \
+         an item filed under it is never read as public, so nothing was written\n\
+         next: make that project readable at its source, file the item under a project its \
+         source holds, or write to a source declared private."
+    )]
+    ProjectUnclassified {
+        /// The project, qualified.
+        project: String,
+        /// Why its classification could not be established.
+        why: String,
+    },
+
     /// A private item was to be filed under a project held public.
     #[error(
         "{item} is private, and project {project} it would be filed under is public; a \

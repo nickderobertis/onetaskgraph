@@ -2852,7 +2852,7 @@ impl Engine {
         running: &mut Running,
     ) -> Result<Planned, EngineError> {
         let read = self.read(kind, id).await?;
-        let classification = self.copied_classification(&read, running).await?;
+        let classification = self.copied_classification(request, &read, running).await?;
         let placement = match &read.item {
             Item::Task(task) => self.routes.place_classified(
                 &request.destination,
@@ -2877,6 +2877,7 @@ impl Engine {
     /// is active — by everything that project holds at its source.
     async fn copied_classification(
         &self,
+        request: &CopyRequest,
         read: &Read,
         running: &mut Running,
     ) -> Result<Classification, EngineError> {
@@ -2896,11 +2897,23 @@ impl Engine {
         let own = self.classify(declared, repositories).await;
         let filed = match filed {
             Some(filed) if self.boundary_active() => {
-                self.source_project_class(
-                    &GlobalId::new(read.source.source.clone(), filed.clone()),
-                    &mut running.project_classes,
-                )
-                .await?
+                match self
+                    .source_project_class(
+                        &GlobalId::new(read.source.source.clone(), filed.clone()),
+                        &mut running.project_classes,
+                    )
+                    .await
+                {
+                    // Unclassified reaches a destination declared private as private, and
+                    // nowhere else at all.
+                    Err(EngineError::ProjectUnclassified { .. })
+                        if self.declared(&request.destination)
+                            == crate::config::SourceVisibility::Private =>
+                    {
+                        Classification::Private
+                    }
+                    other => other?,
+                }
             }
             _ => Classification::Public,
         };
@@ -2918,19 +2931,35 @@ impl Engine {
             return Ok(*known);
         }
         let source = self.readable(&project.source)?;
-        let class = if source.source().capabilities().projects.is_native()
-            && let Some(held) = source
+        let held = if source.source().capabilities().projects.is_native() {
+            source
                 .source()
                 .get_project(&project.native)
                 .await
                 .map_err(|error| refused(source, error))?
-        {
-            let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
-            self.project_class(source, project, &held, tasks.iter().map(|task| &task.item))
-                .await?
         } else {
-            Classification::Public
+            None
         };
+        let Some(held) = held else {
+            // Nothing is inherited from a project that is not there, but while the boundary is
+            // active that is not the same as inheriting nothing: what is filed under it is
+            // unclassified, and that is never written down as public for a later read to trust.
+            if self.boundary_active() {
+                return Err(EngineError::ProjectUnclassified {
+                    project: project.to_string(),
+                    why: if source.source().capabilities().projects.is_native() {
+                        "its source does not hold it".to_owned()
+                    } else {
+                        "its source cannot read projects".to_owned()
+                    },
+                });
+            }
+            return Ok(Classification::Public);
+        };
+        let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
+        let class = self
+            .project_class(source, project, &held, tasks.iter().map(|task| &task.item))
+            .await?;
         known.insert(project.clone(), class);
         Ok(class)
     }

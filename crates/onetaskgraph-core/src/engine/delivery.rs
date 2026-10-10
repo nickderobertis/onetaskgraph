@@ -288,6 +288,14 @@ impl Engine {
                     .await
                 {
                     Ok(inherited) => task.classification.strictest(inherited),
+                    // Unclassified is held private where the ticket's source is, and refused
+                    // anywhere else.
+                    Err(EngineError::ProjectUnclassified { .. })
+                        if self.declared(&ticket.source)
+                            == crate::config::SourceVisibility::Private =>
+                    {
+                        Classification::Private
+                    }
                     Err(error) => return entry(failed(Some(from), &error), Vec::new()),
                 }
             }

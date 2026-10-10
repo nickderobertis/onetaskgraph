@@ -1475,8 +1475,11 @@ list, or none), and a program linking the engine sets it with `Engine::with_term
 
 The refusals name what happened and what to do: `not-private-destination`,
 `destination-not-private`, `visibility-unreadable`, `boundary-refused`,
-`boundary-unavailable`, `private-member`, `private-reference` and `reference-unclassified`
-are their `--json` failure kinds.
+`boundary-unavailable`, `private-member`, `private-reference`, `reference-unclassified` and
+`project-unclassified` are their `--json` failure kinds. While the boundary is active, an item
+filed under a project its source does not hold, or cannot read, is unclassified rather than
+public: it reaches a source declared private as private, and every other write of it — a copy,
+a narrow write, a delivery — is refused as `project-unclassified` before anything is written.
 
 A private source and its routes need no checkout to live in: the user-level document,
 `$XDG_CONFIG_HOME/onetaskgraph/config.yaml`, is read beneath every project document, so a

@@ -294,6 +294,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::ProjectUnclassified { .. } => ("project-unclassified".to_owned(), None, None),
         EngineError::PrivateMemberOfPublicProject { .. } => {
             ("private-member".to_owned(), None, None)
         }

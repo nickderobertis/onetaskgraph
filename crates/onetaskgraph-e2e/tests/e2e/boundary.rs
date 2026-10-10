@@ -3380,3 +3380,88 @@ fn an_external_task_naming_a_project_its_source_does_not_hold_is_refused_before_
     store.ok(&["task", "copy", "plan:standalone", "--to", "site"]);
     assert!(held_text(&store, "site").contains("shelf:alone"));
 }
+
+#[test]
+fn a_task_filed_under_a_project_its_source_does_not_hold_reaches_only_a_private_destination() {
+    // What `stray` inherits cannot be read, so it is unclassified: never copied as public, and
+    // never remembered as public for `plan:dangling`'s reference to it later in the same copy.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "stray",
+        "title: Stray\nstatus: todo\nproject: gone-plan",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "dangling",
+        "title: Dangling\nstatus: todo\ndepends_on: [{id: \"shelf:stray\", item: task}]",
+        PLAIN,
+    );
+    let before = store.tree();
+    for ids in [vec!["shelf:stray"], vec!["shelf:stray", "plan:dangling"]] {
+        let mut arguments = vec!["task", "copy"];
+        arguments.extend(ids);
+        arguments.extend(["--to", "site"]);
+        let (kind, said) = store.refused(&arguments);
+        assert_eq!(kind, "project-unclassified", "{said}");
+        assert!(said.contains("shelf:gone-plan"), "{said}");
+        assert_eq!(store.tree(), before, "nothing was written");
+    }
+    // A destination declared private takes it, held private.
+    store.ok(&["task", "copy", "shelf:stray", "--to", "vault"]);
+    assert!(held_text(&store, "vault").contains("Stray"));
+}
+
+#[test]
+fn a_narrow_write_or_a_delivery_to_a_task_of_a_project_its_source_does_not_hold_writes_nothing() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "site",
+        "tasks",
+        "loose",
+        "title: Loose\nstatus: todo\nproject: gone-plan",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "worker",
+        "title: Worker\nstatus: todo\ndelivers: [\"site:loose\"]",
+        PLAIN,
+    );
+    let site = || tree(&store.folder("site"));
+    let before = site();
+    let (kind, said) = store.refused(&["task", "status", "set", "site:loose", "done"]);
+    assert_eq!(kind, "project-unclassified", "{said}");
+    assert!(said.contains("site:gone-plan"), "{said}");
+    let (kind, said) = store.refused(&[
+        "task",
+        "metadata",
+        "set",
+        "site:loose",
+        "acme.note",
+        "\"x\"",
+    ]);
+    assert_eq!(kind, "project-unclassified", "{said}");
+    assert_eq!(site(), before, "nothing was written to site");
+
+    // The deliverer moves; the ticket it delivers is unclassified, so it is failed and left.
+    let output = store.run(&[
+        "task",
+        "status",
+        "set",
+        "plan:worker",
+        "in-progress",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
+    assert_eq!(set["delivered"][0]["outcome"], "failed", "{set:#}");
+    assert_eq!(site(), before, "nothing was written to site");
+}
