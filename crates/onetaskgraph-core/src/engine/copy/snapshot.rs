@@ -130,6 +130,10 @@ pub(super) async fn take(
         asked = Some(cursor);
         next = page.next;
     }
+    // Oldest first, whichever way the source walks its pages: Linear's run from the newest
+    // back, each page oldest first within itself. A stable sort leaves a source that walks
+    // forward, and comments sharing an instant, in the order the source gave them.
+    held.sort_by_key(|comment| comment.created_at);
     Ok(Taken::Whole(Box::new(Snapshot {
         task,
         comments: Some(held),

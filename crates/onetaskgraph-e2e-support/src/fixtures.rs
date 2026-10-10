@@ -1206,9 +1206,6 @@ impl GitHubBoardFields {
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
         board.touch_issue(&json!(id));
-        for blocker in blockers {
-            board.touch_issue(&json!(blocker));
-        }
     }
 
     /// Take `blocker` off what blocks the issue `id`, as a person removing the relationship on
@@ -1219,7 +1216,6 @@ impl GitHubBoardFields {
             held.retain(|held| held != blocker);
         }
         board.touch_issue(&json!(id));
-        board.touch_issue(&json!(blocker));
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -3058,8 +3054,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         } else {
             entry.retain(|held| held != &blocker);
         }
+        // The relationship is the dependent issue's own: GitHub lists it on that issue.
         board.touch_issue(&json!(issue));
-        board.touch_issue(&json!(blocker));
         let root = if adding {
             "addBlockedBy"
         } else {
@@ -3115,7 +3111,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 wanted.admits(
                     item["title"].as_str().unwrap_or_default(),
                     item["body"].as_str().unwrap_or_default(),
-                )
+                ) && wanted.recent(&item["updatedAt"])
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -3305,6 +3301,9 @@ struct IssueSearch {
     in_body: bool,
     /// Every phrase, as its words; each must hold of one of the fields above.
     phrases: Vec<Vec<String>>,
+    /// The instant an `updated:>=` qualifier names: an issue last updated before it is not
+    /// in the answer.
+    updated_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl IssueSearch {
@@ -3314,6 +3313,7 @@ impl IssueSearch {
             in_title: true,
             in_body: true,
             phrases: Vec::new(),
+            updated_since: None,
         };
         let mut chars = wanted.chars().peekable();
         while let Some(&next) = chars.peek() {
@@ -3348,16 +3348,36 @@ impl IssueSearch {
                     parsed.in_title = fields.contains(&"title");
                     parsed.in_body = fields.contains(&"body");
                 }
-                None => {
-                    assert!(
-                        !word.starts_with("updated:"),
-                        "this board does not model `updated:`: {wanted}"
-                    );
-                    parsed.phrases.push(search_words(&word));
-                }
+                None => match word.strip_prefix("updated:>=") {
+                    Some(instant) => {
+                        parsed.updated_since = Some(
+                            chrono::DateTime::parse_from_rfc3339(instant)
+                                .unwrap_or_else(|_| panic!("an RFC 3339 instant: {wanted}"))
+                                .with_timezone(&chrono::Utc),
+                        );
+                    }
+                    None => {
+                        assert!(
+                            !word.starts_with("updated:"),
+                            "this board models `updated:>=` alone: {wanted}"
+                        );
+                        parsed.phrases.push(search_words(&word));
+                    }
+                },
             }
         }
         parsed
+    }
+
+    /// Whether an issue last updated at `updated` is recent enough for an `updated:>=`
+    /// qualifier — every issue when there is none, and none whose time this board never set.
+    fn recent(&self, updated: &Value) -> bool {
+        self.updated_since.is_none_or(|since| {
+            updated
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .is_some_and(|at| at >= since)
+        })
     }
 
     /// Whether an issue holding this title and body is in the answer.
@@ -3907,9 +3927,9 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
             serde_json::from_value::<ItemVariables>(variables.clone())
                 .is_ok_and(|variables| !variables.id.is_empty())
         }
-        graphql::ISSUE_COMMENTS => serde_json::from_value::<CommentPageVariables>(
-            variables.clone(),
-        )
+        graphql::ISSUE_COMMENTS | graphql::ISSUE_DETAIL => serde_json::from_value::<
+            CommentPageVariables,
+        >(variables.clone())
         .is_ok_and(|variables| {
             !variables.id.is_empty()
                 && variables.last > 0
@@ -4311,6 +4331,7 @@ fn linear_response(
         graphql::DOCUMENT_UPDATE,
         graphql::DOCUMENT_DELETE,
         graphql::ISSUE_COMMENTS,
+        graphql::ISSUE_DETAIL,
         graphql::COMMENT,
         graphql::COMMENT_CREATE,
         graphql::COMMENT_UPDATE,
@@ -4322,6 +4343,26 @@ fn linear_response(
     }
     let vars = Value::Object(request.variables);
     validate_linear_variables(operation, &vars)?;
+    // The issue and a page of its comments in one answer: exactly what the issue read and the
+    // comment page read answer apart, on one `issue` field.
+    if operation == graphql::ISSUE_DETAIL {
+        let issue = linear_response(
+            &json!({"query": graphql::ISSUE, "variables": {"id": vars["id"]}}),
+            recorded,
+            data,
+        )?;
+        if issue["issue"].is_null() {
+            return Ok(issue);
+        }
+        let comments = linear_response(
+            &json!({"query": graphql::ISSUE_COMMENTS, "variables": vars}),
+            recorded,
+            data,
+        )?;
+        let mut answer = issue;
+        answer["issue"]["comments"] = comments["issue"]["comments"].clone();
+        return Ok(answer);
+    }
     if let Some(answer) = linear_comment_response(data, &vars, operation) {
         return answer;
     }

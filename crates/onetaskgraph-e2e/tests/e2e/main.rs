@@ -46,6 +46,11 @@ mod clock;
 // sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
 // depth.
 mod commented_since;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against the loopback board and folders of Markdown in seconds. What
+// they prove is a contract member of every plugin read through the engine — a task's change
+// token, ordered by the engine's own reader — so no one plugin crate's edge is narrower.
+mod change_tokens;
 mod comments;
 mod copy;
 mod copy_link;

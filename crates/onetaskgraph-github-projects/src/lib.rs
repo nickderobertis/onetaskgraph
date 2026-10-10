@@ -3984,8 +3984,11 @@ impl GitHubProjectsSource {
                 }
             }
         };
+        // The membership's own `updatedAt` rides along: it is the board half of the item's change
+        // token, which a field change moves where the issue's own time does not.
         let item = json!({
             "id": required_str(&held, "id")?,
+            "updatedAt": held.get("updatedAt"),
             "project": held.get("project"),
             "fieldValues": held.get("fieldValues"),
             "content": issue,

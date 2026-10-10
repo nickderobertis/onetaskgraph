@@ -540,6 +540,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::DOCUMENT_UPDATE, true),
         (graphql::DOCUMENT_DELETE, true),
         (graphql::ISSUE_COMMENTS, false),
+        (graphql::ISSUE_DETAIL, false),
         (graphql::COMMENT, false),
         (graphql::COMMENT_CREATE, true),
         (graphql::COMMENT_UPDATE, true),
