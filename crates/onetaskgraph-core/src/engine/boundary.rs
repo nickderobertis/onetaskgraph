@@ -860,9 +860,10 @@ impl Engine {
     /// refused when it is private and the project is held public, because a public project
     /// never holds a private member.
     ///
-    /// The project is read only when that can change the answer: always while the boundary is
-    /// active, and for a private item while it is not — an inactive store holds no private
-    /// project, so a public item there inherits nothing.
+    /// The project is read always while the boundary is active, and for a private item while it
+    /// is not, which is refused under a public project either way. A public item in an inactive
+    /// store inherits nothing, although its project may be private by hand: reading the project
+    /// would be a request a store that has not opted in never made.
     pub(crate) async fn filed_under(
         &self,
         source: &ResolvedSource,
