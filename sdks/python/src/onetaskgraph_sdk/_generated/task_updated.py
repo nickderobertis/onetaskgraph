@@ -25,6 +25,11 @@ class BudgetSpent(BaseModel):
     unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
+class Classification(StrEnum):
+    ClassificationPublic = "public"
+    ClassificationPrivate = "private"
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -253,6 +258,12 @@ class Status(BaseModel):
 
 
 class Task(BaseModel):
+    classification: Annotated[
+        Classification,
+        Field(
+            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+        ),
+    ] = Classification.ClassificationPublic
     content: Annotated[
         str | None, Field(description="The long-form body, when the source has one.")
     ] = None

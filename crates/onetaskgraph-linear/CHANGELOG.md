@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.3.11...onetaskgraph-linear-v0.3.12) - 2026-10-10
+
+### Added
+
+- classify store items and enforce private destinations ([#3580](https://github.com/nickderobertis/onetaskgraph/pull/3580))
+
 ## [0.3.8](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.3.7...onetaskgraph-linear-v0.3.8) - 2026-10-08
 
 ### Added

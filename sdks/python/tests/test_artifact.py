@@ -271,7 +271,24 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 33
+    assert emitted_bundle["version"] == 34
+    # Version 34 published the public boundary: `classification` on a task, a project and a
+    # document, and the shapes a store's `write_policy` and a caller's policy exchange.
+    for root in ("Task", "Project", "Document"):
+        assert "classification" in emitted_bundle["roots"][root]["properties"], root
+    for root in (
+        "Classification",
+        "SourceVisibility",
+        "WritePolicyConfig",
+        "RepositoryVisibility",
+        "PublicWriteInput",
+        "WriteVerdict",
+    ):
+        assert root in bundle["roots"], root
+    from onetaskgraph_sdk._generated.public_write_input import PublicWriteInput
+
+    defaulted = PublicWriteInput.model_validate({"destination": "public"})
+    assert (defaulted.text, defaulted.paths, defaulted.metadata) == ([], [], [])
     # Version 33 published `ProjectGraph`, what `project graph --format json` answers with: a
     # project's tasks and edges keyed by qualified id, the nodes and edges its Mermaid form draws.
     assert generate.RESPONSE_ROOTS["project_graph"] == "ProjectGraph"

@@ -16,6 +16,7 @@ mod budget_commands;
 mod budget_runner;
 mod linear;
 mod linear_assets;
+mod linear_boundary;
 mod linear_budget;
 mod linear_status;
 mod telemetry;

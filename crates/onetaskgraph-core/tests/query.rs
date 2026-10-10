@@ -658,6 +658,7 @@ impl TaskSource for Rendezvous {
             repositories: Vec::new(),
             delivers: Vec::new(),
             delivered_by: Vec::new(),
+            classification: Default::default(),
         }]))
     }
 
@@ -971,6 +972,7 @@ fn one_task(id: &NativeId) -> Task {
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -1337,6 +1339,7 @@ impl Recording {
                 repositories: Vec::new(),
                 delivers: Vec::new(),
                 delivered_by: Vec::new(),
+                classification: Default::default(),
             })
             .collect();
         Page {

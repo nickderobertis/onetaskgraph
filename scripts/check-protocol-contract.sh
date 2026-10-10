@@ -133,6 +133,10 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "reports every record as holding no asset"
     ),
+    "visibility": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers `unknown`, which is never private"
+    ),
 }
 
 # The one protocol method with no trait method behind it: it stands for building the
@@ -195,6 +199,7 @@ ENUM_SECTIONS = {
     "Direction": "### 4.8 `task_dependencies` and `project_dependencies`",
     "Location": "### 4.13 `Location`",
     "Priority": "### 4.13b A task's `priority`",
+    "Classification": "### 4.13c A record's `classification`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with

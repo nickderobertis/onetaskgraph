@@ -86,6 +86,7 @@ fn task() -> Task {
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -106,6 +107,7 @@ fn project() -> Project {
         updated_at: None,
         metadata: Default::default(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 

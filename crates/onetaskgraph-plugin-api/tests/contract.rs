@@ -849,6 +849,7 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         ],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");
@@ -878,6 +879,7 @@ fn a_project_and_an_orphan_task_round_trip_through_json() {
         updated_at: Some(Utc.with_ymd_and_hms(2026, 8, 22, 9, 0, 0).unwrap()),
         metadata: Default::default(),
         repositories: Vec::new(),
+        classification: Default::default(),
     };
     let encoded = serde_json::to_string(&project).expect("encodes");
     assert_eq!(
@@ -1459,6 +1461,7 @@ fn outgoing() -> Task {
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -1497,6 +1500,7 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
                     updated_at: None,
                     metadata: std::collections::BTreeMap::new(),
                     repositories: Vec::new(),
+                    classification: Default::default(),
                 },
                 depends_on: Vec::new(),
             })
@@ -1677,6 +1681,7 @@ fn filed() -> Document {
             onetaskgraph_plugin_api::Repository::try_from("github.com/example/work".to_owned())
                 .expect("normalized origin"),
         ],
+        classification: Default::default(),
     }
 }
 
@@ -1730,6 +1735,7 @@ fn a_location_is_told_apart_by_which_key_is_present_on_all_three_entities() {
         updated_at: None,
         metadata: Default::default(),
         repositories: Vec::new(),
+        classification: Default::default(),
     };
     for (encoded, expected) in [
         (

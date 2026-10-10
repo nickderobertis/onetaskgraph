@@ -71,6 +71,12 @@ class Client(GeneratedClient):
             )
         for name, value in options.items():
             flag = f"--{name.removesuffix('_').replace('_', '-')}"
+            # A term scope is a list of repositories, or an empty list for none at all — which
+            # the binary spells as a flag of its own — or `None` for every one the store's
+            # policy knows of. It reaches the binary unchanged either way.
+            if name == "term_scope" and isinstance(value, (list, tuple)) and not value:
+                arguments.append("--term-scope-empty")
+                continue
             match value:
                 case None | False:
                     continue

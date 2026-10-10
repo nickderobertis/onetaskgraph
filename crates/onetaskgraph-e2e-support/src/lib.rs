@@ -10,7 +10,7 @@
 //! - [`fixtures`]: the journey-matrix table and the loopback servers behind its rows;
 //! - [`linear_vocabulary`]: the one Linear team's vocabulary more than one suite configures;
 //! - [`images`]: the test images every asset journey stores or copies, generated in the test;
-//! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on.
+//! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
 //!
 //! Not published, and depended on only by path from the test-only e2e members.
 

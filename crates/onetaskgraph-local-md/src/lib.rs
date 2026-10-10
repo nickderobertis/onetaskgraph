@@ -81,13 +81,14 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UpdatedField, WriteSupport,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
+    CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
+    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, Visibility,
+    WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -238,6 +239,8 @@ struct FrontMatter {
     metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     repositories: Vec<Repository>,
+    #[serde(default)]
+    classification: Classification,
     /// The tasks this one delivers, read as JSON rather than as strings so an entry that is
     /// not a task id is refused naming it rather than failing the whole front matter in
     /// serde's words.
@@ -275,6 +278,7 @@ struct SharedFront {
     url: Option<String>,
     metadata: BTreeMap<String, serde_json::Value>,
     repositories: Vec<Repository>,
+    classification: Classification,
 }
 
 impl FrontMatter {
@@ -296,6 +300,7 @@ impl FrontMatter {
                 url: self.url,
                 metadata: self.metadata,
                 repositories: self.repositories,
+                classification: self.classification,
             },
             self.status,
             self.depends_on,
@@ -323,6 +328,7 @@ impl From<DocumentFrontMatter> for SharedFront {
             url: front.url,
             metadata: front.metadata,
             repositories: front.repositories,
+            classification: front.classification,
         }
     }
 }
@@ -395,6 +401,8 @@ struct DocumentFrontMatter {
     metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     repositories: Vec<Repository>,
+    #[serde(default)]
+    classification: Classification,
 }
 
 /// One work item's Markdown file, read: a task or a project.
@@ -425,6 +433,7 @@ struct Common {
     location: Location,
     metadata: BTreeMap<String, serde_json::Value>,
     repositories: Vec<Repository>,
+    classification: Classification,
 }
 
 /// Which of this source's three folders an item lives in.
@@ -771,6 +780,7 @@ impl LocalMdSource {
                     message: format!("{}: {message}", path.display()),
                 }
             })?,
+            classification: front.classification,
         })
     }
 
@@ -932,6 +942,7 @@ impl LocalMdSource {
             updated_at: None,
             metadata: common.metadata,
             repositories: common.repositories,
+            classification: common.classification,
         })
     }
 
@@ -1128,6 +1139,12 @@ impl TaskSource for LocalMdSource {
             reachable: true,
             detail: Some(format!("reading Markdown under {}", self.root.display())),
         })
+    }
+    /// A folder on this machine: what is written here stays on the host, so a configuration
+    /// declaring this source private declares a host-local destination, which is what private
+    /// means for it.
+    async fn visibility(&self, _target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
+        Ok(Visibility::Private)
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         Ok(self.find(WorkKind::Task, id)?.map(task))
@@ -2759,6 +2776,7 @@ fn task(d: Entry) -> Task {
         repositories: d.common.repositories,
         delivers: d.delivers,
         delivered_by: d.delivered_by,
+        classification: d.common.classification,
     }
 }
 fn project(d: Entry) -> Project {
@@ -2774,6 +2792,7 @@ fn project(d: Entry) -> Project {
         updated_at: None,
         metadata: d.common.metadata,
         repositories: d.common.repositories,
+        classification: d.common.classification,
     }
 }
 
@@ -2811,6 +2830,7 @@ struct Fields<'a> {
     project: Option<&'a NativeId>,
     metadata: &'a BTreeMap<String, serde_json::Value>,
     repositories: &'a [Repository],
+    classification: Classification,
 }
 
 impl<'a> Outgoing<'a> {
@@ -2854,6 +2874,10 @@ struct WrittenFrontMatter {
     metadata: BTreeMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     repositories: Vec<String>,
+    /// Absent while public, so a public item is written exactly as it was before this
+    /// source held a classification.
+    #[serde(skip_serializing_if = "Classification::is_public")]
+    classification: Classification,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     delivers: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -3244,6 +3268,7 @@ impl LocalMdSource {
                     project: task.project.as_ref(),
                     metadata: &task.metadata,
                     repositories: &task.repositories,
+                    classification: task.classification,
                 },
             },
         )
@@ -3275,6 +3300,7 @@ impl LocalMdSource {
                     project: None,
                     metadata: &project.metadata,
                     repositories: &project.repositories,
+                    classification: project.classification,
                 },
             },
         )
@@ -3300,6 +3326,7 @@ impl LocalMdSource {
                     project: document.project.as_ref(),
                     metadata: &document.metadata,
                     repositories: &document.repositories,
+                    classification: document.classification,
                 },
             },
         )
@@ -3800,6 +3827,7 @@ impl LocalMdSource {
                 .iter()
                 .map(|repository| repository.as_str().to_owned())
                 .collect(),
+            classification: outgoing.classification,
             delivers: delivers.iter().map(ToString::to_string).collect(),
             delivered_by: delivered_by.iter().map(ToString::to_string).collect(),
         };

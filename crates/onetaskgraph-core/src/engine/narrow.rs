@@ -13,6 +13,7 @@ use onetaskgraph_plugin_api::Priority;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::boundary::{Exposure, Held};
 use super::delivery::source_failed;
 use super::{Engine, EngineError};
 use crate::GlobalId;
@@ -62,6 +63,14 @@ impl Engine {
         if !source.source().capabilities().priority.is_native() {
             return Err(no_priority(source, &id.to_string(), priority));
         }
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::metadata([priority.as_str().to_owned()]),
+        )
+        .await?;
         let read = source
             .source()
             .set_task_priority(&id.native, priority)
@@ -94,6 +103,14 @@ impl Engine {
                 kind: source.kind().to_owned(),
             });
         }
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::text(content),
+        )
+        .await?;
         source
             .source()
             .set_task_content(&id.native, content)

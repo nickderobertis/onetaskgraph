@@ -56,6 +56,7 @@ async fn create(engine: &Engine, title: &str, bytes: &[u8]) -> GlobalId {
             delivers: Vec::new(),
             metadata: Default::default(),
             assets: vec![AssetPayload::of(name("shot.png"), bytes.to_vec())],
+            classification: Default::default(),
         })
         .await
         .expect("the task is created")
@@ -240,6 +241,7 @@ async fn plain(engine: &Engine, title: &str) -> (GlobalId, GlobalId) {
             delivers: Vec::new(),
             metadata: Default::default(),
             assets: Vec::new(),
+            classification: Default::default(),
         })
         .await
         .expect("the task is created")
@@ -256,6 +258,7 @@ async fn plain(engine: &Engine, title: &str) -> (GlobalId, GlobalId) {
             repositories: Vec::new(),
             metadata: Default::default(),
             assets: Vec::new(),
+            classification: Default::default(),
         })
         .await
         .expect("the document is created")
@@ -613,6 +616,7 @@ async fn a_record_holding_a_malformed_upload_record_is_refused_and_left_as_it_wa
             repositories: Vec::new(),
             metadata: Default::default(),
             assets: Vec::new(),
+            classification: Default::default(),
         })
         .await
         .expect_err("refused");

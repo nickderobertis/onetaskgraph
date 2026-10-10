@@ -613,13 +613,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SharedClock,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
+    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
+    ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping,
+    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -630,6 +630,7 @@ use serde_json::{Value, json};
 pub mod accounting;
 mod assets;
 pub mod change_token;
+mod visibility;
 
 use accounting::Accounting;
 
@@ -1103,6 +1104,9 @@ pub mod graphql {
       }
     }"#
     );
+    /// Whether the board's Project is public — half of what decides whether a write here can
+    /// be read by anybody. Needs the `read:project` scope.
+    pub const PROJECT_VISIBILITY: &str = r#"query($owner:String!,$number:Int!){visibility:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){public}}}}"#;
     /// Resolves the configured repository's node id, which creating an issue requires.
     pub const REPOSITORY: &str = r#"query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id nameWithOwner}}"#;
     /// What creating an issue needs and has not read yet: the board's own id and field
@@ -1312,7 +1316,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 33] = [
+    pub const DOCUMENTS: [(&str, &str); 34] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1325,6 +1329,10 @@ pub mod graphql {
         (BOARD_FIELDS, "reading the board's fields"),
         (DRAFT, "reading one draft"),
         (REPOSITORY, "reading the destination repository"),
+        (
+            PROJECT_VISIBILITY,
+            "reading whether the board's project is public",
+        ),
         (
             CREATION_CONTEXT,
             "reading the board's fields and the destination repository",
@@ -5460,6 +5468,8 @@ impl GitHubProjectsSource {
         } else {
             own_repository.clone().into_iter().collect()
         };
+        let classification = Classification::from_metadata(&slot)
+            .map_err(|message| SourceError::Malformed { message })?;
         let id = NativeId(content_id.to_owned());
         // Read only for a task, because only a task has either list: a project or a
         // document holding one of these keys holds nothing this source reports, and the
@@ -5521,6 +5531,7 @@ impl GitHubProjectsSource {
                 .and_then(Value::as_u64),
             own_repository,
             repositories,
+            classification,
             slot,
             board_id: board_id.map(str::to_owned),
             fields: field_definitions(nodes),
@@ -7382,6 +7393,7 @@ impl GitHubProjectsSource {
             comment_count: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
+            classification: incoming.classification,
             slot,
             board_id: Some(board.id.as_str().to_owned()),
             fields: board
@@ -8552,6 +8564,7 @@ struct Resolved {
     comment_count: Option<u64>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
+    classification: Classification,
     slot: BTreeMap<String, Value>,
     /// The node id of the board this item sits on, when the read that reached it said.
     board_id: Option<String>,
@@ -8613,6 +8626,7 @@ impl Resolved {
         metadata.remove(ItemKind::METADATA_KEY);
         metadata.remove(TaskRef::DELIVERS_KEY);
         metadata.remove(TaskRef::DELIVERED_BY_KEY);
+        metadata.remove(Classification::METADATA_KEY);
         // The board field is the origin, and the body's copy of it is only a mirror for the
         // issue search to find: an item whose field holds none has none, whatever its body
         // says, so no reader ever sees two answers.
@@ -8711,6 +8725,7 @@ impl Resolved {
             repositories: self.repositories.clone(),
             delivers: self.delivers.clone(),
             delivered_by: self.delivered_by.clone(),
+            classification: self.classification,
         })
     }
 
@@ -8727,6 +8742,7 @@ impl Resolved {
             updated_at: self.updated_at,
             metadata: self.metadata(),
             repositories: self.repositories.clone(),
+            classification: self.classification,
         }
     }
 
@@ -8745,6 +8761,7 @@ impl Resolved {
             updated_at: self.updated_at,
             metadata: self.metadata(),
             repositories: self.repositories.clone(),
+            classification: self.classification,
         }
     }
 }
@@ -8855,6 +8872,8 @@ struct Incoming<'a> {
     labels: &'a [Label],
     metadata: &'a BTreeMap<String, Value>,
     repositories: &'a [Repository],
+    /// Recorded in the slot while private, and nowhere while public.
+    classification: Classification,
     parent: Option<&'a NativeId>,
     /// [`Task::delivers`], already checked. Empty for a project or a document, which is
     /// what keeps either key out of their slot.
@@ -9057,6 +9076,12 @@ impl TaskSource for GitHubProjectsSource {
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
         }
+    }
+    async fn visibility(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
+        self.write_visibility(target).await
     }
     async fn health(&self) -> Result<Health, SourceError> {
         let board = self.board_page(None, 1).await?;
@@ -9348,6 +9373,7 @@ impl TaskSource for GitHubProjectsSource {
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
+                classification: write.item.classification,
                 parent: None,
                 delivers: &[],
                 delivered_by: &[],
@@ -10022,6 +10048,7 @@ fn slot_metadata(
         // what a dependency endpoint points at, and nothing may point at a document.
         BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),
     };
+    incoming.classification.record(&mut metadata);
     let derivable = own_repository
         .map(|own| incoming.repositories == [own.clone()])
         .unwrap_or(incoming.repositories.is_empty());
@@ -10611,6 +10638,7 @@ impl GitHubProjectsSource {
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
+                classification: write.item.classification,
                 parent: write.item.project.as_ref(),
                 delivers: &write.item.delivers,
                 delivered_by: &write.item.delivered_by,
@@ -10649,6 +10677,7 @@ impl GitHubProjectsSource {
                 labels: &write.item.labels,
                 metadata: &write.item.metadata,
                 repositories: &write.item.repositories,
+                classification: write.item.classification,
                 parent: write.item.project.as_ref(),
                 delivers: &[],
                 delivered_by: &[],

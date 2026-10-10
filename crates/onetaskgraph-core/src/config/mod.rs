@@ -81,9 +81,21 @@ pub struct SourceConfig {
     config: Value,
     document_dir: Option<DocumentDir>,
     routes: Vec<Route>,
+    visibility: SourceVisibility,
 }
 
 impl SourceConfig {
+    /// Who this configuration declares can read the source.
+    ///
+    /// A declaration, not the source's reality: a source declared private receives an item
+    /// that may only be written somewhere private only while its backend, read at that
+    /// write, agrees. `unknown`, which a source leaving the key off declares, is never
+    /// private.
+    #[must_use]
+    pub fn visibility(&self) -> SourceVisibility {
+        self.visibility
+    }
+
     /// Where an item written to this source goes instead, in the order the entries are
     /// tried. Empty for a source that routes nothing, which is every source a
     /// configuration leaves `routes` off.
@@ -135,6 +147,100 @@ struct SourceShape {
     /// Read by [`routes::parse`] rather than by serde, so a refusal names the entry.
     #[serde(default)]
     routes: Value,
+    #[serde(default)]
+    visibility: SourceVisibility,
+}
+
+/// Who a configuration declares can read one source: `visibility` beside `plugin` and
+/// `config` in its entry.
+///
+/// Only `private` is private, and only once the source's backend agrees at the write it is
+/// about; `unknown`, the default, is what a source that says nothing declares.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceVisibility {
+    /// Anybody can read what is written there.
+    Public,
+    /// Only those its backend admits can — which every write checks against the backend.
+    Private,
+    /// Nobody has said, which is never private.
+    #[default]
+    Unknown,
+}
+
+impl SourceVisibility {
+    /// The value as the configuration spells it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for SourceVisibility {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// The commands a store asks about the public boundary: `write_policy` at the document's
+/// root.
+///
+/// Both are generic command lines rather than a named tool, so the policy behind them stays
+/// the caller's. `visibility_command` is handed `{"repository": "<host/owner/name>"}` on its
+/// standard input and answers `{"visibility": "public" | "private" | "unknown"}`;
+/// `check_command` is handed a whole [`PublicWriteInput`](crate::boundary::PublicWriteInput)
+/// and passes a write only by exiting 0 with `{"verdict": "pass"}`. Either may be left out:
+/// without a visibility command every repository is `unknown`, which is private, and without
+/// a check command no write to a public destination passes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WritePolicyConfig {
+    /// The command that answers a repository's visibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility_command: Option<PolicyCommand>,
+    /// The command that decides whether a write may reach a public destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_command: Option<PolicyCommand>,
+}
+
+/// One command line: the program, then its arguments, never empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+pub struct PolicyCommand(Vec<String>);
+
+impl PolicyCommand {
+    /// The program to run.
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.0[0]
+    }
+
+    /// Its arguments, in order.
+    #[must_use]
+    pub fn arguments(&self) -> &[String] {
+        &self.0[1..]
+    }
+}
+
+impl TryFrom<Vec<String>> for PolicyCommand {
+    type Error = String;
+
+    fn try_from(words: Vec<String>) -> Result<Self, Self::Error> {
+        match words.first() {
+            Some(program) if !program.trim().is_empty() => Ok(Self(words)),
+            _ => Err("a command is a list whose first entry names the program to run".to_owned()),
+        }
+    }
+}
+
+impl From<PolicyCommand> for Vec<String> {
+    fn from(command: PolicyCommand) -> Self {
+        command.0
+    }
 }
 
 /// A plugin block nobody wrote, which is different from one nobody may write.
@@ -161,6 +267,7 @@ pub struct Config {
     output: OutputFormat,
     interactive: bool,
     sources: BTreeMap<SourceName, SourceConfig>,
+    write_policy: Option<WritePolicyConfig>,
 }
 
 /// The document's own shape, before the checks serde cannot make.
@@ -173,6 +280,7 @@ struct DocumentShape {
     output: OutputFormat,
     interactive: bool,
     sources: BTreeMap<String, SourceShape>,
+    write_policy: Option<WritePolicyConfig>,
 }
 
 impl Default for DocumentShape {
@@ -183,6 +291,7 @@ impl Default for DocumentShape {
             output: OutputFormat::default(),
             interactive: DEFAULT_INTERACTIVE,
             sources: BTreeMap::new(),
+            write_policy: None,
         }
     }
 }
@@ -259,6 +368,7 @@ impl Config {
                     config: source.config,
                     document_dir: None,
                     routes,
+                    visibility: source.visibility,
                 },
             );
         }
@@ -266,6 +376,7 @@ impl Config {
             &routes_of(&sources),
             &sources.keys().cloned().collect::<Vec<_>>(),
         )?;
+        routes::check_classified(&routes_of(&sources), &visibilities_of(&sources))?;
 
         let default_sources = shape
             .default_sources
@@ -278,6 +389,7 @@ impl Config {
             output: shape.output,
             interactive: shape.interactive,
             sources,
+            write_policy: shape.write_policy,
         };
         // Here rather than at the call site, so "a `Config` exists" means "every block in
         // it satisfies the schema its own plugin declares". Checked once at the boundary,
@@ -321,6 +433,18 @@ impl Config {
         routes_of(&self.sources)
     }
 
+    /// The commands this store asks about the public boundary, when the document names any.
+    #[must_use]
+    pub fn write_policy(&self) -> Option<&WritePolicyConfig> {
+        self.write_policy.as_ref()
+    }
+
+    /// Who each source is declared readable by, in name order.
+    #[must_use]
+    pub fn visibilities(&self) -> BTreeMap<SourceName, SourceVisibility> {
+        visibilities_of(&self.sources)
+    }
+
     /// Which sources answer when a command names none, or `None` for every one.
     #[must_use]
     pub fn default_sources(&self) -> Option<&[SourceName]> {
@@ -342,7 +466,17 @@ fn routes_of(sources: &BTreeMap<SourceName, SourceConfig>) -> Routes {
     for (name, source) in sources {
         routes.insert(name.clone(), source.routes.clone());
     }
-    routes
+    routes.with_visibility(visibilities_of(sources))
+}
+
+/// Who each source is declared readable by.
+fn visibilities_of(
+    sources: &BTreeMap<SourceName, SourceConfig>,
+) -> BTreeMap<SourceName, SourceVisibility> {
+    sources
+        .iter()
+        .map(|(name, source)| (name.clone(), source.visibility))
+        .collect()
 }
 
 /// Check every `default_sources` entry against the sources that exist.

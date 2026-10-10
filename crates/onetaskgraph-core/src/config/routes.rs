@@ -5,18 +5,27 @@
 //! source's entry, and a plugin's own block never sees it. Every writer reaches the store,
 //! so the rule is held here once rather than restated, and drifting, in each of them.
 //!
-//! An entry matches an item when **every** one of the item's repositories matches at least
-//! one of its patterns; an item with no repositories matches none. The first entry that
-//! matches wins, and no match leaves the item in the source itself.
+//! An entry is one of two kinds. A **repository** entry, `{repositories, to}`, matches an
+//! item when **every** one of the item's repositories matches at least one of its patterns;
+//! an item with no repositories matches none. A **classification** entry,
+//! `{classification, to}`, matches every item of that classification.
+//!
+//! **Safety is decided before matching.** An item that may only be written somewhere
+//! private is never placed in a source not declared private: for it, only entries sending
+//! to a private source are tried — classification entries before repository entries, each
+//! in the order written — and then the source itself when it is private. When none is, it
+//! stays in the source itself, and the write is refused there rather than sent anywhere
+//! less safe. Every other item tries its classification entries, then its repository
+//! entries, each in order, and no match leaves it in the source itself.
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_plugin_api::{Repository, SourceName};
+use onetaskgraph_plugin_api::{Classification, Repository, SourceName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::ConfigError;
+use super::{ConfigError, SourceVisibility};
 
 /// One pattern over a normalized repository origin, `host/owner/name`, where a `*` segment
 /// matches exactly one whole segment of the origin.
@@ -71,15 +80,37 @@ impl RepositoryPattern {
 /// One entry of a source's `routes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
-    repositories: Vec<RepositoryPattern>,
+    matcher: Matcher,
     to: SourceName,
 }
 
+/// What one entry matches on: exactly one of the two, so an entry naming both or neither
+/// cannot be held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Matcher {
+    /// Items every one of whose repositories one of these patterns matches. Never empty.
+    Repositories(Vec<RepositoryPattern>),
+    /// Every item of this classification.
+    Classification(Classification),
+}
+
 impl Route {
-    /// The patterns, in the order written. Never empty.
+    /// The patterns, in the order written — empty for a classification entry.
     #[must_use]
     pub fn repositories(&self) -> &[RepositoryPattern] {
-        &self.repositories
+        match &self.matcher {
+            Matcher::Repositories(patterns) => patterns,
+            Matcher::Classification(_) => &[],
+        }
+    }
+
+    /// The classification a classification entry matches, or `None` for a repository entry.
+    #[must_use]
+    pub fn classification(&self) -> Option<Classification> {
+        match &self.matcher {
+            Matcher::Repositories(_) => None,
+            Matcher::Classification(classification) => Some(*classification),
+        }
     }
 
     /// The configured source an item this entry matches goes to.
@@ -89,15 +120,16 @@ impl Route {
     }
 
     /// Whether every one of `repositories` matches one of this entry's patterns — `false`
-    /// for an item naming none.
+    /// for an item naming none, and for a classification entry.
     #[must_use]
     pub fn matches(&self, repositories: &[Repository]) -> bool {
+        let Matcher::Repositories(patterns) = &self.matcher else {
+            return false;
+        };
         !repositories.is_empty()
-            && repositories.iter().all(|origin| {
-                self.repositories
-                    .iter()
-                    .any(|pattern| pattern.matches(origin))
-            })
+            && repositories
+                .iter()
+                .all(|origin| patterns.iter().any(|pattern| pattern.matches(origin)))
     }
 }
 
@@ -125,32 +157,79 @@ pub struct SourceRoute {
     pub placement: Placement,
 }
 
-/// Every configured source's routes, by source name. A source with none has no entry.
+/// Every configured source's routes, by source name, and who each source is declared
+/// readable by. A source with no routes has no entry in the first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Routes(BTreeMap<SourceName, Vec<Route>>);
+pub struct Routes(
+    BTreeMap<SourceName, Vec<Route>>,
+    BTreeMap<SourceName, SourceVisibility>,
+);
 
 impl Routes {
-    /// Where an item with `repositories` written to `source` lands.
+    /// Where a public item with `repositories` written to `source` lands.
     #[must_use]
     pub fn place(&self, source: &SourceName, repositories: &[Repository]) -> Placement {
-        self.0
+        self.place_classified(source, Classification::Public, repositories)
+    }
+
+    /// Where an item of `classification` with `repositories`, written to `source`, lands —
+    /// by the module's rule: safety first, then classification entries, then repository
+    /// entries, then the source itself.
+    #[must_use]
+    pub fn place_classified(
+        &self,
+        source: &SourceName,
+        classification: Classification,
+        repositories: &[Repository],
+    ) -> Placement {
+        let entries: Vec<(usize, &Route)> = self
+            .0
             .get(source)
-            .and_then(|routes| {
+            .map(|routes| {
                 routes
                     .iter()
                     .enumerate()
-                    .find(|(_, route)| route.matches(repositories))
+                    .filter(|(_, route)| classification.is_public() || self.is_private(&route.to))
+                    .collect()
             })
-            .map_or_else(
-                || Placement {
-                    destination: source.clone(),
-                    route: None,
-                },
-                |(index, route)| Placement {
-                    destination: route.to.clone(),
-                    route: Some(u32::try_from(index).unwrap_or(u32::MAX)),
-                },
-            )
+            .unwrap_or_default();
+        let chosen = entries
+            .iter()
+            .find(|(_, route)| route.classification() == Some(classification))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find(|(_, route)| route.matches(repositories))
+            });
+        chosen.map_or_else(
+            || Placement {
+                destination: source.clone(),
+                route: None,
+            },
+            |(index, route)| Placement {
+                destination: route.to.clone(),
+                route: Some(u32::try_from(*index).unwrap_or(u32::MAX)),
+            },
+        )
+    }
+
+    /// Whether `source` is declared private.
+    #[must_use]
+    pub fn is_private(&self, source: &SourceName) -> bool {
+        self.1.get(source) == Some(&SourceVisibility::Private)
+    }
+
+    /// Who `source` is declared readable by: `unknown` for a source nothing declares.
+    #[must_use]
+    pub fn visibility(&self, source: &SourceName) -> SourceVisibility {
+        self.1.get(source).copied().unwrap_or_default()
+    }
+
+    /// The same routes, holding each source to the visibility `declared` gives it.
+    #[must_use]
+    pub fn with_visibility(mut self, declared: BTreeMap<SourceName, SourceVisibility>) -> Self {
+        self.1 = declared;
+        self
     }
 
     /// Whether `source` declares any route.
@@ -194,15 +273,44 @@ impl Routes {
             for (index, (patterns, to)) in entries.into_iter().enumerate() {
                 let key = entry_key(&source, index);
                 parsed.push(Route {
-                    repositories: patterns_of(&key, patterns)?,
+                    matcher: Matcher::Repositories(patterns_of(&key, patterns)?),
                     to,
                 });
             }
             built.insert(source, parsed);
         }
-        let routes = Self(built);
+        let routes = Self(built, BTreeMap::new());
         check(&routes, configured)?;
         Ok(routes)
+    }
+
+    /// One source's classification entries, built in code beside [`Routes::new`]'s: each
+    /// sends every item of its classification to its `to`, tried before any repository
+    /// entry. Checked by the same rules, and a `private` entry sending to a source this
+    /// value does not hold as private is refused.
+    ///
+    /// # Errors
+    ///
+    /// As [`check`] and [`check_classified`].
+    pub fn classified(
+        mut self,
+        source: SourceName,
+        entries: Vec<(Classification, SourceName)>,
+        configured: &[SourceName],
+    ) -> Result<Self, ConfigError> {
+        let routes = self.0.entry(source).or_default();
+        let mut classified: Vec<Route> = entries
+            .into_iter()
+            .map(|(classification, to)| Route {
+                matcher: Matcher::Classification(classification),
+                to,
+            })
+            .collect();
+        classified.append(routes);
+        *routes = classified;
+        check(&self, configured)?;
+        check_classified(&self, &self.1)?;
+        Ok(self)
     }
 
     pub(super) fn insert(&mut self, source: SourceName, routes: Vec<Route>) {
@@ -272,24 +380,52 @@ pub(super) fn parse(source: &SourceName, value: &Value) -> Result<Vec<Route>, Co
         .collect()
 }
 
-/// One entry, refused naming its key when it is not `{repositories, to}`.
+/// One entry, refused naming its key when it is not `{repositories, to}` or
+/// `{classification, to}`.
 fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
     let Value::Object(fields) = entry else {
         return Err(ConfigError::setting(
             key,
-            "a route is a mapping holding `repositories` and `to`",
-            "write the entry as `{repositories: [host/owner/*], to: <source>}`.",
+            "a route is a mapping holding `to` and one of `repositories` or `classification`",
+            "write the entry as `{repositories: [host/owner/*], to: <source>}` or \
+             `{classification: private, to: <source>}`.",
         ));
     };
     if let Some(unknown) = fields
         .keys()
-        .find(|field| !["repositories", "to"].contains(&field.as_str()))
+        .find(|field| !["repositories", "classification", "to"].contains(&field.as_str()))
     {
         return Err(ConfigError::setting(
             format!("{key}.{unknown}"),
-            "unknown field; a route holds `repositories` and `to` and nothing else",
+            "unknown field; a route holds `to` and one of `repositories` or `classification`, \
+             and nothing else",
             "remove it.",
         ));
+    }
+    let to = destination_of(key, fields)?;
+    if let Some(classification) = fields.get("classification") {
+        if fields.contains_key("repositories") {
+            return Err(ConfigError::setting(
+                key,
+                "a route matches on `repositories` or on `classification`, and this one names \
+                 both",
+                "split it into two entries, in the order they should be tried.",
+            ));
+        }
+        let classification = classification
+            .as_str()
+            .and_then(|spelled| spelled.parse::<Classification>().ok())
+            .ok_or_else(|| {
+                ConfigError::setting(
+                    format!("{key}.classification"),
+                    format!("{classification} is not a classification"),
+                    "write `public` or `private`.",
+                )
+            })?;
+        return Ok(Route {
+            matcher: Matcher::Classification(classification),
+            to,
+        });
     }
     let patterns = match fields.get("repositories") {
         None => {
@@ -320,27 +456,32 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
             ));
         }
     };
-    let to = match fields.get("to") {
+    Ok(Route {
+        matcher: Matcher::Repositories(patterns_of(key, patterns)?),
+        to,
+    })
+}
+
+/// The `to` of one entry, refused naming it when it is absent or not a source name.
+fn destination_of(
+    key: &str,
+    fields: &serde_json::Map<String, Value>,
+) -> Result<SourceName, ConfigError> {
+    match fields.get("to") {
         Some(Value::String(to)) => SourceName::new(to.clone()).map_err(|error| {
             ConfigError::setting(
                 format!("{key}.to"),
                 error.to_string(),
                 "name a configured source; `onetaskgraph config show` lists them.",
             )
-        })?,
-        _ => {
-            return Err(ConfigError::setting(
-                format!("{key}.to"),
-                "a route names the configured source it sends an item to, and this one names \
-                 none",
-                "set `to` to a configured source's name.",
-            ));
-        }
-    };
-    Ok(Route {
-        repositories: patterns_of(key, patterns)?,
-        to,
-    })
+        }),
+        _ => Err(ConfigError::setting(
+            format!("{key}.to"),
+            "a route names the configured source it sends an item to, and this one names \
+             none",
+            "set `to` to a configured source's name.",
+        )),
+    }
 }
 
 /// The patterns of one entry, refused naming it when there are none or one is malformed.
@@ -429,6 +570,43 @@ pub(super) fn check(routes: &Routes, configured: &[SourceName]) -> Result<(), Co
     Ok(())
 }
 
+/// Refuse a `classification: private` entry whose `to` is not declared private.
+///
+/// Such an entry could never be taken — a private item is placed only where it may be
+/// written — so writing one down is a mistake about where private work goes, refused when
+/// the configuration is read rather than discovered at a write.
+///
+/// # Errors
+///
+/// [`ConfigError::Setting`] naming the source and the entry.
+pub(super) fn check_classified(
+    routes: &Routes,
+    declared: &BTreeMap<SourceName, SourceVisibility>,
+) -> Result<(), ConfigError> {
+    for (source, entries) in &routes.0 {
+        for (index, route) in entries.iter().enumerate() {
+            if route.classification() == Some(Classification::Private)
+                && declared.get(&route.to) != Some(&SourceVisibility::Private)
+            {
+                return Err(ConfigError::setting(
+                    format!("{}.to", entry_key(source, index)),
+                    format!(
+                        "route {index} of source {source} sends private items to {}, which is \
+                         not declared private",
+                        route.to
+                    ),
+                    format!(
+                        "declare `visibility: private` on {} if its backend is private, or \
+                         send private items to a source that is.",
+                        route.to
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,7 +640,9 @@ mod tests {
     #[test]
     fn an_entry_matches_only_when_every_repository_does() {
         let route = Route {
-            repositories: vec![RepositoryPattern::new("github.com/example-org/*").unwrap()],
+            matcher: Matcher::Repositories(vec![
+                RepositoryPattern::new("github.com/example-org/*").unwrap(),
+            ]),
             to: SourceName::new("linear").unwrap(),
         };
         assert!(route.matches(&[origin("github.com/example-org/a")]));
@@ -471,5 +651,97 @@ mod tests {
             origin("github.com/nickderobertis/b")
         ]));
         assert!(!route.matches(&[]));
+    }
+
+    fn name(text: &str) -> SourceName {
+        SourceName::new(text.to_owned()).expect("a name")
+    }
+
+    /// `plans` routes private items to `vault`, the entry `classified` puts first, then
+    /// widgetco work to `team`; `vault` is the one source declared private.
+    fn classified() -> Routes {
+        let configured = [name("plans"), name("team"), name("vault")];
+        Routes::new(
+            BTreeMap::from([(
+                name("plans"),
+                vec![(vec!["github.com/widgetco/*".to_owned()], name("team"))],
+            )]),
+            &configured,
+        )
+        .expect("repository routes")
+        .with_visibility(BTreeMap::from([(name("vault"), SourceVisibility::Private)]))
+        .classified(
+            name("plans"),
+            vec![(Classification::Private, name("vault"))],
+            &configured,
+        )
+        .expect("a classification route")
+    }
+
+    #[test]
+    fn safety_is_decided_before_any_repository_entry_matches() {
+        let routes = classified();
+        // A private widgetco item never follows the repository entry to a source not declared
+        // private: the classification entry places it. The `routes` journeys in
+        // `crates/onetaskgraph-e2e/tests/e2e/boundary.rs` hold it to that with the repository
+        // entry written first.
+        assert_eq!(
+            routes.place_classified(
+                &name("plans"),
+                Classification::Private,
+                &[origin("github.com/widgetco/api")]
+            ),
+            Placement {
+                destination: name("vault"),
+                route: Some(0)
+            }
+        );
+        // A public one keeps the repository placement it always had.
+        assert_eq!(
+            routes.place_classified(
+                &name("plans"),
+                Classification::Public,
+                &[origin("github.com/widgetco/api")]
+            ),
+            Placement {
+                destination: name("team"),
+                route: Some(1)
+            }
+        );
+        assert_eq!(
+            routes.place(&name("plans"), &[]),
+            Placement {
+                destination: name("plans"),
+                route: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_private_item_with_no_private_destination_stays_where_it_was_sent() {
+        let routes = classified();
+        // `team` routes nothing and is not private: the item stays, and is refused there.
+        assert_eq!(
+            routes
+                .place_classified(&name("team"), Classification::Private, &[])
+                .destination,
+            name("team")
+        );
+    }
+
+    #[test]
+    fn a_private_classification_entry_naming_a_source_not_declared_private_is_refused() {
+        let configured = [name("plans"), name("team")];
+        let refused = Routes::default()
+            .classified(
+                name("plans"),
+                vec![(Classification::Private, name("team"))],
+                &configured,
+            )
+            .expect_err("team is not declared private");
+        assert!(
+            refused.to_string().contains("not declared private"),
+            "{refused}"
+        );
     }
 }

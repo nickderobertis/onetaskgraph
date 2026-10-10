@@ -855,6 +855,7 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
         ],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -1021,6 +1022,7 @@ async fn a_project_write_carries_its_own_fields_and_an_id_no_path_can_be_made_of
                     .into_iter()
                     .collect(),
                 repositories: Vec::new(),
+                classification: Default::default(),
             },
             depends_on: Vec::new(),
         })
@@ -1345,6 +1347,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
                 repositories: Vec::new(),
                 delivers: Vec::new(),
                 delivered_by: Vec::new(),
+                classification: Default::default(),
             },
             depends_on: Vec::new(),
         })
@@ -1938,6 +1941,7 @@ fn outgoing_document(id: &str, title: &str) -> Document {
             serde_json::from_value(serde_json::json!("github.com/nickderobertis/onetaskgraph"))
                 .expect("a normalized origin"),
         ],
+        classification: Default::default(),
     }
 }
 

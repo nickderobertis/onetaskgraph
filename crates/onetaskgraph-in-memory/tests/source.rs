@@ -1852,6 +1852,7 @@ fn a_document() -> Document {
         updated_at: None,
         metadata: std::collections::BTreeMap::new(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 

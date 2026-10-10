@@ -153,6 +153,7 @@ fn task(arrangement: Arrangement, value: &Value) -> Task {
             Vec::new()
         },
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -379,6 +380,7 @@ async fn a_project_and_a_document_ending_in_a_block_scalar_read_back_as_written(
                     updated_at: None,
                     metadata: metadata.clone(),
                     repositories: Vec::new(),
+                    classification: Default::default(),
                 },
                 depends_on: Vec::new(),
             })
@@ -399,6 +401,7 @@ async fn a_project_and_a_document_ending_in_a_block_scalar_read_back_as_written(
                     updated_at: None,
                     metadata: metadata.clone(),
                     repositories: Vec::new(),
+                    classification: Default::default(),
                 },
                 depends_on: Vec::new(),
             })

@@ -74,7 +74,7 @@ impl GitHubProjectsSource {
         })
     }
 
-    fn loopback(&self) -> bool {
+    pub(crate) fn loopback(&self) -> bool {
         self.endpoint
             .host_str()
             .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"))

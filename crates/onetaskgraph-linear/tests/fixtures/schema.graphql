@@ -111,6 +111,8 @@
 # the member Linear still publishes.
 # Only the read/write contract exercised by this plugin is retained.
 type Query {
+  "The user's organization."
+  organization: Organization!
   viewer: User!
   issue(id: String!): Issue
   comment(id: String): Comment!
@@ -146,6 +148,10 @@ type Mutation {
   projectStatusCreate(input: ProjectStatusCreateInput!): ProjectStatusPayload!
 }
 
+"An organization. Organizations are root-level objects that contain user accounts and teams."
+type Organization {
+  id: ID!
+}
 type User {
   id: ID!
   displayName: String!

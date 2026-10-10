@@ -57,6 +57,7 @@ pub(crate) async fn create_task(
             delivers,
             metadata: item.metadata,
             assets,
+            classification: classification(args.item.classification),
         })
         .await
         .map_err(|error| Failure::from(&error))?;
@@ -99,6 +100,7 @@ pub(crate) async fn create_document(
             repositories: item.repositories,
             metadata: item.metadata,
             assets,
+            classification: classification(args.item.classification),
         })
         .await
         .map_err(|error| Failure::from(&error))?;
@@ -391,7 +393,20 @@ fn project(args: &ProjectCreateArgs, loaded: &Loaded) -> Result<ProjectCreate, R
         labels: (!args.label.is_empty()).then(|| args.label.clone()),
         repositories: (!repositories.is_empty()).then_some(repositories),
         metadata,
+        classification: args
+            .classification
+            .map(crate::cli::ClassificationArg::classification),
     })
+}
+
+/// A create's `--classification`, public when none is given.
+fn classification(
+    given: Option<crate::cli::ClassificationArg>,
+) -> onetaskgraph_plugin_api::Classification {
+    given.map_or_else(
+        Default::default,
+        crate::cli::ClassificationArg::classification,
+    )
 }
 
 /// The configured source a create names, refused naming the problem.

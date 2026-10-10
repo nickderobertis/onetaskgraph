@@ -11,6 +11,7 @@
 
 use onetaskgraph_e2e_support::{common, fixtures};
 
+mod boundary;
 mod copy_cost;
 mod fields;
 mod github_status_by_kind;
@@ -20,3 +21,4 @@ mod write_order;
 mod asset_board;
 mod assets;
 mod budget_runner;
+mod visibility_cost;

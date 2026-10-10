@@ -213,3 +213,9 @@ published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphq
 quoted, the unquoted and the bare-value spellings of an origin each returned exactly its one
 carrier, and a prefix of the value returned none. The values are synthetic; it is
 documentation-derived and carries no captured response.
+
+`ProjectV2.public` in `schema.graphql` was read from the same published artifact
+<https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-09, where it is
+`public: Boolean!`, "Returns true if the project is public." It is what
+`graphql::PROJECT_VISIBILITY` selects, the board half of the visibility a write to a source
+declared private is held to.

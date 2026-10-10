@@ -10,6 +10,11 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
+class Classification(StrEnum):
+    ClassificationPublic = "public"
+    ClassificationPrivate = "private"
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -220,6 +225,12 @@ class SourceFailure(BaseModel):
 
 
 class Document(BaseModel):
+    classification: Annotated[
+        Classification,
+        Field(
+            description="Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+        ),
+    ] = Classification.ClassificationPublic
     content: Annotated[
         str | None, Field(description="The long-form body, when the source has one.")
     ] = None

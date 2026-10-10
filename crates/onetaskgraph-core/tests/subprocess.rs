@@ -1072,6 +1072,7 @@ fn filed() -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: Vec::new(),
+        classification: Default::default(),
     }
 }
 

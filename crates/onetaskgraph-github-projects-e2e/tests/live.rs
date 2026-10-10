@@ -27,6 +27,58 @@ fn name(value: &str) -> SourceName {
     SourceName::new(value).unwrap()
 }
 
+/// How [`read_live_rendering`] asks again after a gateway error: up to `attempts` reads in
+/// all, sleeping `pause` times the attempt number after each 5xx.
+#[derive(Clone, Copy, Debug)]
+struct RenderingRetry {
+    attempts: u32,
+    pause: std::time::Duration,
+}
+
+/// The live journey's own schedule: four reads, two, four and six seconds apart.
+const RENDERING_RETRY: RenderingRetry = RenderingRetry {
+    attempts: 4,
+    pause: std::time::Duration::from_secs(2),
+};
+
+/// Reads one uploaded image back with the credential, the way a reader of the rendering does,
+/// and fails unless it answers success.
+///
+/// A gateway error from GitHub's attachment host says nothing about the image: one run met
+/// a `504` here for an asset the upload's own verification had just read back `200`. So a
+/// 5xx is asked again, up to `retry.attempts` reads in all, and any other answer — a `404`
+/// above all — decides at once.
+async fn read_live_rendering(
+    url: &str,
+    token: &str,
+    file: &str,
+    retry: RenderingRetry,
+) -> Result<(), String> {
+    let mut attempt = 0;
+    let response = loop {
+        attempt += 1;
+        let response = reqwest::Client::new()
+            .get(url)
+            .header("user-agent", "onetaskgraph-live-assets")
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        journey::say(&format!(
+            "authenticated live rendering read {file} {url}: HTTP {}",
+            response.status()
+        ));
+        if !response.status().is_server_error() || attempt >= retry.attempts {
+            break response;
+        }
+        tokio::time::sleep(retry.pause * attempt).await;
+    };
+    if !response.status().is_success() {
+        return Err(format!("broken live image {file}: {}", response.status()));
+    }
+    Ok(())
+}
+
 async fn nominated_status_option(
     endpoint: &str,
     token: &str,
@@ -230,20 +282,7 @@ async fn disposable_task_and_document_asset_copies() {
                 {
                     return Err(format!("unrewritten or wrong attachment URL {url}"));
                 }
-                let response = reqwest::Client::new()
-                    .get(url)
-                    .header("user-agent", "onetaskgraph-live-assets")
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                journey::say(&format!(
-                    "authenticated live rendering read {file} {url}: HTTP {}",
-                    response.status()
-                ));
-                if !response.status().is_success() {
-                    return Err(format!("broken live image {file}: {}", response.status()));
-                }
+                read_live_rendering(url, token, file, RENDERING_RETRY).await?;
             }
             // Engine::copy already bound the local record to this disposable destination.
             engine
@@ -430,5 +469,98 @@ fn malformed_live_demand_is_refused_before_admission() {
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("ONETASKGRAPH_LIVE_REQUIRED must be Unicode")
+    );
+}
+
+/// A loopback attachment host answering each read with the next of `statuses`, then `200`
+/// for as long as it is asked, counting every read that carried the credential.
+fn attachment_host(statuses: Vec<u16>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/user-attachments/assets/one",
+        listener.local_addr().unwrap()
+    );
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = reads.clone();
+    let mut statuses = statuses.into_iter();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line.to_ascii_lowercase());
+            }
+            assert!(headers.contains("authorization: bearer test-token"));
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let status = statuses.next().unwrap_or(200);
+            write!(
+                stream,
+                "HTTP/1.1 {status} Fixture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        }
+    });
+    (url, reads)
+}
+
+/// The live journey's own retry bound, without its pauses.
+const IMMEDIATE_RETRY: RenderingRetry = RenderingRetry {
+    pause: std::time::Duration::ZERO,
+    ..RENDERING_RETRY
+};
+
+#[tokio::test]
+async fn a_rendering_read_rides_out_a_gateway_timeout_and_reads_the_image() {
+    let (url, reads) = attachment_host(vec![504]);
+
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+
+    assert_eq!(read, Ok(()), "a 504 says nothing about the image");
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the timed-out read and the one that answered"
+    );
+}
+
+#[tokio::test]
+async fn a_rendering_read_that_keeps_meeting_server_errors_fails_after_its_bound() {
+    let (url, reads) = attachment_host(vec![502, 503, 504, 500]);
+
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+
+    assert_eq!(
+        read,
+        Err("broken live image one.png: 500 Internal Server Error".to_owned()),
+        "it fails naming the last answer"
+    );
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        RENDERING_RETRY.attempts as usize,
+        "and never asks a fifth time, although the host would answer 200"
+    );
+}
+
+#[tokio::test]
+async fn a_rendering_read_answered_not_found_fails_at_once() {
+    let (url, reads) = attachment_host(vec![404]);
+
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+
+    assert_eq!(
+        read,
+        Err("broken live image one.png: 404 Not Found".to_owned()),
+        "a missing image is a broken rendering"
+    );
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "and is not asked again, although the host would answer 200"
     );
 }
