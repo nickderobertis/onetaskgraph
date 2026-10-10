@@ -3541,10 +3541,24 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -
 /// about it: an issue's raw description byte for byte, and which mutations a command sent.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspace) {
-    let state = Arc::new(Mutex::new(linear_with_comments(held)));
-    let ledger = Arc::new(Mutex::new(Vec::new()));
-    let config = linear_serve(sandbox, state.clone(), ledger.clone(), None, &[]);
-    (config, LinearWorkspace { state, ledger })
+    let workspace = LinearWorkspace {
+        state: Arc::new(Mutex::new(linear_with_comments(held))),
+        ledger: Arc::new(Mutex::new(Vec::new())),
+        hooks: Arc::new(Mutex::new(Vec::new())),
+    };
+    let config = linear_serve(sandbox, workspace.clone(), None, &[]);
+    (config, workspace)
+}
+
+/// One change a journey has a Linear workspace make part way through a command: after the
+/// `skip + 1`th request `matches` holds of, and before the workspace reads another.
+struct LinearHook {
+    /// Whether one request is one this hook counts.
+    matches: RequestMatch,
+    /// How many matching requests to answer before making the change.
+    skip: usize,
+    /// The change, made through the same handle a journey makes one with.
+    change: Box<dyn FnOnce(&LinearWorkspace) + Send>,
 }
 
 /// A Linear workspace over `held` whose team holds exactly `states` — id, name and type — and
@@ -3565,9 +3579,63 @@ pub fn linear_workspace_with(
 pub struct LinearWorkspace {
     state: Arc<Mutex<Value>>,
     ledger: Arc<Mutex<Vec<(String, Value)>>>,
+    hooks: Arc<Mutex<Vec<LinearHook>>>,
 }
 
 impl LinearWorkspace {
+    /// Have this workspace make `change` once it has answered the `skip + 1`th request that
+    /// `matches` holds of — its GraphQL document and its variables — and before it reads the
+    /// next: a person editing an issue part way through a command.
+    pub fn after_request(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        skip: usize,
+        change: impl FnOnce(&LinearWorkspace) + Send + 'static,
+    ) {
+        self.hooks.lock().unwrap().push(LinearHook {
+            matches: Box::new(matches),
+            skip,
+            change: Box::new(change),
+        });
+    }
+
+    /// Rewrite one issue's description, as a person editing it in Linear would.
+    pub fn edit_description(&self, issue: &str, content: &str) {
+        let mut data = self.state.lock().unwrap();
+        let row = data["tasks"]
+            .as_array_mut()
+            .and_then(|tasks| tasks.iter_mut().find(|row| row["id"] == issue))
+            .expect("the issue to edit");
+        row["content"] = json!(content);
+    }
+
+    /// Add one comment to an issue, as a person writing it in Linear would, answering with its
+    /// id.
+    pub fn add_comment(&self, issue: &str, body: &str) -> String {
+        let mut data = self.state.lock().unwrap();
+        let (tick, stamp) = linear_tick(&mut data);
+        let id = format!("C-P{tick}");
+        let row = json!({"id": id, "issue": issue, "body": body, "createdAt": stamp,
+                         "updatedAt": stamp, "user": {"displayName": "a person"}});
+        data["_linear_comments"]
+            .as_array_mut()
+            .expect("comments")
+            .push(row);
+        id
+    }
+
+    /// Replace one comment's body, as its author editing it in Linear would.
+    pub fn edit_comment(&self, comment: &str, body: &str) {
+        let mut data = self.state.lock().unwrap();
+        let (_, stamp) = linear_tick(&mut data);
+        let row = data["_linear_comments"]
+            .as_array_mut()
+            .and_then(|rows| rows.iter_mut().find(|row| row["id"] == comment))
+            .expect("the comment to edit");
+        row["body"] = json!(body);
+        row["updatedAt"] = json!(stamp);
+    }
+
     /// Every request this workspace answered, as its GraphQL document and its variables, in
     /// the order they arrived.
     pub fn served(&self) -> Vec<(String, Value)> {
@@ -3705,14 +3773,12 @@ fn linear_server_over(
     recorded: Option<Value>,
     failing: &[&str],
 ) -> Value {
-    let state = Arc::new(Mutex::new(linear_with_comments(held)));
-    linear_serve(
-        sandbox,
-        state,
-        Arc::new(Mutex::new(Vec::new())),
-        recorded,
-        failing,
-    )
+    let workspace = LinearWorkspace {
+        state: Arc::new(Mutex::new(linear_with_comments(held))),
+        ledger: Arc::new(Mutex::new(Vec::new())),
+        hooks: Arc::new(Mutex::new(Vec::new())),
+    };
+    linear_serve(sandbox, workspace, recorded, failing)
 }
 
 /// The largest request this Linear workspace reads before refusing it as too large.
@@ -3725,11 +3791,11 @@ const LINEAR_FIXTURE_REQUEST_LIMIT: usize = 256 * 1024;
 
 fn linear_serve(
     sandbox: &Sandbox,
-    state: Arc<Mutex<Value>>,
-    ledger: Arc<Mutex<Vec<(String, Value)>>>,
+    workspace: LinearWorkspace,
     recorded: Option<Value>,
     failing: &[&str],
 ) -> Value {
+    let (state, ledger) = (workspace.state.clone(), workspace.ledger.clone());
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -3853,6 +3919,30 @@ fn linear_serve(
                     Ok(body) => ("200 OK", json!({"data":body})),
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
+            // Answered, and not yet sent: a change made here is one the next request sees and
+            // this one did not.
+            let due: Vec<LinearHook> = {
+                let operation = request["query"].as_str().unwrap_or_default();
+                let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                let mut held = workspace.hooks.lock().unwrap();
+                let mut due = Vec::new();
+                let mut kept = Vec::new();
+                for mut hook in std::mem::take(&mut *held) {
+                    if !(hook.matches)(operation, &variables) {
+                        kept.push(hook);
+                    } else if hook.skip == 0 {
+                        due.push(hook);
+                    } else {
+                        hook.skip -= 1;
+                        kept.push(hook);
+                    }
+                }
+                *held = kept;
+                due
+            };
+            for hook in due {
+                (hook.change)(&workspace);
+            }
             let text = serde_json::to_string(&response).unwrap();
             let _ = write!(
                 stream,

@@ -64,6 +64,12 @@ mod copy_link;
 // read the boards' own request logs. What they prove — a copy's skip and its copy by query — is
 // the engine's, so no one plugin crate's edge is narrower.
 mod copy_skip;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against a loopback board, a loopback Linear workspace and a folder
+// of Markdown behind a Python relay, in seconds. What they prove — that a copy writes one
+// revision of an item and never a mix — is the engine's read, so no plugin crate's edge is
+// narrower.
+mod copy_snapshot;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and a
 // loopback fixture board, with no credential and no network, and the whole module finishes in
