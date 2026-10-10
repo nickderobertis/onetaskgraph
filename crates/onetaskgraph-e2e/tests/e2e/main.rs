@@ -32,8 +32,10 @@ mod assets;
 // configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
 // depending on the engine at any depth.
 mod boundary;
-// The released onevcs boundary commands and the onevcs home `boundary` registers its synthetic
-// identities in: what that suite's `write_policy` runs, kept beside the one suite that runs it.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The released onevcs boundary
+// commands and the onevcs home `boundary` registers its synthetic identities in, resolved once
+// per process through uv's cache and only by those journeys: they are the engine's and the
+// configuration's, as `boundary` above says, so there is no narrower edge to put them behind.
 mod onevcs;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the

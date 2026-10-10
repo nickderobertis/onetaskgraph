@@ -586,3 +586,38 @@ fn a_project_visibility_answer_without_a_boolean_public_is_refused_before_any_mu
         assert_eq!(kind, "visibility-unreadable", "{answer}: {message}");
     }
 }
+
+#[test]
+fn a_narrow_write_to_an_existing_issue_is_held_to_that_issues_own_repository() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![
+                json!({"item": "ITEM-AWAY-1", "id": "AWAY-1", "type": "Issue",
+                "title": "Away", "body": "Away.", "state": "OPEN", "reason": null,
+                "parent": null, "repo": "nickderobertis/elsewhere", "status": "Todo",
+                "origin": "", "labels": []}),
+            ],
+        )
+    });
+    // The configured repository is private; the issue lives in a public one.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Public);
+    let (kind, _, served) =
+        setup.refused(&["task", "status", "set", "board:AWAY-1", "in-progress"]);
+    assert_eq!(kind, "destination-not-private");
+    assert!(
+        served.contains(&"GET /repos/nickderobertis/elsewhere".to_owned()),
+        "{served:#?}"
+    );
+    assert!(
+        !served.contains(&format!("GET /repos/{CONFIGURED}")),
+        "{served:#?}"
+    );
+    // Once that repository reads private, the same write lands.
+    setup
+        .board
+        .set_repository_visibility("nickderobertis/elsewhere", RepositoryAnswer::Private);
+    setup.ok(&["task", "status", "set", "board:AWAY-1", "in-progress"]);
+}

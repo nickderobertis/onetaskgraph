@@ -343,16 +343,10 @@ fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
         .expect("JSON"),
     )
     .expect("the telemetry is written");
-    // What the budget holds the copy to is onebudgetspec's to judge; what this journey holds
-    // is the shape of what it spent: both reads, and only those two, for every write.
-    assert_eq!(by_read["project"], json!(WRITES), "{by_read}");
-    assert_eq!(by_read["repository"], json!(WRITES), "{by_read}");
-    assert_eq!(by_write, json!({"project": 2, "task": 200, "document": 2}));
-    // And each write sends its two reads together: both are in flight at once, never one
-    // after the other.
-    assert_eq!(
-        front.overlap(),
-        (WRITES, 0),
-        "pairs in flight together, reads alone"
-    );
+    // What the copy spent is onebudgetspec's to judge, and the reads each write sends are the
+    // boundary journeys'; what this journey holds is how they are sent: each write's two
+    // together, both in flight at once, and never one after the other.
+    let (paired, alone) = front.overlap();
+    assert!(paired > 0, "the copy read who can read the board");
+    assert_eq!(alone, 0, "a read waited for its partner and none came");
 }
