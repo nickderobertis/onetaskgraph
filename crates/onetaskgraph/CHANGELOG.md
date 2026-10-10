@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11](https://github.com/nickderobertis/onetaskgraph/compare/v0.3.10...v0.3.11) - 2026-10-09
+
+### Added
+
+- *(cli)* print a project's task dependency graph as Mermaid ([#3576](https://github.com/nickderobertis/onetaskgraph/pull/3576))
+
 ## [0.3.3](https://github.com/nickderobertis/onetaskgraph/compare/v0.3.2...v0.3.3) - 2026-10-07
 
 ### Added
