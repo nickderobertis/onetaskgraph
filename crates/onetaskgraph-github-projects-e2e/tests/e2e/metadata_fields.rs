@@ -552,3 +552,40 @@ fn a_verification_read_refused_after_a_create_says_what_changed_and_a_rerun_veri
         "the field it created is not created again"
     );
 }
+
+#[test]
+fn a_first_text_field_create_refused_changes_nothing_and_a_rerun_creates_them_all() {
+    let setup = Setup::projecting(Some(two_projections()), false);
+    let fields_before = setup.board.field_list();
+    setup
+        .board
+        .refuse_once("createProjectV2Field(input:$input)");
+    let output = setup
+        .sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains("the guarded field setup failed creating the Host text field"),
+        "{said}"
+    );
+    assert!(!said.contains("changed the"), "nothing had landed: {said}");
+    assert_eq!(
+        setup.board.field_list(),
+        fields_before,
+        "the board is as it was"
+    );
+    let (rerun, served) = setup.run(&["--json", "sources", "fields", "board", "--apply"]);
+    assert_eq!(rerun["metadata_fields"][0]["outcome"], "created");
+    assert_eq!(rerun["metadata_fields"][1]["outcome"], "created");
+    let creates = served
+        .iter()
+        .filter(|(query, _)| query == graphql::CREATE_FIELD)
+        .map(|(_, variables)| variables["input"]["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(creates, [json!("Host"), json!("Team")]);
+}
