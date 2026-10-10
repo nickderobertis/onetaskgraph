@@ -99,6 +99,8 @@ struct State {
     /// Pending delays, by deadline then a sequence number, with whose request each holds.
     delays: BTreeMap<(Duration, u64), (usize, oneshot::Sender<()>)>,
     delay_sequence: u64,
+    /// How long an attach as a client still attached waits for that client to detach.
+    reattach_grace: Duration,
 }
 
 /// One attached client.
@@ -190,6 +192,7 @@ impl SimulatedClock {
         let address = listener.local_addr().expect("the listener's address");
         let state = Arc::new(Mutex::new(State {
             expected: clients,
+            reattach_grace: Duration::from_secs(5),
             ..State::default()
         }));
         let accepting = Arc::clone(&state);
@@ -201,6 +204,16 @@ impl SimulatedClock {
             }
         });
         SimulatedClock { state, address }
+    }
+
+    /// `with_reattach_grace(self, grace: Duration) -> SimulatedClock`: how long an attach
+    /// naming a client still attached waits for that client's last connection to detach
+    /// before it is refused as a second live process under one number. The default, five
+    /// seconds, outlasts any detach of a process that has exited; a journey proving the
+    /// refusal shortens it so it does not pay that wait.
+    pub fn with_reattach_grace(self, grace: Duration) -> SimulatedClock {
+        self.lock().reattach_grace = grace;
+        self
     }
 
     /// The environment one spawned binary needs to run on this clock as client
@@ -344,6 +357,18 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
             sleeps: BTreeMap::new(),
             delayed: 0,
         };
+        // A driver spawns its next process as client `n` the moment the last one exits, and
+        // that one's connection may not have been read to its end yet. Its process is gone, so
+        // its reader is about to detach it: wait for that rather than refuse the next one.
+        // A connection still live never detaches, so it is refused once the wait runs out.
+        if state.clients.contains_key(&client) {
+            let disconnected = Arc::clone(&state.disconnected);
+            let grace = state.reattach_grace;
+            state = disconnected
+                .wait_timeout_while(state, grace, |state| state.clients.contains_key(&client))
+                .expect("the coordinator is not poisoned")
+                .0;
+        }
         // A client number this coordinator was not started for, or one already attached, would
         // count toward the clients it waits for without being one of them: refused, and the
         // binary that sent it stops naming the answer.

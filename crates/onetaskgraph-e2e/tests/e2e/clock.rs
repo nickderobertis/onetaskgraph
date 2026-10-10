@@ -480,8 +480,9 @@ fn the_binary_refuses_a_coordinator_that_does_not_acknowledge_it() {
     );
 
     // A real coordinator refuses a client number it was not started for, and a second attach
-    // as a client already attached, rather than counting either as one it waits for.
-    let clock = SimulatedClock::start(1);
+    // as a client already attached, rather than counting either as one it waits for. The grace
+    // is shortened because the held connection is live and never detaches.
+    let clock = SimulatedClock::start(1).with_reattach_grace(Duration::from_millis(50));
     let (_, value) = clock.client_env(0).remove(0);
     let address = value.rsplit_once('/').expect("an address").0.to_owned();
     let held = TcpStream::connect(&address).expect("the coordinator accepts");
