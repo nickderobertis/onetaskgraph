@@ -334,6 +334,12 @@ class Task(BaseModel):
         Field(description="When the source says the task last changed."),
     ] = None
     url: Annotated[str | None, Field(description="Where a human can open this task.")] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it."
+        ),
+    ] = None
 
 
 class DeliveredFailed(BaseModel):

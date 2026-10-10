@@ -490,6 +490,54 @@ export const runtimeSchemas = {
   },
   "Comment": {
     "$defs": {
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
+        ],
+        "type": "object"
+      },
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
@@ -520,6 +568,17 @@ export const runtimeSchemas = {
       "id": {
         "$ref": "#/$defs/NativeId",
         "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+      },
+      "origin": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CommentOrigin"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
       },
       "updated_at": {
         "description": "When the source says it last changed.",
@@ -572,6 +631,17 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/NativeId",
             "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+          },
           "updated_at": {
             "description": "When the source says it last changed.",
             "format": "date-time",
@@ -591,6 +661,54 @@ export const runtimeSchemas = {
         "required": [
           "id",
           "body"
+        ],
+        "type": "object"
+      },
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
         ],
         "type": "object"
       },
@@ -4350,6 +4468,17 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/NativeId",
             "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+          },
           "updated_at": {
             "description": "When the source says it last changed.",
             "format": "date-time",
@@ -4369,6 +4498,54 @@ export const runtimeSchemas = {
         "required": [
           "id",
           "body"
+        ],
+        "type": "object"
+      },
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
         ],
         "type": "object"
       },
@@ -5353,6 +5530,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
@@ -7093,6 +7277,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
@@ -9868,6 +10059,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10689,6 +10887,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -11310,6 +11515,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
@@ -13539,6 +13751,13 @@ export const runtimeSchemas = {
           "string",
           "null"
         ]
+      },
+      "version": {
+        "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -13673,6 +13892,17 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/NativeId",
             "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+          },
           "updated_at": {
             "description": "When the source says it last changed.",
             "format": "date-time",
@@ -13692,6 +13922,54 @@ export const runtimeSchemas = {
         "required": [
           "id",
           "body"
+        ],
+        "type": "object"
+      },
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
         ],
         "type": "object"
       },
@@ -14296,6 +14574,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
@@ -14478,6 +14763,17 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/NativeId",
             "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+          },
           "updated_at": {
             "description": "When the source says it last changed.",
             "format": "date-time",
@@ -14497,6 +14793,54 @@ export const runtimeSchemas = {
         "required": [
           "id",
           "body"
+        ],
+        "type": "object"
+      },
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
         ],
         "type": "object"
       },
@@ -15101,6 +15445,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
@@ -16358,6 +16709,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -16974,6 +17332,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13c.\n\nOpaque to every caller: nothing compares one but for equality, and the engine's own\nordering of two of them (`onetaskgraph_core::version`) is the one reader that looks\ninside. Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
             "type": [
               "string",
               "null"
