@@ -317,9 +317,10 @@ On every item write that reaches the board — a create, an update and a copy, o
 project and a document alike, `metadata set` and `task update` of the projected key included —
 the value at `key` and `path` in the item's metadata decides the field:
 
-- **a string** is written to the field, and nothing is sent when the field already holds it;
-- **nothing** — the key, or any step of the path, absent — **`null`, or an empty string**
-  clears the field when it holds a value, and sends nothing when it does not;
+- **a string** — the empty string included, which is written as itself — is written to the
+  field, and nothing is sent when the field already holds it;
+- **nothing** — the key, or any step of the path, absent — **or `null`** clears the field when
+  it holds a value, and sends nothing when it does not;
 - **any other JSON type** — a number, a boolean, an object or an array — is refused before any
   mutation, naming the source, the key, the path and the type found.
 

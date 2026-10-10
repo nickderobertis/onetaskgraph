@@ -85,7 +85,8 @@
 //! metadata key and a path inside its value. The slot stays the value's one home — every read
 //! reports metadata from it alone — and the field follows it on every write of an item, a
 //! create, an update and a copy alike: a string is written, and not sent again while the field
-//! holds it; nothing there, `null` or an empty string clears a field holding a value; any other
+//! holds it — an empty string included, which is written as itself; nothing there or `null`
+//! clears a field holding a value; any other
 //! JSON type is refused before any mutation. It rides the ordered [`graphql::UPDATE_FIELDS`]
 //! write beside `Status`, `Priority` and the origin, so it adds no request; a key set on its
 //! own moves its field first and the body last, as every write of an existing item does. A
@@ -2096,7 +2097,7 @@ impl std::ops::Deref for ProjectedKey {
 enum Projected {
     /// A string to hold.
     Text(String),
-    /// Nothing: the key or a step of the path is absent, or the value is `null` or empty.
+    /// Nothing: the key or a step of the path is absent, or the value is `null`.
     Nothing,
 }
 
@@ -2173,7 +2174,6 @@ impl MetadataField {
         }
         let found = match value {
             None | Some(Value::Null) => return Ok(Projected::Nothing),
-            Some(Value::String(text)) if text.is_empty() => return Ok(Projected::Nothing),
             Some(Value::String(text)) => return Ok(Projected::Text(text.clone())),
             Some(Value::Bool(_)) => "a boolean",
             Some(Value::Number(_)) => "a number",
@@ -5985,17 +5985,15 @@ impl GitHubProjectsSource {
         ))
     }
 
-    /// What each projected metadata field holds for one board item, by field name — the
-    /// non-empty text values alone.
+    /// What each projected metadata field holds for one board item, by field name — every text
+    /// value GitHub answers, an empty one included.
     fn held_projections(
         &self,
         field_values: &[Value],
     ) -> Result<BTreeMap<String, String>, SourceError> {
         let mut held = BTreeMap::new();
         for projection in &self.metadata_fields {
-            if let Some(text) =
-                text_field(field_values, &projection.field)?.filter(|text| !text.is_empty())
-            {
+            if let Some(text) = text_field(field_values, &projection.field)? {
                 held.insert(projection.field.to_string(), text);
             }
         }
@@ -9143,7 +9141,7 @@ struct Resolved {
     // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
     origin: Option<String>,
     /// What each board text field this instance projects metadata onto holds for this item,
-    /// by field name — only the fields holding a non-empty value. What a write compares the
+    /// by field name — only the fields holding a value, an empty text included. What a write compares the
     /// item's metadata against, so a field already holding its value is not written again;
     /// never read back as metadata, which the slot alone reports.
     projected: BTreeMap<String, String>,

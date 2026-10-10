@@ -18488,7 +18488,9 @@ async fn several_projections_move_independently_and_validate_together_before_any
         text_of(&fixture, &id.0, "FIELD_host").as_deref(),
         Some("alpha")
     );
-    // An empty string is no value, so it clears the field that held one.
+    // An empty string is a string, so it is written as itself, as the contract says: GitHub's
+    // schema documents `ProjectV2FieldValue.text` as "The text to set on the field" and states
+    // nothing that makes an empty text the same as no value.
     write_kind(
         source().as_ref(),
         Kind::Task,
@@ -18497,10 +18499,22 @@ async fn several_projections_move_independently_and_validate_together_before_any
     )
     .await
     .unwrap();
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_host").as_deref(), Some(""));
+    // Held, it is not written again; null then clears it.
+    for host in [json!({"host":""}), json!({"host":null})] {
+        write_kind(
+            source().as_ref(),
+            Kind::Task,
+            Some(&id.0),
+            metadata(host, json!("core")),
+        )
+        .await
+        .unwrap();
+    }
     assert_eq!(text_of(&fixture, &id.0, "FIELD_host"), None);
     assert_eq!(
         text_writes(&fixture, "FIELD_host"),
-        [Some("alpha".to_owned()), None]
+        [Some("alpha".to_owned()), Some(String::new()), None]
     );
     assert_eq!(
         text_writes(&fixture, "FIELD_team"),
@@ -18517,7 +18531,7 @@ async fn several_projections_move_independently_and_validate_together_before_any
         text_of(&fixture, &id.0, "FIELD_team").as_deref(),
         Some("infra")
     );
-    assert_eq!(text_writes(&fixture, "FIELD_host").len(), 2);
+    assert_eq!(text_writes(&fixture, "FIELD_host").len(), 3);
 
     // One entry's value refused refuses the write, before the other's is sent.
     let before = fixture.seen().len();
