@@ -180,7 +180,10 @@ fn one_key_of_a_task_a_project_and_a_document_is_set_and_nothing_else_moves() {
             // A task's change token covers its metadata, so it moved with the key; a project and
             // a document carry none.
             if before.get("version").is_some() {
-                assert_ne!(after["version"], before["version"], "{who}: the token moved");
+                assert_ne!(
+                    after["version"], before["version"],
+                    "{who}: the token moved"
+                );
                 expected["version"] = after["version"].clone();
             }
             assert_eq!(after, expected, "{who}");

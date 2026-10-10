@@ -723,7 +723,8 @@ fn github_item(
            "state":at.state.0,"reason":at.state.1,
            "parent":at.parent.map_or(Value::Null, |id| json!(id)),
            "repo":"nickderobertis/onetaskgraph","status":at.status,"origin":origin,
-           "priority":at.priority,"labels":labels})
+           "priority":at.priority,"labels":labels,
+           "updatedAt":GITHUB_BOARD_EPOCH,"itemUpdatedAt":GITHUB_BOARD_EPOCH})
 }
 
 /// Where one fixture item sits on the board.
@@ -1020,7 +1021,24 @@ struct GitHubBoard {
     /// How `GET /repos/{owner}/{name}` answers for each repository by `owner/name` —
     /// [`RepositoryAnswer::Private`] for one no journey named.
     repository_visibility: std::collections::BTreeMap<String, RepositoryAnswer>,
+    /// Changes a journey has this board make once it has answered a request matching each,
+    /// before it reads the next — a person editing an item while a command is reading it.
+    hooks: Vec<BoardHook>,
 }
+
+/// One change a journey has the board make part way through a command: after the
+/// `skip + 1`th request `matches` holds of, and before the board reads another.
+struct BoardHook {
+    /// Whether one request — its document and its variables — is one this hook counts.
+    matches: Box<dyn Fn(&str, &Value) -> bool + Send>,
+    /// How many matching requests to answer before making the change.
+    skip: usize,
+    /// The change, made through the same handle a journey makes one with.
+    change: Box<dyn FnOnce(&GitHubBoardFields) + Send>,
+}
+
+/// The moment every item this board starts with was last changed, before any tick.
+const GITHUB_BOARD_EPOCH: &str = "2026-09-01T00:00:00Z";
 
 // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers its one REST read, which the board's own request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
 /// How the loopback GitHub answers `GET /repos/{owner}/{name}`, the read a write to a board
@@ -1187,6 +1205,21 @@ impl GitHubBoardFields {
             Some((_, held)) => held.extend(blockers.iter().cloned()),
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
+        board.touch_issue(&json!(id));
+        for blocker in blockers {
+            board.touch_issue(&json!(blocker));
+        }
+    }
+
+    /// Take `blocker` off what blocks the issue `id`, as a person removing the relationship on
+    /// GitHub would.
+    pub fn unblock(&self, id: &str, blocker: &str) {
+        let mut board = self.board.lock().unwrap();
+        if let Some((_, held)) = board.blocked_by.iter_mut().find(|(near, _)| near == id) {
+            held.retain(|held| held != blocker);
+        }
+        board.touch_issue(&json!(id));
+        board.touch_issue(&json!(blocker));
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -1341,17 +1374,142 @@ impl GitHubBoardFields {
             .find(|item| item["id"] == json!(id))
             .expect("the item to assign exists");
         held["priority"] = name.map_or(Value::Null, |name| json!(name));
+        let item = held["item"].clone();
+        board.touch_item(&item);
     }
 
     /// Rewrite one issue's body, as a person editing it on GitHub would.
     pub fn edit_body(&self, id: &str, body: &str) {
-        self.board.lock().unwrap().find(&json!(id))["body"] = json!(body);
+        let mut board = self.board.lock().unwrap();
+        board.find(&json!(id))["body"] = json!(body);
+        board.touch_issue(&json!(id));
+    }
+
+    /// Rewrite one issue's title, as a person editing it on GitHub would.
+    pub fn edit_title(&self, id: &str, title: &str) {
+        let mut board = self.board.lock().unwrap();
+        board.find(&json!(id))["title"] = json!(title);
+        board.touch_issue(&json!(id));
+    }
+
+    /// Give one issue exactly the labels named, as a person labelling it on GitHub would.
+    pub fn set_labels(&self, id: &str, labels: &[&str]) {
+        let mut board = self.board.lock().unwrap();
+        board.find(&json!(id))["labels"] = Value::Array(
+            labels
+                .iter()
+                .map(|label| json!([format!("LABEL-{label}"), label]))
+                .collect(),
+        );
+        board.touch_issue(&json!(id));
+    }
+
+    /// Set one caller key in the metadata slot at the end of one issue's body, adding the slot
+    /// when it holds none, as a person editing the body on GitHub would.
+    pub fn set_metadata(&self, id: &str, key: &str, value: Value) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        let body = item["body"].as_str().unwrap_or_default().to_owned();
+        let open = "<!-- onetaskgraph.metadata\n";
+        let rewritten = match body.rfind(open) {
+            Some(at) => {
+                let start = at + open.len();
+                let end = start + body[start..].find("\n-->").expect("a closed slot");
+                let mut slot: serde_json::Map<String, Value> =
+                    serde_json::from_str(&body[start..end]).expect("the slot is JSON");
+                slot.insert(key.to_owned(), value);
+                format!("{}{}{}", &body[..start], Value::Object(slot), &body[end..])
+            }
+            None => format!("{body}\n\n{open}{}\n-->", json!({ key: value })),
+        };
+        item["body"] = json!(rewritten);
+        board.touch_issue(&json!(id));
+    }
+
+    /// Set a person's own text field on one item's board card — a board field this product
+    /// neither reads nor writes — as a person editing the card on the board would. GitHub
+    /// moves the board item's `updatedAt` for it and leaves the issue's alone.
+    pub fn set_card_field(&self, id: &str, field: &str, value: &str) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        item["own_fields"][field] = json!(value);
+        let card = item["item"].clone();
+        board.touch_item(&card);
+    }
+
+    /// Add a comment to one issue, as the account the token belongs to posting it on GitHub
+    /// would, answering with the comment's id.
+    pub fn add_comment(&self, issue: &str, body: &str) -> String {
+        let added = self.board.lock().unwrap().comment(issue, body);
+        added["id"].as_str().expect("a comment id").to_owned()
+    }
+
+    /// Replace one comment's body, as its author editing it on GitHub would.
+    pub fn edit_comment(&self, comment: &str, body: &str) {
+        let mut board = self.board.lock().unwrap();
+        let at = board.tick();
+        let held = board
+            .comments
+            .iter_mut()
+            .find(|held| held["id"] == json!(comment))
+            .expect("the comment to edit");
+        held["body"] = json!(body);
+        held["updatedAt"] = json!(at);
+        let issue = held["issue"].clone();
+        board.touch_issue(&issue);
+    }
+
+    /// Delete one comment, as its author deleting it on GitHub would — which moves the
+    /// issue's comment count and neither of its times.
+    pub fn delete_comment(&self, comment: &str) {
+        let mut board = self.board.lock().unwrap();
+        assert!(
+            board
+                .comments
+                .iter()
+                .any(|held| held["id"] == json!(comment)),
+            "the comment to delete: {comment}"
+        );
+        board.comments.retain(|held| held["id"] != json!(comment));
+    }
+
+    /// Every comment the issue `issue` holds, oldest first, as `{id, body}`.
+    #[must_use]
+    pub fn comments_on(&self, issue: &str) -> Vec<Value> {
+        self.board
+            .lock()
+            .unwrap()
+            .comments
+            .iter()
+            .filter(|held| held["issue"] == json!(issue))
+            .map(|held| json!({"id": held["id"], "body": held["body"]}))
+            .collect()
+    }
+
+    /// Have this board make `change` once it has answered the `skip + 1`th request that
+    /// `matches` holds of — its GraphQL document and its variables — and before it reads the
+    /// next: a person editing an item part way through a command.
+    pub fn after_request(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        skip: usize,
+        change: impl FnOnce(&GitHubBoardFields) + Send + 'static,
+    ) {
+        self.board.lock().unwrap().hooks.push(BoardHook {
+            matches: Box::new(matches),
+            skip,
+            change: Box::new(change),
+        });
     }
 
     /// Move one item's card to the `Status` option named `name`, as a person dragging it on
     /// the board would.
     pub fn move_card(&self, id: &str, name: &str) {
-        self.board.lock().unwrap().find(&json!(id))["status"] = json!(name);
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        item["status"] = json!(name);
+        let card = item["item"].clone();
+        board.touch_item(&card);
     }
 
     /// The name of the `Status` option one item sits in, or `None`.
@@ -1417,6 +1575,7 @@ impl GitHubBoardFields {
         );
         let rewritten = format!("{}{}{}", &body[..start], Value::Object(slot), &body[end..]);
         item["body"] = json!(rewritten);
+        board.touch_issue(&json!(id));
     }
 
     /// The origin field this board holds for one issue.
@@ -1554,14 +1713,49 @@ impl GitHubBoard {
         item["type"] == "DraftIssue"
     }
 
-    /// The next moment this board stamps a comment with, a second after the one before.
+    /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
+    /// board item's — a second after the one before, so no two changes share one.
     fn tick(&mut self) -> String {
         self.comment_ticks += 1;
+        let ticks = self.comment_ticks;
+        assert!(ticks < 86_400, "this board's clock runs one day");
         format!(
-            "2026-09-01T00:{:02}:{:02}Z",
-            self.comment_ticks / 60,
-            self.comment_ticks % 60
+            "2026-09-01T{:02}:{:02}:{:02}Z",
+            ticks / 3600,
+            (ticks / 60) % 60,
+            ticks % 60
         )
+    }
+
+    /// Move the issue `id`'s own `updatedAt`, as GitHub does for an edit of its title, body,
+    /// labels, state or relationships, and for a comment added or edited on it.
+    fn touch_issue(&mut self, id: &Value) {
+        let at = self.tick();
+        if let Some(item) = self
+            .items
+            .iter_mut()
+            .chain(self.pending.iter_mut())
+            .find(|item| item["id"] == *id)
+        {
+            item["updatedAt"] = json!(at);
+        }
+    }
+
+    /// Move the board item `item`'s own `updatedAt`, as GitHub does for a change to one of its
+    /// field values — the issue's own does not move.
+    fn touch_item(&mut self, item: &Value) {
+        let at = self.tick();
+        if let Some(held) = self.items.iter_mut().find(|held| held["item"] == *item) {
+            held["itemUpdatedAt"] = json!(at);
+        }
+    }
+
+    /// How many comments the issue `id` holds, as `comments { totalCount }` answers.
+    fn comment_count(&self, id: &Value) -> usize {
+        self.comments
+            .iter()
+            .filter(|held| held["issue"] == *id)
+            .count()
     }
 
     /// Put a comment on `issue`, signed as [`GITHUB_COMMENTER`] — the account this board's
@@ -1571,6 +1765,7 @@ impl GitHubBoard {
         let held = json!({"id":format!("COMMENT-{}", self.comment_ticks),"issue":issue,
                           "author":GITHUB_COMMENTER,"body":body,"createdAt":at,"updatedAt":at});
         self.comments.push(held.clone());
+        self.touch_issue(&json!(issue));
         held
     }
 
@@ -1638,7 +1833,9 @@ impl GitHubBoard {
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "number":github_number(item["id"].as_str().unwrap()),
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
-               "createdAt":null,"updatedAt":null,"state":item["state"],
+               "createdAt":null,"updatedAt":item["updatedAt"],
+               "commentCount":{"totalCount":self.comment_count(&item["id"])},
+               "state":item["state"],
                "stateReason":item["reason"],
                "repository":item["repo"].as_str().map(|repo| json!({"nameWithOwner":repo})),
                "parent":item["parent"].as_str().map(|id| json!({"id":id})),
@@ -1717,6 +1914,7 @@ impl GitHubBoard {
         let board_item = self.rendered(item);
         let mut issue = self.content(item);
         issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
+                                                 "updatedAt":board_item["updatedAt"],
                                                  "project":{"id":"PVT-board","number":7},
                                                  "fieldValues":board_item["fieldValues"]}],
                                        "pageInfo":{"hasNextPage":false}});
@@ -1741,7 +1939,7 @@ impl GitHubBoard {
                                "options":options}}),
             );
         }
-        json!({"id":item["item"],
+        json!({"id":item["item"],"updatedAt":item["itemUpdatedAt"],
                "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
                "content":self.content(item)})
     }
@@ -2016,9 +2214,14 @@ fn github_projects_board_at(
         project_visibility_error: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
+        hooks: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
+    let hooked = GitHubBoardFields {
+        endpoint: endpoint.clone(),
+        board: Arc::clone(&board),
+    };
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
@@ -2126,6 +2329,28 @@ fn github_projects_board_at(
                     .to_string()
                 }
             };
+            // Answered, and not yet sent: a change made here is one the next request sees and
+            // this one did not.
+            let due: Vec<BoardHook> = {
+                let mut held = board.lock().unwrap();
+                let mut due = Vec::new();
+                let mut kept = Vec::new();
+                for mut hook in std::mem::take(&mut held.hooks) {
+                    if !(hook.matches)(query, &variables) {
+                        kept.push(hook);
+                    } else if hook.skip == 0 {
+                        due.push(hook);
+                    } else {
+                        hook.skip -= 1;
+                        kept.push(hook);
+                    }
+                }
+                held.hooks = kept;
+                due
+            };
+            for hook in due {
+                (hook.change)(&hooked);
+            }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -2435,6 +2660,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .find(|item| item["item"] == item_id)
             .expect("a field clear names a board item");
         held["priority"] = Value::Null;
+        board.touch_item(&item_id);
         return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":null}}});
     }
     if query.contains("updateProjectV2Field(input:$input)") {
@@ -2596,7 +2822,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             });
         held["body"] = input["body"].clone();
         held["updatedAt"] = json!(at);
-        return json!({"updateIssueComment":{"issueComment":GitHubBoard::comment_node(held)}});
+        let (issue, edited) = (held["issue"].clone(), GitHubBoard::comment_node(held));
+        board.touch_issue(&issue);
+        return json!({"updateIssueComment":{"issueComment":edited}});
     }
     if query.contains("deleteIssueComment(input:$input)") {
         assert!(
@@ -2665,10 +2893,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         assert!(input["body"].is_string() || input["body"].is_null());
         board.created += 1;
         let id = format!("ISSUE-{}", board.created);
+        let at = board.tick();
         let created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
-            "origin":"","labels":[]});
+            "origin":"","labels":[],"updatedAt":at});
         // A real board answered a create naming it in `projectV2Ids` with no item, filed the
         // issue after, and refused the filing that then had to follow — so no create names it.
         assert!(
@@ -2690,8 +2919,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .iter()
             .position(|item| item["id"] == content)
             .expect("the issue was created before it was filed");
-        let item = board.pending.remove(at);
+        let mut item = board.pending.remove(at);
         let id = item["item"].clone();
+        item["itemUpdatedAt"] = json!(board.tick());
         board.items.push(item);
         return json!({"addProjectV2ItemById":{"item":{"id":id}}});
     }
@@ -2710,6 +2940,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             held["state"] = state["value"].clone();
             held["reason"] = state["stateReason"].clone();
         }
+        board.touch_issue(&input["id"]);
         return json!({"updateIssue":{"issue":{"id":input["id"]}}});
     }
     if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
@@ -2756,7 +2987,13 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         if text.is_string() {
             held["origin"] = text;
         }
-        let held = held.clone();
+        board.touch_item(&item_id);
+        let held = board
+            .items
+            .iter()
+            .find(|item| item["item"] == item_id)
+            .expect("the item just written")
+            .clone();
         if variables["readPriority"] == true
             && let Some(response) = board.priority_response.take()
         {
@@ -2778,6 +3015,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let parent = input["issueId"].clone();
         let child = input["subIssueId"].clone();
         board.find(&child)["parent"] = if adding { parent.clone() } else { Value::Null };
+        board.touch_issue(&child);
+        board.touch_issue(&parent);
         let root = if adding {
             "addSubIssue"
         } else {
@@ -2819,6 +3058,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         } else {
             entry.retain(|held| held != &blocker);
         }
+        board.touch_issue(&json!(issue));
+        board.touch_issue(&json!(blocker));
         let root = if adding {
             "addBlockedBy"
         } else {

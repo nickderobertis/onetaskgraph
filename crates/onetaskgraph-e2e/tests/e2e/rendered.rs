@@ -16,7 +16,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout, unclocked};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 use crate::machine::{bundle, validates};
 
@@ -1001,7 +1001,13 @@ fn documents_are_created_on_both_kinds_of_source_and_their_answers_read_where_ke
         );
         let id = created["items"][0]["id"].as_str().unwrap().to_owned();
         let shown = plan.json(&["document", "show", &id]);
-        assert_eq!(created, shown, "`document show --json`, exactly");
+        // Exactly, but for the board's own clock: the create answers with what it wrote, and a
+        // read of the issue carries the time GitHub stamped it with.
+        assert_eq!(
+            unclocked(&created),
+            unclocked(&shown),
+            "`document show --json`, exactly"
+        );
         let document = &shown["items"][0]["item"];
         assert_eq!(document["title"], "Design");
         assert_eq!(document["project"], "P-1");

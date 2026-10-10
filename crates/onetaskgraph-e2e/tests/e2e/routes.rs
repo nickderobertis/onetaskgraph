@@ -14,7 +14,7 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, stderr, stdout, unclocked};
 use crate::fixtures::{
     document, github_projects_with_board, linear_empty_workspace,
     linear_failing_a_relation_write_once,
@@ -1254,9 +1254,10 @@ fn a_routed_copy_that_fails_in_its_second_source_leaves_both_as_it_found_them() 
         "every item the copy touched, in both sources, reads as it did — the home's members, \
          each counterpart's metadata and every edge included"
     );
+    // The board's own clock moved for the writes the undo made; nothing else did.
     assert_eq!(
-        answer(&sandbox, &["task", "list", "--project", &home, "--members"])["items"],
-        listed_before["items"],
+        unclocked(&answer(&sandbox, &["task", "list", "--project", &home, "--members"])["items"]),
+        unclocked(&listed_before["items"]),
         "no item the copy created remains in either source"
     );
     // The plan's own files carry only the edits made to them: no copy link was written.

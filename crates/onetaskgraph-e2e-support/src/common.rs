@@ -254,3 +254,25 @@ pub fn stdout(output: &std::process::Output) -> String {
 pub fn stderr(output: &std::process::Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8")
 }
+
+/// `value` with every `updated_at` and every `version` taken out, at any depth.
+///
+/// What a source's own clock says rather than what an item holds: a hosted board moves an
+/// item's time, and the change token built on it, for every write it takes — the write that
+/// puts an item back after a copy could not finish included — so two reads of an item a
+/// command left as it found it agree on everything else, and on these only when nothing wrote
+/// to it at all.
+#[must_use]
+pub fn unclocked(value: &Value) -> Value {
+    match value {
+        Value::Object(members) => Value::Object(
+            members
+                .iter()
+                .filter(|(key, _)| key.as_str() != "updated_at" && key.as_str() != "version")
+                .map(|(key, member)| (key.clone(), unclocked(member)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(unclocked).collect()),
+        scalar => scalar.clone(),
+    }
+}

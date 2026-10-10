@@ -221,7 +221,10 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
             "{who}: the task's token moved with its status"
         );
         expected["items"][0]["item"]["version"] = after["items"][0]["item"]["version"].clone();
-        assert_eq!(after, expected, "{who}: everything else reads back unchanged");
+        assert_eq!(
+            after, expected,
+            "{who}: everything else reads back unchanged"
+        );
         assert_eq!(
             expected["items"][0]["item"]["delivers"],
             json!(["work:T-2"]),
