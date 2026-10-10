@@ -753,6 +753,11 @@ export const runtimeSchemas = {
             "const": "unrecorded",
             "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
             "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "The copy was asked to write nothing to the source — `--no-link` — so no entry was\nrecorded or changed. The next copy finds the counterpart by its own origin.",
+            "type": "string"
           }
         ]
       },
@@ -781,6 +786,66 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -794,6 +859,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -874,7 +944,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       {
-        "description": "The destination held a counterpart that already read that way; nothing was written.",
+        "description": "The destination held a counterpart that already read that way; nothing of the item\nwas written.\n\nA task's copy record — `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`\nand `onetaskgraph.copied_destination_version` — may still be brought up to date on it,\nwhich changes nothing the item says.",
         "properties": {
           "action": {
             "const": "unchanged",
@@ -894,6 +964,11 @@ export const runtimeSchemas = {
               }
             ],
             "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "skipped": {
+            "default": false,
+            "description": "Whether the copy decided this from change tokens alone, without reading the item's\nbody or comments from the source: the source's current `version` is the one the\ndestination records at `onetaskgraph.copied_version`, and the destination reads as\nthe copy left it. `false` for an item read and compared.",
+            "type": "boolean"
           },
           "via": {
             "$ref": "#/$defs/CopyVia",
@@ -924,6 +999,24 @@ export const runtimeSchemas = {
           "destination"
         ],
         "type": "object"
+      },
+      {
+        "description": "The item changed while the copy read it, and changed again while the copy read it a\nsecond time, so nothing was written for it — never a mix of two of its revisions.\n\nEvery other item of the copy landed as it would have and is not undone, and the command\nexits `4`. Copying the item again once it has settled lands it.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why, in the failure document every verb reports a failure in."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
       }
     ],
     "title": "CopyAction"
@@ -946,12 +1039,53 @@ export const runtimeSchemas = {
         "const": "unrecorded",
         "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
         "type": "string"
+      },
+      {
+        "const": "skipped",
+        "description": "The copy was asked to write nothing to the source — `--no-link` — so no entry was\nrecorded or changed. The next copy finds the counterpart by its own origin.",
+        "type": "string"
       }
     ],
     "title": "CopyLink"
   },
   "CopyOutcome": {
     "$defs": {
+      "CommentCounts": {
+        "description": "What a `--comments` copy did to one task's comments at the destination.\n\nEvery figure counts comments of the *source*: one added is a source comment the\ndestination held no copy of, one edited is a copy brought back in step with its origin\ncomment, one deleted is a copy whose origin comment the source no longer holds, and one\nunchanged is a copy that already read as its origin. A comment native to the destination\nis never counted, because a copy never touches it, and neither is a source comment that is\na copy of one of the destination's own, because it is never sent back.",
+        "properties": {
+          "added": {
+            "description": "Copies the copy created.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "description": "Copies the copy deleted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edited": {
+            "description": "Copies the copy edited.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unchanged": {
+            "description": "Copies that already read as their origin comments.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "edited",
+          "deleted",
+          "unchanged"
+        ],
+        "type": "object"
+      },
       "CopyLink": {
         "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
         "oneOf": [
@@ -968,6 +1102,11 @@ export const runtimeSchemas = {
           {
             "const": "unrecorded",
             "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "The copy was asked to write nothing to the source — `--no-link` — so no entry was\nrecorded or changed. The next copy finds the counterpart by its own origin.",
             "type": "string"
           }
         ]
@@ -993,6 +1132,66 @@ export const runtimeSchemas = {
           {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          }
+        ]
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
             "type": "string"
           }
         ]
@@ -1117,7 +1316,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       {
-        "description": "The destination held a counterpart that already read that way; nothing was written.",
+        "description": "The destination held a counterpart that already read that way; nothing of the item\nwas written.\n\nA task's copy record — `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`\nand `onetaskgraph.copied_destination_version` — may still be brought up to date on it,\nwhich changes nothing the item says.",
         "properties": {
           "action": {
             "const": "unchanged",
@@ -1137,6 +1336,11 @@ export const runtimeSchemas = {
               }
             ],
             "description": "What the copy did to the copied item's link; absent for a dry run."
+          },
+          "skipped": {
+            "default": false,
+            "description": "Whether the copy decided this from change tokens alone, without reading the item's\nbody or comments from the source: the source's current `version` is the one the\ndestination records at `onetaskgraph.copied_version`, and the destination reads as\nthe copy left it. `false` for an item read and compared.",
+            "type": "boolean"
           },
           "via": {
             "$ref": "#/$defs/CopyVia",
@@ -1167,9 +1371,38 @@ export const runtimeSchemas = {
           "destination"
         ],
         "type": "object"
+      },
+      {
+        "description": "The item changed while the copy read it, and changed again while the copy read it a\nsecond time, so nothing was written for it — never a mix of two of its revisions.\n\nEvery other item of the copy landed as it would have and is not undone, and the command\nexits `4`. Copying the item again once it has settled lands it.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why, in the failure document every verb reports a failure in."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
       }
     ],
     "properties": {
+      "comments": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CommentCounts"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
+      },
       "placed": {
         "anyOf": [
           {
@@ -1224,6 +1457,42 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "CommentCounts": {
+        "description": "What a `--comments` copy did to one task's comments at the destination.\n\nEvery figure counts comments of the *source*: one added is a source comment the\ndestination held no copy of, one edited is a copy brought back in step with its origin\ncomment, one deleted is a copy whose origin comment the source no longer holds, and one\nunchanged is a copy that already read as its origin. A comment native to the destination\nis never counted, because a copy never touches it, and neither is a source comment that is\na copy of one of the destination's own, because it is never sent back.",
+        "properties": {
+          "added": {
+            "description": "Copies the copy created.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "description": "Copies the copy deleted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edited": {
+            "description": "Copies the copy edited.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unchanged": {
+            "description": "Copies that already read as their origin comments.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "edited",
+          "deleted",
+          "unchanged"
+        ],
+        "type": "object"
+      },
       "CopyLink": {
         "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
         "oneOf": [
@@ -1240,6 +1509,11 @@ export const runtimeSchemas = {
           {
             "const": "unrecorded",
             "description": "The item's source cannot hold the entry — it has no write side, or it refuses the\nnarrow metadata write — so the copy landed without recording it.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "The copy was asked to write nothing to the source — `--no-link` — so no entry was\nrecorded or changed. The next copy finds the counterpart by its own origin.",
             "type": "string"
           }
         ]
@@ -1322,7 +1596,7 @@ export const runtimeSchemas = {
             "type": "object"
           },
           {
-            "description": "The destination held a counterpart that already read that way; nothing was written.",
+            "description": "The destination held a counterpart that already read that way; nothing of the item\nwas written.\n\nA task's copy record — `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`\nand `onetaskgraph.copied_destination_version` — may still be brought up to date on it,\nwhich changes nothing the item says.",
             "properties": {
               "action": {
                 "const": "unchanged",
@@ -1342,6 +1616,11 @@ export const runtimeSchemas = {
                   }
                 ],
                 "description": "What the copy did to the copied item's link; absent for a dry run."
+              },
+              "skipped": {
+                "default": false,
+                "description": "Whether the copy decided this from change tokens alone, without reading the item's\nbody or comments from the source: the source's current `version` is the one the\ndestination records at `onetaskgraph.copied_version`, and the destination reads as\nthe copy left it. `false` for an item read and compared.",
+                "type": "boolean"
               },
               "via": {
                 "$ref": "#/$defs/CopyVia",
@@ -1372,9 +1651,38 @@ export const runtimeSchemas = {
               "destination"
             ],
             "type": "object"
+          },
+          {
+            "description": "The item changed while the copy read it, and changed again while the copy read it a\nsecond time, so nothing was written for it — never a mix of two of its revisions.\n\nEvery other item of the copy landed as it would have and is not undone, and the command\nexits `4`. Copying the item again once it has settled lands it.",
+            "properties": {
+              "action": {
+                "const": "failed",
+                "type": "string"
+              },
+              "error": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, in the failure document every verb reports a failure in."
+              }
+            },
+            "required": [
+              "action",
+              "error"
+            ],
+            "type": "object"
           }
         ],
         "properties": {
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
+          },
           "placed": {
             "anyOf": [
               {

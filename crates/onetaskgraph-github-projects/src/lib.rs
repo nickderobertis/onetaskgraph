@@ -9836,6 +9836,10 @@ type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 /// `author` is absent both when GitHub answers `null` for an account that no longer exists
 /// and when it answers an actor with no login, because either way the source did not say who
 /// wrote it — which is what an absent author means, rather than an author called nothing.
+///
+/// A comment a copy wrote here carries its origin as the hidden marker at the end of its body
+/// — GitHub sets every comment's author and times itself, so there is nowhere else to keep it —
+/// and is read back with the marker taken out and reported as its origin.
 fn comment_from(value: &Value) -> Result<Comment, SourceError> {
     Ok(Comment {
         origin: None,
@@ -9846,7 +9850,8 @@ fn comment_from(value: &Value) -> Result<Comment, SourceError> {
         updated_at: optional_time(value, "updatedAt")?,
         body: required_str(value, "body")?.to_owned(),
         url: optional_str(value, "url")?.map(str::to_owned),
-    })
+    }
+    .unmarked())
 }
 
 /// The page of comments one issue node carries, resumed from `after`.

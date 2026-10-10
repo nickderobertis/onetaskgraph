@@ -912,12 +912,14 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
             .collect::<Vec<_>>(),
         vec![
             "myapp.estimate",
+            "onetaskgraph.copied_destination_version",
+            "onetaskgraph.copied_version",
             "onetaskgraph.item_kind",
             "onetaskgraph.origin",
             "onetaskgraph.template"
         ],
-        "the caller's keys and the provenance, besides the board's own kind marker and the \
-         mirror of the origin its board field holds"
+        "the caller's keys, the provenance and the copy's record of itself, besides the \
+         board's own kind marker and the mirror of the origin its board field holds"
     );
     assert!(
         !body.as_str().unwrap().contains("BACKGROUND-"),

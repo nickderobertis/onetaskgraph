@@ -626,8 +626,9 @@ what the journeys validate this output against.
 `updated` and `unchanged` it names the rule above that found the counterpart: `link`,
 `origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
 none did. `link` says what became of the item's own link, on those same three actions of a
-copy that writes: `recorded`, `unchanged`, or `unrecorded` where its source could not hold
-one. A dry run reports `via` and leaves `link` out, and an `orphaned` item carries neither.
+copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
+one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
+reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
 In the generated SDKs the four rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
@@ -970,6 +971,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }).await?;
 
     let outcome = &report.items[0];

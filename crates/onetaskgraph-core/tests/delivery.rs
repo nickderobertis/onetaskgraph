@@ -463,6 +463,8 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }
 }
 

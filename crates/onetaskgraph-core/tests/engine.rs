@@ -2002,8 +2002,9 @@ const THIRTY_FOURTH_BUNDLE_SHAPE: [(&str, u64); 112] = [
 ];
 
 /// The exact schema bundle published as version 35: version 34's document with `Task`'s
-/// optional `version` change token and `Comment`'s optional `origin`, the comment's identity
-/// at the item a copy carried it from.
+/// optional `version` change token, `Comment`'s optional `origin` — the comment's identity at
+/// the item a copy carried it from — and a copy report whose outcomes carry `comments` counts,
+/// `skipped` on `unchanged`, a `failed` action and a `skipped` link.
 const THIRTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 112] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
@@ -2017,10 +2018,10 @@ const THIRTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 112] = [
     ("Classification", 0xca41e910f010da5b),
     ("Comment", 0xf4d10955d5040047),
     ("CommentList", 0x13ff258e389fa4cc),
-    ("CopyAction", 0x6f602a0b698fc4ee),
-    ("CopyLink", 0xa73df648489586ed),
-    ("CopyOutcome", 0x353870152d2d19fb),
-    ("CopyReport", 0xd41403f70fe3db81),
+    ("CopyAction", 0x6c43359e2d023768),
+    ("CopyLink", 0x58389f81345b5907),
+    ("CopyOutcome", 0xc0004aaf12999eeb),
+    ("CopyReport", 0x1d985a1dc876f7bc),
     ("CopyVia", 0x641c3292827db1fb),
     ("CredentialLayer", 0x54cdffe467a3b7f1),
     ("DeletedComment", 0xaa757b7907bb38f8),

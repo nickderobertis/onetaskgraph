@@ -596,7 +596,16 @@ async fn named_edges_replace_the_forward_edges_and_are_reported() {
         let answer = store.update(&update).await.expect("the update lands");
         assert_eq!(answer.written, BTreeSet::from([UpdatedField::DependsOn]));
         assert_eq!(store.edges().await, vec!["T-7"], "{kind:?}");
-        assert_eq!(store.task("T-1").await, before, "{kind:?}");
+        let after = store.task("T-1").await;
+        let untokened = |task: &Task| Task {
+            version: None,
+            ..task.clone()
+        };
+        assert_eq!(untokened(&after), untokened(&before), "{kind:?}");
+        // An edge is a change a task's token covers, so a source that gives one moves it.
+        if before.version.is_some() {
+            assert_ne!(after.version, before.version, "{kind:?}");
+        }
         assert!(
             answer.delivered.is_empty(),
             "{kind:?}: neither list was named"

@@ -18,8 +18,9 @@ use onetaskgraph_plugin_api::{
     AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy, DependencyEdge,
     Direction, Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord,
     Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless, unwritable_field, unwritable_metadata,
+    SourceError, SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless, unwritable_field,
+    unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,9 +33,10 @@ use super::wire::{
     DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
-    ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams, TaskQueryParams,
-    TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
-    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
+    ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams,
+    TaskDetailParams, TaskDetailResult, TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams,
+    UpdateResult, WriteResult, after_the_first_vocabulary, knows_every_category, spelled,
+    vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -129,6 +131,12 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is handed a copied comment through `add_comment` and
     /// `edit_comment`, its origin as the hidden marker, and is never sent the method.
     comment_copies: bool,
+    /// Whether the plugin said it answers `get_task_detail` (§3.13), read at the same
+    /// handshake.
+    ///
+    /// A plugin that said nothing is read a task and a page of its comments through
+    /// `get_task` and `task_comments`, and is never sent the method.
+    task_details: bool,
     /// The live process.
     connection: Connection,
 }
@@ -368,6 +376,7 @@ impl SubprocessSource {
             targeted_updates,
             ends_commands,
             comment_copies,
+            task_details,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -401,6 +410,7 @@ impl SubprocessSource {
             targeted_updates,
             ends_commands,
             comment_copies,
+            task_details,
             connection: Connection::adopt(peer),
         })
     }
@@ -630,6 +640,52 @@ impl TaskSource for SubprocessSource {
             .ask("get_task", params(&IdParams { id: id.clone() }))
             .await?;
         Ok(result.task)
+    }
+
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        let mut read = Vec::with_capacity(ids.len());
+        for id in ids {
+            read.push(match comments {
+                // Never sent to a plugin that did not declare it (§3.13): one written before the
+                // method existed is read the task and the page in two calls, as the contract's
+                // own default reads them.
+                Some(page) if self.task_details => self
+                    .ask::<TaskDetailResult>(
+                        "get_task_detail",
+                        params(&TaskDetailParams {
+                            id: id.clone(),
+                            comments: page.clone(),
+                        }),
+                    )
+                    .await
+                    .map(|result| {
+                        let comments = match result.comments_error {
+                            Some(error) => Err(error),
+                            None => Ok(result.page),
+                        };
+                        result.task.map(|task| TaskDetailRead {
+                            task,
+                            comments: Some(comments),
+                        })
+                    }),
+                _ => match self.get_task(id).await {
+                    Ok(Some(task)) => {
+                        let comments = match comments {
+                            Some(page) => Some(self.task_comments(id, page).await),
+                            None => None,
+                        };
+                        Ok(Some(TaskDetailRead { task, comments }))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                },
+            });
+        }
+        read
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {

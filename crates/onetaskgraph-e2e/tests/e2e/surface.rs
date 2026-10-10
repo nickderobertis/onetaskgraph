@@ -286,7 +286,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 34);
+    assert_eq!(bundle["version"], 35);
     assert!(
         bundle["roots"]["FailureDocument"].is_object(),
         "the document a failed command writes under machine output is a root"
@@ -1235,7 +1235,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
         })
         .collect();
     assert_eq!(via.len(), 5, "{via:?}");
-    assert_eq!(link.len(), 3, "{link:?}");
+    assert_eq!(link.len(), 4, "{link:?}");
 
     let readme = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
@@ -1259,6 +1259,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
         "via",
         "link",
         "--match-by",
+        "--no-link",
         "CopyVia",
         "NoCounterpart",
         "CopyLink",

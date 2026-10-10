@@ -373,6 +373,8 @@ test("copy drives the real binary and reports what it did to each item", async (
         destination: "into:P-1",
         via: "link",
         link: "unchanged",
+        // Read and compared: a copy without `comments`, by id, never skips.
+        skipped: false,
       },
     ]);
     // The project and exactly the members named; a folder of Markdown meters nothing, so
@@ -1154,7 +1156,13 @@ test("a task's content is replaced from a file through the real binary, and noth
     expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({ id: "work:T-1" });
     const after = (await contentClient.taskShow("work:T-1")).items[0]?.item;
     expect(after?.content).toBe("The new body.\n\nWith a second paragraph.");
-    expect({ ...after, content: null }).toEqual({ ...before, content: null });
+    // The task's change token moves with its content; nothing else does.
+    expect(after?.version).not.toBe(before?.version);
+    expect({ ...after, content: null, version: null }).toEqual({
+      ...before,
+      content: null,
+      version: null,
+    });
 
     const refused = contentClient.taskContentSet("work:T-1", resolve(contentRoot, "absent.md"));
     await expect(refused).rejects.toThrow("--file");

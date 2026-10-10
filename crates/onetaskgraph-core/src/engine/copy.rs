@@ -38,23 +38,30 @@
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
 
+mod comments;
+mod query;
+mod record;
+mod snapshot;
+
+use query::{Slot, failed};
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
-    AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Cursor, DependencyEdge,
-    DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, ItemKind, ItemWrite,
-    Location, MetadataKey, MetadataMatch, Metering, NativeId, Page, PageRequest, Project,
-    ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
-    TextFields, TextQuery, WriteTarget,
+    AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId, Page,
+    PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::GlobalId;
 use crate::config::Placement;
 use crate::resolve::ResolvedSource;
 use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
+use crate::{Failure, GlobalId};
 
 use super::assets;
 use super::boundary::{Exposure, Outbound};
@@ -96,6 +103,24 @@ pub struct CopyRequest {
     // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Whether to perform every read and no write.
     pub dry_run: bool,
+    /// Whether the copy keeps the destination's copies of each task's comments in step with
+    /// the source's — `--comments`.
+    ///
+    /// Without it a copy reads, writes and costs exactly what it did before comments could be
+    /// carried: no comment is read or written at either end. With it, the copy adds the
+    /// source's comments the destination holds no copy of, edits a copy whose origin comment
+    /// changed, and deletes a copy whose origin comment is gone; a comment native to the
+    /// destination is never edited or deleted, and a source comment that is itself a copy of
+    /// one of the destination's own is never sent back. Each item's outcome then reports
+    /// [`CopyOutcome::comments`].
+    pub comments: bool,
+    /// Whether the copy writes nothing at all to the source — `--no-link`.
+    ///
+    /// No `onetaskgraph.copies` link is recorded on any item copied, and each outcome reports
+    /// [`CopyLink::Skipped`]. The counterpart is found on the next copy by the destination's
+    /// own `onetaskgraph.origin`, so leaving the source untouched costs a later copy nothing
+    /// but that lookup.
+    pub no_link: bool,
 }
 
 /// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
@@ -117,26 +142,63 @@ impl std::fmt::Display for CopyLookup {
     }
 }
 
-/// The items one copy names: at least one, because a copy naming none is not a copy.
+/// The items one copy names: at least one id, or the tasks one query matches.
 ///
 /// A newtype rather than a bare `Vec`, for the reason [`Repository`] is one: the empty
 /// list is not a copy of nothing, it is a caller mistake, and a type that can hold it
 /// leaves every reader to decide what it means — a report with no entries, an error, a
-/// silent success. None of those is better than not being able to say it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyItems(Vec<GlobalId>);
+/// silent success. None of those is better than not being able to say it. A query that
+/// matches nothing is a different thing: the caller asked a question, and an empty report is
+/// its answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyItems(Named);
+
+/// What a [`CopyItems`] holds.
+#[derive(Debug, Clone, PartialEq)]
+enum Named {
+    /// Ids a caller named, at least one.
+    Ids(Vec<GlobalId>),
+    /// The query whose matches are copied — `task copy --to` with `task list`'s narrowing in
+    /// place of ids.
+    Matching(Box<TaskRequest>),
+}
 
 impl CopyItems {
     /// The items a caller named, or `None` when they named none.
     #[must_use]
     pub fn new(items: Vec<GlobalId>) -> Option<Self> {
-        (!items.is_empty()).then_some(Self(items))
+        (!items.is_empty()).then_some(Self(Named::Ids(items)))
     }
 
-    /// The items, in the order they were named.
+    /// Every task `query` matches, read through every page of it when the copy runs.
+    ///
+    /// Only a task copy — [`CopyScope::Tasks`] — names its items this way. The page the query
+    /// names is ignored: every page is walked, at its limit. Its `commented_since` is not handed
+    /// to any source: the copy confirms it from the comments it reads anyway — or, for a task
+    /// unchanged since it was last copied with its comments, from the destination's copies of
+    /// them — so no task's comments are read twice in one invocation.
+    #[must_use]
+    pub fn matching(query: TaskRequest) -> Self {
+        Self(Named::Matching(Box::new(query)))
+    }
+
+    /// The ids named, in the order they were named — none for a query, whose items are known
+    /// only once it has run.
     #[must_use]
     pub fn as_slice(&self) -> &[GlobalId] {
-        &self.0
+        match &self.0 {
+            Named::Ids(ids) => ids,
+            Named::Matching(_) => &[],
+        }
+    }
+
+    /// The query whose matches are copied, when these items are one.
+    #[must_use]
+    pub fn query(&self) -> Option<&TaskRequest> {
+        match &self.0 {
+            Named::Ids(_) => None,
+            Named::Matching(query) => Some(query),
+        }
     }
 }
 
@@ -146,7 +208,7 @@ impl CopyItems {
 /// those two would make are real and the fourth — tasks, with the tasks of each also
 /// copied — means nothing. The member list is a variant for the same reason: it narrows a
 /// project copy that carries its tasks, and it has nothing to say to the other three.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CopyScope {
     /// The ids name tasks, and only those tasks are copied.
     Tasks,
@@ -359,6 +421,31 @@ pub struct CopyOutcome {
     /// not placed at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Placement>,
+    /// What the copy did to the task's comments at the destination — present for every task
+    /// a `--comments` copy landed or found unchanged, a dry run's included, and absent for a
+    /// copy without it, for a project and a document, and for an orphan or a failed item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<CommentCounts>,
+}
+
+/// What a `--comments` copy did to one task's comments at the destination.
+///
+/// Every figure counts comments of the *source*: one added is a source comment the
+/// destination held no copy of, one edited is a copy brought back in step with its origin
+/// comment, one deleted is a copy whose origin comment the source no longer holds, and one
+/// unchanged is a copy that already read as its origin. A comment native to the destination
+/// is never counted, because a copy never touches it, and neither is a source comment that is
+/// a copy of one of the destination's own, because it is never sent back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommentCounts {
+    /// Copies the copy created.
+    pub added: u64,
+    /// Copies the copy edited.
+    pub edited: u64,
+    /// Copies the copy deleted.
+    pub deleted: u64,
+    /// Copies that already read as their origin comments.
+    pub unchanged: u64,
 }
 
 /// Which rule found the destination counterpart an item was updated at, or found already
@@ -410,6 +497,9 @@ pub enum CopyLink {
     /// The item's source cannot hold the entry — it has no write side, or it refuses the
     /// narrow metadata write — so the copy landed without recording it.
     Unrecorded,
+    /// The copy was asked to write nothing to the source — `--no-link` — so no entry was
+    /// recorded or changed. The next copy finds the counterpart by its own origin.
+    Skipped,
 }
 
 impl CopyOutcome {
@@ -459,7 +549,12 @@ pub enum CopyAction {
         // llmlint: ignore[invalid_states_unrepresentable] As `link` on `Created` above.
         link: Option<CopyLink>,
     },
-    /// The destination held a counterpart that already read that way; nothing was written.
+    /// The destination held a counterpart that already read that way; nothing of the item
+    /// was written.
+    ///
+    /// A task's copy record — `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`
+    /// and `onetaskgraph.copied_destination_version` — may still be brought up to date on it,
+    /// which changes nothing the item says.
     Unchanged {
         /// The item that already said it.
         destination: GlobalId,
@@ -469,6 +564,12 @@ pub enum CopyAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         // llmlint: ignore[invalid_states_unrepresentable] As `link` on `Created` above.
         link: Option<CopyLink>,
+        /// Whether the copy decided this from change tokens alone, without reading the item's
+        /// body or comments from the source: the source's current `version` is the one the
+        /// destination records at `onetaskgraph.copied_version`, and the destination reads as
+        /// the copy left it. `false` for an item read and compared.
+        #[serde(default)]
+        skipped: bool,
     },
     /// The destination holds a counterpart the source no longer does. A copy never
     /// deletes, so it was left exactly as it is — and no rule was asked where it goes, and
@@ -476,6 +577,15 @@ pub enum CopyAction {
     Orphaned {
         /// The item that was left alone.
         destination: GlobalId,
+    },
+    /// The item changed while the copy read it, and changed again while the copy read it a
+    /// second time, so nothing was written for it — never a mix of two of its revisions.
+    ///
+    /// Every other item of the copy landed as it would have and is not undone, and the command
+    /// exits `4`. Copying the item again once it has settled lands it.
+    Failed {
+        /// Why, in the failure document every verb reports a failure in.
+        error: Failure,
     },
 }
 
@@ -488,37 +598,52 @@ impl CopyAction {
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
             | Self::Orphaned { destination } => Some(destination),
+            Self::Failed { .. } => None,
         }
     }
 
     /// Which rule found the counterpart, or `None` when none did — the item was created —
-    /// and for an orphan, which no rule was asked about.
+    /// and for an orphan or a failed item, which no rule was asked about.
     #[must_use]
     pub fn found_by(&self) -> Option<CopyVia> {
         match self {
             Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
-            Self::Created { .. } | Self::Orphaned { .. } => None,
+            Self::Created { .. } | Self::Orphaned { .. } | Self::Failed { .. } => None,
         }
     }
 
-    /// What became of the copied item's link, or `None` for a dry run and for an orphan.
+    /// What became of the copied item's link, or `None` for a dry run, an orphan and a
+    /// failed item.
     #[must_use]
     pub fn link(&self) -> Option<CopyLink> {
         match self {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
-            Self::Orphaned { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } => None,
         }
     }
 
-    /// The link slot of an item this copy landed, `None` for an orphan.
+    /// Whether an unchanged item was decided from change tokens alone; `false` for every
+    /// other action.
+    #[must_use]
+    pub fn skipped(&self) -> bool {
+        matches!(self, Self::Unchanged { skipped: true, .. })
+    }
+
+    /// Whether this item landed — was created, updated or found unchanged — rather than being
+    /// an orphan the copy left alone or an item it failed to read whole.
+    fn landed(&self) -> bool {
+        !matches!(self, Self::Orphaned { .. } | Self::Failed { .. })
+    }
+
+    /// The link slot of an item this copy landed, `None` for an orphan and a failed item.
     fn link_slot(&mut self) -> Option<&mut Option<CopyLink>> {
         match self {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
-            Self::Orphaned { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } => None,
         }
     }
 
@@ -546,6 +671,7 @@ struct Pointing<'a> {
 }
 
 /// Where one item is going at the destination.
+#[derive(Clone)]
 enum Target {
     /// Update the destination item with this id, reached by the rule named.
     Update {
@@ -684,6 +810,9 @@ struct Prior {
     assets: Option<Vec<AssetPayload>>,
     /// What its `onetaskgraph.assets` says the destination serves, checked where it was read.
     recorded: Option<AssetUploads>,
+    /// Its comments there, every page of them, when a `--comments` copy read them — `None`
+    /// for every other read, and for an item that is not a task.
+    comments: Option<Vec<Comment>>,
 }
 
 /// One item that landed with an edge whose far end was not written yet.
@@ -798,6 +927,36 @@ struct Journal {
     /// destination's, and an id alone does not say which store it is in: a copy inside one
     /// source can write a link on an item and land on another item with the same kind.
     links: Vec<Unlink>,
+    /// One entry per comment write this copy made, in the order it made them.
+    ///
+    /// Undone before the items they are on, in reverse: a copy created on a task this copy
+    /// created goes with the task anyway, and one on a task it updated is taken back here.
+    comments: Vec<CommentUndo>,
+}
+
+/// How to take back one comment write a `--comments` copy made.
+struct CommentUndo {
+    /// The source the destination task is in.
+    at: SourceName,
+    /// The destination task.
+    task: NativeId,
+    /// What to do.
+    undo: CommentUndoing,
+}
+
+/// What taking one comment write back does.
+enum CommentUndoing {
+    /// The copy added this comment: delete it.
+    Added(NativeId),
+    /// The copy edited this comment from what `before` said: write that back.
+    Edited {
+        /// The comment.
+        id: NativeId,
+        /// What it was, origin included.
+        before: CommentCopy,
+    },
+    /// The copy deleted a copy that said this: write it back, as a new comment.
+    Deleted(CommentCopy),
 }
 
 /// How to take back one link this copy wrote on a copied item.
@@ -884,6 +1043,14 @@ struct Running {
     /// Every item outside this copy that a carried reference names and whose classification
     /// this command has read as public, so a second reference to it is not read again.
     public_references: Vec<GlobalId>,
+    /// Each task's first detail read, made for many tasks of one source at once before any of
+    /// them is planned, keyed by the qualified id's own rendering and taken by the plan that
+    /// reads it.
+    prefetched: HashMap<String, Result<Option<TaskDetailRead>, SourceError>>,
+    /// Where a task copied by query is going, already decided from its listing when the copy
+    /// asked whether it could skip it — taken by the plan that lands it, so the destination is
+    /// not read for it twice.
+    aimed: HashMap<String, (Target, Option<Prior>)>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1045,6 +1212,16 @@ struct Planned {
     /// the origin naming its source, any link naming a private source — is left behind
     /// rather than written where it would name somewhere private.
     withheld: bool,
+    /// Its comments at the source, every page of one revision of them, for a task a
+    /// `--comments` copy carries; `None` otherwise.
+    comments: Option<Vec<Comment>>,
+    /// Whether the copy carries its comments.
+    with_comments: bool,
+    /// What the copy does to its comments at the destination, decided before it lands.
+    comment_plan: Option<comments::CommentPlan>,
+    /// Whether the copy found it unchanged at both ends by its change tokens alone, so nothing
+    /// of it is written or compared.
+    skipped: bool,
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -1053,6 +1230,8 @@ struct Read {
     source: GlobalId,
     /// The item as its source reported it.
     item: Item,
+    /// Its comments, every page of one revision of them, when a `--comments` copy read them.
+    comments: Option<Vec<Comment>>,
 }
 
 /// A task, a project or a document, so the copy path is written once.
@@ -1285,11 +1464,29 @@ impl Engine {
                 }
             }
         }
+        if request.items.query().is_some() && request.scope != CopyScope::Tasks {
+            return Err(EngineError::QueryNotTasks);
+        }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
         if request.scope == CopyScope::Documents {
             documentary(destination)?;
+        }
+        // And for the same reason, a `--comments` copy into a destination whose tasks hold no
+        // comments — the copy's own, or any a route can send a task to.
+        if request.comments && request.scope != CopyScope::Documents {
+            for name in std::iter::once(request.destination.clone())
+                .chain(self.routes.reachable(&request.destination))
+            {
+                let landing = self.writable(&name)?;
+                if !landing.source().capabilities().comments.is_native() {
+                    return Err(EngineError::CommentlessDestination {
+                        name: landing.name().to_string(),
+                        kind: landing.kind().to_owned(),
+                    });
+                }
+            }
         }
         // The sources this command names, each read once before and once after, so what it
         // spent is the difference between two of each one's own running totals.
@@ -1301,8 +1498,17 @@ impl Engine {
                 metered.push(source);
             }
         }
-        for id in request.items.as_slice() {
-            if let Some(source) = self.ready().find(|source| source.name() == &id.source)
+        let mut reading: Vec<SourceName> = request
+            .items
+            .as_slice()
+            .iter()
+            .map(|id| id.source.clone())
+            .collect();
+        if let Some(query) = request.items.query() {
+            reading.extend(self.resolve_selection(&query.sources)?);
+        }
+        for name in reading {
+            if let Some(source) = self.ready().find(|source| source.name() == &name)
                 && !metered.iter().any(|held| held.name() == source.name())
             {
                 metered.push(source);
@@ -1358,15 +1564,72 @@ impl Engine {
                 } else {
                     Level::Task
                 };
-                running
-                    .resolvable
-                    .extend(request.items.as_slice().iter().cloned());
+                let slots = match request.items.query() {
+                    Some(query) => self.matching(request, query, &mut running).await?,
+                    None => request
+                        .items
+                        .as_slice()
+                        .iter()
+                        .cloned()
+                        .map(Slot::Read)
+                        .collect(),
+                };
+                let since = request
+                    .items
+                    .query()
+                    .and_then(|query| query.commented_since);
+                let ids: Vec<GlobalId> = slots
+                    .iter()
+                    .filter_map(|slot| match slot {
+                        Slot::Read(id) => Some(id.clone()),
+                        Slot::Done(_) => None,
+                    })
+                    .collect();
+                running.resolvable.extend(ids.iter().cloned());
+                self.prefetch(request, &ids, &mut running).await;
+                let mut placed: Vec<Option<CopyOutcome>> = Vec::new();
                 let mut planned = Vec::new();
-                for id in request.items.as_slice() {
-                    planned.push(self.plan(request, kind, id, &mut running).await?);
+                for slot in slots {
+                    let id = match slot {
+                        Slot::Done(outcome) => {
+                            placed.push(Some(outcome));
+                            continue;
+                        }
+                        Slot::Read(id) => id,
+                    };
+                    let read = match self.read_for_copy(request, kind, &id, &mut running).await {
+                        Ok(read) => read,
+                        Err(error @ EngineError::ChangedWhileCopied { .. }) => {
+                            placed.push(Some(failed(id, &error)));
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    // A query's comment activity, confirmed from the comments just read rather
+                    // than by a read of its own: a task without it is not one the query matches.
+                    if let Some(since) = since {
+                        let query = TaskQuery {
+                            commented_since: Some(since),
+                            ..TaskQuery::default()
+                        };
+                        if !query.comments_match(read.comments.iter().flatten()) {
+                            continue;
+                        }
+                    }
+                    planned.push(self.plan_read(request, read, &mut running).await?);
+                    placed.push(None);
                 }
-                self.copy_items(request, planned, None, &mut running, journal)
+                let mut landed = self
+                    .copy_items(request, planned, None, &mut running, journal)
                     .await?
+                    .into_iter();
+                placed
+                    .into_iter()
+                    .map(|slot| {
+                        slot.or_else(|| landed.next())
+                            .expect("every item planned is reported once")
+                    })
+                    .collect()
             }
             CopyScope::Projects { tasks } => {
                 let mut projects = Vec::new();
@@ -1421,7 +1684,8 @@ impl Engine {
             self.record_members(homes, journal).await?;
         }
         let mut items = items;
-        self.link(linking, &mut items, journal).await?;
+        self.link(linking, &mut items, request.no_link, journal)
+            .await?;
         Ok((
             CopyReport {
                 items,
@@ -1516,6 +1780,38 @@ impl Engine {
         // back, so the first refusal carries the first id and neither half can be
         // recorded without the other.
         let mut unrestored: Option<(LeftBehind, SourceError)> = None;
+        // The comments next to last, in reverse: each was written after the item it is on.
+        for entry in journal.comments.iter().rev() {
+            let outcome = match self.writable(&entry.at) {
+                Err(failed) => Err(SourceError::Refused {
+                    message: failed.to_string(),
+                }),
+                Ok(destination) => match &entry.undo {
+                    CommentUndoing::Added(id) => destination
+                        .source()
+                        .delete_comment(&entry.task, id)
+                        .await
+                        .map(|_| ()),
+                    CommentUndoing::Edited { id, before } => destination
+                        .source()
+                        .write_comment_copy(&entry.task, Some(id), before)
+                        .await
+                        .map(|_| ()),
+                    CommentUndoing::Deleted(before) => destination
+                        .source()
+                        .write_comment_copy(&entry.task, None, before)
+                        .await
+                        .map(|_| ()),
+                },
+            };
+            if let Err(problem) = outcome {
+                let id = GlobalId::new(entry.at.clone(), entry.task.clone());
+                match &mut unrestored {
+                    Some((left_behind, _)) => left_behind.push(id),
+                    None => unrestored = Some((LeftBehind::new(id), problem)),
+                }
+            }
+        }
         // The links first, because they were written last: once the whole copy had landed.
         for entry in journal.links.iter().rev() {
             if let Err(problem) = self.unlink(entry).await {
@@ -1568,18 +1864,22 @@ impl Engine {
         &self,
         linking: Vec<Linking>,
         items: &mut [CopyOutcome],
+        no_link: bool,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        let mut landed = items
-            .iter_mut()
-            .filter(|outcome| !matches!(outcome.action, CopyAction::Orphaned { .. }));
         for entry in linking {
-            let slot = landed
-                .next()
-                .filter(|outcome| outcome.source == entry.item)
+            let slot = items
+                .iter_mut()
+                .filter(|outcome| outcome.action.landed() && outcome.action.link().is_none())
+                .find(|outcome| outcome.source == entry.item)
                 .and_then(|outcome| outcome.action.link_slot())
-                .expect("every item a copy landed is reported, in the order it landed");
-            *slot = Some(self.linked(entry, journal).await?);
+                .expect("every item a copy landed is reported");
+            *slot = Some(if no_link {
+                // `--no-link`: nothing at all is written to the source.
+                CopyLink::Skipped
+            } else {
+                self.linked(entry, journal).await?
+            });
         }
         Ok(())
     }
@@ -1765,8 +2065,19 @@ impl Engine {
                 // is decided by where they do.
                 let project = self.read(Level::Project, id).await?;
                 let mut reads = Vec::new();
+                let mut changed = Vec::new();
+                self.prefetch(request, members, running).await;
                 for member in members {
-                    reads.push(self.read(Level::Task, member).await?);
+                    match self
+                        .read_for_copy(request, Level::Task, member, running)
+                        .await
+                    {
+                        Ok(read) => reads.push(read),
+                        Err(error @ EngineError::ChangedWhileCopied { .. }) => {
+                            changed.push(failed(member.clone(), &error));
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 let class = self.read_project_class(&project, &reads, running).await?;
                 // A project holding anything private goes, with everything it holds, wholly
@@ -1777,7 +2088,9 @@ impl Engine {
                 } else {
                     self.home_placement(request, &project, &reads).await?
                 };
-                let project = self.aim(request, project, home.clone(), class).await?;
+                let project = self
+                    .aim(request, project, home.clone(), class, None)
+                    .await?;
                 let mut tasks = Vec::new();
                 for read in reads {
                     let placement = match &read.item {
@@ -1791,14 +2104,22 @@ impl Engine {
                             self.placed_at(request, &request.destination)
                         }
                     };
-                    tasks.push(self.aim(request, read, placement, class).await?);
+                    tasks.push(self.aim(request, read, placement, class, None).await?);
                 }
-                plans.push((project, tasks));
+                plans.push((project, tasks, changed));
             } else {
                 let mut project = self.plan(request, Level::Project, id, running).await?;
                 let mut tasks = Vec::new();
+                let mut changed = Vec::new();
+                self.prefetch(request, members, running).await;
                 for member in members {
-                    tasks.push(self.plan(request, Level::Task, member, running).await?);
+                    match self.plan(request, Level::Task, member, running).await {
+                        Ok(task) => tasks.push(task),
+                        Err(error @ EngineError::ChangedWhileCopied { .. }) => {
+                            changed.push(failed(member.clone(), &error));
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 let mut class = tasks.iter().fold(project.classification, |class, task| {
                     class.strictest(task.classification)
@@ -1812,10 +2133,10 @@ impl Engine {
                 for item in std::iter::once(&mut project).chain(&mut tasks) {
                     item.classification = class;
                 }
-                plans.push((project, tasks));
+                plans.push((project, tasks, changed));
             }
         }
-        for (project, tasks) in &plans {
+        for (project, tasks, _) in &plans {
             for item in std::iter::once(project).chain(tasks) {
                 unrecorded_far_end(item, unrecorded)?;
             }
@@ -1826,22 +2147,26 @@ impl Engine {
             request,
             plans
                 .iter()
-                .flat_map(|(project, tasks)| std::iter::once(project).chain(tasks)),
+                .flat_map(|(project, tasks, _)| std::iter::once(project).chain(tasks))
+                .filter(|item| !item.skipped),
             running,
         )
         .await?;
         running.preflighted = true;
-        for (project, tasks) in &plans {
+        for (project, tasks, _) in &plans {
             for item in std::iter::once(project).chain(tasks) {
                 note_private(running, item);
             }
         }
         let mut outcomes = Vec::new();
-        for (project, tasks) in plans {
+        for (project, tasks, changed) in plans {
             outcomes.extend(
-                self.copy_project(request, project, tasks, running, journal)
+                self.copy_project(request, project, tasks, &changed, running, journal)
                     .await?,
             );
+            // A task that would not hold still is reported where its project's tasks are,
+            // having written nothing.
+            outcomes.extend(changed);
         }
         Ok(outcomes)
     }
@@ -1940,6 +2265,7 @@ impl Engine {
         request: &CopyRequest,
         project: Planned,
         tasks: Vec<Planned>,
+        changed: &[CopyOutcome],
         running: &mut Running,
         journal: &mut Journal,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
@@ -1949,7 +2275,13 @@ impl Engine {
             CopyScope::Tasks | CopyScope::Documents => (false, false),
         };
         let id = project.source.clone();
-        let members: Vec<GlobalId> = tasks.iter().map(|task| task.source.clone()).collect();
+        // A member that would not hold still is still a member: its counterpart is not an
+        // orphan for having been left unwritten this time.
+        let members: Vec<GlobalId> = tasks
+            .iter()
+            .map(|task| task.source.clone())
+            .chain(changed.iter().map(|outcome| outcome.source.clone()))
+            .collect();
         // The project lands with every edge it can already resolve — its members' targets
         // are known from their plans — so a project that has not changed is not written at
         // all. What it *reports* is read the way it always has been: against the ids known
@@ -2032,6 +2364,7 @@ impl Engine {
                     destination: landed,
                     via,
                     link,
+                    skipped: false,
                 }
             } else {
                 CopyAction::Updated {
@@ -2632,6 +2965,7 @@ impl Engine {
                         destination: GlobalId::new(destination.name().clone(), task.id.clone()),
                     },
                     placed: None,
+                    comments: None,
                 });
             }
             unrepeated(
@@ -2674,13 +3008,6 @@ impl Engine {
             self.rewrite_references(&mut planned, &mut running.references)
                 .await?;
         }
-        // Once the content that lands is settled, and before anything — a member project
-        // included — is written.
-        if !running.preflighted {
-            self.preflight_copy(request, planned.iter(), running)
-                .await?;
-        }
-
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
                 running.counterparts.insert(
@@ -2694,12 +3021,96 @@ impl Engine {
             }
         }
 
+        // A task skips only once every counterpart this copy found is known, because what it
+        // would write depends on the copied set as well as on its source: an edge to a member of
+        // the set names that member's counterpart, and one to anything else names it as its
+        // source does. So beside the two tokens, the edges and the `delivers` it would write
+        // have to be the ones the destination holds.
+        //
+        // Only a `--comments` copy and a copy by query skip at all. A copy by id without
+        // `--comments` reads and compares every task exactly as it did before there were
+        // tokens, so what it costs is what it cost then; it still records itself on every
+        // task it writes, for the next copy that can skip.
+        let skipping = request.comments || request.items.query().is_some();
+        for item in planned.iter_mut().filter(|_| skipping) {
+            let (Item::Task(task), Target::Update { .. }, Some(held), false) =
+                (&item.item, &item.target, &item.held, item.skipped)
+            else {
+                continue;
+            };
+            if task.version.is_none() {
+                continue;
+            }
+            let Item::Task(held_task) = &held.item else {
+                continue;
+            };
+            let edges = self.shown_edges(
+                &item.to,
+                mapped_edges(
+                    &item.edges,
+                    &item.source.source,
+                    &item.to,
+                    &running.resolvable,
+                    &running.counterparts,
+                ),
+                &running.private,
+            );
+            let delivers = self.shown_delivers(
+                &item.to,
+                delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                &running.private,
+            );
+            if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
+                continue;
+            }
+            let as_written = same_edges(&held.edges, &resolved(&edges))
+                && targets(&held_task.delivers, &item.to)
+                    == targets(&resolved_entries(&delivers), &item.to);
+            item.skipped = as_written && skips(task, held, item.with_comments, &item.to);
+        }
+        // What each task's comments come to at the destination, decided from the two reads
+        // already in hand before anything is written: the record a task lands with is a digest
+        // of the comments it will hold.
+        for item in &mut planned {
+            if let (Item::Task(task), true, false) = (&item.item, item.with_comments, item.skipped)
+            {
+                let landing = match &item.target {
+                    Target::Update { id, .. } => Some(GlobalId::new(item.to.clone(), id.clone())),
+                    Target::Create => None,
+                };
+                let held = item
+                    .held
+                    .as_ref()
+                    .and_then(|held| held.comments.clone())
+                    .unwrap_or_default();
+                item.comment_plan = Some(comments::plan(
+                    &item.source,
+                    origin_of(&task.metadata).as_ref(),
+                    item.comments.as_deref().unwrap_or_default(),
+                    landing.as_ref(),
+                    &held,
+                ));
+            }
+        }
+        // Once the content that lands is settled, and before anything — a member project
+        // included — is written. A task skipped writes nothing, so it has nothing to hold.
+        if !running.preflighted {
+            self.preflight_copy(
+                request,
+                planned.iter().filter(|item| !item.skipped),
+                running,
+            )
+            .await?;
+        }
+
         // Resolved once per item, and used by both passes: the repair pass writes the
         // same item again, and re-deriving this there could file it somewhere else.
         let mut filed = Vec::new();
         for item in &planned {
             filed.push(match (project, &item.item) {
                 (_, Item::Project(_)) => None,
+                // A task skipped is written nowhere, so it is filed nowhere either.
+                (None, _) if item.skipped => None,
                 (Some(filing), _) => filing.get(&item.to).cloned(),
                 (None, _) => self.filed(request, item, None, running, journal).await?,
             });
@@ -2712,6 +3123,7 @@ impl Engine {
         if project.is_none() {
             for (item, filed) in planned.iter_mut().zip(&filed) {
                 if let Some(filed) = filed
+                    && !item.skipped
                     && (self.boundary_active() || item.classification == Classification::Private)
                 {
                     let destination = self.writable(&item.to)?;
@@ -2763,7 +3175,9 @@ impl Engine {
                 delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
                 &running.private,
             );
-            if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
+            if !item.skipped
+                && (edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none))
+            {
                 unresolved.push(index);
             }
             let resolvable_delivers = resolved_entries(&delivers);
@@ -2801,6 +3215,7 @@ impl Engine {
                 }
             }
             if !request.dry_run
+                && !item.skipped
                 && let (Item::Task(task), Some(landed)) = (&item.item, outcome.destination())
             {
                 running.landed.push(LandedTask {
@@ -2852,7 +3267,18 @@ impl Engine {
         id: &GlobalId,
         running: &mut Running,
     ) -> Result<Planned, EngineError> {
-        let read = self.read(kind, id).await?;
+        let read = self.read_for_copy(request, kind, id, running).await?;
+        self.plan_read(request, read, running).await
+    }
+
+    /// Place one item already read, read its forward edges, and decide where it is going.
+    async fn plan_read(
+        &self,
+        request: &CopyRequest,
+        read: Read,
+        running: &mut Running,
+    ) -> Result<Planned, EngineError> {
+        let id = read.source.clone();
         let classification = self.copied_classification(request, &read, running).await?;
         let placement = match &read.item {
             Item::Task(task) => self.routes.place_classified(
@@ -2870,7 +3296,9 @@ impl Engine {
                 &project.repositories,
             ),
         };
-        self.aim(request, read, placement, classification).await
+        let aimed = running.aimed.remove(&id.to_string());
+        self.aim(request, read, placement, classification, aimed)
+            .await
     }
 
     /// Who may read one item read for a copy: its own declaration, tightened by its
@@ -3247,7 +3675,108 @@ impl Engine {
         Ok(Read {
             source: id.clone(),
             item,
+            comments: None,
         })
+    }
+
+    /// One item read for a copy.
+    ///
+    /// A task a `--comments` copy carries is read with every page of its comments as one
+    /// revision of it — see [`snapshot`] — starting from the detail read made for many tasks of
+    /// its source at once, when there was one, and read again from its first page once when its
+    /// requests disagreed. Every other item is read as [`Engine::read`] reads it, so a copy
+    /// without `--comments` costs exactly what it did before comments could be carried.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::ChangedWhileCopied`] for a task whose requests disagreed on both reads,
+    /// and every error [`Engine::read`] returns.
+    async fn read_for_copy(
+        &self,
+        request: &CopyRequest,
+        kind: Level,
+        id: &GlobalId,
+        running: &mut Running,
+    ) -> Result<Read, EngineError> {
+        if kind != Level::Task || !reads_comments(request) {
+            return self.read(kind, id).await;
+        }
+        let source = self.readable(&id.source)?;
+        if !source.source().capabilities().comments.is_native() {
+            // A source whose tasks hold no comments has none to carry.
+            let mut read = self.read(kind, id).await?;
+            read.comments = Some(Vec::new());
+            return Ok(read);
+        }
+        let mut prefetched = running.prefetched.remove(&id.to_string());
+        for _ in 0..2 {
+            let answer = match prefetched.take() {
+                Some(answer) => answer,
+                None => snapshot::first(source, &id.native).await,
+            };
+            let read = answer
+                .map_err(|error| refused(source, error))?
+                .ok_or_else(|| EngineError::NoSuchItem { id: id.to_string() })?;
+            match snapshot::take(source, &id.native, read)
+                .await
+                .map_err(|error| refused(source, error))?
+            {
+                snapshot::Taken::Whole(whole) => {
+                    return Ok(Read {
+                        source: id.clone(),
+                        item: Item::Task(Box::new(whole.task)),
+                        comments: Some(whole.comments.unwrap_or_default()),
+                    });
+                }
+                snapshot::Taken::Gone => {
+                    return Err(EngineError::NoSuchItem { id: id.to_string() });
+                }
+                snapshot::Taken::Changed => {}
+            }
+        }
+        Err(EngineError::ChangedWhileCopied { item: id.clone() })
+    }
+
+    /// Read the first detail page of every task in `ids` a `--comments` copy carries, as few
+    /// requests as each source's own batched detail read takes, for [`Engine::read_for_copy`]
+    /// to start from — each task with the first page of its comments beside it.
+    ///
+    /// Nothing for a copy without `--comments`, which reads each task by itself as it always did.
+    async fn prefetch(&self, request: &CopyRequest, ids: &[GlobalId], running: &mut Running) {
+        if !reads_comments(request) {
+            return;
+        }
+        let mut by_source: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        for id in ids {
+            if running.prefetched.contains_key(&id.to_string()) {
+                continue;
+            }
+            match by_source.iter_mut().find(|(name, _)| name == &id.source) {
+                Some((_, natives)) => {
+                    if !natives.contains(&id.native) {
+                        natives.push(id.native.clone());
+                    }
+                }
+                None => by_source.push((id.source.clone(), vec![id.native.clone()])),
+            }
+        }
+        for (name, natives) in by_source {
+            let Ok(source) = self.readable(&name) else {
+                continue;
+            };
+            if !source.source().capabilities().comments.is_native() {
+                continue;
+            }
+            let answers = source
+                .source()
+                .get_task_details(&natives, Some(&snapshot::comment_page(source)))
+                .await;
+            for (native, answer) in natives.into_iter().zip(answers) {
+                running
+                    .prefetched
+                    .insert(GlobalId::new(name.clone(), native).to_string(), answer);
+            }
+        }
     }
 
     /// Decide where one read item is going, once it is known which source it lands in.
@@ -3257,8 +3786,13 @@ impl Engine {
         read: Read,
         placement: Placement,
         classification: Classification,
+        aimed: Option<(Target, Option<Prior>)>,
     ) -> Result<Planned, EngineError> {
-        let Read { source: id, item } = read;
+        let Read {
+            source: id,
+            item,
+            comments,
+        } = read;
         // Provenance naming a private source stays out of anywhere not declared private.
         let withheld = self.declared(&id.source) == crate::config::SourceVisibility::Private
             && self.declared(&placement.destination) != crate::config::SourceVisibility::Private;
@@ -3288,10 +3822,17 @@ impl Engine {
         if let Some(first) = assets.first() {
             assets::stores(destination, &id.to_string(), &first.name)?;
         }
+        let with_comments = request.comments && item.level() == Level::Task;
         let edges = forward_edges(source, &id.native, item.level()).await?;
-        let (target, held) = self
-            .target(destination, request, &id, &item, withheld)
-            .await?;
+        // A task copied by query was already aimed from its listing, when the copy asked
+        // whether it could skip it.
+        let (target, held) = match aimed {
+            Some(aimed) => aimed,
+            None => {
+                self.target(destination, request, &id, &item, withheld)
+                    .await?
+            }
+        };
         Ok(Planned {
             source: id,
             item,
@@ -3303,6 +3844,10 @@ impl Engine {
             assets,
             classification,
             withheld,
+            comments,
+            with_comments,
+            comment_plan: None,
+            skipped: false,
         })
     }
 
@@ -3415,8 +3960,12 @@ impl Engine {
         // one back: a person who re-pointed that item's origin has said it is not this
         // one's counterpart any more, so the link is ignored and rewritten to whatever the
         // rules below find.
+        let comments = request.comments;
         if let Some(link) = link_of(metadata, destination.name()) {
-            match self.prior(destination, item.level(), &link.native).await? {
+            match self
+                .prior_reading(destination, item.level(), &link.native, comments)
+                .await?
+            {
                 // A copy whose provenance was withheld left no origin there to name this
                 // item back, so a link it recorded on its own private source is believed
                 // while the item it names holds none.
@@ -3448,7 +3997,7 @@ impl Engine {
             // The read that says the origin still names something is the read of what it
             // holds, so rule 1 costs one round trip rather than two.
             if let Some(held) = self
-                .prior(destination, item.level(), &origin.native)
+                .prior_reading(destination, item.level(), &origin.native, comments)
                 .await?
             {
                 return Ok((
@@ -3470,7 +4019,9 @@ impl Engine {
             .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
             .await?
         {
-            let held = self.prior(destination, item.level(), &found).await?;
+            let held = self
+                .prior_reading(destination, item.level(), &found, comments)
+                .await?;
             return Ok((
                 Target::Update {
                     id: found,
@@ -3489,7 +4040,9 @@ impl Engine {
         if let Some(wanted) = wanted
             && let Some(found) = self.scan(destination, item.level(), &wanted).await?
         {
-            let held = self.prior(destination, item.level(), &found).await?;
+            let held = self
+                .prior_reading(destination, item.level(), &found, comments)
+                .await?;
             return Ok((
                 Target::Update {
                     id: found,
@@ -3607,6 +4160,7 @@ impl Engine {
                 destination,
                 via: via.via(),
                 link: None,
+                skipped: item.skipped,
             },
             (_, destination) => CopyAction::Created {
                 destination,
@@ -3614,43 +4168,68 @@ impl Engine {
                 link: None,
             },
         };
+        let outcome = |action: CopyAction| CopyOutcome {
+            source: item.source.clone(),
+            action,
+            placed: item.placed.clone(),
+            comments: if item.skipped {
+                item.with_comments
+                    .then(|| skipped_counts(item.held.as_ref()))
+            } else {
+                item.comment_plan.as_ref().map(|plan| plan.counts)
+            },
+        };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to
         // put that item back.
         let prior = item.held.clone();
-        let edges = resolved(edges);
         let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
-        if let Some(id) = &target
-            && !changes(
-                prior.as_ref(),
-                item,
-                id,
-                &project,
-                &edges,
-                delivers,
-                destination.name(),
-            )
+        if item.skipped
+            && let Some(id) = &target
         {
-            return Ok((
-                CopyOutcome {
-                    source: item.source.clone(),
-                    action: reached(Some(qualified(id.clone())), false),
-                    placed: item.placed.clone(),
-                },
-                prior,
-            ));
+            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
+        }
+        let edges = resolved(edges);
+        let comments_move = item
+            .comment_plan
+            .as_ref()
+            .is_some_and(|plan| !plan.steps.is_empty());
+        let changed = comments_move
+            || target.as_ref().is_none_or(|id| {
+                changes(
+                    prior.as_ref(),
+                    item,
+                    id,
+                    &project,
+                    &edges,
+                    delivers,
+                    destination.name(),
+                )
+            });
+        // An item that already reads as the source does may still hold a stale record of the
+        // copy that left it so, which this copy brings up to date without calling it changed.
+        let rerecord = !changed
+            && match (&target, prior.as_ref()) {
+                (Some(id), Some(held)) => stale_record(
+                    item,
+                    held,
+                    id,
+                    &project,
+                    &edges,
+                    delivers,
+                    destination.name(),
+                ),
+                _ => false,
+            };
+        if let Some(id) = &target
+            && !changed
+            && !rerecord
+        {
+            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
         }
         if request.dry_run {
-            return Ok((
-                CopyOutcome {
-                    source: item.source.clone(),
-                    // Null only for a create here: nothing was created, so there is no id to
-                    // report.
-                    action: reached(target.map(qualified), true),
-                    placed: item.placed.clone(),
-                },
-                prior,
-            ));
+            // Null only for a create here: nothing was created, so there is no id to report.
+            return Ok((outcome(reached(target.map(qualified), changed)), prior));
         }
         let written = qualified(
             self.write(
@@ -3665,14 +4244,101 @@ impl Engine {
             )
             .await?,
         );
-        Ok((
-            CopyOutcome {
-                source: item.source.clone(),
-                action: reached(Some(written), true),
-                placed: item.placed.clone(),
-            },
-            prior,
-        ))
+        if let Some(plan) = &item.comment_plan {
+            self.write_comments(destination, &written.native, plan, journal)
+                .await?;
+        }
+        Ok((outcome(reached(Some(written), changed)), prior))
+    }
+
+    /// Make one destination task's comments what `plan` decided, recording how to take each
+    /// write back.
+    async fn write_comments(
+        &self,
+        destination: &ResolvedSource,
+        task: &NativeId,
+        plan: &comments::CommentPlan,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        let at = destination.name().clone();
+        let gone = || EngineError::NoSuchTask {
+            id: GlobalId::new(at.clone(), task.clone()).to_string(),
+        };
+        for step in &plan.steps {
+            match step {
+                comments::Step::Delete(before) => {
+                    let removed = destination
+                        .source()
+                        .delete_comment(task, &before.id)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
+                    if removed.is_some()
+                        && let (Some(origin), Ok(body)) = (
+                            before.origin.clone(),
+                            onetaskgraph_plugin_api::CommentBody::new(before.body.clone()),
+                        )
+                    {
+                        journal.comments.push(CommentUndo {
+                            at: at.clone(),
+                            task: task.clone(),
+                            undo: CommentUndoing::Deleted(CommentCopy { body, origin }),
+                        });
+                    }
+                }
+                comments::Step::Edit { id, copy, before } => {
+                    let edited = destination
+                        .source()
+                        .write_comment_copy(task, Some(id), copy)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
+                    match edited {
+                        Some(_) => {
+                            if let (Some(origin), Ok(body)) = (
+                                before.origin.clone(),
+                                onetaskgraph_plugin_api::CommentBody::new(before.body.clone()),
+                            ) {
+                                journal.comments.push(CommentUndo {
+                                    at: at.clone(),
+                                    task: task.clone(),
+                                    undo: CommentUndoing::Edited {
+                                        id: id.clone(),
+                                        before: CommentCopy { body, origin },
+                                    },
+                                });
+                            }
+                        }
+                        // Removed since it was read: the copy is written afresh.
+                        None => {
+                            let added = destination
+                                .source()
+                                .write_comment_copy(task, None, copy)
+                                .await
+                                .map_err(|error| refused(destination, error))?
+                                .ok_or_else(gone)?;
+                            journal.comments.push(CommentUndo {
+                                at: at.clone(),
+                                task: task.clone(),
+                                undo: CommentUndoing::Added(added.id),
+                            });
+                        }
+                    }
+                }
+                comments::Step::Add(copy) => {
+                    let added = destination
+                        .source()
+                        .write_comment_copy(task, None, copy)
+                        .await
+                        .map_err(|error| refused(destination, error))?
+                        .ok_or_else(gone)?;
+                    journal.comments.push(CommentUndo {
+                        at: at.clone(),
+                        task: task.clone(),
+                        undo: CommentUndoing::Added(added.id),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Which destination project this item is filed under, when it is filed at all.
@@ -3990,7 +4656,55 @@ impl Engine {
         kind: Level,
         id: &NativeId,
     ) -> Result<Option<Prior>, EngineError> {
+        self.prior_reading(destination, kind, id, false).await
+    }
+
+    /// [`Engine::prior`], with every page of a task's comments there when `comments` asks and
+    /// the destination has comments: the first page in the same detail read as the task.
+    async fn prior_reading(
+        &self,
+        destination: &ResolvedSource,
+        kind: Level,
+        id: &NativeId,
+        comments: bool,
+    ) -> Result<Option<Prior>, EngineError> {
+        let mut held_comments = None;
         let held = match kind {
+            Level::Task if comments && destination.source().capabilities().comments.is_native() => {
+                let mut whole = None;
+                for _ in 0..2 {
+                    let Some(read) = snapshot::first(destination, id)
+                        .await
+                        .map_err(|error| refused(destination, error))?
+                    else {
+                        return Ok(None);
+                    };
+                    match snapshot::take(destination, id, read)
+                        .await
+                        .map_err(|error| refused(destination, error))?
+                    {
+                        snapshot::Taken::Whole(taken) => {
+                            whole = Some(taken);
+                            break;
+                        }
+                        snapshot::Taken::Gone => return Ok(None),
+                        snapshot::Taken::Changed => {}
+                    }
+                }
+                let whole = whole.ok_or_else(|| {
+                    refused(
+                        destination,
+                        SourceError::Unavailable {
+                            message: format!(
+                                "task {id} changed while the copy read it, twice; copy again \
+                                 once it has settled"
+                            ),
+                        },
+                    )
+                })?;
+                held_comments = Some(whole.comments.unwrap_or_default());
+                Some(Item::Task(Box::new(whole.task)))
+            }
             Level::Task => destination
                 .source()
                 .get_task(id)
@@ -4022,6 +4736,7 @@ impl Engine {
             edges,
             assets,
             recorded,
+            comments: held_comments,
         }))
     }
 
@@ -4051,7 +4766,7 @@ impl Engine {
         // destination holds at the origin key is what a copy-back leaves there, and what it
         // holds as `delivered_by` is what the item keeps.
         let origin = recorded(item, prior.as_ref());
-        let landing = outgoing(
+        let mut landing = outgoing(
             item,
             suggested,
             project.clone(),
@@ -4059,6 +4774,12 @@ impl Engine {
             delivers,
             prior.as_ref(),
         );
+        // A task lands with the record of this copy: the source's token it read, whether it
+        // carried the comments, and the digest of what it leaves here.
+        if let Item::Task(task) = &mut landing {
+            let record = record_of(item, task, edges, destination.name());
+            record.stamp(&mut task.metadata);
+        }
         // Immediately before anything is sent: a destination declared private is read again
         // for this write, whatever an earlier write read.
         self.at_write(
@@ -5081,6 +5802,19 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
         Item::Document(document) => Exposure::of_document(document),
     }
     .assets(&item.assets)
+    // The comments a `--comments` copy carries land beside the item, so they are held to the
+    // boundary with it — every one of them, before any is written.
+    .and(
+        item.comments
+            .iter()
+            .flatten()
+            .filter(|_| item.with_comments)
+            .fold(Exposure::metadata(Vec::new()), |exposure, comment| {
+                exposure
+                    .and(Exposure::text(comment.body.clone()))
+                    .and(Exposure::metadata(comment.author.iter().cloned()))
+            }),
+    )
     .and(Exposure::metadata(
         item.edges
             .iter()
@@ -5148,7 +5882,10 @@ fn carried(
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
-    ] {
+    ]
+    .into_iter()
+    .chain(record::KEYS)
+    {
         carried.remove(kept);
         if let Some(held) = own.and_then(|own| own.get(kept)) {
             carried.insert(kept.to_owned(), held.clone());
@@ -5212,6 +5949,119 @@ fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
     Origin::Records(item.source.clone())
 }
 
+/// Whether a copy reads each task's comments from its source: to carry them, or to confirm the
+/// comment activity of the query that names its items.
+fn reads_comments(request: &CopyRequest) -> bool {
+    request.comments
+        || request
+            .items
+            .query()
+            .is_some_and(|query| query.commented_since.is_some())
+}
+
+/// Whether a copy may skip `task`, whose counterpart the destination holds as `held`: its
+/// source token is the one the counterpart records, and the counterpart digests now — over the
+/// read the copy made of it to find it, comments included when the copy carries them — to the
+/// digest the copy that left it so recorded.
+fn skips(task: &Task, held: &Prior, with_comments: bool, destination: &SourceName) -> bool {
+    let Item::Task(held_task) = &held.item else {
+        return false;
+    };
+    let comments = if with_comments {
+        match &held.comments {
+            Some(held) => Some(comments::digest_entries(held)),
+            None => return false,
+        }
+    } else {
+        None
+    };
+    let now = record::digest(held_task, &held.edges, comments, destination);
+    record::skips(
+        task.version.as_deref(),
+        with_comments,
+        &held_task.metadata,
+        &now,
+    )
+}
+
+/// What a `--comments` copy reports for the comments of a task it skipped: every copy the
+/// destination holds of a comment, each already reading as its origin.
+fn skipped_counts(held: Option<&Prior>) -> CommentCounts {
+    let copies = held
+        .and_then(|held| held.comments.as_ref())
+        .map_or(0, |held| {
+            held.iter()
+                .filter(|comment| comment.origin.is_some())
+                .count()
+        });
+    CommentCounts {
+        unchanged: u64::try_from(copies).unwrap_or(u64::MAX),
+        ..CommentCounts::default()
+    }
+}
+
+/// The record a copy of `item` leaves on its destination task, which lands as `task` with
+/// `edges`: the source's token as read, whether the comments were carried, and the digest of
+/// what lands — the comments as the copy leaves them included, when it carries them.
+fn record_of(
+    item: &Planned,
+    task: &Task,
+    edges: &[DependencyEdge],
+    destination: &SourceName,
+) -> record::Record {
+    let version = match &item.item {
+        Item::Task(source) => source.version.clone(),
+        Item::Project(_) | Item::Document(_) => None,
+    };
+    let comments = item.with_comments.then(|| match &item.comment_plan {
+        Some(plan) => plan.after.clone(),
+        None => comments::digest_entries(
+            item.held
+                .as_ref()
+                .and_then(|held| held.comments.as_deref())
+                .unwrap_or_default(),
+        ),
+    });
+    record::Record {
+        version,
+        with_comments: item.with_comments,
+        digest: record::digest(task, edges, comments, destination),
+    }
+}
+
+/// Whether a destination task that already reads as the source does holds a record of the
+/// copy other than the one this copy would leave — and this copy is one that brings it up to
+/// date: a `--comments` copy always, and a copy without it only to take away a record that
+/// says the comments were carried.
+///
+/// A copy without `--comments` leaves any other stale record where it is rather than spend a
+/// write on it, so a repeat copy of an unchanged source costs exactly what it did before
+/// there was a record; the next copy that writes the task records it afresh.
+fn stale_record(
+    item: &Planned,
+    held: &Prior,
+    target: &NativeId,
+    project: &Option<NativeId>,
+    edges: &[DependencyEdge],
+    delivers: &[TaskRef],
+    destination: &SourceName,
+) -> bool {
+    let landing = outgoing(
+        item,
+        target.clone(),
+        project.clone(),
+        &recorded(item, Some(held)),
+        delivers,
+        Some(held),
+    );
+    let (Item::Task(task), Item::Task(held_task)) = (&landing, &held.item) else {
+        return false;
+    };
+    let record = record_of(item, task, edges, destination);
+    !record.held_by(&held_task.metadata)
+        && (item.with_comments || record::carried_comments(&held_task.metadata))
+}
+
 /// Whether the destination already reads exactly as this copy would leave it.
 ///
 /// The destination's own `url` and timestamps are excluded because a copy never writes
@@ -5230,7 +6080,8 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.priority == outgoing.priority
                 && held.labels == outgoing.labels
                 && held.project == outgoing.project
-                && held.metadata == outgoing.metadata
+                && record::without_record(&held.metadata)
+                    == record::without_record(&outgoing.metadata)
                 && held.repositories == outgoing.repositories
                 && held.classification == outgoing.classification
         }

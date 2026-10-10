@@ -312,12 +312,13 @@ pub enum TaskCommand {
     ShowMany(TaskShowManyArgs),
     /// Walk one task's dependency edges.
     Deps(DependencyArgs),
-    /// Copy tasks into another configured source, by qualified id.
+    /// Copy tasks into another configured source, by qualified id or by the narrowing
+    /// `task list` takes.
     Copy(TaskCopyArgs),
     /// Add, list, edit and delete one task's comments.
     ///
-    /// A copy never reads or writes a comment, at either end: these verbs are the only way
-    /// one is written.
+    /// A copy without --comments never reads or writes a comment, at either end; with it, it
+    /// keeps the destination's copies of the source's comments in step.
     Comment {
         #[command(subcommand)]
         command: CommentCommand,
@@ -1526,6 +1527,14 @@ pub struct CopyArgs {
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
+    /// Write nothing at all to the source: no `onetaskgraph.copies` link on any item copied.
+    ///
+    /// The next copy finds each counterpart by the destination's own `onetaskgraph.origin`
+    /// instead, and every item reports its link as `skipped`. A copy out of a hosted board
+    /// into a folder of Markdown this way leaves the board exactly as it was.
+    #[arg(long = "no-link")]
+    pub no_link: bool,
+
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
@@ -1533,14 +1542,30 @@ pub struct CopyArgs {
 /// `onetaskgraph task copy`.
 #[derive(Debug, Args)]
 pub struct TaskCopyArgs {
-    /// The qualified ids to copy, `<source>:<native-id>`.
+    /// The qualified ids to copy, `<source>:<native-id>` — or none, and the narrowing below
+    /// names the tasks instead.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — a `GlobalId` here would refuse an
     /// unqualified id as a bad invocation, under clap's wording, for the reason recorded
     /// on `ShowArgs::id`. `qualified` in `main` converts through `GlobalId::from_str` and
     /// says what a qualified id is and where to read the configured names.
-    #[arg(value_name = "ID", required = true)]
+    #[arg(value_name = "ID")]
     pub id: Vec<String>,
+
+    /// Copy what `task list` with the same narrowing returns, in place of ids: these sources,
+    /// and every task matching `--commented-since` and every `--metadata` given.
+    #[command(flatten)]
+    pub query: CopyQueryArgs,
+
+    /// Keep the destination's copies of each task's comments in step with the source's.
+    ///
+    /// Adds a copy of each source comment the destination holds none of, edits a copy whose
+    /// origin comment changed and deletes one whose origin comment is gone. A comment written
+    /// at the destination is never edited or deleted, and a comment that is itself a copy of
+    /// one of the destination's own is never sent back. Each copied comment records where it
+    /// came from as its `origin`. Without this flag a copy reads and writes no comment.
+    #[arg(long)]
+    pub comments: bool,
 
     /// Create each task at the destination without looking for a counterpart first.
     ///
@@ -1556,6 +1581,50 @@ pub struct TaskCopyArgs {
     // llmlint: ignore-end[invalid_states_unrepresentable]
     #[command(flatten)]
     pub copy: CopyArgs,
+}
+
+/// The narrowing `task copy` takes in place of ids: the `task list` flags that name which
+/// tasks a copy carries.
+#[derive(Debug, Args)]
+pub struct CopyQueryArgs {
+    /// Copy tasks of this source. Repeat for several; with another narrowing and no
+    /// `--source`, the configured selection.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `SelectionArgs::source`.
+    #[arg(long = "source", value_name = "S", conflicts_with = "id")]
+    pub source: Vec<String>,
+
+    /// Copy tasks with a comment created or last edited at or after this RFC 3339 instant, as
+    /// `task list --commented-since` keeps them.
+    ///
+    /// Confirmed from the comments the copy reads anyway, so no task's comments are read
+    /// twice; a task unchanged since it was last copied with its comments is confirmed from
+    /// the destination's copies of them.
+    #[arg(
+        long = "commented-since",
+        value_name = "RFC3339",
+        value_parser = instant,
+        conflicts_with = "id"
+    )]
+    pub commented_since: Option<DateTime<Utc>>,
+
+    /// Copy tasks holding this metadata value, `<KEY>[/<SEGMENT>…]=<VALUE>`, as `task list
+    /// --metadata` keeps them. Repeat for several.
+    #[arg(
+        long = "metadata",
+        value_name = "KEY[/SEGMENT...]=VALUE",
+        value_parser = metadata_match,
+        conflicts_with = "id"
+    )]
+    pub metadata: Vec<MetadataMatch>,
+}
+
+impl CopyQueryArgs {
+    /// Whether any narrowing was given, so the copy names its tasks by a query.
+    #[must_use]
+    pub fn given(&self) -> bool {
+        !self.source.is_empty() || self.commented_since.is_some() || !self.metadata.is_empty()
+    }
 }
 
 /// `onetaskgraph project copy`.
@@ -1578,6 +1647,11 @@ pub struct ProjectCopyArgs {
     /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
     #[arg(long = "member", value_name = "TASK-ID", conflicts_with = "no_tasks")]
     pub member: Vec<String>,
+
+    /// Keep the destination's copies of each copied task's comments in step with the
+    /// source's, as `task copy --comments` does.
+    #[arg(long, conflicts_with = "no_tasks")]
+    pub comments: bool,
 
     #[command(flatten)]
     pub copy: CopyArgs,

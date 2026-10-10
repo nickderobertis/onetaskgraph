@@ -52,15 +52,15 @@ pub use clock::{
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::boundary;
 pub use engine::{
-    Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup,
-    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine,
-    EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey, LabelRequest, LeftBehind,
-    MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
-    ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
-    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet,
-    TaskUpdated, graph_label, settled,
+    Body, BudgetSpent, CommentCounts, CommentList, ConfiguredSource, CopyAction, CopyItems,
+    CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment,
+    Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
+    DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
+    LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION,
+    Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified,
+    QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing,
+    SourceState, Spent, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest,
+    TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

@@ -76,10 +76,26 @@ export type CopyOptions = WriteOptions & {
   matchBy?: string;
   recreate?: boolean;
   dryRun?: boolean;
+  // Write nothing at all to the source: no `onetaskgraph.copies` link on anything copied, every
+  // item's `link` reported `skipped`. The next copy finds each counterpart by its own origin.
+  noLink?: boolean;
+  // Keep the destination's copies of each task's comments in step with the source's: add, edit
+  // and delete copies, never touching a comment written at the destination. A task or project
+  // copy only.
+  comments?: boolean;
+};
+// What `task copy` takes in place of ids: the narrowing `task list` takes. Every task these
+// sources hold that matches the comment-activity instant and every metadata match is copied.
+export type CopyQueryOptions = {
+  sources?: string[];
+  // An RFC 3339 instant with its offset.
+  commentedSince?: string;
+  // `<KEY>[/<SEGMENT>...]=<VALUE>`, as `taskList` takes it.
+  metadata?: string[];
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
-// without the correspondence lookup. Only `task copy` takes it.
-export type TaskCopyOptions = CopyOptions & { create?: boolean };
+// without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
+export type TaskCopyOptions = CopyOptions & CopyQueryOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) & WriteOptions;
@@ -255,7 +271,8 @@ export const commandAlternateRoots: Readonly<
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
 // write — a copy, or `task status set` — that landed and could not keep a task it delivers in
-// step, which its response names. A comment verb is one call to one source and neither reads
+// step, or a copy that left a task unwritten because it kept changing while it was read, which
+// its response names. A comment verb is one call to one source and neither reads
 // several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
@@ -765,11 +782,27 @@ function termScopeFlags(method: string, options: { termScope?: unknown }): strin
   return scope.flatMap((repository) => ["--term-scope", repository]);
 }
 
-function copyFlags(options: CopyOptions): string[] {
-  const args: string[] = [...termScopeFlags("copy", options)];
+function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
+  const args: string[] = [...termScopeFlags(method, options)];
+  for (const flag of ["noLink", "comments"] as const) {
+    if (options[flag] !== undefined && typeof options[flag] !== "boolean") {
+      throw new TypeError(`${method}: ${flag} must be a boolean`);
+    }
+  }
   if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
   if (options.recreate) args.push("--recreate");
   if (options.dryRun) args.push("--dry-run");
+  if (options.noLink) args.push("--no-link");
+  if (options.comments) args.push("--comments");
+  for (const source of stringList(method, "sources", options.sources)) {
+    args.push("--source", source);
+  }
+  if (options.commentedSince !== undefined) {
+    args.push("--commented-since", stringOption(method, "commentedSince", options.commentedSince));
+  }
+  for (const match of stringList(method, "metadata", options.metadata)) {
+    args.push("--metadata", match);
+  }
   return args;
 }
 
@@ -963,7 +996,7 @@ export class OnetaskgraphClient {
       ...ids,
       "--to",
       to,
-      ...copyFlags(options),
+      ...copyFlags("taskCopy", options),
       ...(options.create ? ["--create"] : []),
     ]);
   }
@@ -1002,7 +1035,7 @@ export class OnetaskgraphClient {
     to: string,
     options: CopyOptions & { noTasks?: boolean; members?: string[] } = {},
   ): Promise<CopyReport> {
-    const args = [id, "--to", to, ...copyFlags(options)];
+    const args = [id, "--to", to, ...copyFlags("projectCopy", options)];
     if (options.noTasks) args.push("--no-tasks");
     for (const member of options.members ?? []) args.push("--member", member);
     return this.run("project copy", args);
@@ -1035,8 +1068,13 @@ export class OnetaskgraphClient {
   ): Promise<DocumentDetail> {
     return this.run("document show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
   }
-  documentCopy(ids: string[], to: string, options: CopyOptions = {}): Promise<CopyReport> {
-    return this.run("document copy", [...ids, "--to", to, ...copyFlags(options)]);
+  // A document has no comments, so a document copy carries none.
+  documentCopy(
+    ids: string[],
+    to: string,
+    options: Omit<CopyOptions, "comments"> = {},
+  ): Promise<CopyReport> {
+    return this.run("document copy", [...ids, "--to", to, ...copyFlags("documentCopy", options)]);
   }
   documentMetadataSet(
     id: string,

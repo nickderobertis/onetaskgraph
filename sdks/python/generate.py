@@ -142,6 +142,8 @@ OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
     "no_comments": "bool",
+    "comments": "bool",
+    "no_link": "bool",
     "answers": "answers",
     "asset": "list[str] | tuple[str, ...]",
     "author": "str",
@@ -200,6 +202,8 @@ OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
     "no_comments": None,
+    "comments": None,
+    "no_link": None,
     "answers": "FILE",
     "asset": "PATH",
     "author": "NAME",
@@ -274,6 +278,13 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     # `task list` keeps the tasks holding a metadata string at a key and nested path, where every
     # write verb sets a key to a JSON value.
     ("task", "list"): {
+        "metadata": OptionShape(
+            type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
+        )
+    },
+    # `task copy` names the tasks it copies by `task list`'s narrowing when it names no ids, so it
+    # keeps the tasks holding a metadata string exactly as `task list` does.
+    ("task", "copy"): {
         "metadata": OptionShape(
             type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
         )

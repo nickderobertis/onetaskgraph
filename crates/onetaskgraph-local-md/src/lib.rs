@@ -86,9 +86,9 @@ use onetaskgraph_plugin_api::{
     DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
     ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
     Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, Visibility,
-    WriteSupport, WriteTarget,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
+    Visibility, WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -1812,6 +1812,17 @@ impl TaskSource for LocalMdSource {
         };
         self.paginate(file.comments, page).map(Some)
     }
+    /// Each task with the page of its comments `comments` names, the two out of one read of
+    /// its file.
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        ids.iter()
+            .map(|id| self.task_detail(id, comments))
+            .collect()
+    }
     async fn add_comment(
         &self,
         task: &NativeId,
@@ -2127,10 +2138,38 @@ impl LocalMdSource {
         let Some(path) = self.locate(Kind::Task, id)? else {
             return Ok(None);
         };
-        self.parse(WorkKind::Task, &path)?;
-        let text = fs::read_to_string(&path).map_err(|e| SourceError::Malformed {
-            message: format!("{}: {e}", path.display()),
-        })?;
+        let text = Self::read_text(&path)?;
+        self.parse_text(WorkKind::Task, &path, &text)?;
+        Self::task_file_of(path, text).map(Some)
+    }
+
+    /// The task and the page of its comments `comments` names, both out of one read of its
+    /// file — so the two are always one revision of the task, which two reads of a file a
+    /// person may be saving cannot promise.
+    fn task_detail(
+        &self,
+        id: &NativeId,
+        comments: Option<&PageRequest>,
+    ) -> Result<Option<TaskDetailRead>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        let read = task(self.parse_text(WorkKind::Task, &path, &text)?);
+        let comments = comments.map(|page| {
+            Self::task_file_of(path, text)
+                .and_then(|file| self.paginate(file.comments, page))
+                .map(Some)
+        });
+        Ok(Some(TaskDetailRead {
+            task: read,
+            comments,
+        }))
+    }
+
+    /// The task file at `path`, whose whole text is `text`, split into what a comment write
+    /// needs.
+    fn task_file_of(path: PathBuf, text: String) -> Result<TaskFile, SourceError> {
         let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(&path))?;
         let (content, comments) = sectioned(&text[body_at..]);
         let section_at = body_at + content.len();
@@ -2146,13 +2185,13 @@ impl LocalMdSource {
                 ),
             });
         }
-        Ok(Some(TaskFile {
+        Ok(TaskFile {
             path,
             text,
             body_at,
             section_at,
             comments,
-        }))
+        })
     }
 }
 

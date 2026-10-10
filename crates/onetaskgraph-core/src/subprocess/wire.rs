@@ -316,6 +316,13 @@ pub(crate) struct InitializeResult {
     /// the origin's hidden marker appended to its body (§4.16a). Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) comment_copies: bool,
+    /// Whether this plugin answers `get_task_detail` (§3.13).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// task and a page of its comments are read from it through `get_task` and `task_comments`,
+    /// one call each. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) task_details: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -560,6 +567,32 @@ pub(crate) struct CommentsParams {
     pub(crate) task: NativeId,
     /// Where to resume and how much to return.
     pub(crate) page: PageRequest,
+}
+
+/// `get_task_detail` parameters (§4.4a).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskDetailParams {
+    /// The task.
+    pub(crate) id: NativeId,
+    /// The page of its comments wanted beside it.
+    pub(crate) comments: PageRequest,
+}
+
+/// The `get_task_detail` result (§4.4a): the task and that page of its comments, read as one
+/// revision of it — both `null` when there is no such task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskDetailResult {
+    /// The task, or `null`.
+    #[serde(default)]
+    pub(crate) task: Option<Task>,
+    /// The page of its comments, or `null` with the task — and `null` beside a task whose
+    /// comments could not be read, the refusal then in `comments_error`.
+    #[serde(default)]
+    pub(crate) page: Option<Page<Comment>>,
+    /// Why the task's comments could not be read, when the task itself could — a board draft,
+    /// which has none — so the task is still answered. Omitted when they were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) comments_error: Option<SourceError>,
 }
 
 /// The `task_comments` result (§4.15): a page, or `null` when there is no such task.

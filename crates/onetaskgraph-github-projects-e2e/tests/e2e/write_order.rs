@@ -408,7 +408,19 @@ fn a_bound_recopy_applies_each_change_alone_and_all_together_in_three_requests()
         let (_, served) = setup.ok(&["task", "copy", "plans:A", "--to", "board", "--json"]);
         one_read_then_writes(what, &served, 3);
         let item = setup.item(&a);
-        assert_eq!(item[check.0], check.1, "{what}");
+        let mut held = item[check.0].clone();
+        if let Some(metadata) = held.as_object_mut().filter(|_| check.0 == "metadata") {
+            // The copy's record of itself rides along in the same write; what this row changes
+            // is the caller's key.
+            assert!(
+                metadata.remove("onetaskgraph.copied_version").is_some()
+                    && metadata
+                        .remove("onetaskgraph.copied_destination_version")
+                        .is_some(),
+                "{what}: the copy records itself on the issue"
+            );
+        }
+        assert_eq!(held, check.1, "{what}");
         // Back as it was, so the next row changes one thing.
         rebound(&setup, &a, &as_copied, None, "first body");
         setup.ok(&["task", "copy", "plans:A", "--to", "board", "--json"]);

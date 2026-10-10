@@ -28,8 +28,8 @@ use super::wire::{
     DeleteParams, DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams,
     EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
     LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
-    ProjectWriteParams, Request, Response, ServedWriteParams, StatusParams, TaskQueryParams,
-    UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
+    ProjectWriteParams, Request, Response, ServedWriteParams, StatusParams, TaskDetailParams,
+    TaskQueryParams, UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -272,6 +272,9 @@ async fn initialize(
                 // And a copied comment: every plugin of this build stores its origin natively
                 // or through the contract's default marker.
                 comment_copies: true,
+                // And a task read beside a page of its comments, which this host answers with
+                // the plugin's own detail read — one read of the two, where the plugin makes one.
+                task_details: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -419,6 +422,24 @@ async fn dispatch(
             let params: IdParams = decode(method, params)?;
             let task = source.get_task(&params.id).await?;
             encode(json!({ "task": task.map(|task| told_task(task, known)) }))
+        }
+        "get_task_detail" => {
+            let params: TaskDetailParams = decode(method, params)?;
+            let read = source
+                .get_task_details(std::slice::from_ref(&params.id), Some(&params.comments))
+                .await
+                .pop()
+                .unwrap_or(Ok(None))?;
+            let Some(read) = read else {
+                return encode(json!({ "task": null, "page": null }));
+            };
+            let task = told_task(read.task, known);
+            match read.comments {
+                Some(Ok(page)) => encode(json!({ "task": task, "page": page })),
+                // The task was read and its comments were refused: both are the answer.
+                Some(Err(error)) => encode(json!({ "task": task, "comments_error": error })),
+                None => encode(json!({ "task": task, "page": null })),
+            }
         }
         "get_project" => {
             let params: IdParams = decode(method, params)?;

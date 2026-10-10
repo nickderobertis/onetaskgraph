@@ -4171,6 +4171,9 @@ fn map_comment(v: &Value) -> Result<Comment, SourceError> {
         Some(Value::Null) => None,
         Some(user) => Some(str_at(user, "displayName")?.to_owned()),
     };
+    // A comment a copy wrote here carries its origin as the hidden marker at the end of its
+    // body — Linear sets every comment's author and times itself — and is read back with the
+    // marker taken out and reported as its origin.
     Ok(Comment {
         origin: None,
         id: NativeId(backend_id(v, "id")?.into()),
@@ -4179,7 +4182,8 @@ fn map_comment(v: &Value) -> Result<Comment, SourceError> {
         updated_at: time(v, "updatedAt")?,
         body: str_at(v, "body")?.into(),
         url: optional_string(v, "url")?,
-    })
+    }
+    .unmarked())
 }
 
 /// The comment a `commentCreate` or `commentUpdate` answered with, as Linear now holds it.

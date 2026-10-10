@@ -879,6 +879,8 @@ async fn copy_into_back(
             recreate: false,
             create: false,
             dry_run: false,
+            comments: false,
+            no_link: false,
         })
         .await
         .expect("the copy runs")
