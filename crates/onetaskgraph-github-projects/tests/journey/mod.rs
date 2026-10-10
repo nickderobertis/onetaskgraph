@@ -1372,7 +1372,7 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
+pub const MUTATION_TYPES: [(&str, bool, &[&str]); 35] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -1439,6 +1439,10 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
     ("AddCommentPayload", false, &["commentEdge", "subject"]),
     ("UpdateIssueCommentPayload", false, &["issueComment"]),
     ("DeleteIssueCommentPayload", false, &["clientMutationId"]),
+    // Not a mutation type, but what a write reads to tell a text field a projected metadata
+    // value can be written to from a number or date field of the same GraphQL type, and what
+    // `sources fields` reads to report a conflict — so GitHub is held to it here too.
+    ("ProjectV2Field", false, &["id", "name", "dataType"]),
 ];
 
 /// How many times one document may select a given introspection field.
@@ -1701,6 +1705,7 @@ pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'stati
         "CreateProjectV2FieldPayload" | "DeleteProjectV2FieldPayload" => {
             &[("projectV2Field", "ProjectV2FieldConfiguration")]
         }
+        "ProjectV2Field" => &[("dataType", "ProjectV2FieldType!")],
         _ => &[],
     }
 }

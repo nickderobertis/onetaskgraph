@@ -29,12 +29,17 @@ struct Setup {
 
 impl Setup {
     fn new(projecting: bool, host_field: bool) -> Self {
+        Self::projecting(projecting.then(host_projection), host_field)
+    }
+
+    /// The same, configuring `entries` as the source's `metadata_fields` when given.
+    fn projecting(entries: Option<Value>, host_field: bool) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("notes");
         std::fs::create_dir_all(root.join("tasks")).expect("the task folder");
         let (mut config, board) = github_projects_with_board(&sandbox);
-        if projecting {
-            config["metadata_fields"] = host_projection();
+        if let Some(entries) = entries {
+            config["metadata_fields"] = entries;
         }
         if host_field {
             board.with_text_field("Host");
@@ -427,4 +432,94 @@ fn projecting_a_field_adds_no_request_to_a_copy_and_records_what_it_spends() {
         .unwrap(),
     )
     .unwrap();
+}
+
+/// `Host`, projected from a path, and `Team`, projected from a key's own value.
+fn two_projections() -> Value {
+    json!([
+        {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+        {"field": "Team", "key": "team.name"},
+    ])
+}
+
+#[test]
+fn sources_fields_says_in_words_what_it_would_create_and_what_it_created() {
+    let setup = Setup::projecting(Some(two_projections()), false);
+    let said = |arguments: &[&str]| {
+        let output = setup
+            .sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        stdout(&output)
+    };
+    let planned = said(&["sources", "fields", "board"]);
+    for line in [
+        "board: no Host text field; would create it for orchestrator.follow-up at host\n",
+        "board: no Team text field; would create it for team.name\n",
+    ] {
+        assert!(planned.contains(line), "{line}{planned}");
+    }
+    let applied = said(&["sources", "fields", "board", "--apply"]);
+    for line in [
+        "board: created the Host text field for orchestrator.follow-up at host\n",
+        "board: created the Team text field for team.name\n",
+    ] {
+        assert!(applied.contains(line), "{line}{applied}");
+    }
+}
+
+#[test]
+fn a_refused_text_field_create_names_what_landed_and_a_rerun_creates_only_what_is_missing() {
+    let setup = Setup::projecting(Some(two_projections()), false);
+    // Host is created; Team's create is refused.
+    setup
+        .board
+        .refuse_after("createProjectV2Field(input:$input)", 1);
+    let output = setup
+        .sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    for named in [
+        "changed the Host field and then failed creating the Team text field",
+        "run it again",
+    ] {
+        assert!(said.contains(named), "{named}: {said}");
+    }
+    let (rerun, served) = setup.run(&["--json", "sources", "fields", "board", "--apply"]);
+    assert_eq!(rerun["metadata_fields"][0]["outcome"], "unchanged");
+    assert_eq!(rerun["metadata_fields"][1]["outcome"], "created");
+    let creates = served
+        .iter()
+        .filter(|(query, _)| query == graphql::CREATE_FIELD)
+        .map(|(_, variables)| variables["input"]["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(creates, [json!("Team")]);
+}
+
+#[test]
+fn a_created_text_field_the_board_does_not_hold_afterwards_is_refused_as_drift() {
+    let setup = Setup::new(true, false);
+    setup.board.omit_created_text_field();
+    let output = setup
+        .sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains("GitHub changed the created Host text field after the guarded field setup"),
+        "{said}"
+    );
 }

@@ -47,7 +47,7 @@ budgets:
     threshold: 240
   - id: github-metadata-field-content-creation-share
     description: >-
-      An inner measure of headroom on the shared board token that no check may spend: the larger of two shares projecting one configured metadata field adds to a 10x follow-up burst on one token, of GitHub's per-minute (80) content-creation allowance in the burst's peak minute and of its hourly (500) one over the burst hour, every mutation operation counted as one write even when several ride as aliases in one request. The operations are counted on the loopback board for one follow-up copied once and re-copied twice unchanged, and scaled to 50 first copies and 100 unchanged re-copies an hour, 10 and 20 in the peak minute, with the limits read from tests/fixtures/rate-limits.json through the constants gated against it.
+      An inner measure of headroom on the shared board token that no check may spend: the larger share of GitHub's per-minute and hourly content-creation allowances that projecting one metadata field adds to a 10x hour of follow-up filing, every aliased mutation counted as one write. It protects the write allowance every manager on the host draws from.
     labels: [github]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_metadata_fields", "--exact", "--nocapture"]

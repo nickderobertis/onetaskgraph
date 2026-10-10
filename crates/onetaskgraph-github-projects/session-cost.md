@@ -1007,3 +1007,18 @@ does not move: its pages answer questions that never read an edge.
 nodes per request — 20,400 → 25,400 for the reconciliation and 40,800 → 50,800 for the
 journey's two reads — and its total with them, 234,562 → 249,562. Its request count does not
 move: the journey reads each project's tasks once per source.
+
+## The type of a board field, held to GitHub
+
+A `github-projects` source's `metadata_fields` writes a projected value to a board text field,
+and a text field, a number field and a date field are all GraphQL's one `ProjectV2Field`. So the
+board-field reads — `BOARD`, `BOARD_FIELDS`, `CREATION_CONTEXT` and `ISSUE`'s board half — now
+select `ProjectV2Field.dataType`, a scalar that adds no node to any of them, and the contract
+schema introspection holds GitHub to that member, which is what keeps the pinned copy of it in
+`tests/fixtures/schema.graphql` from drifting in silence.
+
+**One request more, and no node.** The introspection now asks about thirty-five types, which at
+GitHub's cap of two capped selections a document is **ten** documents rather than nine; each is
+a `__type` read with no connection. `session-cost.txt` moves on that line and its total alone,
+121 → 122 requests. The projection's own writes ride `UPDATE_FIELDS`, which the journey already
+sends, so no write row moves.

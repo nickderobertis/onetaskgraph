@@ -130,20 +130,7 @@ fn report_concurrent_refusals() {
 }
 #[test]
 fn report_metadata_fields() {
-    let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
-        Ok(budget) => budget,
-        Err(std::env::VarError::NotPresent) => return,
-        Err(error) => refuse(&error.to_string()),
-    };
-    let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
-    // llmlint: ignore[budget_commands_measure_directly] As `report_expected`: a selected report command fails when no destination was written, and onebudgetspec alone judges the figure.
-    match onebudgetspec_core::report(value, Some(&detail)) {
-        Ok(true) => (),
-        Ok(false) => {
-            refuse("no budget figure written: ONEBUDGETSPEC_RESULT must name a destination")
-        }
-        Err(error) => refuse(&error.to_string()),
-    }
+    report_with(metadata_field_share);
 }
 // llmlint: ignore-end[tests_assert_real_behavior]
 
@@ -362,12 +349,18 @@ fn the_metadata_field_share_is_the_larger_of_the_minute_and_the_hour() {
 }
 
 fn report_expected(expected: Workload) {
+    report_with(|budget| read(budget, expected));
+}
+
+/// The one report path every entry point above takes: the selected budget's telemetry read and
+/// validated by `read`, then handed to onebudgetspec.
+fn report_with(read: impl FnOnce(&str) -> Result<(f64, String), String>) {
     let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
         Ok(budget) => budget,
         Err(std::env::VarError::NotPresent) => return,
         Err(error) => refuse(&error.to_string()),
     };
-    let (value, detail) = read(&budget, expected).unwrap_or_else(|error| refuse(&error));
+    let (value, detail) = read(&budget).unwrap_or_else(|error| refuse(&error));
     // llmlint: ignore[budget_commands_measure_directly] An explicitly selected standalone report command must fail when report returns false (no destination), rather than claim success without a figure. This checks its exit-status contract only; onebudgetspec alone validates the result file and judges the figure against its threshold.
     match onebudgetspec_core::report(value, Some(&detail)) {
         Ok(true) => (),

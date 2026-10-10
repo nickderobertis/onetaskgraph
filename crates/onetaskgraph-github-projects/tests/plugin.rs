@@ -1164,7 +1164,18 @@ impl Fixture {
 }
 
 /// The id and name of every text field beyond the origin's a case may put on this board.
-const TEXT_FIELD_NAMES: [(&str, &str); 2] = [("FIELD_host", "Host"), ("FIELD_team", "Team")];
+const TEXT_FIELD_NAMES: [(&str, &str); 10] = [
+    ("FIELD_host", "Host"),
+    ("FIELD_team", "Team"),
+    ("FIELD_b0", "B0"),
+    ("FIELD_b1", "B1"),
+    ("FIELD_b2", "B2"),
+    ("FIELD_b3", "B3"),
+    ("FIELD_b4", "B4"),
+    ("FIELD_b5", "B5"),
+    ("FIELD_b6", "B6"),
+    ("FIELD_b7", "B7"),
+];
 
 fn board(items: Vec<Item>) -> Fixture {
     board_with(items, true, true)
@@ -18387,4 +18398,200 @@ async fn a_read_reports_the_metadata_comment_and_never_the_projected_field() {
         )])
     );
     assert_eq!(read.metadata, unprojected.metadata);
+}
+
+/// A text field of the board, as its field list answers it.
+fn text_field_def(id: &str, name: &str) -> Value {
+    json!({"__typename":"ProjectV2Field","id":id,"name":name,"dataType":"TEXT"})
+}
+
+/// The text field `id` holds for one item.
+fn text_of(fixture: &Fixture, content_id: &str, id: &str) -> Option<String> {
+    fixture.item(content_id).texts.get(id).cloned()
+}
+
+/// The field writes this board received for `id`, in order: the text, or `None` for a clear.
+fn text_writes(fixture: &Fixture, id: &str) -> Vec<Option<String>> {
+    fixture
+        .seen()
+        .into_iter()
+        .filter(|call| call[1]["fieldId"] == id)
+        .map(|call| call[1]["value"]["text"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn several_projections_move_independently_and_validate_together_before_any_mutation() {
+    let fixture = board(vec![])
+        .with_field(host_field())
+        .with_field(text_field_def("FIELD_team", "Team"));
+    let source = || {
+        configured(
+            &fixture.endpoint,
+            json!({"metadata_fields":[
+                {"field":"Host","key":"orchestrator.follow-up","path":["host"]},
+                {"field":"Team","key":"team.name"},
+            ]}),
+        )
+    };
+    let metadata = |follow_up: Value, team: Value| {
+        BTreeMap::from([
+            ("orchestrator.follow-up".to_owned(), follow_up),
+            ("team.name".to_owned(), team),
+        ])
+    };
+    // The key's own value with no path; a path whose step is missing projects nothing.
+    let id = write_kind(
+        source().as_ref(),
+        Kind::Task,
+        None,
+        metadata(json!({"run":"r-1"}), json!("core")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        text_of(&fixture, &id.0, "FIELD_team").as_deref(),
+        Some("core")
+    );
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_host"), None);
+    assert_eq!(
+        text_writes(&fixture, "FIELD_host"),
+        Vec::<Option<String>>::new()
+    );
+
+    write_kind(
+        source().as_ref(),
+        Kind::Task,
+        Some(&id.0),
+        metadata(json!({"host":"alpha"}), json!("core")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        text_of(&fixture, &id.0, "FIELD_host").as_deref(),
+        Some("alpha")
+    );
+    // An empty string is no value, so it clears the field that held one.
+    write_kind(
+        source().as_ref(),
+        Kind::Task,
+        Some(&id.0),
+        metadata(json!({"host":""}), json!("core")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_host"), None);
+    assert_eq!(
+        text_writes(&fixture, "FIELD_host"),
+        [Some("alpha".to_owned()), None]
+    );
+    assert_eq!(
+        text_writes(&fixture, "FIELD_team"),
+        [Some("core".to_owned())]
+    );
+
+    // An update naming one projected key moves that field and no other.
+    let mut update = TaskUpdate::default();
+    update
+        .metadata_set
+        .insert(MetadataKey::new("team.name").unwrap(), json!("infra"));
+    source().update_task(&id, &update).await.unwrap().unwrap();
+    assert_eq!(
+        text_of(&fixture, &id.0, "FIELD_team").as_deref(),
+        Some("infra")
+    );
+    assert_eq!(text_writes(&fixture, "FIELD_host").len(), 2);
+
+    // One entry's value refused refuses the write, before the other's is sent.
+    let before = fixture.seen().len();
+    let message = refusal(
+        write_kind(
+            source().as_ref(),
+            Kind::Task,
+            Some(&id.0),
+            metadata(json!({"host":"beta"}), json!(7)),
+        )
+        .await
+        .expect_err("a number"),
+    );
+    assert!(message.contains("\"team.name\" at path []"), "{message}");
+    assert_eq!(fixture.seen().len(), before, "nothing was sent");
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_host"), None);
+}
+
+#[tokio::test]
+async fn more_writes_than_one_request_holds_go_in_further_requests_and_a_refusal_keeps_the_body() {
+    let mut fixture = board(vec![]);
+    let mut entries = Vec::new();
+    for n in 0..8 {
+        fixture = fixture.with_field(text_field_def(&format!("FIELD_b{n}"), &format!("B{n}")));
+        entries
+            .push(json!({"field":format!("B{n}"),"key":"batch.values","path":[format!("f{n}")]}));
+    }
+    let source = || configured(&fixture.endpoint, json!({"metadata_fields": entries}));
+    let values = |text: &str| {
+        BTreeMap::from([(
+            "batch.values".to_owned(),
+            Value::Object(
+                (0..8)
+                    .map(|n| (format!("f{n}"), json!(format!("{text}{n}"))))
+                    .collect(),
+            ),
+        )])
+    };
+    let field_requests = |fixture: &Fixture| fixture.requests("updateProjectV2ItemFieldValue");
+
+    // The Status option and eight fields: six writes in one request, three in the next.
+    let id = write_kind(source().as_ref(), Kind::Task, None, values("a"))
+        .await
+        .unwrap();
+    assert_eq!(field_requests(&fixture), 2);
+    for n in 0..8 {
+        assert_eq!(
+            text_of(&fixture, &id.0, &format!("FIELD_b{n}")),
+            Some(format!("a{n}"))
+        );
+    }
+
+    // Eight clears and no write: three requests of three, three and two clears.
+    let cleared = BTreeMap::from([("batch.values".to_owned(), json!({}))]);
+    write_kind(source().as_ref(), Kind::Task, Some(&id.0), cleared)
+        .await
+        .unwrap();
+    assert_eq!(field_requests(&fixture), 5);
+    assert_eq!(
+        fixture
+            .seen()
+            .iter()
+            .filter(|call| call[0] == "clearProjectV2ItemFieldValue")
+            .count(),
+        8
+    );
+    for n in 0..8 {
+        assert_eq!(text_of(&fixture, &id.0, &format!("FIELD_b{n}")), None);
+    }
+
+    // The second request of a write refused: the first's fields landed, and the item's body —
+    // the metadata's home — was never sent, so it holds what it held.
+    let body = fixture.item(&id.0).body.clone();
+    let updates = |fixture: &Fixture| {
+        fixture
+            .seen()
+            .iter()
+            .filter(|call| call[0] == "updateIssue")
+            .count()
+    };
+    let issue_updates = updates(&fixture);
+    fixture.refuse_after("updateProjectV2ItemFieldValue", 1);
+    write_kind(source().as_ref(), Kind::Task, Some(&id.0), values("b"))
+        .await
+        .expect_err("the second request is refused");
+    assert_eq!(updates(&fixture), issue_updates, "the body is written last");
+    assert_eq!(fixture.item(&id.0).body, body);
+    assert_eq!(
+        text_of(&fixture, &id.0, "FIELD_b0").as_deref(),
+        Some("b0"),
+        "the first request landed"
+    );
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_b7"), None);
 }

@@ -701,3 +701,82 @@ fn the_priority_levels_and_their_configuration_are_reconciled_against_the_vocabu
         .expect("the configuration schema serializes");
     assert!(whole["properties"]["priority_mapping"].is_object());
 }
+
+/// Each aliased field of `UPDATE_FIELDS`, in the order GitHub runs them: the key its answer
+/// comes back under, the mutation it is, the variable carrying its input and the boolean that
+/// includes it.
+fn update_fields_slots(document: &str) -> Vec<(String, String, String, String)> {
+    let document = query::parse_query::<String>(document).expect("a valid document");
+    let query::Definition::Operation(query::OperationDefinition::Mutation(mutation)) =
+        &document.definitions[0]
+    else {
+        panic!("UPDATE_FIELDS is a mutation");
+    };
+    let variable = |value: &query::Value<String>| match value {
+        query::Value::Variable(name) => name.clone(),
+        other => panic!("a slot is bound to a variable, not {other:?}"),
+    };
+    mutation
+        .selection_set
+        .items
+        .iter()
+        .map(|selection| {
+            let query::Selection::Field(field) = selection else {
+                panic!("UPDATE_FIELDS selects fields alone");
+            };
+            let input = field
+                .arguments
+                .iter()
+                .find(|(name, _)| name == "input")
+                .map(|(_, value)| variable(value))
+                .expect("an input");
+            let include = field
+                .directives
+                .iter()
+                .find(|directive| directive.name == "include")
+                .and_then(|directive| directive.arguments.first())
+                .map(|(_, value)| variable(value))
+                .expect("every slot is included by its own boolean");
+            (
+                field.alias.clone().unwrap_or_else(|| field.name.clone()),
+                field.name.clone(),
+                input,
+                include,
+            )
+        })
+        .collect()
+}
+
+/// `FIELD_WRITE_SLOTS` and `FIELD_CLEAR_SLOTS` are what the source and every loopback board
+/// read `UPDATE_FIELDS`' aliases off, so they are held to the document itself, both ways and in
+/// order: a slot added to one and not the other fails here rather than as a write whose answer
+/// is read under the wrong key.
+#[test]
+fn the_field_slots_are_exactly_the_aliased_fields_of_update_fields() {
+    use onetaskgraph_github_projects::{FIELD_CLEAR_SLOTS, FIELD_WRITE_SLOTS, graphql};
+    let declared = FIELD_WRITE_SLOTS
+        .iter()
+        .map(|slot| (slot, "updateProjectV2ItemFieldValue"))
+        .chain(
+            FIELD_CLEAR_SLOTS
+                .iter()
+                .map(|slot| (slot, "clearProjectV2ItemFieldValue")),
+        )
+        .map(|(slot, mutation)| {
+            (
+                slot.alias.to_owned(),
+                mutation.to_owned(),
+                slot.variable.to_owned(),
+                slot.include.to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(update_fields_slots(graphql::UPDATE_FIELDS), declared);
+    // And the comparison is one that can fail: the same document with two slots' includes
+    // swapped is refused.
+    let swapped = graphql::UPDATE_FIELDS
+        .replacen("@include(if:$writeSecond)", "@include(if:$PLACEHOLDER)", 1)
+        .replacen("@include(if:$writeThird)", "@include(if:$writeSecond)", 1)
+        .replacen("@include(if:$PLACEHOLDER)", "@include(if:$writeThird)", 1);
+    assert_ne!(update_fields_slots(&swapped), declared);
+}

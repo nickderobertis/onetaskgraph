@@ -984,6 +984,8 @@ struct GitHubBoard {
     /// each as the board's field list answers it. An item's value of one is under its
     /// `texts`, by field id.
     text_fields: Vec<Value>,
+    /// Whether the next text-field create is answered as landed without the board keeping it.
+    omits_created_text_field: bool,
     /// Whether the `Priority` field answers its `options` as something other than a list.
     malformed_priority_options: bool,
     /// A field whose value the board snapshot answers twice on `T-1`, the second time naming
@@ -1118,6 +1120,7 @@ impl GitHubBoardFields {
 
     /// Give the board a text field called `name`, which a source's `metadata_fields` may
     /// project a value onto, holding nothing on any item.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: its field list and every item's values are the board's private state, read by its own request loop, so a handle on them can only be a method beside `with_persons_field` and `refuse_once`, and a suite of one plugin could not add it from outside.
     pub fn with_text_field(&self, name: &str) {
         self.board.lock().unwrap().text_fields.push(
             json!({"__typename":"ProjectV2Field","id":format!("FIELD-text-{name}"),
@@ -1127,6 +1130,7 @@ impl GitHubBoardFields {
 
     /// What the text field called `name` holds on the board item whose content is `id`, or
     /// `None` when it holds nothing — or the board has no such field.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private item state, beside `status_options` and `priority_options`, for the reason `with_text_field` above states.
     #[must_use]
     pub fn text_of(&self, id: &str, name: &str) -> Option<String> {
         let board = self.board.lock().unwrap();
@@ -1141,12 +1145,20 @@ impl GitHubBoardFields {
     }
 
     /// The board's fields as its own field list answers them.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private field list, for the reason `with_text_field` above states.
     #[must_use]
     pub fn field_list(&self) -> Vec<Value> {
         self.board.lock().unwrap().fields()["nodes"]
             .as_array()
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Answer the next text-field create as landed without keeping the field, as a response
+    /// the setup's verification read has to catch would.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's private field list, for the reason `with_text_field` above states.
+    pub fn omit_created_text_field(&self) {
+        self.board.lock().unwrap().omits_created_text_field = true;
     }
 
     /// Give the board a single-select field of a person's own, `field`, holding the first of
@@ -1913,6 +1925,7 @@ fn github_projects_board_at(
         omits_added_priority_option: false,
         persons_fields: Vec::new(),
         text_fields: Vec::new(),
+        omits_created_text_field: false,
         malformed_priority_options: false,
         repeated_snapshot_value: None,
         drift_after_status_update: false,
@@ -2251,7 +2264,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         );
         let field = json!({"__typename":"ProjectV2Field","id":format!("FIELD-text-{name}"),
             "name":name,"dataType":"TEXT"});
-        board.text_fields.push(field.clone());
+        if std::mem::take(&mut board.omits_created_text_field) {
+            return json!({"createProjectV2Field":{"projectV2Field":{}}});
+        }
+        board.text_fields.push(field);
         return json!({"createProjectV2Field":{"projectV2Field":{}}});
     }
     if query.contains("createProjectV2Field(input:$input)") {

@@ -1,4 +1,4 @@
-requests 121
+requests 122
 node count 249562
 
 requests per call
@@ -11,7 +11,7 @@ requests per call
     2       0  adding a comment
     6       0  adding an issue to the board
     2     100  board page size probe
-    9       0  contract schema introspection
+   10       0  contract schema introspection
     6       0  creating an issue
     6       0  deleting an issue
     1       0  editing a comment
