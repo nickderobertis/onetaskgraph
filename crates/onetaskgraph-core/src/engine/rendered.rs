@@ -878,9 +878,19 @@ impl Engine {
             metadata: given,
             answers,
         } = request.body.parts(&request.metadata);
-        let held_classification = held
-            .as_ref()
-            .map_or(Classification::Public, |held| held.classification);
+        // A project replaced keeps what it was, and while the boundary is active that is what
+        // it holds as well as its record: a member private makes it private.
+        let held_classification = match &held {
+            Some(held) if self.boundary_active() => held.classification.strictest(
+                self.source_project_class(
+                    &GlobalId::new(request.source.clone(), request.id.clone()),
+                    &mut std::collections::HashMap::new(),
+                )
+                .await?,
+            ),
+            Some(held) => held.classification,
+            None => Classification::Public,
+        };
         let (target, depends_on, mut metadata, status, labels, repositories) = match held {
             Some(held) => {
                 let edges = forward_edges(source, &held.id, Level::Project).await?;

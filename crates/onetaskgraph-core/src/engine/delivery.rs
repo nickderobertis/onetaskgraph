@@ -276,6 +276,23 @@ impl Engine {
             .iter()
             .filter(|other| !self.withholds(&ticket.source, other, private))
             .collect();
+        // The ticket is held to what it inherits as well as its record: while the boundary is
+        // active, the project it is filed under.
+        let ticket_class = match &task.project {
+            Some(filed) if self.boundary_active() => {
+                match self
+                    .source_project_class(
+                        &GlobalId::new(ticket.source.clone(), filed.clone()),
+                        &mut std::collections::HashMap::new(),
+                    )
+                    .await
+                {
+                    Ok(inherited) => task.classification.strictest(inherited),
+                    Err(error) => return entry(failed(Some(from), &error), Vec::new()),
+                }
+            }
+            _ => task.classification,
+        };
         if !written.iter().copied().eq(&held) {
             let list: Vec<TaskRef> = written
                 .iter()
@@ -286,7 +303,7 @@ impl Engine {
                     source,
                     &ticket.to_string(),
                     &ticket.native,
-                    task.classification,
+                    ticket_class,
                     &task.repositories,
                     &Exposure::metadata(list.iter().map(ToString::to_string)),
                 )
@@ -323,7 +340,7 @@ impl Engine {
                 source,
                 &ticket.to_string(),
                 &ticket.native,
-                task.classification,
+                ticket_class,
                 &task.repositories,
                 &Exposure::metadata([category_name(to)]),
             )

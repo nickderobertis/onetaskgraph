@@ -3235,3 +3235,138 @@ fn a_narrow_write_to_an_item_private_by_inheritance_held_by_a_public_source_is_r
     // A public task under a public project is written as before.
     store.ok(&["task", "status", "set", "site:open", "done"]);
 }
+
+#[test]
+fn a_delivered_task_private_only_by_its_project_is_reported_failed_and_left_as_it_was() {
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({ "shelf": folder(sandbox, "shelf", "public") }),
+    );
+    // Held by hand under a private project in a public source; neither ticket's own record
+    // says private.
+    store.record(
+        "site",
+        "projects",
+        "closed-plan",
+        "title: Closed plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "unnamed",
+        "title: Unnamed\nstatus: todo\nproject: closed-plan",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "named",
+        "title: Named\nstatus: todo\nproject: closed-plan\ndelivered_by: [\"shelf:helper\"]",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "helper",
+        "title: Helper\nstatus: todo\ndelivers: [\"site:unnamed\", \"site:named\"]",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let output = store.run(&[
+        "task",
+        "status",
+        "set",
+        "shelf:helper",
+        "in-progress",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
+    let delivered = set["delivered"]
+        .as_array()
+        .expect("one entry per delivered task");
+    assert_eq!(delivered.len(), 2, "{set:#}");
+    for entry in delivered {
+        // `unnamed`'s refusal is its `delivered_by` write's; `named`'s, its status write's.
+        assert_eq!(entry["outcome"], "failed", "{set:#}");
+        assert_eq!(
+            entry["failure"]["kind"], "not-private-destination",
+            "{set:#}"
+        );
+    }
+    assert_eq!(tree(&store.folder("site")), before, "both are as they were");
+}
+
+#[test]
+fn a_project_replaced_over_one_holding_a_private_member_is_held_private() {
+    let store = Store::new(Some(registered), json!({}));
+    // Public by its own record, private by what it holds.
+    store.record(
+        "site",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "inner",
+        "title: Inner\nstatus: todo\nproject: mixed\nclassification: private",
+        PLAIN,
+    );
+    let body = store.body(PLAIN);
+    let before = store.tree();
+    let (kind, said) = store.refused(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "mixed",
+        "--title",
+        "Replaced",
+        "--body-file",
+        &body,
+    ]);
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert_eq!(store.tree(), before, "nothing was written");
+}
+
+#[test]
+fn an_external_task_whose_project_its_source_does_not_hold_is_classified_by_its_own_record() {
+    // Nothing inherits from a project that is not there, so `stray` is what its record says.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "stray",
+        "title: Stray\nstatus: todo\nproject: gone-plan",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "stray-secret",
+        "title: Stray secret\nstatus: todo\nproject: gone-plan\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\n\
+         depends_on: [{id: \"shelf:stray\", item: task}, {id: \"shelf:stray-secret\", item: task}]",
+        PLAIN,
+    );
+    store.ok(&["task", "copy", "plan:open", "--to", "site"]);
+    let landed = held_text(&store, "site");
+    assert!(
+        landed.contains("shelf:stray\n") || landed.contains("shelf:stray\""),
+        "{landed}"
+    );
+    assert!(!landed.contains("shelf:stray-secret"), "{landed}");
+}
