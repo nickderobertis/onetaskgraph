@@ -39,7 +39,9 @@ impl Workload {
         }
     }
 }
-fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
+/// The recording the ordinary test target wrote for `budget`, refused unless `budget` is a
+/// budget id and the recording is that budget's own — the one reader every report shares.
+fn recorded(budget: &str) -> Result<Value, String> {
     if !regex::Regex::new(onebudgetspec_core::model::ID_PATTERN)
         .unwrap()
         .is_match(budget)
@@ -57,6 +59,11 @@ fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
     if value["budget"].as_str() != Some(budget) {
         return Err("telemetry belongs to a different budget".into());
     }
+    Ok(value)
+}
+
+fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
     validate(&value, expected)?;
     let figure = value["value"]
         .as_f64()
@@ -150,33 +157,20 @@ fn selected() -> Option<String> {
 /// What `visibility_cost` recorded for `budget`, refused unless it is that journey's recording
 /// at that journey's workload: its figure, and the detail it reports beside it.
 fn read_visibility(budget: &str) -> Result<(f64, String), String> {
-    use super::visibility_cost::{BUDGET, WORKLOAD, WRITES};
-    if budget != BUDGET {
-        return Err(format!(
-            "only {BUDGET} is recorded by the visibility journey"
-        ));
-    }
-    let path = onetaskgraph_e2e_support::telemetry::file_in(&directory(), budget);
-    let text = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "no telemetry at {}: {error}; run the domain test target",
-            path.display()
-        )
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    if value["budget"].as_str() != Some(budget) {
-        return Err("telemetry belongs to a different budget".into());
-    }
+    use super::visibility_cost::{WORKLOAD, WRITES};
+    let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) || value["writes"].as_u64() != Some(WRITES) {
         return Err("workload does not match the 102-write plan copy".into());
     }
     let figure = value["value"]
         .as_u64()
         .ok_or("missing whole-number figure")?;
+    // Every entry of a breakdown is a whole count: one that is not is no breakdown at all,
+    // rather than an entry left out of the sum.
     let sum = |key: &str| {
         value[key]
             .as_object()
-            .map(|counts| counts.values().filter_map(Value::as_u64).sum::<u64>())
+            .and_then(|counts| counts.values().map(Value::as_u64).sum::<Option<u64>>())
     };
     if sum("by_write") != Some(figure) || sum("by_read") != Some(figure) {
         return Err("the breakdown does not add up to the figure".into());
@@ -188,8 +182,8 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
         return Err("missing simulated seconds".into());
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
-    #[allow(clippy::cast_precision_loss)]
-    Ok((figure as f64, detail))
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
 }
 
 fn report_expected(expected: Workload) {
@@ -444,11 +438,15 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     fewer["writes"] = json!(12);
     let mut unbalanced = valid.clone();
     unbalanced["by_read"] = json!({"project":102,"repository":101});
+    // An entry that is no count, beside entries that still add up to the figure on their own.
+    let mut uncounted = valid.clone();
+    uncounted["by_write"] = json!({"project":2,"task":200,"document":2,"note":"extra"});
     for (recorded, message) in [
         (None, "no telemetry"),
         (Some(foreign), "workload does not match"),
         (Some(fewer), "workload does not match"),
         (Some(unbalanced), "does not add up"),
+        (Some(uncounted), "does not add up"),
     ] {
         let (output, written) = run(recorded);
         assert!(!output.status.success(), "accepted: {message}");
