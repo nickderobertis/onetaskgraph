@@ -1013,8 +1013,8 @@ store opts in.
 
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
   boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v1.json`; the release the
-  journeys drive is pinned once, in `onetaskgraph-e2e-support`'s `boundary::ONEVCS_CLI`, and
-  provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
+  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e/tests/e2e/onevcs.rs`,
+  and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
   refuses to let drift.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
   policy's. A GitHub source reads twice per write and holds nothing between writes; the

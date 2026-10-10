@@ -571,3 +571,18 @@ fn a_board_item_whose_stored_classification_is_malformed_is_refused_rather_than_
         stderr(&output)
     );
 }
+
+#[test]
+fn a_project_visibility_answer_without_a_boolean_public_is_refused_before_any_mutation() {
+    for answer in [json!({}), json!({"public": "yes"}), json!(null)] {
+        let setup = Setup::new();
+        setup.board.malform_project_visibility(answer.clone());
+        setup.record(
+            "tasks",
+            "secret",
+            "title: Secret\nstatus: todo\nclassification: private",
+        );
+        let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
+        assert_eq!(kind, "visibility-unreadable", "{answer}: {message}");
+    }
+}

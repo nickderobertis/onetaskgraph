@@ -18,7 +18,7 @@ use crate::common::Sandbox;
 ///
 /// Its `boundary schema --json` is what the store's command adapter embeds, so moving this pin
 /// is moving the schema the reconciliation journey compares against.
-pub const ONEVCS_CLI: &str = "onevcs-cli==0.44.0";
+pub(crate) const ONEVCS_CLI: &str = "onevcs-cli==0.44.0";
 
 /// The pinned `onevcs` executable, resolved once per test process through `uv`.
 ///
@@ -26,7 +26,7 @@ pub const ONEVCS_CLI: &str = "onevcs-cli==0.44.0";
 ///
 /// When `uv` cannot provide the pinned release, naming how to install it.
 #[must_use]
-pub fn onevcs() -> &'static Path {
+pub(crate) fn onevcs() -> &'static Path {
     static ONEVCS: OnceLock<PathBuf> = OnceLock::new();
     ONEVCS.get_or_init(|| {
         let output = Command::new("uv")
@@ -81,7 +81,7 @@ struct Identity {
 }
 
 /// An onevcs home inside one sandbox, and the synthetic identities registered in it.
-pub struct OnevcsHome {
+pub(crate) struct OnevcsHome {
     home: PathBuf,
     checkouts: PathBuf,
     identities: Vec<Identity>,
@@ -90,7 +90,7 @@ pub struct OnevcsHome {
 impl OnevcsHome {
     /// An empty home under `sandbox`, holding no identity.
     #[must_use]
-    pub fn new(sandbox: &Sandbox) -> Self {
+    pub(crate) fn new(sandbox: &Sandbox) -> Self {
         let home = sandbox.config_home().join("onevcs-home");
         let checkouts = sandbox.config_home().join("onevcs-checkouts");
         std::fs::create_dir_all(&home).expect("the onevcs home");
@@ -106,23 +106,23 @@ impl OnevcsHome {
 
     /// Where `ONEVCS_HOME` points for every command this home answers.
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.home
     }
 
     /// Register `owner/name` on `github.com` as a private identity.
-    pub fn private(&mut self, owner: &str, name: &str) -> &mut Self {
+    pub(crate) fn private(&mut self, owner: &str, name: &str) -> &mut Self {
         self.register(owner, name, Declared::Private, &[])
     }
 
     /// Register `owner/name` on `github.com` as a public identity.
-    pub fn public(&mut self, owner: &str, name: &str) -> &mut Self {
+    pub(crate) fn public(&mut self, owner: &str, name: &str) -> &mut Self {
         self.register(owner, name, Declared::Public, &[])
     }
 
     /// Register `owner/name` as a private identity whose committed `Cargo.toml` does not parse,
     /// which makes a check deriving terms from it unavailable.
-    pub fn private_with_malformed_manifest(&mut self, owner: &str, name: &str) -> &mut Self {
+    pub(crate) fn private_with_malformed_manifest(&mut self, owner: &str, name: &str) -> &mut Self {
         self.register(
             owner,
             name,
@@ -133,7 +133,7 @@ impl OnevcsHome {
 
     /// The `write_policy` block naming this release's two commands.
     #[must_use]
-    pub fn write_policy(&self) -> Value {
+    pub(crate) fn write_policy(&self) -> Value {
         let onevcs = onevcs().to_string_lossy().into_owned();
         json!({
             "visibility_command": [onevcs, "boundary", "inspect", "--input", "-"],

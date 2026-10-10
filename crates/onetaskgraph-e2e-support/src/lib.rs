@@ -11,15 +11,12 @@
 //! - [`linear_vocabulary`]: the one Linear team's vocabulary more than one suite configures;
 //! - [`images`]: the test images every asset journey stores or copies, generated in the test;
 //! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
-//! - [`boundary`]: the released onevcs boundary commands, and an onevcs home holding
-//!   synthetic identities, for the journeys that configure a store's `write_policy`.
 //!
 //! Not published, and depended on only by path from the test-only e2e members.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub mod boundary;
 pub mod clock;
 pub mod common;
 pub mod fixtures;

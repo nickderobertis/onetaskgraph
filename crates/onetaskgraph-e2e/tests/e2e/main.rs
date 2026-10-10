@@ -32,6 +32,9 @@ mod assets;
 // configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
 // depending on the engine at any depth.
 mod boundary;
+// The released onevcs boundary commands and the onevcs home `boundary` registers its synthetic
+// identities in: what that suite's `write_policy` runs, kept beside the one suite that runs it.
+mod onevcs;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the
 // deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.

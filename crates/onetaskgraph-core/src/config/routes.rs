@@ -657,8 +657,8 @@ mod tests {
         SourceName::new(text.to_owned()).expect("a name")
     }
 
-    /// `plans` routes widgetco work to `team` first, then private items to `vault`; `vault` is
-    /// the one source declared private.
+    /// `plans` routes private items to `vault`, the entry `classified` puts first, then
+    /// widgetco work to `team`; `vault` is the one source declared private.
     fn classified() -> Routes {
         let configured = [name("plans"), name("team"), name("vault")];
         Routes::new(
@@ -682,7 +682,9 @@ mod tests {
     fn safety_is_decided_before_any_repository_entry_matches() {
         let routes = classified();
         // A private widgetco item never follows the repository entry to a source not declared
-        // private, though that entry is written first: the classification entry places it.
+        // private: the classification entry places it. The `routes` journeys in
+        // `crates/onetaskgraph-e2e/tests/e2e/boundary.rs` hold it to that with the repository
+        // entry written first.
         assert_eq!(
             routes.place_classified(
                 &name("plans"),

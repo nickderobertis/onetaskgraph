@@ -156,8 +156,8 @@ pub trait WritePolicy: Send + Sync {
 }
 
 /// The policy a store with no `write_policy` asks: every repository unknown, every check
-/// unavailable — so an active store without one writes nothing private anywhere and nothing
-/// at all to a public destination.
+/// unavailable — so an active store without one treats every repository's item as private,
+/// which only a destination verified private takes, and writes nothing at all to any other.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MissingWritePolicy;
 

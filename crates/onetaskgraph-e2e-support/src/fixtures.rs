@@ -1004,6 +1004,9 @@ struct GitHubBoard {
     project_public_after_reads: Option<usize>,
     /// The reads of the Project's `public` field answered so far.
     project_visibility_reads: usize,
+    /// What every read of the Project's `public` field is answered with as `projectV2`, in
+    /// place of the board's own answer; `None` for the board's own.
+    project_visibility_answer: Option<Value>,
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
@@ -1012,6 +1015,7 @@ struct GitHubBoard {
     repository_visibility: std::collections::BTreeMap<String, RepositoryAnswer>,
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers its one REST read, which the board's own request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
 /// How the loopback GitHub answers `GET /repos/{owner}/{name}`, the read a write to a board
 /// declared private sends for the repository an issue lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1062,6 +1066,7 @@ impl RepositoryAnswer {
         }
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// A read-only handle on one fixture board's own fields.
 pub struct GitHubBoardFields {
@@ -1097,6 +1102,7 @@ impl GitHubBoardFields {
             .collect()
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] Controls of the loopback board's visibility answers, which its request loop reads from its private state: like `refuse_once` below, they can only be methods of this handle, and a suite of one plugin could not add them from outside.
     /// Make the board's Project public, or private again.
     pub fn set_project_public(&self, public: bool) {
         self.board.lock().unwrap().project_public = public;
@@ -1121,6 +1127,13 @@ impl GitHubBoardFields {
             .repository_visibility
             .insert(slug.to_owned(), answer);
     }
+
+    /// Answer every read of the Project's `public` field with `project` as `projectV2`, in
+    /// place of the board's own answer — a response GitHub's schema does not describe.
+    pub fn malform_project_visibility(&self, project: Value) {
+        self.board.lock().unwrap().project_visibility_answer = Some(project);
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// Refuse the next request carrying `operation`, once, from here on.
     pub fn refuse_once(&self, operation: &'static str) {
@@ -1971,6 +1984,7 @@ fn github_projects_board_at(
         project_public: false,
         project_public_after_reads: None,
         project_visibility_reads: 0,
+        project_visibility_answer: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
     }));
@@ -2237,6 +2251,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             return Value::Null;
         }
         held.project_visibility_reads += 1;
+        if let Some(project) = &held.project_visibility_answer {
+            return json!({"visibility": {"projectV2": project}});
+        }
         let public = held.project_public
             || held
                 .project_public_after_reads

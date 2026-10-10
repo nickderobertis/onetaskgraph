@@ -2,8 +2,10 @@
 //! classification routes and the `write_policy` commands, through the binary.
 //!
 //! Every store here is folders of Markdown — `plan` and `vault` declared private, `site`
-//! declared public — and every `write_policy` runs the released onevcs boundary commands
-//! against an onevcs home this run owns, holding synthetic identities alone:
+//! declared public. Most run the released onevcs boundary commands as their `write_policy`,
+//! against an onevcs home this run owns, holding synthetic identities alone; the journeys about
+//! what a store hands its policy, or does with a policy that fails, configure a small Python
+//! command of their own instead:
 //!
 //! - `hiddenco/quietharbor` (A) and `lanternco/brightwater` (B), registered private;
 //! - `openco/openwidget`, registered public;
@@ -16,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use onetaskgraph_e2e_support::boundary::OnevcsHome;
+use crate::onevcs::OnevcsHome;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
@@ -1336,7 +1338,7 @@ impl LinkedOnevcs {
     fn run(&self, arguments: &[&str], input: &Value) -> (Option<i32>, Vec<u8>) {
         let file = tempfile::NamedTempFile::new().expect("an input file");
         std::fs::write(file.path(), input.to_string()).expect("the input is written");
-        let output = std::process::Command::new(onetaskgraph_e2e_support::boundary::onevcs())
+        let output = std::process::Command::new(crate::onevcs::onevcs())
             .args(arguments)
             .arg("--input")
             .arg(file.path())
@@ -1630,7 +1632,7 @@ fn the_boundary_payloads_reconcile_with_the_released_onevcs_schema() {
         ONEVCS_BOUNDARY_SCHEMA, ONEVCS_BOUNDARY_SCHEMA_VERSION, PublicWriteInput,
         RepositoryVisibility, WriteVerdict, check_verdict,
     };
-    let output = std::process::Command::new(onetaskgraph_e2e_support::boundary::onevcs())
+    let output = std::process::Command::new(crate::onevcs::onevcs())
         .args(["boundary", "schema", "--json"])
         .output()
         .expect("onevcs runs");
@@ -2558,4 +2560,50 @@ fn a_store_declaring_every_source_unknown_and_naming_no_policy_stays_inactive() 
     );
     let (kind, said) = store.refused(&["task", "copy", "plan:secret", "--to", "notes"]);
     assert_eq!(kind, "not-private-destination", "{said}");
+}
+
+#[test]
+fn a_copy_over_an_item_the_destination_holds_private_keeps_it_private() {
+    let store = Store::new(Some(registered), json!({}));
+    // Filed under no project, so nothing but the destination's own record says private.
+    store.record("plan", "tasks", "open", "title: Open\nstatus: todo", PLAIN);
+    store.record("plan", "documents", "design", "title: Design", PLAIN);
+    store.ok(&["task", "copy", "plan:open", "--to", "vault"]);
+    store.ok(&["document", "copy", "plan:design", "--to", "vault"]);
+    // Somebody marks what landed private, at the destination alone.
+    for kind in ["tasks", "documents"] {
+        let files: Vec<String> = files_under(&store, "vault")
+            .into_iter()
+            .filter(|path| path.contains(kind))
+            .collect();
+        assert_eq!(files.len(), 1, "{kind}: {files:?}");
+        let text = std::fs::read_to_string(&files[0]).expect("a record");
+        std::fs::write(
+            &files[0],
+            text.replacen("---\n", "---\nclassification: private\n", 1),
+        )
+        .expect("marked private");
+    }
+    // A copy of the same public items again updates them, and loosens nothing.
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open, revised\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "documents",
+        "design",
+        "title: Design, revised",
+        PLAIN,
+    );
+    store.ok(&["task", "copy", "plan:open", "--to", "vault"]);
+    store.ok(&["document", "copy", "plan:design", "--to", "vault"]);
+    for kind in ["tasks", "documents"] {
+        let held = one_file(&store, "vault", kind);
+        assert!(held.contains("revised"), "{kind}: {held}");
+        assert!(held.contains("classification: private"), "{kind}: {held}");
+    }
 }
