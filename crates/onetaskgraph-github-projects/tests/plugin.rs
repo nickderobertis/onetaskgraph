@@ -14823,9 +14823,9 @@ async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_c
 /// - Another process's comment after the instant is selected by the read and is not the
 ///   journey's to judge, so the leg passes, before the journey's own comment activity and
 ///   after it.
-/// - A read from an instant before the comment the journey writes ahead of its instant —
-///   what run 38081007889 amounted to — selects `first`, which had no activity after the
-///   instant the leg judges against, and the leg fails naming it.
+/// - A read from an instant before the comment the journey writes ahead of its instant selects
+///   `first`, which had no activity after the instant the leg judges against, and the leg
+///   fails naming it.
 /// - A read that leaves out one of the journey's tasks that was commented on — a reader the
 ///   search index is still behind for — fails naming that task.
 #[tokio::test]

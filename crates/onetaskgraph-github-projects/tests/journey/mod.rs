@@ -2793,9 +2793,9 @@ async fn drive_every_declared_capability(
 /// edit waits two seconds past it, so no skew between this machine and GitHub can put the edit
 /// before the instant. The comment's own stamps are in it because the issue's are not enough:
 /// GitHub stamps the two separately, and a node read made the moment the comment returns can
-/// answer the issue as it stood before it. A boundary a second past that reading alone has put
-/// the comment written to precede it at or after it, and the read then rightly selected `first`
-/// before anything was edited — which is how this leg failed in run 38081007889.
+/// answer the issue as it stood before it, so a boundary a second past that reading alone can
+/// fall at or before the comment written to precede it, and the read then rightly selects
+/// `first` before anything was edited.
 ///
 /// Every read is judged over `own`, this journey's own tasks, alone; see
 /// [`comment_activity_read_selects`].
