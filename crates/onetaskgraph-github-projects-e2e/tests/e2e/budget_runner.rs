@@ -441,12 +441,35 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     // An entry that is no count, beside entries that still add up to the figure on their own.
     let mut uncounted = valid.clone();
     uncounted["by_write"] = json!({"project":2,"task":200,"document":2,"note":"extra"});
+    let with = |field: &str, value: Value| {
+        let mut changed = valid.clone();
+        changed[field] = value;
+        Some(changed)
+    };
+    // A figure past what one budget can report, its breakdown made to add up so the range is
+    // what refuses it.
+    let mut huge = valid.clone();
+    huge["value"] = json!(u64::from(u32::MAX) + 1);
+    huge["by_write"] = json!({"task": u64::from(u32::MAX) + 1});
+    huge["by_read"] = json!({"project": u64::from(u32::MAX) + 1});
     for (recorded, message) in [
         (None, "no telemetry"),
         (Some(foreign), "workload does not match"),
         (Some(fewer), "workload does not match"),
         (Some(unbalanced), "does not add up"),
         (Some(uncounted), "does not add up"),
+        (with("value", json!(null)), "missing whole-number figure"),
+        (with("value", json!(204.5)), "missing whole-number figure"),
+        (
+            with("simulated_seconds", json!(null)),
+            "missing simulated seconds",
+        ),
+        (
+            with("simulated_seconds", json!(-1.0)),
+            "missing simulated seconds",
+        ),
+        (with("detail", json!(null)), "missing detail"),
+        (Some(huge), "figure out of range"),
     ] {
         let (output, written) = run(recorded);
         assert!(!output.status.success(), "accepted: {message}");

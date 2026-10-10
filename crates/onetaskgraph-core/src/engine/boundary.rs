@@ -654,37 +654,61 @@ impl Engine {
         self.boundary.active
     }
 
-    /// Refuse a write to `destination` that names, at the caller's own request, an item of a
-    /// source declared private — a `--depends-on` or a `--delivers` of a create or an update —
-    /// when `destination` is not itself declared private.
+    /// Refuse a write to `destination` that names, at the caller's own request, a private
+    /// item — a `--depends-on` or a `--delivers` of a create or an update — when `destination`
+    /// is not itself declared private.
     ///
     /// Such a reference is a qualified id, `<source>:<id>`, and the source's name is in no
     /// term list unless it happens to match a private repository: so it is refused here,
     /// whatever the check would say, rather than written where it names somewhere private.
-    /// A copy and a delivered task's back-reference withhold the same ids instead (see
-    /// [`Engine::withholds`]), because there the id is what the engine carries along rather
-    /// than what the caller asked to be written. `references` are `(source, native id)` pairs;
-    /// one naming `destination` itself is that source's own item and names nothing elsewhere.
-    /// While no source is declared private nothing can be refused, which keeps an inactive
-    /// store exactly as it was.
-    pub(crate) fn refuse_private_references<'a>(
+    /// An item of a source declared private is refused by its source alone; while the boundary
+    /// is active, every other item of another source is read for its classification with what
+    /// it inherits (see [`Engine::reference_class`]), refused when private and when that cannot
+    /// be established. A copy and a delivered task's back-reference withhold the same ids
+    /// instead (see [`Engine::withholds`]), because there the id is what the engine carries
+    /// along rather than what the caller asked to be written. One naming `destination` itself
+    /// is that source's own item and names nothing elsewhere.
+    pub(crate) async fn refuse_private_references(
         &self,
         destination: &onetaskgraph_plugin_api::SourceName,
         item: &str,
-        references: impl IntoIterator<Item = &'a crate::GlobalId>,
+        references: &[(crate::GlobalId, onetaskgraph_plugin_api::ItemKind)],
     ) -> Result<(), EngineError> {
         if self.declared(destination) == SourceVisibility::Private {
             return Ok(());
         }
-        for reference in references {
-            if &reference.source != destination
-                && self.declared(&reference.source) == SourceVisibility::Private
-            {
+        let mut known = std::collections::HashMap::new();
+        for (reference, kind) in references {
+            if &reference.source == destination {
+                continue;
+            }
+            if self.declared(&reference.source) == SourceVisibility::Private {
                 return Err(EngineError::PrivateReference {
                     item: item.to_owned(),
                     destination: destination.to_string(),
                     named: reference.source.to_string(),
                 });
+            }
+            if !self.boundary.active {
+                continue;
+            }
+            match self.reference_class(reference, *kind, &mut known).await {
+                Ok(Classification::Private) => {
+                    return Err(EngineError::PrivateItemReference {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        reference: reference.to_string(),
+                    });
+                }
+                Ok(Classification::Public) => {}
+                Err(why) => {
+                    return Err(EngineError::ReferenceUnclassified {
+                        item: item.to_owned(),
+                        reference: reference.to_string(),
+                        destination: destination.to_string(),
+                        why,
+                    });
+                }
             }
         }
         Ok(())
@@ -919,16 +943,20 @@ impl Engine {
             return Ok(());
         }
         let stored = match held {
-            Held::Task => destination
-                .source()
-                .get_task(id)
-                .await
-                .map(|task| task.map(|task| (task.classification, task.repositories))),
+            Held::Task => destination.source().get_task(id).await.map(|task| {
+                task.map(|task| (task.classification, task.repositories, task.project))
+            }),
             Held::Project => destination.source().get_project(id).await.map(|project| {
-                project.map(|project| (project.classification, project.repositories))
+                project.map(|project| (project.classification, project.repositories, None))
             }),
             Held::Document => destination.source().get_document(id).await.map(|document| {
-                document.map(|document| (document.classification, document.repositories))
+                document.map(|document| {
+                    (
+                        document.classification,
+                        document.repositories,
+                        document.project,
+                    )
+                })
             }),
         }
         .map_err(|error| EngineError::SourceRefused {
@@ -937,11 +965,38 @@ impl Engine {
         })?;
         // An item the source does not hold is the write's own refusal to make, in its own
         // words; nothing of it can be private.
-        let Some((declared, repositories)) = stored else {
+        let Some((declared, repositories, filed)) = stored else {
             return Ok(());
         };
-        self.admit_known(destination, item, id, declared, &repositories, exposure)
-            .await
+        // What it inherits tightens it too: a task's or a document's project, and a project's
+        // own tasks and documents.
+        let mut known = std::collections::HashMap::new();
+        let inherited = match (held, filed) {
+            (Held::Project, _) => {
+                self.source_project_class(
+                    &crate::GlobalId::new(destination.name().clone(), id.clone()),
+                    &mut known,
+                )
+                .await?
+            }
+            (_, Some(filed)) => {
+                self.source_project_class(
+                    &crate::GlobalId::new(destination.name().clone(), filed),
+                    &mut known,
+                )
+                .await?
+            }
+            (_, None) => Classification::Public,
+        };
+        self.admit_known(
+            destination,
+            item,
+            id,
+            declared.strictest(inherited),
+            &repositories,
+            exposure,
+        )
+        .await
     }
 
     /// Admit one write to an item `destination` holds, whose classification and repositories

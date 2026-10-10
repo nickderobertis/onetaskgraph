@@ -572,11 +572,14 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
-        self.refuse_private_references(
-            near,
-            "the new task",
-            request.depends_on.iter().chain(&request.delivers),
-        )?;
+        let references: Vec<(GlobalId, ItemKind)> = request
+            .depends_on
+            .iter()
+            .chain(&request.delivers)
+            .map(|far| (far.clone(), ItemKind::Task))
+            .collect();
+        self.refuse_private_references(near, "the new task", &references)
+            .await?;
         if let Some(first) = carried.first() {
             assets::stores(source, &record, &first.name)?;
         }

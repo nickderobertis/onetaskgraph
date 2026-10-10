@@ -455,6 +455,24 @@ pub enum EngineError {
         named: String,
     },
 
+    /// A write to a source not declared private would name an item classified private, though
+    /// its source is not declared private.
+    #[error(
+        "{item} names {reference}, which is private, and source {destination} is not declared \
+         private; a reference to a private item is never written where it would name it, so \
+         nothing was written\n\
+         next: write it to a source declared private, or take the dependency or the delivery \
+         that names it off first."
+    )]
+    PrivateItemReference {
+        /// How the write named the item.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The private item a reference names, qualified.
+        reference: String,
+    },
+
     /// A write to a source not declared private would name an item whose classification
     /// cannot be established.
     #[error(

@@ -1427,7 +1427,8 @@ visibility.** Active:
   missing or failed check refuses it;
 - a narrow write (`task status set`, `priority set`, `content set`, `metadata set`, `update`,
   `comment add` and `edit`, `render`) to an item of a source not verified private reads the
-  item once for its classification and refuses a private one; to a source verified private it
+  item for its classification, with what it inherits — a task's or a document's project, a
+  project's tasks and documents — and refuses a private one; to a source verified private it
   reads nothing more.
 
 **Routing by classification.** A route entry may match on `classification` instead of
@@ -1461,8 +1462,10 @@ a task the project it is filed under, a project every task and document it holds
 its source declares; a reference whose classification cannot be read — its source not
 configured, any of those reads failing, or no such item — is refused before anything is
 written. A `--depends-on` or
-`--delivers` naming such an item is the caller asking for it to be written, so that write is
-refused before anything is written rather than quietly answering something else.
+`--delivers` naming such an item — or, while the boundary is active, an item of any other
+source read as private, with what it inherits, or one it cannot classify — is the caller asking
+for it to be written, so that write is refused before anything is written rather than quietly
+answering something else.
 
 **Term scope.** Which private repositories a check derives terms from is the caller's to say.
 Every verb that writes takes `--term-scope <host/owner/name>`, repeatable, or

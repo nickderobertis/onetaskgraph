@@ -1804,7 +1804,10 @@ impl Engine {
                     class.strictest(task.classification)
                 });
                 if self.boundary_active() {
-                    class = class.strictest(self.source_project_class(id, running).await?);
+                    class = class.strictest(
+                        self.source_project_class(id, &mut running.project_classes)
+                            .await?,
+                    );
                 }
                 for item in std::iter::once(&mut project).chain(&mut tasks) {
                     item.classification = class;
@@ -2895,7 +2898,7 @@ impl Engine {
             Some(filed) if self.boundary_active() => {
                 self.source_project_class(
                     &GlobalId::new(read.source.source.clone(), filed.clone()),
-                    running,
+                    &mut running.project_classes,
                 )
                 .await?
             }
@@ -2906,12 +2909,12 @@ impl Engine {
 
     /// A source project's classification, worked out once per command: see
     /// [`Engine::project_class`].
-    async fn source_project_class(
+    pub(super) async fn source_project_class(
         &self,
         project: &GlobalId,
-        running: &mut Running,
+        known: &mut HashMap<GlobalId, Classification>,
     ) -> Result<Classification, EngineError> {
-        if let Some(known) = running.project_classes.get(project) {
+        if let Some(known) = known.get(project) {
             return Ok(*known);
         }
         let source = self.readable(&project.source)?;
@@ -2928,8 +2931,65 @@ impl Engine {
         } else {
             Classification::Public
         };
-        running.project_classes.insert(project.clone(), class);
+        known.insert(project.clone(), class);
         Ok(class)
+    }
+
+    /// Who may read the item `far` names, as a write naming it has to know: its own record and
+    /// repositories, tightened — a task's by the project it is filed under, a project's by every
+    /// task and document it holds. `known` holds the project classifications this command has
+    /// already worked out. `Err` says why it could not be established: its source is not
+    /// configured, a read failed, or no such item is held.
+    pub(super) async fn reference_class(
+        &self,
+        far: &GlobalId,
+        kind: ItemKind,
+        known: &mut HashMap<GlobalId, Classification>,
+    ) -> Result<Classification, String> {
+        let Ok(source) = self.readable(&far.source) else {
+            return Err("no source of that name is configured to read it from".to_owned());
+        };
+        let unread = |error: SourceError| format!("its source could not be read: {error}");
+        let missing = || "its source holds no such item".to_owned();
+        match kind {
+            ItemKind::Task => {
+                let task = source
+                    .source()
+                    .get_task(&far.native)
+                    .await
+                    .map_err(unread)?
+                    .ok_or_else(missing)?;
+                let own = self.classify(task.classification, &task.repositories).await;
+                Ok(match &task.project {
+                    Some(filed) => own.strictest(
+                        self.source_project_class(
+                            &GlobalId::new(far.source.clone(), filed.clone()),
+                            known,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    None => own,
+                })
+            }
+            ItemKind::Project => {
+                if let Some(class) = known.get(far) {
+                    return Ok(*class);
+                }
+                if source
+                    .source()
+                    .get_project(&far.native)
+                    .await
+                    .map_err(unread)?
+                    .is_none()
+                {
+                    return Err(missing());
+                }
+                self.source_project_class(far, known)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
     }
 
     /// A project's classification: the strictest of its own declaration, its repositories,
@@ -3099,73 +3159,15 @@ impl Engine {
             {
                 continue;
             }
-            let unclassified = |why: String| EngineError::ReferenceUnclassified {
-                item: item.source.to_string(),
-                reference: far.to_string(),
-                destination: item.to.to_string(),
-                why,
-            };
-            let Ok(source) = self.readable(&far.source) else {
-                return Err(unclassified(
-                    "no source of that name is configured to read it from".to_owned(),
-                ));
-            };
-            let unread =
-                |error: SourceError| unclassified(format!("its source could not be read: {error}"));
-            let missing = || unclassified("its source holds no such item".to_owned());
-            // Its effective classification: a task's tightened by the project it is filed
-            // under, and a project's by every task and document it holds — the same rule a
-            // copy of either applies to itself.
-            let class = match kind {
-                ItemKind::Task => {
-                    let task = source
-                        .source()
-                        .get_task(&far.native)
-                        .await
-                        .map_err(unread)?
-                        .ok_or_else(missing)?;
-                    let own = self.classify(task.classification, &task.repositories).await;
-                    match &task.project {
-                        Some(filed) => own.strictest(
-                            self.source_project_class(
-                                &GlobalId::new(far.source.clone(), filed.clone()),
-                                running,
-                            )
-                            .await
-                            .map_err(|error| unclassified(error.to_string()))?,
-                        ),
-                        None => own,
-                    }
-                }
-                ItemKind::Project => {
-                    let held = source
-                        .source()
-                        .get_project(&far.native)
-                        .await
-                        .map_err(unread)?
-                        .ok_or_else(missing)?;
-                    match running.project_classes.get(&far) {
-                        Some(known) => *known,
-                        None => {
-                            let tasks = self
-                                .project_member_tasks(&far, FOR_A_COPY)
-                                .await
-                                .map_err(|error| unclassified(error.to_string()))?;
-                            let class = self
-                                .project_class(
-                                    source,
-                                    &far,
-                                    &held,
-                                    tasks.iter().map(|task| &task.item),
-                                )
-                                .await
-                                .map_err(|error| unclassified(error.to_string()))?;
-                            running.project_classes.insert(far.clone(), class);
-                            class
-                        }
-                    }
-                }
-            };
+            let class = self
+                .reference_class(&far, kind, &mut running.project_classes)
+                .await
+                .map_err(|why| EngineError::ReferenceUnclassified {
+                    item: item.source.to_string(),
+                    reference: far.to_string(),
+                    destination: item.to.to_string(),
+                    why,
+                })?;
             if class == Classification::Private {
                 running.private.push(far);
             } else {

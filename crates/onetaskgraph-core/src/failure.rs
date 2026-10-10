@@ -284,6 +284,11 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::PrivateItemReference { destination, .. } => (
+            "private-reference".to_owned(),
+            configured(destination),
+            None,
+        ),
         EngineError::ReferenceUnclassified { destination, .. } => (
             "reference-unclassified".to_owned(),
             configured(destination),

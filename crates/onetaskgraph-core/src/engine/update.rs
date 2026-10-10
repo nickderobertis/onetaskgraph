@@ -107,16 +107,23 @@ impl Engine {
         };
         let mut references = Vec::new();
         for edge in update.depends_on.iter().flatten() {
-            references.push(if edge.to.is_qualified() {
-                qualified(edge.to.id().to_owned())?
-            } else {
-                GlobalId::new(id.source.clone(), NativeId(edge.to.id().to_owned()))
-            });
+            references.push((
+                if edge.to.is_qualified() {
+                    qualified(edge.to.id().to_owned())?
+                } else {
+                    GlobalId::new(id.source.clone(), NativeId(edge.to.id().to_owned()))
+                },
+                edge.to.kind,
+            ));
         }
         for entry in update.delivers.iter().flatten() {
-            references.push(qualified(entry.in_source(&id.source).as_str().to_owned())?);
+            references.push((
+                qualified(entry.in_source(&id.source).as_str().to_owned())?,
+                onetaskgraph_plugin_api::ItemKind::Task,
+            ));
         }
-        self.refuse_private_references(&id.source, &id.to_string(), &references)?;
+        self.refuse_private_references(&id.source, &id.to_string(), &references)
+            .await?;
         self.admit_existing(
             source,
             &id.to_string(),

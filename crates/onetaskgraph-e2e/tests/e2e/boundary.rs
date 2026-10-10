@@ -3075,3 +3075,163 @@ fn a_narrow_write_to_a_record_a_public_source_does_not_hold_is_refused_writing_n
     }
     assert_eq!(store.tree(), before, "nothing was written");
 }
+
+#[test]
+fn a_reference_a_caller_names_to_an_item_private_by_record_or_inheritance_is_refused() {
+    // `shelf` declares nothing: what makes each item private is its record, its project or
+    // its members, and what makes `broken` unclassifiable is a record that does not parse.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "projects",
+        "closed-plan",
+        "title: Closed plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "legacy",
+        "title: Legacy\nstatus: todo\nproject: closed-plan",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "broken",
+        "title: Broken\nstatus: todo\nclassification: secret",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo",
+        PLAIN,
+    );
+    store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
+    let body = store.body(PLAIN);
+    let before = store.tree();
+    for (far, kind) in [
+        ("shelf:secret", "private-reference"),
+        ("shelf:legacy", "private-reference"),
+        ("shelf:broken", "reference-unclassified"),
+    ] {
+        for arguments in [
+            vec![
+                "task",
+                "create",
+                "site",
+                "--project",
+                "p",
+                "--title",
+                "T",
+                "--body-file",
+                &body,
+                "--depends-on",
+                far,
+            ],
+            vec!["task", "update", "site:fine", "--delivers", far],
+            vec!["task", "update", "site:fine", "--depends-on", far],
+        ] {
+            let (refused, said) = store.refused(&arguments);
+            assert_eq!(refused, kind, "{arguments:?}: {said}");
+            assert!(said.contains(far), "{said}");
+        }
+    }
+    assert_eq!(store.tree(), before, "no refused write left anything");
+    // A public item of the same source is named as before.
+    store.ok(&["task", "update", "site:fine", "--depends-on", "shelf:plain"]);
+    assert!(held_text(&store, "site").contains("shelf:plain"));
+}
+
+#[test]
+fn a_narrow_write_to_an_item_private_by_inheritance_held_by_a_public_source_is_refused() {
+    let store = Store::new(Some(registered), json!({}));
+    // Held there by hand: none of the three is private by its own record.
+    store.record(
+        "site",
+        "projects",
+        "closed-plan",
+        "title: Closed plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "filed",
+        "title: Filed\nstatus: todo\nproject: closed-plan",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "documents",
+        "filed-notes",
+        "title: Filed notes\nproject: closed-plan",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "inner",
+        "title: Inner\nstatus: todo\nproject: mixed\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "projects",
+        "open-plan",
+        "title: Open plan\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\nproject: open-plan",
+        PLAIN,
+    );
+    let before = store.tree();
+    for arguments in [
+        vec!["task", "status", "set", "site:filed", "done"],
+        vec![
+            "document",
+            "metadata",
+            "set",
+            "site:filed-notes",
+            "team.note",
+            "\"x\"",
+        ],
+        vec![
+            "project",
+            "metadata",
+            "set",
+            "site:mixed",
+            "team.note",
+            "\"x\"",
+        ],
+    ] {
+        let (kind, said) = store.refused(&arguments);
+        assert_eq!(kind, "not-private-destination", "{arguments:?}: {said}");
+    }
+    assert_eq!(store.tree(), before, "nothing was written");
+    // A public task under a public project is written as before.
+    store.ok(&["task", "status", "set", "site:open", "done"]);
+}
