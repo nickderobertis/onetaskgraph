@@ -19,6 +19,14 @@
 # https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
 # Priority writes select that value from their mutation payload instead of reading the issue again.
 #
+# `ProjectV2Field.dataType: ProjectV2FieldType!` — "The field's type." — and that enum's members
+# were read from GitHub.com's own published schema artifact
+# <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-10. A text field and a
+# number or date field are all `ProjectV2Field`, so `dataType` is what tells a board text field a
+# projected metadata value can be written to from one it cannot. The same artifact declares
+# `CreateProjectV2FieldInput.dataType: ProjectV2CustomFieldType!`, whose `TEXT` member is what
+# the guarded field setup creates a missing projected field with.
+#
 # `CreateIssueInput.projectV2Ids: [ID!]` — "An array of Node IDs for Projects V2 associated with
 # this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])` — was read from GitHub.com's own
 # published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
@@ -330,6 +338,30 @@ type ProjectV2SingleSelectField {
 type ProjectV2Field {
   id: ID!
   name: String!
+  dataType: ProjectV2FieldType!
+}
+enum ProjectV2FieldType {
+  ASSIGNEES
+  CLOSED
+  CREATED
+  DATE
+  ISSUE_TYPE
+  ITERATION
+  LABELS
+  LINKED_PULL_REQUESTS
+  MILESTONE
+  MULTI_SELECT
+  NUMBER
+  PARENT_ISSUE
+  REPOSITORY
+  REVIEWERS
+  SINGLE_SELECT
+  SUB_ISSUES_PROGRESS
+  TEXT
+  TITLE
+  TRACKED_BY
+  TRACKS
+  UPDATED
 }
 type ProjectV2SingleSelectFieldOption {
   id: ID!

@@ -1351,36 +1351,23 @@ fn repository_node_id(slug: &str) -> String {
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
-        for (alias, variable, enabled, document, key) in [
+        let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
             (
-                "updateProjectV2ItemFieldValue",
-                "input",
-                true,
+                slot,
                 onetaskgraph_github_projects::graphql::UPDATE_FIELD,
                 "updateProjectV2ItemFieldValue",
-            ),
+            )
+        });
+        let clears = onetaskgraph_github_projects::FIELD_CLEAR_SLOTS.map(|slot| {
             (
-                "second",
-                "second",
-                variables["writeSecond"] == true,
-                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
-            (
-                "third",
-                "third",
-                variables["writeThird"] == true,
-                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
-            (
-                "cleared",
-                "clear",
-                variables["writeClear"] == true,
+                slot,
                 onetaskgraph_github_projects::graphql::CLEAR_FIELD,
                 "clearProjectV2ItemFieldValue",
-            ),
-        ] {
+            )
+        });
+        for (slot, document, key) in writes.into_iter().chain(clears) {
+            let (alias, variable, enabled) =
+                (slot.alias, slot.variable, variables[slot.include] == true);
             if enabled {
                 let answer = answer(state, document, &json!({"input":variables[variable]}));
                 result.insert(alias.to_owned(), answer[key].clone());
