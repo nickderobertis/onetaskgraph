@@ -2720,3 +2720,73 @@ fn a_narrow_write_to_a_record_of_a_private_repository_held_by_a_public_source_is
     assert_eq!(store.tree(), before, "nothing was written");
     store.ok(&["task", "status", "set", "site:open", "done"]);
 }
+
+#[test]
+fn a_copy_withholds_a_carried_private_item_s_id_though_its_source_is_not_declared_private() {
+    // `shelf` and `notes` declare nothing, so only `secret`'s own classification says its id
+    // must not reach `site`.
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}},
+            "notes": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("notes")}},
+            "site": {"routes": [{"classification": "private", "to": "vault"}]},
+        })
+    });
+    store.record(
+        "shelf",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "notes",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\n\
+         depends_on: [{id: \"shelf:secret\", item: task}, {id: \"shelf:plain\", item: task}]\n\
+         delivers: [\"shelf:secret\"]",
+        PLAIN,
+    );
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "copy",
+        "notes:open",
+        "shelf:secret",
+        "--to",
+        "site",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let placed = |source: &str| {
+        report["items"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .find(|item| item["source"] == source)
+            .unwrap_or_else(|| panic!("{source}: {report:#}"))["destination"]
+            .as_str()
+            .expect("a destination")
+            .to_owned()
+    };
+    let secret_at = placed("shelf:secret");
+    assert!(secret_at.starts_with("vault:"), "{report:#}");
+    let landed = held_text(&store, "site");
+    // Neither the id it was read under nor the one it landed under reaches the public write…
+    assert!(!landed.contains("shelf:secret"), "{landed}");
+    assert!(!landed.contains(&secret_at), "{landed}");
+    // …while the edge to a public item outside the copy is written as before.
+    assert!(landed.contains("shelf:plain"), "{landed}");
+    // A destination declared private keeps both.
+    store.ok(&["task", "copy", "notes:open", "--to", "vault"]);
+    let kept = held_text(&store, "vault");
+    assert!(kept.contains("shelf:secret"), "{kept}");
+    assert!(kept.contains("shelf:plain"), "{kept}");
+}

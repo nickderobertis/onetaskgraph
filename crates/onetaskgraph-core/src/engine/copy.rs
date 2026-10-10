@@ -877,6 +877,10 @@ struct Running {
     /// Whether every item this command lands was already held to the public boundary, as a
     /// project copy does for all of them before it writes the first.
     preflighted: bool,
+    /// Every item this command carries that is classified private, by its source id and by
+    /// where it lands: an id naming one is withheld from a write anywhere not declared
+    /// private (see [`Engine::withholds`]), whichever source it was read from.
+    private: Vec<GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1451,6 +1455,7 @@ impl Engine {
             resolvable,
             counterparts,
             deferred,
+            private,
             ..
         } = running;
         for entry in deferred {
@@ -1464,10 +1469,12 @@ impl Engine {
                     &resolvable,
                     &counterparts,
                 ),
+                &private,
             );
             let delivers = self.shown_delivers(
                 &entry.item.to,
                 delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts),
+                &private,
             );
             self.write(
                 destination,
@@ -1817,6 +1824,11 @@ impl Engine {
         )
         .await?;
         running.preflighted = true;
+        for (project, tasks) in &plans {
+            for item in std::iter::once(project).chain(tasks) {
+                note_private(running, item);
+            }
+        }
         let mut outcomes = Vec::new();
         for (project, tasks) in plans {
             outcomes.extend(
@@ -1964,6 +1976,7 @@ impl Engine {
                         &running.resolvable,
                         &running.counterparts,
                     ),
+                    &running.private,
                 );
                 let first = self.shown_edges(
                     &home_source,
@@ -1974,6 +1987,7 @@ impl Engine {
                         &running.resolvable,
                         &before_members,
                     ),
+                    &running.private,
                 );
                 let held = project.held.as_ref();
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
@@ -2715,6 +2729,10 @@ impl Engine {
             }
         }
 
+        for item in &planned {
+            note_private(running, item);
+        }
+
         let mut outcomes = Vec::new();
         let mut unresolved = Vec::new();
         let mut priors = Vec::new();
@@ -2729,10 +2747,12 @@ impl Engine {
                     &running.resolvable,
                     &running.counterparts,
                 ),
+                &running.private,
             );
             let delivers = self.shown_delivers(
                 &item.to,
                 delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                &running.private,
             );
             if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
                 unresolved.push(index);
@@ -2755,6 +2775,9 @@ impl Engine {
                 running
                     .counterparts
                     .insert(item.source.to_string(), id.clone());
+                if item.classification == Classification::Private && !running.private.contains(id) {
+                    running.private.push(id.clone());
+                }
                 if !request.dry_run {
                     running.linking.push(Linking {
                         item: item.source.clone(),
@@ -2931,21 +2954,21 @@ impl Engine {
     }
 
     /// `edges` as a write to `destination` carries them: without one whose far end that write
-    /// withholds (see [`Engine::withholds`]). One not resolvable yet stays `None`.
-    ///
-    /// A far end is withheld here by its source alone: an item a copy knows is classified
-    /// private only ever lands in a source declared private, so naming it is naming that source.
+    /// withholds (see [`Engine::withholds`]) — an item of a source declared private, or one of
+    /// `private`, the items this copy carries classified private. One not resolvable yet stays
+    /// `None`.
     fn shown_edges(
         &self,
         destination: &SourceName,
         edges: Vec<Option<DependencyEdge>>,
+        private: &[GlobalId],
     ) -> Vec<Option<DependencyEdge>> {
         edges
             .into_iter()
             .filter(|edge| {
                 !edge.as_ref().is_some_and(|edge| {
                     far_end(&edge.to, destination)
-                        .is_some_and(|far| self.withholds(destination, &far, &[]))
+                        .is_some_and(|far| self.withholds(destination, &far, private))
                 })
             })
             .collect()
@@ -2957,6 +2980,7 @@ impl Engine {
         &self,
         destination: &SourceName,
         delivers: Vec<Option<TaskRef>>,
+        private: &[GlobalId],
     ) -> Vec<Option<TaskRef>> {
         delivers
             .into_iter()
@@ -2966,7 +2990,7 @@ impl Engine {
                         .in_source(destination)
                         .as_str()
                         .parse::<GlobalId>()
-                        .is_ok_and(|far| self.withholds(destination, &far, &[]))
+                        .is_ok_and(|far| self.withholds(destination, &far, private))
                 })
             })
             .collect()
@@ -5199,6 +5223,23 @@ fn spelled_from(landed: &GlobalId, near: &SourceName) -> String {
         landed.native.0.clone()
     } else {
         landed.to_string()
+    }
+}
+
+/// Record `item` among those `running` carries classified private, when it is: by its source
+/// id, and by its destination id when it already has one.
+fn note_private(running: &mut Running, item: &Planned) {
+    if item.classification != Classification::Private {
+        return;
+    }
+    let mut ids = vec![item.source.clone()];
+    if let Target::Update { id, .. } = &item.target {
+        ids.push(GlobalId::new(item.to.clone(), id.clone()));
+    }
+    for id in ids {
+        if !running.private.contains(&id) {
+            running.private.push(id);
+        }
     }
 }
 
