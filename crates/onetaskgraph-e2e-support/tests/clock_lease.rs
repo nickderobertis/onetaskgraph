@@ -68,7 +68,7 @@ fn a_client_number_reattaches_straight_after_its_last_connection_closes() {
 }
 #[test]
 fn a_client_number_still_attached_is_refused() {
-    let clock = SimulatedClock::start(1);
+    let clock = SimulatedClock::start(1).with_reattach_grace(Duration::from_millis(50));
     let _held = Client::attach(&clock, 0).unwrap();
     assert!(Client::attach(&clock, 0).is_none());
     assert_eq!(clock.attached(), vec![0]);
