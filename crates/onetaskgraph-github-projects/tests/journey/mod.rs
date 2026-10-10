@@ -2773,6 +2773,7 @@ async fn drive_every_declared_capability(
         writer,
         (&first_id, &first),
         (&second_id, &second),
+        &run_tasks,
         &by_prefix,
     )
     .await
@@ -2787,9 +2788,17 @@ async fn drive_every_declared_capability(
 /// instant, then edited after it, must move `first`'s `updatedAt` past the instant and select
 /// `first`; a comment newly added to `second` after the instant must select `second`.
 ///
-/// The instant comes from GitHub's own clock — a second past the `updatedAt` the first
-/// comment left — and the edit waits two seconds past it, so no skew between this machine and
-/// GitHub can put the edit before the instant.
+/// The instant comes from GitHub's own clock — a second past the later of the `updatedAt` the
+/// first comment left on its issue and the stamps GitHub gave that comment itself — and the
+/// edit waits two seconds past it, so no skew between this machine and GitHub can put the edit
+/// before the instant. The comment's own stamps are in it because the issue's are not enough:
+/// GitHub stamps the two separately, and a node read made the moment the comment returns can
+/// answer the issue as it stood before it. A boundary a second past that reading alone has put
+/// the comment written to precede it at or after it, and the read then rightly selected `first`
+/// before anything was edited — which is how this leg failed in run 38081007889.
+///
+/// Every read is judged over `own`, this journey's own tasks, alone; see
+/// [`comment_activity_read_selects`].
 ///
 /// GitHub reports `updatedAt` to the whole second, so the assertion is held to what can only
 /// be GitHub's behaviour. The edit GitHub itself stamps — the edited comment's own
@@ -2802,6 +2811,7 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
     writer: &dyn TaskSource,
     (first_id, first): (&NativeId, &str),
     (second_id, second): (&NativeId, &str),
+    own: &[String],
     by_prefix: &dyn Fn() -> TaskQuery,
 ) -> Result<(), String> {
     let body = |text: &str| {
@@ -2819,18 +2829,19 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
         .map_err(|error| format!("live comment write failed: {error}"))?
         .ok_or_else(|| "the task to comment on was not there".to_owned())?;
     let before_edit = issue_updated_at(writer, first_id, "after its comment was written").await?;
-    let since = before_edit + chrono::Duration::seconds(1);
+    let since = [written.created_at, written.updated_at]
+        .into_iter()
+        .flatten()
+        .fold(before_edit, std::cmp::max)
+        + chrono::Duration::seconds(1);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let commented_since = || TaskQuery {
         commented_since: Some(since),
         ..by_prefix()
     };
-    let unedited = task_titles(writer, &commented_since(), "comment-activity read").await?;
-    ensure!(
-        unedited.is_empty(),
-        "before any comment activity after {since}, a comment-activity read selected \
-         {unedited:?}"
-    );
+    comment_activity_read_selects(writer, &commented_since(), own, &[])
+        .await
+        .map_err(|error| format!("before any comment activity after {since}, {error}"))?;
 
     let mut edited_at = before_edit;
     for attempt in 0..5 {
@@ -2897,19 +2908,61 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
     // not GitHub's search index has caught up with either write. It is still asked
     // repeatedly, as it always was, and what it waits for is exactly the two issues, never a
     // superset.
-    let expected = sorted(vec![first.to_owned(), second.to_owned()]);
-    let mut selected = Vec::new();
+    let expected = [first.to_owned(), second.to_owned()];
+    let mut last = String::new();
     for _ in 0..30 {
-        selected = task_titles(writer, &commented_since(), "comment-activity read").await?;
-        if selected == expected {
-            return Ok(());
+        match comment_activity_read_selects(writer, &commented_since(), own, &expected).await {
+            Ok(()) => return Ok(()),
+            Err(error) => last = error,
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     Err(format!(
-        "a comment-activity read since {since} never selected the issue whose comment was \
-         edited and the issue newly commented on ({expected:?}); it last selected {selected:?}"
+        "a comment-activity read since {since} never selected exactly the issue whose comment \
+         was edited and the issue newly commented on ({expected:?}) of this journey's own \
+         tasks; at the last read, {last}"
     ))
+}
+
+/// Whether a comment-activity read selected, of `own` — the tasks this journey wrote — exactly
+/// `commented`: the ones it gave a comment created or edited at or after the read's instant.
+///
+/// Each of `own` is judged both ways: selected without that activity is a predicate applied
+/// too wide, and left out with it is one applied too narrow. A selected task outside `own` is
+/// set aside rather than judged, because whether it has comment activity is not this journey's
+/// to know: the board is shared, and the title prefix the read is narrowed by is shared too,
+/// with every other process of the same CI attempt, so another lane's setup, cleanup or
+/// journey can comment on an item that matches it at any moment. Asserting the read selects
+/// none of those would be asserting that nobody else commented meanwhile.
+///
+/// # Errors
+///
+/// The read failing, or selecting other than `commented` of `own`, naming both halves.
+pub async fn comment_activity_read_selects(
+    source: &dyn TaskSource,
+    query: &TaskQuery,
+    own: &[String],
+    commented: &[String],
+) -> Result<(), String> {
+    let selected = task_titles(source, query, "comment-activity read").await?;
+    let unexpected = selected
+        .iter()
+        .filter(|title| own.contains(title) && !commented.contains(title))
+        .collect::<Vec<_>>();
+    let missing = sorted(
+        commented
+            .iter()
+            .filter(|title| !selected.contains(title))
+            .cloned()
+            .collect(),
+    );
+    ensure!(
+        unexpected.is_empty() && missing.is_empty(),
+        "a comment-activity read selected {unexpected:?} of this journey's own tasks, which \
+         had no comment activity after its instant, and left out {missing:?}, which did; it \
+         selected {selected:?} in all"
+    );
+    Ok(())
 }
 
 /// Everything one run of this journey may reach, and the names it may write under.

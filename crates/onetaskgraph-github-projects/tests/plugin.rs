@@ -14814,6 +14814,126 @@ async fn an_issue_this_source_commented_on_is_selected_before_the_search_index_c
     );
 }
 
+/// The live journey's comment-activity leg judges each read with
+/// `journey::comment_activity_read_selects`, and this drives that judgement against a board
+/// shaped as the shared live board is during a run: the journey's own three tasks under its
+/// run's title prefix, and a fourth under the same prefix that another process of the same
+/// attempt wrote and comments on meanwhile.
+///
+/// - Another process's comment after the instant is selected by the read and is not the
+///   journey's to judge, so the leg passes, before the journey's own comment activity and
+///   after it.
+/// - A read from an instant before the comment the journey writes ahead of its instant —
+///   what run 38081007889 amounted to — selects `first`, which had no activity after the
+///   instant the leg judges against, and the leg fails naming it.
+/// - A read that leaves out one of the journey's tasks that was commented on — a reader the
+///   search index is still behind for — fails naming that task.
+#[tokio::test]
+async fn the_live_comment_activity_leg_sets_aside_another_process_and_judges_its_own_tasks() {
+    const PREFIX: &str = "onetaskgraph live cleanup ci-1-1-";
+    let titled = |stamp: &str| format!("{PREFIX}{stamp}");
+    let fixture = board(vec![
+        Item::issue("I_first", &titled("10"))
+            .status("Todo")
+            .updated("2026-07-01T00:00:00Z"),
+        Item::issue("I_second", &titled("11"))
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_orphan", &titled("12"))
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+        Item::issue("I_stranger", &titled("99"))
+            .status("Todo")
+            .updated("2026-06-02T09:00:00Z"),
+    ]);
+    let own = [titled("10"), titled("11"), titled("12")];
+    // The comment the journey writes on `first` ahead of its instant.
+    let early = fixture.commented_at("I_first", "2026-07-01T00:00:00Z", "2026-07-01T00:00:00Z");
+    let at = |instant: &str| TaskQuery {
+        text: text(PREFIX, TextFields::Title),
+        commented_since: Some(instant.parse().expect("an RFC 3339 instant")),
+        ..TaskQuery::default()
+    };
+    // Every comment written below is stamped by this board's clock, which reads 2026-09-01.
+    let since = "2026-08-01T00:00:00Z";
+    let journey = source(&fixture);
+    let elsewhere = source(&fixture);
+    elsewhere
+        .add_comment(&native("I_stranger"), &commenting("another lane's"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+
+    assert_eq!(
+        selected_tasks(journey.as_ref(), &at(since)).await,
+        ["I_stranger"],
+        "the read selects the item another process commented on, so the judgement below is \
+         asked about it"
+    );
+    journey::comment_activity_read_selects(journey.as_ref(), &at(since), &own, &[])
+        .await
+        .expect("another process's comment activity is set aside");
+
+    let refused = journey::comment_activity_read_selects(
+        journey.as_ref(),
+        &at("2026-06-15T00:00:00Z"),
+        &own,
+        &[],
+    )
+    .await
+    .expect_err("a read selecting the journey's own task with no activity since fails");
+    assert!(
+        refused.contains(&format!(
+            "selected [{:?}] of this journey's own tasks",
+            titled("10")
+        )),
+        "{refused}"
+    );
+
+    journey
+        .edit_comment(&native("I_first"), &native(&early), &comment_body("edited"))
+        .await
+        .unwrap()
+        .expect("a comment of that task");
+    journey
+        .add_comment(&native("I_second"), &commenting("new"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    let mut selected = selected_tasks(journey.as_ref(), &at(since)).await;
+    selected.sort();
+    assert_eq!(selected, ["I_first", "I_second", "I_stranger"]);
+    journey::comment_activity_read_selects(
+        journey.as_ref(),
+        &at(since),
+        &own,
+        &[titled("10"), titled("11")],
+    )
+    .await
+    .expect("exactly the journey's commented tasks, beside another process's");
+
+    // `orphan` is commented on too, by a process whose comment the search index has not caught
+    // up with, so a reader that wrote nothing cannot know of it and leaves it out.
+    fixture.indexes_behind("I_orphan");
+    elsewhere
+        .add_comment(&native("I_orphan"), &commenting("late"))
+        .await
+        .unwrap()
+        .expect("a task this board holds");
+    let omitted = journey::comment_activity_read_selects(
+        source(&fixture).as_ref(),
+        &at(since),
+        &own,
+        &[titled("10"), titled("11"), titled("12")],
+    )
+    .await
+    .expect_err("a read leaving out a commented task of the journey's fails");
+    assert!(
+        omitted.contains(&format!("and left out [{:?}], which did", titled("12"))),
+        "{omitted}"
+    );
+}
+
 /// A read narrowed to one project asks that project for its children by their own nodes, not
 /// the lagging search, so a child this source commented on carries a current `updatedAt`. The
 /// record that it was commented on still exempts it from being ruled out by that `updatedAt`.
