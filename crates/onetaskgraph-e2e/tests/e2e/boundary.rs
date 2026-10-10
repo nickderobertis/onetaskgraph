@@ -3509,3 +3509,109 @@ fn a_document_created_public_under_a_private_project_is_held_private_and_refused
     assert_eq!(kind, "not-private-destination", "{said}");
     assert_eq!(store.tree(), before, "nothing was written");
 }
+
+/// One item of the loopback board, in its own repository `repo`, filed under `parent`; a project
+/// when `project` is set.
+fn board_item(id: &str, parent: Option<&str>, project: bool) -> Value {
+    let body = if project {
+        format!(
+            "{PLAIN}\n\n<!-- onetaskgraph.metadata\n{{\"onetaskgraph.item_kind\":\"project\"}}\n-->"
+        )
+    } else {
+        PLAIN.to_owned()
+    };
+    json!({"item": format!("ITEM-{id}"), "id": id, "type": "Issue", "title": id, "body": body,
+           "state": "OPEN", "reason": null, "parent": parent, "repo": "openco/openwidget",
+           "status": "Todo", "origin": "", "labels": []})
+}
+
+/// The store, beside a loopback GitHub board `board` that declares nothing and holds the public
+/// project `HOME-1` with the two tasks `W-1` and `W-2` filed under it.
+fn store_over_board() -> (Store, crate::fixtures::GitHubBoardFields) {
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (config, board) = crate::fixtures::github_projects_with_items(
+            sandbox,
+            vec![
+                board_item("HOME-1", None, true),
+                board_item("W-1", Some("HOME-1"), false),
+                board_item("W-2", Some("HOME-1"), false),
+            ],
+        );
+        handle = Some(board);
+        json!({"board": {"plugin": "github-projects", "config": config}})
+    });
+    (store, handle.expect("the board"))
+}
+
+/// The board's read of one item by its id, and nothing else it sends: a listing of a project's
+/// members carries `$after` between these.
+const ITEM_READ: &str = "query($id:ID!,$first:Int!,$nestedFirst:Int!";
+
+#[test]
+fn a_public_classification_cached_before_its_project_went_is_never_trusted() {
+    // One copy reads `W-1`, then `HOME-1` and its members — classifying the project public and
+    // keeping that for the rest of the command — then `W-2` itself, or `W-2` as what `plan:ref`
+    // names. Before that the board deletes `HOME-1`, or refuses to read it: nothing filed under
+    // it may then reach `site` on the strength of what was read before.
+    type Make = fn(&crate::fixtures::GitHubBoardFields);
+    let cases: [(&str, Make); 2] = [
+        ("absent", |board| board.vanish_after("HOME-1", 2)),
+        ("unreadable", |board| board.refuse_after(ITEM_READ, 3)),
+    ];
+    for (gone, make) in cases {
+        for (ids, expected) in [
+            (
+                ["board:W-1", "board:W-2"],
+                ["project-unclassified", "refused"],
+            ),
+            (
+                ["board:W-1", "plan:ref"],
+                ["reference-unclassified", "reference-unclassified"],
+            ),
+        ] {
+            let expected = if gone == "absent" {
+                expected[0]
+            } else {
+                expected[1]
+            };
+            let (store, board) = store_over_board();
+            store.record(
+                "plan",
+                "tasks",
+                "ref",
+                "title: Ref\nstatus: todo\ndepends_on: [{id: \"board:W-2\", item: task}]",
+                PLAIN,
+            );
+            make(&board);
+            let before = store.tree();
+            let mut arguments = vec!["task", "copy"];
+            arguments.extend(ids);
+            arguments.extend(["--to", "site"]);
+            let (kind, said) = store.refused(&arguments);
+            assert_eq!(kind, expected, "{gone} {ids:?}: {said}");
+            assert_eq!(store.tree(), before, "{gone} {ids:?}: nothing was written");
+            let served = board.served();
+            // What refused it is `HOME-1` asked for again, before its cached answer was used.
+            let last = served
+                .iter()
+                .rfind(|(document, _)| document.contains(ITEM_READ))
+                .map(|(_, variables)| variables["id"].clone());
+            assert_eq!(last, Some(json!("HOME-1")), "{gone} {ids:?}");
+            if gone == "absent" {
+                assert!(said.contains("board:HOME-1"), "{gone} {ids:?}: {said}");
+            }
+            assert!(
+                !served
+                    .iter()
+                    .any(|(document, _)| document.trim_start().starts_with("mutation")),
+                "{gone} {ids:?}: the board was sent a mutation"
+            );
+        }
+    }
+    // The same copy over a board that keeps answering lands both, public as they read.
+    let (store, _board) = store_over_board();
+    store.ok(&["task", "copy", "board:W-1", "board:W-2", "--to", "site"]);
+    let landed = held_text(&store, "site");
+    assert!(landed.contains("W-1") && landed.contains("W-2"), "{landed}");
+}

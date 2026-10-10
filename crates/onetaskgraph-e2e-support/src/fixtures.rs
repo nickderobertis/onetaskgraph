@@ -948,6 +948,9 @@ struct GitHubBoard {
     /// Operations this board refuses once after answering that many requests carrying them —
     /// so a journey can let a read's first pages land and refuse a later one.
     refusing_after: Vec<(&'static str, usize)>,
+    /// Items this board stops holding after answering that many requests naming them by id —
+    /// so a journey can let a command read one and then find it gone.
+    vanishing: Vec<(String, usize)>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
@@ -1160,6 +1163,17 @@ impl GitHubBoardFields {
             .unwrap()
             .refusing_after
             .push((operation, answered));
+    }
+
+    /// Answer the next `answered` requests naming the item `id`, then stop holding it — a
+    /// person deleting it part way through a command, so every later read finds nothing there.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: the items it removes are the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_after`, and a suite could not add it from outside.
+    pub fn vanish_after(&self, id: &str, answered: usize) {
+        self.board
+            .lock()
+            .unwrap()
+            .vanishing
+            .push((id.to_owned(), answered));
     }
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
@@ -1946,6 +1960,7 @@ fn github_projects_board_at(
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
+        vanishing: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
@@ -2050,6 +2065,15 @@ fn github_projects_board_at(
                 let mut served = board.lock().unwrap();
                 served.documents.push(query.to_owned());
                 served.variables.push(variables.clone());
+                let named = variables["id"].as_str().unwrap_or_default().to_owned();
+                if let Some(at) = served.vanishing.iter().position(|(id, _)| *id == named) {
+                    if served.vanishing[at].1 == 0 {
+                        served.vanishing.remove(at);
+                        served.items.retain(|item| item["id"] != named.as_str());
+                    } else {
+                        served.vanishing[at].1 -= 1;
+                    }
+                }
             }
             {
                 // Refusals named after the board was built join the ones it was built with.

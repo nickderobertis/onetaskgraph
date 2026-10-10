@@ -2922,13 +2922,23 @@ impl Engine {
 
     /// A source project's classification, worked out once per command: see
     /// [`Engine::project_class`].
+    ///
+    /// While the boundary is active a project its source does not hold, or cannot read
+    /// projects at all, is [`EngineError::ProjectUnclassified`], and a read that fails is
+    /// refused: neither is ever answered public. A public answer worked out earlier in the
+    /// command is trusted only once the project is read again and is still there, because it
+    /// may have gone or become unreadable since, and a private one stays private whatever
+    /// became of the project, so it is trusted without a read.
     pub(super) async fn source_project_class(
         &self,
         project: &GlobalId,
         known: &mut HashMap<GlobalId, Classification>,
     ) -> Result<Classification, EngineError> {
-        if let Some(known) = known.get(project) {
-            return Ok(*known);
+        let cached = known.get(project).copied();
+        if let Some(class) = cached
+            && (class == Classification::Private || !self.boundary_active())
+        {
+            return Ok(class);
         }
         let source = self.readable(&project.source)?;
         let held = if source.source().capabilities().projects.is_native() {
@@ -2945,6 +2955,7 @@ impl Engine {
             // active that is not the same as inheriting nothing: what is filed under it is
             // unclassified, and that is never written down as public for a later read to trust.
             if self.boundary_active() {
+                known.remove(project);
                 return Err(EngineError::ProjectUnclassified {
                     project: project.to_string(),
                     why: if source.source().capabilities().projects.is_native() {
@@ -2956,6 +2967,9 @@ impl Engine {
             }
             return Ok(Classification::Public);
         };
+        if let Some(class) = cached {
+            return Ok(class);
+        }
         let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
         let class = self
             .project_class(source, project, &held, tasks.iter().map(|task| &task.item))
@@ -2967,8 +2981,9 @@ impl Engine {
     /// Who may read the item `far` names, as a write naming it has to know: its own record and
     /// repositories, tightened — a task's by the project it is filed under, a project's by every
     /// task and document it holds. `known` holds the project classifications this command has
-    /// already worked out. `Err` says why it could not be established: its source is not
-    /// configured, a read failed, or no such item is held.
+    /// already worked out, each confirmed by [`Engine::source_project_class`] before it is
+    /// trusted. `Err` says why it could not be established: its source is not configured, a
+    /// read failed, or no such item is held.
     pub(super) async fn reference_class(
         &self,
         far: &GlobalId,
@@ -2996,48 +3011,19 @@ impl Engine {
                 // to read: one its source cannot read or does not hold leaves the task
                 // unclassified, never classified as though it named none.
                 let project = GlobalId::new(far.source.clone(), filed.clone());
-                if !known.contains_key(&project) {
-                    if !source.source().capabilities().projects.is_native() {
-                        return Err(format!(
-                            "it is filed under project {project}, and its source cannot read \
-                             projects"
-                        ));
+                match self.source_project_class(&project, known).await {
+                    Ok(inherited) => Ok(own.strictest(inherited)),
+                    Err(EngineError::ProjectUnclassified { project, why }) => {
+                        Err(format!("it is filed under project {project}, and {why}"))
                     }
-                    if source
-                        .source()
-                        .get_project(filed)
-                        .await
-                        .map_err(unread)?
-                        .is_none()
-                    {
-                        return Err(format!(
-                            "it is filed under project {project}, which its source does not hold"
-                        ));
-                    }
+                    Err(error) => Err(error.to_string()),
                 }
-                Ok(own.strictest(
-                    self.source_project_class(&project, known)
-                        .await
-                        .map_err(|error| error.to_string())?,
-                ))
             }
-            ItemKind::Project => {
-                if let Some(class) = known.get(far) {
-                    return Ok(*class);
-                }
-                if source
-                    .source()
-                    .get_project(&far.native)
-                    .await
-                    .map_err(unread)?
-                    .is_none()
-                {
-                    return Err(missing());
-                }
-                self.source_project_class(far, known)
-                    .await
-                    .map_err(|error| error.to_string())
-            }
+            ItemKind::Project => match self.source_project_class(far, known).await {
+                Ok(class) => Ok(class),
+                Err(EngineError::ProjectUnclassified { why, .. }) => Err(why),
+                Err(error) => Err(error.to_string()),
+            },
         }
     }
 
