@@ -1814,7 +1814,11 @@ impl ClosedState {
 }
 
 /// Configuration for one GitHub Projects v2 board.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+///
+/// It serializes to a document this same type reads back as itself, so a caller writing a
+/// configuration — a consumer filing onto a board it configures — can build one here rather
+/// than spell the shape again; an empty `metadata_fields` is left out, as one never set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitHubProjectsConfig {
     /// Login of the user or organization which owns the board.
@@ -1883,7 +1887,10 @@ pub struct GitHubProjectsConfig {
     /// Reads and writes never create the field: `onetaskgraph sources fields <source>
     /// --apply` does, as a text field, and a write to a board lacking it, or holding a
     /// non-text field of that name, is refused pointing there.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although a serialized configuration leaves an empty
+    // list out, so both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
     pub metadata_fields: Vec<MetadataFieldConfig>,
     /// How fast this source writes, and how long it waits out a rate-limit refusal.
     ///
@@ -1898,7 +1905,7 @@ pub struct GitHubProjectsConfig {
 /// One member per level rather than a map, so a key that is not a level is refused where
 /// the configuration is read, naming the levels there are. `none` is not a member: it is no
 /// value in the field, not an option of it.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PriorityMappingConfig {
     /// The option `urgent` lands on; `Urgent` when absent.
@@ -2027,7 +2034,7 @@ impl PriorityMapping {
 }
 
 /// One metadata value this source projects onto a board text field.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataFieldConfig {
     /// The name of the board text field the value is written to.
@@ -2036,8 +2043,10 @@ pub struct MetadataFieldConfig {
     /// `onetaskgraph.` prefix is refused.
     pub key: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `MetadataField::resolve` refuses a blank or reserved key before the private validated entry is built.
     /// Object keys walked inside that key's value, outermost first. Absent or empty, the
-    /// key's own value is the one projected.
-    #[serde(default)]
+    /// key's own value is the one projected. Left out of a serialized entry when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []`, for the reason `metadata_fields`' is.
+    #[schemars(!skip_serializing_if)]
     pub path: Vec<String>,
 }
 
@@ -2208,7 +2217,7 @@ enum HeldPriority {
 /// Configurable because a GitHub Enterprise installation sets its own limits and an
 /// operator who has already been refused may want to go slower still — not because the
 /// defaults are guesses.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacingConfig {
     /// Shortest interval between two content-creating mutations, in milliseconds.

@@ -780,3 +780,68 @@ fn the_field_slots_are_exactly_the_aliased_fields_of_update_fields() {
         .replacen("@include(if:$PLACEHOLDER)", "@include(if:$writeThird)", 1);
     assert_ne!(update_fields_slots(&swapped), declared);
 }
+
+/// A `github-projects` configuration serializes to a document it reads back as itself, with an
+/// empty `metadata_fields`, and an entry's empty `path`, left out — so a configuration written
+/// before either existed and one written with them empty are the same document.
+#[test]
+fn a_configuration_round_trips_and_leaves_its_empty_lists_out() {
+    use onetaskgraph_github_projects::GitHubProjectsConfig;
+    use serde_json::{Value, json};
+    let base = json!({"owner": "octo-org", "project_number": 7, "repository": "acme/work"});
+    let read = |document: &Value| -> GitHubProjectsConfig {
+        serde_json::from_value(document.clone())
+            .unwrap_or_else(|error| panic!("{document} does not read: {error}"))
+    };
+    let written = |config: &GitHubProjectsConfig| serde_json::to_value(config).unwrap();
+    let with = |entries: Value| {
+        let mut document = base.clone();
+        document["metadata_fields"] = entries;
+        document
+    };
+
+    // Absent and empty read alike, and both write no key at all.
+    for document in [base.clone(), with(json!([]))] {
+        let config = read(&document);
+        assert!(config.metadata_fields.is_empty(), "{document}");
+        let serialized = written(&config);
+        assert_eq!(serialized.get("metadata_fields"), None, "{serialized}");
+        assert_eq!(read(&serialized), config, "{serialized}");
+    }
+    assert_eq!(read(&base), read(&with(json!([]))));
+
+    // Populated: every entry kept in order; a path is written only when it has a step.
+    let populated = read(&with(json!([
+        {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+        {"field": "Team", "key": "team.name", "path": []},
+        {"field": "Owner", "key": "team.owner"},
+    ])));
+    let serialized = written(&populated);
+    assert_eq!(
+        serialized["metadata_fields"],
+        json!([
+            {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+            {"field": "Team", "key": "team.name"},
+            {"field": "Owner", "key": "team.owner"},
+        ])
+    );
+    let again = read(&serialized);
+    assert_eq!(again, populated);
+    assert_eq!(
+        written(&again),
+        serialized,
+        "a second round trip writes the same bytes"
+    );
+    assert_eq!(populated.metadata_fields[1].path, Vec::<String>::new());
+
+    // Every other member survives the trip too, defaults included.
+    let full = read(&json!({
+        "owner": "octo-org", "project_number": 7, "repository": "acme/work",
+        "token_env": "BOARD_TOKEN", "endpoint": "https://github.example/api/graphql",
+        "status_mapping": {"todo": "Ready", "draft": null},
+        "priority_mapping": {"urgent": "P0"},
+        "pacing": {"min_mutation_interval_ms": 0, "retry_budget_ms": 0},
+        "metadata_fields": [{"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]}],
+    }));
+    assert_eq!(read(&written(&full)), full);
+}
