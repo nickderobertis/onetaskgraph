@@ -1259,7 +1259,7 @@ impl GitHubBoardFields {
 
     /// What the text field called `name` holds on the board item whose content is `id`, or
     /// `None` when it holds nothing — or the board has no such field.
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private item state, beside `status_options` and `priority_options`, for the reason `with_text_field` above states.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private item state, beside `status_options` and `priority_options`, for the reason `with_text_field` above states.
     #[must_use]
     pub fn text_of(&self, id: &str, name: &str) -> Option<String> {
         let board = self.board.lock().unwrap();
@@ -1272,9 +1272,10 @@ impl GitHubBoardFields {
             .as_str()
             .map(str::to_owned)
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// The board's fields as its own field list answers them.
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private field list, for the reason `with_text_field` above states.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private field list, for the reason `with_text_field` above states.
     #[must_use]
     pub fn field_list(&self) -> Vec<Value> {
         self.board.lock().unwrap().fields()["nodes"]
@@ -1282,6 +1283,7 @@ impl GitHubBoardFields {
             .cloned()
             .unwrap_or_default()
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// Answer the next text-field create as landed without keeping the field, as a response
     /// the setup's verification read has to catch would.

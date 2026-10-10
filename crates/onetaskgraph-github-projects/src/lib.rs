@@ -3139,17 +3139,26 @@ pub struct FieldsReport {
 /// The type of a board field that is not a text field, as GitHub names it — its `dataType`, or
 /// its GraphQL type when it has none — which is what a projected field's conflict reports.
 ///
-/// Never blank and never `TEXT`: a text field of that name is no conflict.
+/// Never empty, never beginning with whitespace, and never `TEXT`: a text field of that name is
+/// no conflict.
+// The schema states that rule as `NON_TEXT_FIELD_TYPE_PATTERN`, so a generated SDK model
+// refuses exactly what `try_from` below does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
-pub struct NonTextFieldType(#[schemars(length(min = 1))] String);
+pub struct NonTextFieldType(#[schemars(regex(pattern = NON_TEXT_FIELD_TYPE_PATTERN))] String);
+
+/// What a [`NonTextFieldType`] may be, as the emitted schema states it: a first character that
+/// is not whitespace, and anything but exactly `TEXT` — spelled without a lookahead, which
+/// neither SDK's validator can be relied on to support.
+const NON_TEXT_FIELD_TYPE_PATTERN: &str =
+    r"^(?:[^T\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\s\S])";
 
 impl TryFrom<String> for NonTextFieldType {
     type Error = String;
 
     fn try_from(kind: String) -> Result<Self, Self::Error> {
-        if kind.trim().is_empty() {
-            return Err("a board field's type cannot be blank".to_owned());
+        if kind.is_empty() || kind.starts_with(char::is_whitespace) {
+            return Err("a board field's type cannot be blank or begin with whitespace".to_owned());
         }
         if kind == "TEXT" {
             return Err("a TEXT field is no conflict for a projected text field".to_owned());

@@ -162,6 +162,53 @@ pub(super) const METADATA_FIELD_WORKLOAD: &str = "metadata-field-follow-up";
 const BURST_HOUR: (u64, u64) = (50, 100);
 const BURST_MINUTE: (u64, u64) = (10, 20);
 
+/// A well-formed recording broken one way at a time, each with the refusal it must meet:
+/// another workload, a count that is missing or not a whole number, and re-copies that are
+/// absent, not a list, or not the two the workload makes.
+fn malformed_metadata_recordings(valid: Value) -> Vec<(Value, Result<f64, &'static str>)> {
+    use serde_json::json;
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed
+            .pointer_mut(pointer)
+            .expect("the recording has that member") = value;
+        changed
+    };
+    vec![
+        (
+            with("/workload", json!("another-workload")),
+            Err("workload does not match"),
+        ),
+        (
+            with("/first/with/operations", Value::Null),
+            Err("a first copy with the projection is missing a whole operations count"),
+        ),
+        (
+            with("/first/without/requests", json!(5.5)),
+            Err("a first copy without the projection is missing a whole requests count"),
+        ),
+        (
+            with("/unchanged/with/0/points", json!("one")),
+            Err("an unchanged re-copy with the projection is missing a whole points count"),
+        ),
+        (
+            with("/unchanged/without", Value::Null),
+            Err("two unchanged re-copies without the projection"),
+        ),
+        (
+            with("/unchanged/with", json!({"operations": 0})),
+            Err("two unchanged re-copies with the projection"),
+        ),
+        (
+            with(
+                "/unchanged/with",
+                json!([{"operations": 0, "requests": 1, "points": 1}]),
+            ),
+            Err("two unchanged re-copies with the projection"),
+        ),
+    ]
+}
+
 /// One copy kind's spend as the telemetry records it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Spent {
@@ -306,7 +353,13 @@ fn the_metadata_field_share_is_the_larger_of_the_minute_and_the_hour() {
         (recorded((3, 2), (0, 0), (6, 1)), Err("must ride a request")),
         (recorded((3, 2), (0, 0), (5, 2)), Err("must ride a request")),
         (recorded((1, 2), (0, 0), (5, 1)), Err("fewer operations")),
-    ] {
+    ]
+    .into_iter()
+    .chain(malformed_metadata_recordings(recorded(
+        (3, 2),
+        (0, 0),
+        (5, 1),
+    ))) {
         std::fs::write(
             onetaskgraph_e2e_support::telemetry::file_in(&directory, "recorded-share"),
             telemetry.to_string(),

@@ -376,6 +376,71 @@ fn sources_fields_reports_a_same_named_field_of_another_type_and_changes_nothing
     );
 }
 
+#[test]
+fn sources_fields_names_a_conflict_without_a_data_type_by_its_graphql_type() {
+    // A field GitHub answers with no `dataType` is named by its GraphQL type, and one with
+    // neither is still a conflict rather than a text field.
+    for (field, named) in [
+        (
+            json!({"__typename": "ProjectV2SingleSelectField", "id": "FIELD-host-select",
+                   "name": "Host", "options": []}),
+            json!("ProjectV2SingleSelectField"),
+        ),
+        (
+            json!({"id": "FIELD-host-untyped", "name": "Host"}),
+            json!("field of another type"),
+        ),
+    ] {
+        let setup = Setup::new(true, false);
+        setup.board.with_persons_field(field.clone());
+        let (applied, served) = setup.run(&["--json", "sources", "fields", "board", "--apply"]);
+        assert_eq!(
+            applied["metadata_fields"],
+            json!([{"field": "Host", "key": "orchestrator.follow-up", "path": ["host"],
+                    "exists": false, "conflict": named, "outcome": "unchanged"}]),
+            "{field}"
+        );
+        assert!(
+            !served
+                .iter()
+                .any(|(query, _)| query.trim_start().starts_with("mutation")),
+            "{field}: a conflict is reported, never changed"
+        );
+    }
+}
+
+#[test]
+fn sources_fields_refuses_a_field_type_it_cannot_read_before_any_mutation() {
+    // A blank `dataType` names no type at all: the setup fails as a malformed answer rather
+    // than reporting a conflict it cannot name, and creates nothing.
+    let setup = Setup::new(true, false);
+    setup.board.with_persons_field(
+        json!({"__typename": "ProjectV2Field", "id": "FIELD-host-blank", "name": "Host",
+               "dataType": " "}),
+    );
+    let before = setup.board.served().len();
+    let output = setup
+        .sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains("board's Host field with a type this setup cannot read"),
+        "{said}"
+    );
+    assert!(said.contains("cannot be blank"), "{said}");
+    assert!(
+        !setup.board.served()[before..]
+            .iter()
+            .any(|(query, _)| query.trim_start().starts_with("mutation")),
+        "a type it cannot read creates nothing"
+    );
+}
+
 /// What one copy kind came to, with and without the projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Spent {

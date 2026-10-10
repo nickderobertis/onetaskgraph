@@ -2072,7 +2072,8 @@ export namespace GeneratedFieldsReport {
  * The type of a board field that is not a text field, as GitHub names it — its `dataType`, or
  * its GraphQL type when it has none — which is what a projected field's conflict reports.
  *
- * Never blank and never `TEXT`: a text field of that name is no conflict.
+ * Never empty, never beginning with whitespace, and never `TEXT`: a text field of that name is
+ * no conflict.
  */
 export type NonTextFieldType = string
 

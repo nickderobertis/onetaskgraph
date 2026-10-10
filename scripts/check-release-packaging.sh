@@ -107,12 +107,14 @@ report() {
   echo "check-release-packaging: $1" >&2
 }
 
-# Whether the archive $1 lists the member $2. The listing is taken whole and its exit status
-# checked before it is searched: piped into `grep -q`, which exits at its first match, the
-# tar left writing to a closed pipe failed the pipeline under `pipefail` by timing alone and
-# reported a carrier that held the binary as one that did not; and a listing that failed
-# part way must not pass for one that found the member before it stopped.
-archive_lists() {
+# Report $3 unless the archive $1 lists the member $2, and report an archive tar cannot list at
+# all; it returns success either way, because a failure is counted rather than returned. The
+# listing is taken whole and its exit status checked before it is searched: piped into
+# `grep -q`, which exits at its first match, the tar left writing to a closed pipe failed the
+# pipeline under `pipefail` by timing alone and reported a carrier that held the binary as one
+# that did not; and a listing that failed part way must not pass for one that found the member
+# before it stopped.
+report_unless_archive_lists() {
   local listing
   if ! listing="$(tar -tzf "$1" 2>&1)"; then
     report "tar could not list ${1#"$TREE"/}, so the step wrote an archive that is not a readable gzip tarball; repair how it creates it. tar said:"
@@ -134,7 +136,7 @@ for pair in $targets; do
   [ -f "$TREE/$asset" ] || report "the step left no archive $asset, which is the name scripts/install.sh downloads for $target"
   [ -f "$TREE/$asset.sha256" ] || report "the step left no checksum $asset.sha256"
   if [ -f "$TREE/$asset" ]; then
-    archive_lists "$TREE/$asset" onetaskgraph \
+    report_unless_archive_lists "$TREE/$asset" onetaskgraph \
       "$asset does not carry a bare 'onetaskgraph' at its root, which is what the installer extracts"
   fi
   grep -qF -- "release upload $tag $asset $asset.sha256 --clobber" "$UPLOADS" 2>/dev/null || report \
@@ -142,7 +144,7 @@ for pair in $targets; do
   carrier="$TREE/dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz"
   [ -f "$carrier" ] || report "the step left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads after the carrier-$npm_platform artifact is downloaded"
   if [ -f "$carrier" ]; then
-    archive_lists "$carrier" package/bin/onetaskgraph "the $npm_platform carrier does not carry package/bin/onetaskgraph"
+    report_unless_archive_lists "$carrier" package/bin/onetaskgraph "the $npm_platform carrier does not carry package/bin/onetaskgraph"
     packed_name="$(tar -xzOf "$carrier" package/package.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')" || packed_name=""
     [ "$packed_name" = "@onetaskgraph/cli-$npm_platform" ] || report "the $npm_platform carrier's manifest names '$packed_name', expected @onetaskgraph/cli-$npm_platform"
   fi

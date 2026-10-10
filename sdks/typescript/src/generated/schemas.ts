@@ -3758,8 +3758,8 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "NonTextFieldType": {
-        "description": "The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever blank and never `TEXT`: a text field of that name is no conflict.",
-        "minLength": 1,
+        "description": "The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever empty, never beginning with whitespace, and never `TEXT`: a text field of that name is\nno conflict.",
+        "pattern": "^(?:[^T\\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\\s\\S])",
         "type": "string"
       },
       "SourceName": {
