@@ -1550,6 +1550,49 @@ mod tests {
         emit(out, schema_bundle()?.trim_end(), "the schema bundle")
     }
 
+    /// The roots this binary adds over the engine's bundle are exactly the three
+    /// `PUBLISHED_BUNDLES` in `crates/onetaskgraph-core/tests/engine.rs` records by digest as
+    /// `binary/<root>`, each emitted as its own type's schema — so a root added here fails until
+    /// that golden records it too, and its version moves with it.
+    #[test]
+    fn the_roots_this_binary_adds_are_the_ones_the_bundle_golden_records() {
+        let mut out = Vec::new();
+        write_schema_bundle(&mut out).expect("the bundle renders");
+        let bundle: serde_json::Value =
+            serde_json::from_slice(&out).expect("the bundle is valid JSON");
+        let engine = onetaskgraph_core::schema_bundle();
+        let engine_roots = engine["roots"].as_object().expect("roots");
+        let mut added: Vec<&str> = bundle["roots"]
+            .as_object()
+            .expect("roots")
+            .keys()
+            .filter(|root| !engine_roots.contains_key(*root))
+            .map(String::as_str)
+            .collect();
+        added.sort_unstable();
+        assert_eq!(
+            added,
+            ["FieldsReport", "StatusNamesReport", "StatusOptionsReport"]
+        );
+        let schema = |value| serde_json::to_value(value).expect("a schema renders");
+        assert_eq!(
+            bundle["roots"]["FieldsReport"],
+            schema(schemars::schema_for!(FieldsReport))
+        );
+        assert_eq!(
+            bundle["roots"]["StatusOptionsReport"],
+            schema(schemars::schema_for!(StatusOptionsReport))
+        );
+        assert_eq!(
+            bundle["roots"]["StatusNamesReport"],
+            schema(schemars::schema_for!(
+                onetaskgraph_linear::StatusNamesReport
+            ))
+        );
+        assert_eq!(bundle["plugin_config"], engine["plugin_config"]);
+        assert_eq!(bundle["version"], onetaskgraph_core::SCHEMA_BUNDLE_VERSION);
+    }
+
     #[test]
     fn the_schema_verb_writes_a_bundle_with_every_contract_root() {
         let mut out = Vec::new();
