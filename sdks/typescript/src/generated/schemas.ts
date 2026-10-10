@@ -3653,6 +3653,49 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "MetadataFieldReport": {
+        "description": "One projected metadata text field's plan, or its verified outcome.\n\nThe setup creates a missing one as a text field and never alters a field that is there:\na same-named field of another type is reported in `conflict` and left as it is.",
+        "properties": {
+          "conflict": {
+            "description": "The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exists": {
+            "description": "Whether the board had a text field of that name before the operation.",
+            "type": "boolean"
+          },
+          "field": {
+            "description": "The board field's name.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The metadata key the value is read from.",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/$defs/FieldOutcome",
+            "description": "What the requested operation did: `planned`; `created` for a field that was not\nthere; `unchanged` for one that was, and for a conflict, which is never changed."
+          },
+          "path": {
+            "description": "The object keys walked inside that key's value; empty for the key's own value.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "field",
+          "key",
+          "path",
+          "exists",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -3744,6 +3787,14 @@ export const runtimeSchemas = {
         "description": "`Status`, always, and `Priority` when the source sets `priority_mapping`.",
         "items": {
           "$ref": "#/$defs/FieldReport"
+        },
+        "type": "array"
+      },
+      "metadata_fields": {
+        "default": [],
+        "description": "Each board text field the source's `metadata_fields` projects a value onto, in\nconfigured order. Empty — and left out of the JSON — when it projects none.",
+        "items": {
+          "$ref": "#/$defs/MetadataFieldReport"
         },
         "type": "array"
       },

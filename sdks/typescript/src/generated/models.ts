@@ -2049,6 +2049,11 @@ export interface FieldsReport {
  */
 fields: FieldReport[]
 /**
+ * Each board text field the source's `metadata_fields` projects a value onto, in
+ * configured order. Empty — and left out of the JSON — when it projects none.
+ */
+metadata_fields?: MetadataFieldReport[]
+/**
  * The configured source name.
  */
 source: string
@@ -2124,6 +2129,41 @@ kind: ("task" | "project")
  * The names that kind maps a category to and the field lacked, in category order.
  */
 missing: string[]
+[k: string]: any
+}
+/**
+ * One projected metadata text field's plan, or its verified outcome.
+ *
+ * The setup creates a missing one as a text field and never alters a field that is there:
+ * a same-named field of another type is reported in `conflict` and left as it is.
+ */
+export interface MetadataFieldReport {
+/**
+ * The type of a field of that name that is not a text field, which the setup leaves as
+ * it is; absent — and left out of the JSON — when there is none.
+ */
+conflict?: (string | null)
+/**
+ * Whether the board had a text field of that name before the operation.
+ */
+exists: boolean
+/**
+ * The board field's name.
+ */
+field: string
+/**
+ * The metadata key the value is read from.
+ */
+key: string
+/**
+ * What the requested operation did: `planned`; `created` for a field that was not
+ * there; `unchanged` for one that was, and for a conflict, which is never changed.
+ */
+outcome: ("planned" | "unchanged" | "applied" | "created")
+/**
+ * The object keys walked inside that key's value; empty for the key's own value.
+ */
+path: string[]
 [k: string]: any
 }
 
@@ -2280,7 +2320,7 @@ team?: (LinearTeam | null)
  * configuration is read.
  */
 export interface StatusMapping {
-[k: string]: (StatusNames | null)
+[k: string]: StatusNames | null
 }
 
 }
@@ -6644,7 +6684,7 @@ export type StatusName = string
  * Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each.
  */
 export interface StatusMapping {
-[k: string]: (StatusNames | null)
+[k: string]: StatusNames | null
 }
 
 }
