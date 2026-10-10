@@ -202,11 +202,11 @@ fn introspected_type_members(name: &str) -> Value {
             .collect::<Vec<_>>();
         return json!({ "fields": fields });
     }
-    let (_, input, expected) = crate::journey::MUTATION_TYPES
+    let (_, input, expected) = crate::journey::CONTRACT_TYPES
         .iter()
         .find(|(held, _, _)| *held == name)
         .unwrap_or_else(|| panic!("the journey asked about a type it does not name: {name}"));
-    let declared = crate::journey::mutation_field_types(name);
+    let declared = crate::journey::contract_field_types(name);
     let mut fields = declared
         .iter()
         .map(|(field, signature)| json!({"name":field,"type":introspected_type(signature)}))

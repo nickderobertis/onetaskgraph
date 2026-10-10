@@ -12874,7 +12874,7 @@ fn no_introspection_document_selects_a_capped_field_more_often_than_github_allow
     }
 
     let selected = documents.concat();
-    for (type_name, input, _) in journey::MUTATION_TYPES {
+    for (type_name, input, _) in journey::CONTRACT_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let root = format!("{type_name}:__type(name:\"{type_name}\"){{{selection}");
         assert_eq!(
@@ -12962,7 +12962,7 @@ fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
             "{name}'s argument"
         );
         for type_name in [*input, *payload] {
-            let mut live = journey::mutation_field_types(type_name)
+            let mut live = journey::contract_field_types(type_name)
                 .iter()
                 .map(|(field, kind)| ((*field).to_owned(), (*kind).to_owned()))
                 .collect::<Vec<_>>();

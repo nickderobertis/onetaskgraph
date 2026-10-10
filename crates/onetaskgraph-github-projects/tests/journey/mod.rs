@@ -1368,11 +1368,13 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
     ),
 ];
 
-/// Every input and payload type those mutations reach, and the fields each must carry.
+/// Every input and payload type those mutations reach, and the one board type a write reads
+/// to tell its fields apart, with the fields each must carry — the whole of the type contract
+/// the introspection holds GitHub to.
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const MUTATION_TYPES: [(&str, bool, &[&str]); 35] = [
+pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -1489,7 +1491,7 @@ pub fn contract_schema_documents() -> Vec<String> {
         ),
     ];
     let mut selected_input_fields = Vec::new();
-    for (type_name, input, _) in MUTATION_TYPES {
+    for (type_name, input, _) in CONTRACT_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let selected = format!(
             "{type_name}:__type(name:\"{type_name}\"){{{selection}{{name type{{kind name \
@@ -1605,7 +1607,7 @@ async fn verify_contract_schema(
             ));
         }
     }
-    for (type_name, input, expected_fields) in MUTATION_TYPES {
+    for (type_name, input, expected_fields) in CONTRACT_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let fields = response
             .pointer(&format!("/data/{type_name}/{selection}"))
@@ -1621,7 +1623,7 @@ async fn verify_contract_schema(
                 ));
             }
         }
-        for (field_name, expected_type) in mutation_field_types(type_name) {
+        for (field_name, expected_type) in contract_field_types(type_name) {
             let field = fields
                 .iter()
                 .find(|field| field.get("name").and_then(Value::as_str) == Some(field_name))
@@ -1639,7 +1641,7 @@ async fn verify_contract_schema(
     Ok(())
 }
 
-pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
+pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
     match type_name {
         "CreateIssueInput" => &[
             ("repositoryId", "ID!"),
