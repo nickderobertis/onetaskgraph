@@ -575,10 +575,7 @@ impl Engine {
         self.refuse_private_references(
             near,
             "the new task",
-            request
-                .depends_on
-                .iter()
-                .chain(&request.delivers),
+            request.depends_on.iter().chain(&request.delivers),
         )?;
         if let Some(first) = carried.first() {
             assets::stores(source, &record, &first.name)?;
