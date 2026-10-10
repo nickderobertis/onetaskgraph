@@ -2695,3 +2695,28 @@ fn a_delivered_task_the_boundary_refuses_is_reported_failed_and_left_as_it_was()
         std::fs::read_to_string(store.folder("shelf").join("tasks/helper.md")).expect("the helper");
     assert!(helper.contains("status: in progress"), "{helper}");
 }
+
+#[test]
+fn a_narrow_write_to_a_record_of_a_private_repository_held_by_a_public_source_is_refused() {
+    let store = Store::new(Some(registered), json!({}));
+    // Neither is classified private by its own record: one names a private repository.
+    store.record(
+        "site",
+        "tasks",
+        "closed",
+        &format!("title: Closed\nstatus: todo\nrepositories: [{A}]"),
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "open",
+        &format!("title: Open\nstatus: todo\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["task", "status", "set", "site:closed", "done"]);
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert_eq!(store.tree(), before, "nothing was written");
+    store.ok(&["task", "status", "set", "site:open", "done"]);
+}

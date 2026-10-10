@@ -1034,6 +1034,8 @@ pub enum RepositoryAnswer {
     },
     /// A `visibility` field present but not a string.
     MalformedVisibility,
+    /// A `visibility` string naming none of `public`, `private` and `internal`.
+    UnnamedVisibility,
     /// A `200` whose body is not JSON.
     NotJson,
     /// A repository the token cannot see: `404`.
@@ -1061,6 +1063,7 @@ impl RepositoryAnswer {
                 json!({"id": 123_456, "full_name": slug, "private": true, "visibility": 7})
                     .to_string(),
             ),
+            Self::UnnamedVisibility => ("200 OK", named("restricted")),
             Self::NotJson => ("200 OK", "<html>not a repository</html>".to_owned()),
             Self::Unseen => ("404 Not Found", json!({"message": "Not Found"}).to_string()),
         }

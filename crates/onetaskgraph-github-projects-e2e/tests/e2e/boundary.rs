@@ -272,6 +272,7 @@ fn an_unreadable_visibility_is_never_guessed() {
         RepositoryAnswer::Unseen,
         RepositoryAnswer::NotJson,
         RepositoryAnswer::MalformedVisibility,
+        RepositoryAnswer::UnnamedVisibility,
     ] {
         setup.board.set_repository_visibility(CONFIGURED, answer);
         let (kind, message, _) = setup.refused(&["task", "copy", "plan:secret", "--to", "board"]);
