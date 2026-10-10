@@ -1049,6 +1049,12 @@ const VOCABULARIES: &[(&[&str], &str, &str, bool)] = &[
     (&["help", "task", "list"], "--priority", "Priority", true),
     (&["help", "search"], "--in", "TextFields", false),
     (&["help", "search"], "--kind", "SearchKind", false),
+    (
+        &["help", "sources", "route"],
+        "--classification",
+        "Classification",
+        true,
+    ),
 ];
 
 /// The values clap says `flag` takes, read out of this help text.
@@ -1177,6 +1183,7 @@ fn every_value_the_help_advertises_is_one_the_command_line_actually_takes() {
             let verb: Vec<&str> = match *flag {
                 "--status" | "--priority" => vec!["task", "list"],
                 "--direction" => vec!["task", "deps", "work:T-1"],
+                "--classification" => vec!["sources", "route", "work"],
                 _ => vec!["search", "alpha"],
             };
             sandbox
