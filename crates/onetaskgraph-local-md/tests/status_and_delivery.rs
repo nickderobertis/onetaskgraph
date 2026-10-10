@@ -295,6 +295,7 @@ async fn a_written_task_carries_both_lists_and_refuses_one_naming_itself_or_one_
         repositories: Vec::new(),
         delivers,
         delivered_by,
+        classification: Default::default(),
     };
     let landed = source
         .write_task(&ItemWrite {

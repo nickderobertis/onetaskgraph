@@ -286,6 +286,8 @@ type User implements Node & RepositoryOwner & ProjectV2Owner {
 type ProjectV2 implements Node {
   id: ID!
   number: Int!
+  "Returns true if the project is public."
+  public: Boolean!
   title: String!
   createdAt: DateTime!
   updatedAt: DateTime!

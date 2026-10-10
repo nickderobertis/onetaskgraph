@@ -2712,6 +2712,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         repositories: vec![],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -2728,6 +2729,7 @@ fn project(id: &str, title: &str, status: Status) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -2748,6 +2750,7 @@ fn document(id: &str, title: &str) -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -16166,6 +16169,86 @@ async fn the_journeys_board_wait_ends_at_once_on_an_error_that_is_not_unavailabi
         fixture.requests("search"),
         1,
         "and no second attempt is made, although the board would answer one"
+    );
+}
+
+/// GitHub's issue search answering before it has indexed what was just written: a
+/// successful answer that finds nothing.
+fn search_not_yet_indexed() -> Refusal {
+    Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({"data":{"search":{"nodes":[],
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
+        .to_string(),
+    }
+}
+
+/// The credentialed journey's wait for its design document, run against this board: the
+/// writer's own title search for `title` first, then a fresh source's, as the journey asks.
+async fn await_engine_document(fixture: &Fixture, terms: &str, title: &str) -> Result<(), String> {
+    let writer = source(fixture);
+    let rebuilt = || source(fixture);
+    journey::await_document_listed(
+        writer.as_ref(),
+        &rebuilt,
+        &DocumentQuery {
+            text: Some(TextQuery {
+                terms: terms.to_owned(),
+                fields: TextFields::Title,
+            }),
+            ..Default::default()
+        },
+        title,
+        SHORT_BOARD_WAIT,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn the_journeys_document_wait_rides_out_a_search_that_has_not_indexed_it_yet() {
+    let fixture = board_with_documents();
+    fixture.script_for(
+        "search",
+        vec![search_not_yet_indexed(), search_not_yet_indexed()],
+    );
+
+    let waited = await_engine_document(&fixture, "Alpha design", "Alpha design").await;
+
+    assert_eq!(
+        waited,
+        Ok(()),
+        "a search that has not caught up is an attempt that saw nothing"
+    );
+    assert_eq!(
+        fixture.requests("search"),
+        3,
+        "two searches that found nothing and the one that found the document"
+    );
+}
+
+#[tokio::test]
+async fn the_journeys_document_wait_fails_naming_what_its_last_search_reported() {
+    let fixture = board_with_documents();
+    fixture.script_for(
+        "search",
+        vec![search_not_yet_indexed(), search_not_yet_indexed()],
+    );
+
+    let message = await_engine_document(&fixture, "Alpha", "Alpha design (this run)")
+        .await
+        .expect_err("a document the search never reports fails the journey");
+
+    assert_eq!(
+        message,
+        "the board never reported the document this run created (\"Alpha design (this run)\"); \
+         its last title search reported [\"Alpha design\"]",
+        "the last search's titles, not the empty answers before it"
+    );
+    assert_eq!(
+        fixture.requests("search"),
+        SHORT_BOARD_WAIT.attempts as usize,
+        "bounded by the wait's own attempts"
     );
 }
 

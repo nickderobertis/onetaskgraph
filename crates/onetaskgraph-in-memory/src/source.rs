@@ -11,8 +11,8 @@ use onetaskgraph_plugin_api::{
     MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
     ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
     Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, WriteSupport, assetless, commentless, documentless, serve_asset_references,
-    unwritable, unwritable_field,
+    UpdatedField, Visibility, WriteSupport, WriteTarget, assetless, commentless, documentless,
+    serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -408,6 +408,12 @@ impl TaskSource for InMemorySource {
                 held.projects.len()
             )),
         })
+    }
+
+    /// This process's memory: nothing written here leaves the host, so a configuration
+    /// declaring this source private declares a host-local destination.
+    async fn visibility(&self, _target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
+        Ok(Visibility::Private)
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {

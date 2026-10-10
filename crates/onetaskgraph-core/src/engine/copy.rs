@@ -38,14 +38,14 @@
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
-    AssetPayload, AssetUploads, AssetWrite, Capabilities, Cursor, DependencyEdge,
+    AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Cursor, DependencyEdge,
     DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, ItemKind, ItemWrite,
     Location, MetadataKey, MetadataMatch, Metering, NativeId, Page, PageRequest, Project,
     ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task, TaskQuery, TaskRef,
-    TextFields, TextQuery,
+    TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,7 @@ use crate::resolve::ResolvedSource;
 use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
 
 use super::assets;
+use super::boundary::{Exposure, Outbound};
 use super::delivery::{Delivered, targets};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
@@ -869,6 +870,20 @@ struct Running {
     /// Every item this copy landed, in the order it landed them, for the link each records
     /// once the whole copy has landed.
     linking: Vec<Linking>,
+    /// Each source project's classification once this command has worked it out — its own,
+    /// its repositories', and every task's and document's it holds — so a second item filed
+    /// under it does not read the whole project again.
+    project_classes: HashMap<GlobalId, Classification>,
+    /// Whether every item this command lands was already held to the public boundary, as a
+    /// project copy does for all of them before it writes the first.
+    preflighted: bool,
+    /// Every item this command carries that is classified private, by its source id and by
+    /// where it lands: an id naming one is withheld from a write anywhere not declared
+    /// private (see [`Engine::withholds`]), whichever source it was read from.
+    private: Vec<GlobalId>,
+    /// Every item outside this copy that a carried reference names and whose classification
+    /// this command has read as public, so a second reference to it is not read again.
+    public_references: Vec<GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -887,6 +902,8 @@ struct Home {
     title: String,
     /// See `title`.
     status: onetaskgraph_plugin_api::Status,
+    /// Who may read it, which a member created for it is too.
+    classification: Classification,
     /// The members it names, at most one per source.
     members: Vec<GlobalId>,
     /// Whether this copy added or replaced one, so the home's own list is written once the
@@ -912,6 +929,7 @@ impl Home {
             id,
             title: held.title.clone(),
             status: held.status.clone(),
+            classification: held.classification,
             members,
             grew: false,
         })
@@ -985,11 +1003,14 @@ struct LandedTask {
     before: Vec<GlobalId>,
     /// Its status category, as the copy wrote it.
     category: StatusCategory,
+    /// Who may read it, as the copy wrote it.
+    classification: Classification,
 }
 
 /// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
 struct Deliverer {
     destination: GlobalId,
+    classification: Classification,
     category: StatusCategory,
     now: Vec<GlobalId>,
     before: Vec<GlobalId>,
@@ -1017,6 +1038,13 @@ struct Planned {
     /// The image assets its content references, with their bytes as its source holds them,
     /// in the order the content first references them; none for a project.
     assets: Vec<AssetPayload>,
+    /// Who may read it: its own declaration tightened by its repositories and its project —
+    /// for a project, by every task and document it holds. It lands as this.
+    classification: Classification,
+    /// Whether its source is declared private and where it lands is not, so its provenance —
+    /// the origin naming its source, any link naming a private source — is left behind
+    /// rather than written where it would name somewhere private.
+    withheld: bool,
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -1291,6 +1319,7 @@ impl Engine {
                     report.delivered.extend(
                         self.deliver(
                             &deliverer.destination,
+                            deliverer.classification,
                             deliverer.category,
                             &deliverer.now,
                             &deliverer.before,
@@ -1370,6 +1399,7 @@ impl Engine {
             .iter()
             .map(|task| Deliverer {
                 destination: task.destination.clone(),
+                classification: task.classification,
                 category: task.category,
                 now: targets(
                     &resolved_entries(&mapped_delivers(
@@ -1428,18 +1458,27 @@ impl Engine {
             resolvable,
             counterparts,
             deferred,
+            private,
             ..
         } = running;
         for entry in deferred {
             let destination = self.writable(&entry.item.to)?;
-            let edges = mapped_edges(
-                &entry.item.edges,
-                &entry.item.source.source,
+            let edges = self.shown_edges(
                 &entry.item.to,
-                &resolvable,
-                &counterparts,
+                mapped_edges(
+                    &entry.item.edges,
+                    &entry.item.source.source,
+                    &entry.item.to,
+                    &resolvable,
+                    &counterparts,
+                ),
+                &private,
             );
-            let delivers = delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts);
+            let delivers = self.shown_delivers(
+                &entry.item.to,
+                delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts),
+                &private,
+            );
             self.write(
                 destination,
                 &entry.item,
@@ -1572,6 +1611,19 @@ impl Engine {
         if !source.source().writes().is_supported() {
             return Ok(CopyLink::Unrecorded);
         }
+        // A link naming a private destination is not written where it would name it to
+        // anybody who may read the source.
+        if self.declared(&landed_in) == crate::config::SourceVisibility::Private
+            && self.declared(source.name()) != crate::config::SourceVisibility::Private
+        {
+            return Ok(CopyLink::Unrecorded);
+        }
+        self.at_write(
+            source,
+            &entry.item.to_string(),
+            &WriteTarget::Existing(&entry.item.native),
+        )
+        .await?;
         links.insert(landed_in.to_string(), wanted);
         // Journalled before the write, for the reason a destination write is: a write that
         // stopped part way is only put back by what this journal holds.
@@ -1716,26 +1768,49 @@ impl Engine {
                 for member in members {
                     reads.push(self.read(Level::Task, member).await?);
                 }
-                let home = self.home_placement(request, &project, &reads).await?;
-                let project = self.aim(request, project, home).await?;
+                let class = self.read_project_class(&project, &reads, running).await?;
+                // A project holding anything private goes, with everything it holds, wholly
+                // to one private destination, whatever its tasks' repositories would say.
+                let home = if class == Classification::Private {
+                    self.routes
+                        .place_classified(&request.destination, class, &[])
+                } else {
+                    self.home_placement(request, &project, &reads).await?
+                };
+                let project = self.aim(request, project, home.clone(), class).await?;
                 let mut tasks = Vec::new();
                 for read in reads {
                     let placement = match &read.item {
-                        Item::Task(task) => {
-                            self.routes.place(&request.destination, &task.repositories)
-                        }
+                        _ if class == Classification::Private => home.clone(),
+                        Item::Task(task) => self.routes.place_classified(
+                            &request.destination,
+                            class,
+                            &task.repositories,
+                        ),
                         Item::Project(_) | Item::Document(_) => {
                             self.placed_at(request, &request.destination)
                         }
                     };
-                    tasks.push(self.aim(request, read, placement).await?);
+                    tasks.push(self.aim(request, read, placement, class).await?);
                 }
                 plans.push((project, tasks));
             } else {
-                let project = self.plan(request, Level::Project, id, running).await?;
+                let mut project = self.plan(request, Level::Project, id, running).await?;
                 let mut tasks = Vec::new();
                 for member in members {
                     tasks.push(self.plan(request, Level::Task, member, running).await?);
+                }
+                let mut class = tasks.iter().fold(project.classification, |class, task| {
+                    class.strictest(task.classification)
+                });
+                if self.boundary_active() {
+                    class = class.strictest(
+                        self.source_project_class(id, &mut running.project_classes)
+                            .await?,
+                    );
+                }
+                for item in std::iter::once(&mut project).chain(&mut tasks) {
+                    item.classification = class;
                 }
                 plans.push((project, tasks));
             }
@@ -1743,6 +1818,22 @@ impl Engine {
         for (project, tasks) in &plans {
             for item in std::iter::once(project).chain(tasks) {
                 unrecorded_far_end(item, unrecorded)?;
+            }
+        }
+        // Every item of every project held to the public boundary before any is written, so
+        // a refusal leaves nothing anywhere — not even a project its tasks never reached.
+        self.preflight_copy(
+            request,
+            plans
+                .iter()
+                .flat_map(|(project, tasks)| std::iter::once(project).chain(tasks)),
+            running,
+        )
+        .await?;
+        running.preflighted = true;
+        for (project, tasks) in &plans {
+            for item in std::iter::once(project).chain(tasks) {
+                note_private(running, item);
             }
         }
         let mut outcomes = Vec::new();
@@ -1753,6 +1844,35 @@ impl Engine {
             );
         }
         Ok(outcomes)
+    }
+
+    /// A project's classification from its read and its tasks' (see
+    /// [`Engine::project_class`]), remembered for the rest of this command.
+    async fn read_project_class(
+        &self,
+        project: &Read,
+        tasks: &[Read],
+        running: &mut Running,
+    ) -> Result<Classification, EngineError> {
+        let Item::Project(held) = &project.item else {
+            return Ok(Classification::Public);
+        };
+        let source = self.readable(&project.source.source)?;
+        let class = self
+            .project_class(
+                source,
+                &project.source,
+                held,
+                tasks.iter().filter_map(|read| match &read.item {
+                    Item::Task(task) => Some(&**task),
+                    Item::Project(_) | Item::Document(_) => None,
+                }),
+            )
+            .await?;
+        running
+            .project_classes
+            .insert(project.source.clone(), class);
+        Ok(class)
     }
 
     /// Where a routed project copy lands the project: its **home**.
@@ -1854,19 +1974,27 @@ impl Engine {
         let home_source = project.to.clone();
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
-                let settled = mapped_edges(
-                    &project.edges,
-                    &id.source,
+                let settled = self.shown_edges(
                     &home_source,
-                    &running.resolvable,
-                    &running.counterparts,
+                    mapped_edges(
+                        &project.edges,
+                        &id.source,
+                        &home_source,
+                        &running.resolvable,
+                        &running.counterparts,
+                    ),
+                    &running.private,
                 );
-                let first = mapped_edges(
-                    &project.edges,
-                    &id.source,
+                let first = self.shown_edges(
                     &home_source,
-                    &running.resolvable,
-                    &before_members,
+                    mapped_edges(
+                        &project.edges,
+                        &id.source,
+                        &home_source,
+                        &running.resolvable,
+                        &before_members,
+                    ),
+                    &running.private,
                 );
                 let held = project.held.as_ref();
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
@@ -2546,6 +2674,12 @@ impl Engine {
             self.rewrite_references(&mut planned, &mut running.references)
                 .await?;
         }
+        // Once the content that lands is settled, and before anything — a member project
+        // included — is written.
+        if !running.preflighted {
+            self.preflight_copy(request, planned.iter(), running)
+                .await?;
+        }
 
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
@@ -2571,19 +2705,64 @@ impl Engine {
             });
         }
 
+        // A task or a document copied on its own joins whatever project it is filed under at
+        // the destination, which says who may read it too: a private one is never filed under
+        // a project held public there, and one filed under a private project is private. A dry
+        // run reads that project too, so it reports the refusal its copy would meet.
+        if project.is_none() {
+            for (item, filed) in planned.iter_mut().zip(&filed) {
+                if let Some(filed) = filed
+                    && (self.boundary_active() || item.classification == Classification::Private)
+                {
+                    let destination = self.writable(&item.to)?;
+                    item.classification = self
+                        .filed_under(
+                            destination,
+                            filed,
+                            &item.source.to_string(),
+                            item.classification,
+                            super::boundary::Absent::Carried,
+                        )
+                        .await?;
+                    let declared = self.declared(&item.to);
+                    if item.classification == Classification::Private
+                        && declared != crate::config::SourceVisibility::Private
+                    {
+                        return Err(EngineError::NotPrivateDestination {
+                            item: item.source.to_string(),
+                            destination: item.to.to_string(),
+                            declared,
+                        });
+                    }
+                }
+            }
+        }
+
+        for item in &planned {
+            note_private(running, item);
+        }
+
         let mut outcomes = Vec::new();
         let mut unresolved = Vec::new();
         let mut priors = Vec::new();
         for (index, item) in planned.iter().enumerate() {
             let destination = self.writable(&item.to)?;
-            let edges = mapped_edges(
-                &item.edges,
-                &item.source.source,
+            let edges = self.shown_edges(
                 &item.to,
-                &running.resolvable,
-                &running.counterparts,
+                mapped_edges(
+                    &item.edges,
+                    &item.source.source,
+                    &item.to,
+                    &running.resolvable,
+                    &running.counterparts,
+                ),
+                &running.private,
             );
-            let delivers = delivers_of(item, &item.to, &running.resolvable, &running.counterparts);
+            let delivers = self.shown_delivers(
+                &item.to,
+                delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                &running.private,
+            );
             if edges.iter().any(Option::is_none) || delivers.iter().any(Option::is_none) {
                 unresolved.push(index);
             }
@@ -2605,6 +2784,9 @@ impl Engine {
                 running
                     .counterparts
                     .insert(item.source.to_string(), id.clone());
+                if item.classification == Classification::Private && !running.private.contains(id) {
+                    running.private.push(id.clone());
+                }
                 if !request.dry_run {
                     running.linking.push(Linking {
                         item: item.source.clone(),
@@ -2630,6 +2812,7 @@ impl Engine {
                         _ => Vec::new(),
                     },
                     category: task.status.category,
+                    classification: item.classification,
                 });
             }
             outcomes.push(outcome);
@@ -2670,17 +2853,368 @@ impl Engine {
         running: &mut Running,
     ) -> Result<Planned, EngineError> {
         let read = self.read(kind, id).await?;
+        let classification = self.copied_classification(request, &read, running).await?;
         let placement = match &read.item {
-            Item::Task(task) => self.routes.place(&request.destination, &task.repositories),
+            Item::Task(task) => self.routes.place_classified(
+                &request.destination,
+                classification,
+                &task.repositories,
+            ),
             Item::Document(document) => {
-                self.document_placement(request, &read.source, document, running)
+                self.document_placement(request, &read.source, document, classification, running)
                     .await?
             }
-            Item::Project(project) => self
-                .routes
-                .place(&request.destination, &project.repositories),
+            Item::Project(project) => self.routes.place_classified(
+                &request.destination,
+                classification,
+                &project.repositories,
+            ),
         };
-        self.aim(request, read, placement).await
+        self.aim(request, read, placement, classification).await
+    }
+
+    /// Who may read one item read for a copy: its own declaration, tightened by its
+    /// repositories and — for a task or a document filed under a project, while the boundary
+    /// is active — by everything that project holds at its source.
+    async fn copied_classification(
+        &self,
+        request: &CopyRequest,
+        read: &Read,
+        running: &mut Running,
+    ) -> Result<Classification, EngineError> {
+        let (declared, repositories, filed) = match &read.item {
+            Item::Task(task) => (
+                task.classification,
+                &task.repositories,
+                task.project.as_ref(),
+            ),
+            Item::Document(document) => (
+                document.classification,
+                &document.repositories,
+                document.project.as_ref(),
+            ),
+            Item::Project(project) => (project.classification, &project.repositories, None),
+        };
+        let own = self.classify(declared, repositories).await;
+        let filed = match filed {
+            Some(filed) if self.boundary_active() => {
+                match self
+                    .source_project_class(
+                        &GlobalId::new(read.source.source.clone(), filed.clone()),
+                        &mut running.project_classes,
+                    )
+                    .await
+                {
+                    // Unclassified reaches a destination declared private as private, and
+                    // nowhere else at all.
+                    Err(EngineError::ProjectUnclassified { .. })
+                        if self.declared(&request.destination)
+                            == crate::config::SourceVisibility::Private =>
+                    {
+                        Classification::Private
+                    }
+                    other => other?,
+                }
+            }
+            _ => Classification::Public,
+        };
+        Ok(own.strictest(filed))
+    }
+
+    /// A source project's classification, worked out once per command: see
+    /// [`Engine::project_class`].
+    ///
+    /// While the boundary is active a project its source does not hold, or cannot read
+    /// projects at all, is [`EngineError::ProjectUnclassified`], and a read that fails is
+    /// refused: neither is ever answered public. A public answer worked out earlier in the
+    /// command is trusted only once the project is read again and is still there, because it
+    /// may have gone or become unreadable since, and a private one stays private whatever
+    /// became of the project, so it is trusted without a read.
+    pub(super) async fn source_project_class(
+        &self,
+        project: &GlobalId,
+        known: &mut HashMap<GlobalId, Classification>,
+    ) -> Result<Classification, EngineError> {
+        let cached = known.get(project).copied();
+        if let Some(class) = cached
+            && (class == Classification::Private || !self.boundary_active())
+        {
+            return Ok(class);
+        }
+        let source = self.readable(&project.source)?;
+        let held = if source.source().capabilities().projects.is_native() {
+            source
+                .source()
+                .get_project(&project.native)
+                .await
+                .map_err(|error| refused(source, error))?
+        } else {
+            None
+        };
+        let Some(held) = held else {
+            // Nothing is inherited from a project that is not there, but while the boundary is
+            // active that is not the same as inheriting nothing: what is filed under it is
+            // unclassified, and that is never written down as public for a later read to trust.
+            if self.boundary_active() {
+                known.remove(project);
+                return Err(EngineError::ProjectUnclassified {
+                    project: project.to_string(),
+                    why: if source.source().capabilities().projects.is_native() {
+                        "its source does not hold it".to_owned()
+                    } else {
+                        "its source cannot read projects".to_owned()
+                    },
+                });
+            }
+            return Ok(Classification::Public);
+        };
+        if let Some(class) = cached {
+            // Read again, its record may have tightened since; nothing loosens it.
+            let class =
+                class.strictest(self.classify(held.classification, &held.repositories).await);
+            known.insert(project.clone(), class);
+            return Ok(class);
+        }
+        let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
+        let class = self
+            .project_class(source, project, &held, tasks.iter().map(|task| &task.item))
+            .await?;
+        known.insert(project.clone(), class);
+        Ok(class)
+    }
+
+    /// Who may read the item `far` names, as a write naming it has to know: its own record and
+    /// repositories, tightened — a task's by the project it is filed under, a project's by every
+    /// task and document it holds. `known` holds the project classifications this command has
+    /// already worked out, each confirmed by [`Engine::source_project_class`] before it is
+    /// trusted. `Err` says why it could not be established: its source is not configured, a
+    /// read failed, or no such item is held.
+    pub(super) async fn reference_class(
+        &self,
+        far: &GlobalId,
+        kind: ItemKind,
+        known: &mut HashMap<GlobalId, Classification>,
+    ) -> Result<Classification, String> {
+        let Ok(source) = self.readable(&far.source) else {
+            return Err("no source of that name is configured to read it from".to_owned());
+        };
+        let unread = |error: SourceError| format!("its source could not be read: {error}");
+        let missing = || "its source holds no such item".to_owned();
+        match kind {
+            ItemKind::Task => {
+                let task = source
+                    .source()
+                    .get_task(&far.native)
+                    .await
+                    .map_err(unread)?
+                    .ok_or_else(missing)?;
+                let own = self.classify(task.classification, &task.repositories).await;
+                let Some(filed) = &task.project else {
+                    return Ok(own);
+                };
+                // A task that names a project inherits from it, so that project has to be there
+                // to read: one its source cannot read or does not hold leaves the task
+                // unclassified, never classified as though it named none.
+                let project = GlobalId::new(far.source.clone(), filed.clone());
+                match self.source_project_class(&project, known).await {
+                    Ok(inherited) => Ok(own.strictest(inherited)),
+                    Err(EngineError::ProjectUnclassified { project, why }) => {
+                        Err(format!("it is filed under project {project}, and {why}"))
+                    }
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            ItemKind::Project => match self.source_project_class(far, known).await {
+                Ok(class) => Ok(class),
+                Err(EngineError::ProjectUnclassified { why, .. }) => Err(why),
+                Err(error) => Err(error.to_string()),
+            },
+        }
+    }
+
+    /// A project's classification: the strictest of its own declaration, its repositories,
+    /// every task in `tasks` and — while the boundary is active, at a source with documents —
+    /// every document filed under it. Nothing loosens it: a project once private stays
+    /// private, because what this writes it as is what the next copy reads.
+    async fn project_class<'a>(
+        &self,
+        source: &ResolvedSource,
+        project: &GlobalId,
+        held: &Project,
+        tasks: impl Iterator<Item = &'a Task>,
+    ) -> Result<Classification, EngineError> {
+        let mut class = self.classify(held.classification, &held.repositories).await;
+        for task in tasks {
+            class = class.strictest(self.classify(task.classification, &task.repositories).await);
+        }
+        if self.boundary_active() && source.source().capabilities().documents.is_native() {
+            for document in self.project_documents(project).await? {
+                class = class.strictest(
+                    self.classify(document.item.classification, &document.item.repositories)
+                        .await,
+                );
+            }
+        }
+        Ok(class)
+    }
+
+    /// `edges` as a write to `destination` carries them: without one whose far end that write
+    /// withholds (see [`Engine::withholds`]) — an item of a source declared private, or one of
+    /// `private`, the items this copy carries classified private. One not resolvable yet stays
+    /// `None`.
+    fn shown_edges(
+        &self,
+        destination: &SourceName,
+        edges: Vec<Option<DependencyEdge>>,
+        private: &[GlobalId],
+    ) -> Vec<Option<DependencyEdge>> {
+        edges
+            .into_iter()
+            .filter(|edge| {
+                !edge.as_ref().is_some_and(|edge| {
+                    far_end(&edge.to, destination)
+                        .is_some_and(|far| self.withholds(destination, &far, private))
+                })
+            })
+            .collect()
+    }
+
+    /// `delivers` as a write to `destination` carries them: without an entry naming a task
+    /// that write withholds. One not resolvable yet stays `None`.
+    fn shown_delivers(
+        &self,
+        destination: &SourceName,
+        delivers: Vec<Option<TaskRef>>,
+        private: &[GlobalId],
+    ) -> Vec<Option<TaskRef>> {
+        delivers
+            .into_iter()
+            .filter(|entry| {
+                !entry.as_ref().is_some_and(|entry| {
+                    entry
+                        .in_source(destination)
+                        .as_str()
+                        .parse::<GlobalId>()
+                        .is_ok_and(|far| self.withholds(destination, &far, private))
+                })
+            })
+            .collect()
+    }
+
+    /// Hold every item a copy lands to the public boundary before any is written: a private
+    /// one refused anywhere not declared private, and every one landing anywhere not declared
+    /// private put to the caller's check. A dry run, which writes nothing, also reads each
+    /// destination declared private once, so it reports the refusal its copy would meet.
+    ///
+    /// While the boundary is active it first learns who may read every item outside the copy
+    /// that a carried dependency or delivery names, so a write anywhere not declared private
+    /// withholds the id of a private one — and refuses, before anything is written, a
+    /// reference whose classification it cannot establish.
+    async fn preflight_copy<'a>(
+        &self,
+        request: &CopyRequest,
+        planned: impl Iterator<Item = &'a Planned>,
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        let planned: Vec<&Planned> = planned.collect();
+        for item in &planned {
+            note_private(running, item);
+        }
+        if self.boundary_active() {
+            for item in &planned {
+                self.classify_references(item, running).await?;
+            }
+        }
+        for item in planned {
+            let destination = self.writable(&item.to)?;
+            let target = match &item.target {
+                Target::Update { id, .. } => WriteTarget::Existing(id),
+                Target::Create => WriteTarget::New {
+                    repositories: repositories_of(&item.item),
+                    project: None,
+                },
+            };
+            let outbound = Outbound {
+                item: item.source.to_string(),
+                classification: item.classification.strictest(
+                    item.held
+                        .as_ref()
+                        .map_or(Classification::Public, |held| classification_of(&held.item)),
+                ),
+                target,
+                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &running.private)),
+            };
+            self.preflight(destination, &outbound).await?;
+            // Every item, not one per destination: who can read a write depends on where in
+            // the destination it lands — an issue's own repository on a board.
+            if request.dry_run {
+                self.at_write(destination, &outbound.item, &outbound.target)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Learn who may read each item outside the copy that `item`'s dependencies and deliveries
+    /// name, when `item` lands anywhere not declared private, recording each private one in
+    /// `running.private`.
+    ///
+    /// An item of a source declared private, one of the destination itself, and one this copy
+    /// carries need no read: the first is withheld by its source, the second names nothing
+    /// elsewhere, and the third's classification is already known. Every other is read once
+    /// per command, with what its classification inherits — a task's project, and a project's
+    /// tasks and documents. One whose source is not configured, or where any of those reads
+    /// fails or finds no such item, is refused, because an id that cannot be shown public is
+    /// never written where it would name a private item.
+    async fn classify_references(
+        &self,
+        item: &Planned,
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+            return Ok(());
+        }
+        let origin = &item.source.source;
+        let mut named: Vec<(GlobalId, ItemKind)> = item
+            .edges
+            .iter()
+            .filter_map(|edge| far_end(&edge.to, origin).map(|far| (far, edge.to.kind)))
+            .collect();
+        if let Item::Task(task) = &item.item {
+            named.extend(task.delivers.iter().filter_map(|entry| {
+                entry
+                    .in_source(origin)
+                    .as_str()
+                    .parse::<GlobalId>()
+                    .ok()
+                    .map(|far| (far, ItemKind::Task))
+            }));
+        }
+        for (far, kind) in named {
+            if far.source == item.to
+                || self.declared(&far.source) == crate::config::SourceVisibility::Private
+                || running.resolvable.contains(&far)
+                || running.private.contains(&far)
+                || running.public_references.contains(&far)
+            {
+                continue;
+            }
+            let class = self
+                .reference_class(&far, kind, &mut running.project_classes)
+                .await
+                .map_err(|why| EngineError::ReferenceUnclassified {
+                    item: item.source.to_string(),
+                    reference: far.to_string(),
+                    destination: item.to.to_string(),
+                    why,
+                })?;
+            if class == Classification::Private {
+                running.private.push(far);
+            } else {
+                running.public_references.push(far);
+            }
+        }
+        Ok(())
     }
 
     /// Read one item out of its own source.
@@ -2722,8 +3256,12 @@ impl Engine {
         request: &CopyRequest,
         read: Read,
         placement: Placement,
+        classification: Classification,
     ) -> Result<Planned, EngineError> {
         let Read { source: id, item } = read;
+        // Provenance naming a private source stays out of anywhere not declared private.
+        let withheld = self.declared(&id.source) == crate::config::SourceVisibility::Private
+            && self.declared(&placement.destination) != crate::config::SourceVisibility::Private;
         let destination = self.writable(&placement.destination)?;
         if item.level() == Level::Document {
             documentary(destination)?;
@@ -2751,7 +3289,9 @@ impl Engine {
             assets::stores(destination, &id.to_string(), &first.name)?;
         }
         let edges = forward_edges(source, &id.native, item.level()).await?;
-        let (target, held) = self.target(destination, request, &id, &item).await?;
+        let (target, held) = self
+            .target(destination, request, &id, &item, withheld)
+            .await?;
         Ok(Planned {
             source: id,
             item,
@@ -2761,6 +3301,8 @@ impl Engine {
             to: placement.destination.clone(),
             placed: routed.then_some(placement),
             assets,
+            classification,
+            withheld,
         })
     }
 
@@ -2812,6 +3354,7 @@ impl Engine {
         request: &CopyRequest,
         id: &GlobalId,
         document: &Document,
+        classification: Classification,
         running: &mut Running,
     ) -> Result<Placement, EngineError> {
         if self.routes.routes(&request.destination)
@@ -2822,9 +3365,11 @@ impl Engine {
                 return Ok(self.placed_at(request, &home.source));
             }
         }
-        Ok(self
-            .routes
-            .place(&request.destination, &document.repositories))
+        Ok(self.routes.place_classified(
+            &request.destination,
+            classification,
+            &document.repositories,
+        ))
     }
 
     /// What the report says placed an item in `at`: the first route entry sending there, or
@@ -2849,6 +3394,7 @@ impl Engine {
         request: &CopyRequest,
         id: &GlobalId,
         item: &Item,
+        withheld: bool,
     ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
         // A caller asserting there is nothing to find is believed, and nothing is looked for —
@@ -2871,7 +3417,13 @@ impl Engine {
         // rules below find.
         if let Some(link) = link_of(metadata, destination.name()) {
             match self.prior(destination, item.level(), &link.native).await? {
-                Some(held) if origin_of(described(&held.item).1).as_ref() == Some(id) => {
+                // A copy whose provenance was withheld left no origin there to name this
+                // item back, so a link it recorded on its own private source is believed
+                // while the item it names holds none.
+                Some(held)
+                    if origin_of(described(&held.item).1).as_ref() == Some(id)
+                        || (withheld && origin_of(described(&held.item).1).is_none()) =>
+                {
                     return Ok((
                         Target::Update {
                             id: link.native,
@@ -3283,7 +3835,21 @@ impl Engine {
                 Value::String(home.to_string()),
             )]),
             repositories: Vec::new(),
+            classification: held.classification,
         };
+        self.admit(
+            there,
+            &Outbound {
+                item: format!("the member project of {home}"),
+                classification: member.classification,
+                target: WriteTarget::New {
+                    repositories: &[],
+                    project: None,
+                },
+                exposure: &Exposure::of_project(&member),
+            },
+        )
+        .await?;
         let created = there
             .source()
             .write_project(&ItemWrite {
@@ -3347,6 +3913,12 @@ impl Engine {
                 )
                 .await
                 .map_err(|error| refused(at, error))?;
+            self.at_write(
+                at,
+                &home.id.to_string(),
+                &WriteTarget::Existing(&home.id.native),
+            )
+            .await?;
             journal.record(Undo::Updated {
                 at: home.id.source.clone(),
                 id: home.id.native.clone(),
@@ -3479,7 +4051,28 @@ impl Engine {
         // destination holds at the origin key is what a copy-back leaves there, and what it
         // holds as `delivered_by` is what the item keeps.
         let origin = recorded(item, prior.as_ref());
-        let landing = outgoing(item, suggested, project, &origin, delivers, prior.as_ref());
+        let landing = outgoing(
+            item,
+            suggested,
+            project.clone(),
+            &origin,
+            delivers,
+            prior.as_ref(),
+        );
+        // Immediately before anything is sent: a destination declared private is read again
+        // for this write, whatever an earlier write read.
+        self.at_write(
+            destination,
+            &item.source.to_string(),
+            &match &target {
+                Some(id) => WriteTarget::Existing(id),
+                None => WriteTarget::New {
+                    repositories: repositories_of(&item.item),
+                    project: project.as_ref(),
+                },
+            },
+        )
+        .await?;
         // Asked before the journal records anything or the destination is sent anything: a
         // status the destination has no name for refuses this write while there is nothing to
         // put back, where refused inside the write it would leave the journal restoring an
@@ -4394,6 +4987,11 @@ fn outgoing(
 ) -> Item {
     let own = held.map(|held| described(&held.item).1);
     let carried = |metadata: &BTreeMap<String, Value>| carried(metadata, origin, own);
+    // Never looser than the destination already holds it: a project once private stays
+    // private after the members that made it so are gone, and so does anything else.
+    let classification = item
+        .classification
+        .strictest(held.map_or(Classification::Public, |held| classification_of(&held.item)));
     match &item.item {
         Item::Task(task) => Item::Task(Box::new(Task {
             id,
@@ -4408,6 +5006,7 @@ fn outgoing(
                 Some(Item::Task(held)) => held.delivered_by.clone(),
                 _ => Vec::new(),
             },
+            classification,
             ..(**task).clone()
         })),
         Item::Project(project) => Item::Project(Box::new(Project {
@@ -4417,6 +5016,7 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             metadata: carried(&project.metadata),
+            classification,
             ..(**project).clone()
         })),
         Item::Document(document) => Item::Document(Box::new(Document {
@@ -4427,9 +5027,66 @@ fn outgoing(
             updated_at: None,
             project,
             metadata: carried(&document.metadata),
+            classification,
             ..(**document).clone()
         })),
     }
+}
+
+/// Who may read `item`, as its own record says.
+fn classification_of(item: &Item) -> Classification {
+    match item {
+        Item::Task(task) => task.classification,
+        Item::Project(project) => project.classification,
+        Item::Document(document) => document.classification,
+    }
+}
+
+fn repositories_of(item: &Item) -> &[Repository] {
+    match item {
+        Item::Task(task) => &task.repositories,
+        Item::Project(project) => &project.repositories,
+        Item::Document(document) => &document.repositories,
+    }
+}
+
+/// What one planned item would put in front of a reader where it lands: everything it carries
+/// once its provenance is settled, and the names of its assets.
+///
+/// An id the write withholds is not part of what it exposes: `withheld` says which, by the far
+/// end's own id as the item's source names it.
+fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure {
+    let origin = &item.source.source;
+    let shown = |id: &str| id.parse::<GlobalId>().map_or(true, |far| !withheld(&far));
+    let delivers = match &item.item {
+        Item::Task(task) => task
+            .delivers
+            .iter()
+            .filter(|entry| shown(entry.in_source(origin).as_str()))
+            .cloned()
+            .collect(),
+        Item::Project(_) | Item::Document(_) => Vec::new(),
+    };
+    let preview = outgoing(
+        item,
+        item.item.id().clone(),
+        None,
+        &recorded(item, item.held.as_ref()),
+        &delivers,
+        item.held.as_ref(),
+    );
+    match &preview {
+        Item::Task(task) => Exposure::of_task(task),
+        Item::Project(project) => Exposure::of_project(project),
+        Item::Document(document) => Exposure::of_document(document),
+    }
+    .assets(&item.assets)
+    .and(Exposure::metadata(
+        item.edges
+            .iter()
+            .filter(|edge| far_end(&edge.to, origin).is_none_or(|far| !withheld(&far)))
+            .map(|edge| edge.to.id().to_owned()),
+    ))
 }
 
 /// The id a created item is offered to the destination under.
@@ -4534,6 +5191,11 @@ enum Origin {
 /// reported, and whoever reads that board now has two. So a copy-back leaves the
 /// destination's origin exactly as the destination holds it, absent included, and every
 /// other copy records the id it was copied from.
+///
+/// A copy out of a private source into somewhere not declared private records no origin at
+/// all: the id it would record names the private source, and provenance is not a way for it
+/// to leave. The correspondence is kept on the private side instead, as the link the copied
+/// item records.
 fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
     if let Target::Update {
         found: Found::Origin,
@@ -4543,6 +5205,9 @@ fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
         return Origin::Keeps(
             held.and_then(|held| described(&held.item).1.get(GlobalId::ORIGIN_KEY).cloned()),
         );
+    }
+    if item.withheld {
+        return Origin::Keeps(None);
     }
     Origin::Records(item.source.clone())
 }
@@ -4567,6 +5232,7 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.project == outgoing.project
                 && held.metadata == outgoing.metadata
                 && held.repositories == outgoing.repositories
+                && held.classification == outgoing.classification
         }
         (Item::Project(held), Item::Project(outgoing)) => {
             held.title == outgoing.title
@@ -4575,6 +5241,7 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.labels == outgoing.labels
                 && held.metadata == outgoing.metadata
                 && held.repositories == outgoing.repositories
+                && held.classification == outgoing.classification
         }
         // No status, because a document has none; no edges, because it is in no graph.
         (Item::Document(held), Item::Document(outgoing)) => {
@@ -4584,6 +5251,7 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.project == outgoing.project
                 && held.metadata == outgoing.metadata
                 && held.repositories == outgoing.repositories
+                && held.classification == outgoing.classification
         }
         _ => false,
     }
@@ -4737,6 +5405,36 @@ fn spelled_from(landed: &GlobalId, near: &SourceName) -> String {
         landed.native.0.clone()
     } else {
         landed.to_string()
+    }
+}
+
+/// Record `item` among those `running` carries classified private, when it is: by its source
+/// id, and by its destination id when it already has one.
+fn note_private(running: &mut Running, item: &Planned) {
+    if item.classification != Classification::Private {
+        return;
+    }
+    let mut ids = vec![item.source.clone()];
+    if let Target::Update { id, .. } = &item.target {
+        ids.push(GlobalId::new(item.to.clone(), id.clone()));
+    }
+    for id in ids {
+        if !running.private.contains(&id) {
+            running.private.push(id);
+        }
+    }
+}
+
+/// The item `endpoint` names, read from an item of `origin`: a native id names one of
+/// `origin`'s own.
+fn far_end(endpoint: &DependencyEndpoint, origin: &SourceName) -> Option<GlobalId> {
+    if endpoint.is_qualified() {
+        endpoint.id().parse().ok()
+    } else {
+        Some(GlobalId::new(
+            origin.clone(),
+            NativeId(endpoint.id().to_owned()),
+        ))
     }
 }
 

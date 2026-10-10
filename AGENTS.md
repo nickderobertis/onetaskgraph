@@ -71,7 +71,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `TaskRef`,
   `Repository`,
   `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
-  `Direction`, `NativeId`, `SourceName`; the query and paging types `TaskQuery`,
+  `Direction`, `NativeId`, `SourceName`, `Classification`; the destination-reality types
+  `Visibility` and `WriteTarget`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
@@ -971,6 +972,57 @@ them do; this is the inventory of what is owed, not a status board.
     measured plan shapes, `--group-by`'s blocks and its refusal of a non-string group; the same
     bytes twice and from another store; and over a GitHub board, one request per listing page
     and no part of a graph when a later page or a dependency read is refused.
+86. An explicitly private task, project or document is refused onto every source not declared
+    private while the boundary is inactive, and everything else writes as it did; active, a task
+    naming a private or unknown repository is refused onto a public source on create and copy,
+    and every narrow write — status, priority, content, metadata, update, comment — to a private
+    item a public source holds is refused, each before anything is written.
+87. A public write is refused when the released onevcs check finds a private term in its text,
+    title, metadata or asset names, neutrally; a missing, failing or out-of-schema check never
+    passes; and the caller's term scope — `--term-scope`, `--term-scope-empty`, the SDKs'
+    `term_scope` and `Engine::with_term_scope` — decides which registered private identities'
+    terms are derived, a malformed third identity making only an unscoped check unavailable.
+88. A mixed project goes, with every task and document in it, wholly to the private source a
+    `classification: private` route names, over any repository route; with none reachable it is
+    refused whole; a private member is refused by a project held public; an explicit `public`
+    never loosens an inherited classification; and a project stays private after its private
+    members are removed.
+89. A copy out of a private source into a public one records no origin naming it, and keeps
+    its correspondence on the private side; a copy's dependency edges and `delivers` entries,
+    and a delivered task's `delivered_by`, leave out every id naming an item of a private
+    source or classified private — read from outside the copy while the boundary is active, a
+    reference it cannot classify refused — on a public write, kept in the private store's own
+    record and unchanged between public items, whatever the term lists hold, while a
+    `--depends-on` or `--delivers` naming one is refused before any write; a stdio-hosted
+    source is never verified private.
+90. A GitHub board declared private is held, at every write, to its Project and the issue's
+    repository both reading private, read with its own credential — a change between writes
+    refused at the next, an unreadable read never guessed, a missing `read:project` named; and a
+    Linear source declared private is verified once per instance inside the cold resolution,
+    spending no request a declared-nothing source does not, an unverifiable one refused.
+91. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
+    every payload the store sends and every verdict it reads is held to it.
+
+## The public boundary
+
+Classification, a source's declared `visibility`, classification routes and `write_policy`
+are the store's; which repositories are public and whether text names a private one are the
+caller's policy, never this repository's. `crates/onetaskgraph-core/src/engine/boundary.rs` is
+the one seam every write passes, before its first mutation, and README's "The public boundary"
+is where its activation rule is stated for a user — **an inactive store consults no repository
+visibility**, which is what keeps every request sequence and budget above unchanged until a
+store opts in.
+
+- **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
+  boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v1.json`; the release the
+  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e/tests/e2e/onevcs.rs`,
+  and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
+  refuses to let drift.
+- **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
+  policy's. A GitHub source reads twice per write and holds nothing between writes; the
+  `visibility-write-requests` budget holds a 102-write plan copy to 204. A Linear source is
+  verified once per instance, by the manager's ruling, because a Linear workspace cannot become
+  readable by anybody but its members.
 
 ## What a copied document's references are pointed at
 

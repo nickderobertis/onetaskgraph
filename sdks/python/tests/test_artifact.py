@@ -271,8 +271,8 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 34
-    # Version 34 published a `github-projects` source's `metadata_fields`: its configuration's
+    assert emitted_bundle["version"] == 35
+    # Version 35 published a `github-projects` source's `metadata_fields`: its configuration's
     # list of `{field, key, path}` entries, and the `metadata_fields` list `sources fields`
     # answers with in a `FieldsReport`, each left out when empty.
     github_config = emitted_bundle["plugin_config"]["github-projects"]
@@ -284,6 +284,23 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     from onetaskgraph_sdk import FieldsReport
 
     assert FieldsReport.model_validate({"source": "board", "fields": []}).metadata_fields == []
+    # Version 34 published the public boundary: `classification` on a task, a project and a
+    # document, and the shapes a store's `write_policy` and a caller's policy exchange.
+    for root in ("Task", "Project", "Document"):
+        assert "classification" in emitted_bundle["roots"][root]["properties"], root
+    for root in (
+        "Classification",
+        "SourceVisibility",
+        "WritePolicyConfig",
+        "RepositoryVisibility",
+        "PublicWriteInput",
+        "WriteVerdict",
+    ):
+        assert root in bundle["roots"], root
+    from onetaskgraph_sdk._generated.public_write_input import PublicWriteInput
+
+    defaulted = PublicWriteInput.model_validate({"destination": "public"})
+    assert (defaulted.text, defaulted.paths, defaulted.metadata) == ([], [], [])
     # Version 33 published `ProjectGraph`, what `project graph --format json` answers with: a
     # project's tasks and edges keyed by qualified id, the nodes and edges its Mermaid form draws.
     assert generate.RESPONSE_ROOTS["project_graph"] == "ProjectGraph"

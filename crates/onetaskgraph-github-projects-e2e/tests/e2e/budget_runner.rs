@@ -39,7 +39,9 @@ impl Workload {
         }
     }
 }
-fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
+/// The recording the ordinary test target wrote for `budget`, refused unless `budget` is a
+/// budget id and the recording is that budget's own — the one reader every report shares.
+fn recorded(budget: &str) -> Result<Value, String> {
     if !regex::Regex::new(onebudgetspec_core::model::ID_PATTERN)
         .unwrap()
         .is_match(budget)
@@ -57,6 +59,11 @@ fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
     if value["budget"].as_str() != Some(budget) {
         return Err("telemetry belongs to a different budget".into());
     }
+    Ok(value)
+}
+
+fn read(budget: &str, expected: Workload) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
     validate(&value, expected)?;
     let figure = value["value"]
         .as_f64()
@@ -129,8 +136,20 @@ fn report_concurrent_refusals() {
     report_expected(Workload::ConcurrentRefusals);
 }
 #[test]
+fn report_visibility_reads() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+#[test]
 fn report_metadata_fields() {
-    report_with(metadata_field_share);
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
 }
 // llmlint: ignore-end[tests_assert_real_behavior]
 
@@ -193,23 +212,7 @@ fn unchanged(value: &Value, side: &str) -> Result<Spent, String> {
 /// The larger of the two shares of GitHub's content-creation allowance projecting one field
 /// adds to the stated burst, in percent, and the breakdown it is reported with.
 pub(super) fn metadata_field_share(budget: &str) -> Result<(f64, String), String> {
-    if !regex::Regex::new(onebudgetspec_core::model::ID_PATTERN)
-        .unwrap()
-        .is_match(budget)
-    {
-        return Err("invalid budget id".into());
-    }
-    let path = onetaskgraph_e2e_support::telemetry::file_in(&directory(), budget);
-    let text = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "no telemetry at {}: {error}; run the domain test target",
-            path.display()
-        )
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    if value["budget"].as_str() != Some(budget) {
-        return Err("telemetry belongs to a different budget".into());
-    }
+    let value = recorded(budget)?;
     if value["workload"].as_str() != Some(METADATA_FIELD_WORKLOAD) {
         return Err("workload does not match expected shape".into());
     }
@@ -348,21 +351,60 @@ fn the_metadata_field_share_is_the_larger_of_the_minute_and_the_hour() {
     }
 }
 
-fn report_expected(expected: Workload) {
-    report_with(|budget| read(budget, expected));
+/// The budget the report command was selected for, or `None` for an ordinary test run.
+fn selected() -> Option<String> {
+    match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
+        Ok(budget) => Some(budget),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => refuse(&error.to_string()),
+    }
 }
 
-/// The one report path every entry point above takes: the selected budget's telemetry read and
-/// validated by `read`, then handed to onebudgetspec.
-fn report_with(read: impl FnOnce(&str) -> Result<(f64, String), String>) {
-    let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
-        Ok(budget) => budget,
-        Err(std::env::VarError::NotPresent) => return,
-        Err(error) => refuse(&error.to_string()),
+/// What `visibility_cost` recorded for `budget`, refused unless it is that journey's recording
+/// at that journey's workload: its figure, and the detail it reports beside it.
+fn read_visibility(budget: &str) -> Result<(f64, String), String> {
+    use super::visibility_cost::{WORKLOAD, WRITES};
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(WORKLOAD) || value["writes"].as_u64() != Some(WRITES) {
+        return Err("workload does not match the 102-write plan copy".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    // Every entry of a breakdown is a whole count: one that is not is no breakdown at all,
+    // rather than an entry left out of the sum.
+    let sum = |key: &str| {
+        value[key]
+            .as_object()
+            .and_then(|counts| counts.values().map(Value::as_u64).sum::<Option<u64>>())
     };
-    let (value, detail) = read(&budget).unwrap_or_else(|error| refuse(&error));
+    if sum("by_write") != Some(figure) || sum("by_read") != Some(figure) {
+        return Err("the breakdown does not add up to the figure".into());
+    }
+    if !value["simulated_seconds"]
+        .as_f64()
+        .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+    {
+        return Err("missing simulated seconds".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+fn report_expected(expected: Workload) {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read(&budget, expected).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+
+/// Hand one figure and its detail to onebudgetspec, failing the command when no figure was
+/// written.
+fn hand_over(value: f64, detail: &str) {
     // llmlint: ignore[budget_commands_measure_directly] An explicitly selected standalone report command must fail when report returns false (no destination), rather than claim success without a figure. This checks its exit-status contract only; onebudgetspec alone validates the result file and judges the figure against its threshold.
-    match onebudgetspec_core::report(value, Some(&detail)) {
+    match onebudgetspec_core::report(value, Some(detail)) {
         Ok(true) => (),
         Ok(false) => {
             refuse("no budget figure written: ONEBUDGETSPEC_RESULT must name a destination")
@@ -563,4 +605,92 @@ fn refusal_report_rejects_fractional_and_impossible_counts() {
             assert!(String::from_utf8_lossy(&output.stderr).contains("refusal count"));
         }
     }
+}
+
+#[test]
+fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("visibility");
+    let budget = super::visibility_cost::BUDGET;
+    let valid = json!({"budget":budget,"value":204,"detail":"recorded","workload":super::visibility_cost::WORKLOAD,
+        "writes":102,"by_write":{"project":2,"task":200,"document":2},
+        "by_read":{"project":102,"repository":102},"simulated_seconds":38.76});
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_visibility_reads",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, result.exists())
+    };
+    let mut foreign = valid.clone();
+    foreign["workload"] = json!("plan-copy-1-project-10-tasks-1-document");
+    let mut fewer = valid.clone();
+    fewer["writes"] = json!(12);
+    let mut unbalanced = valid.clone();
+    unbalanced["by_read"] = json!({"project":102,"repository":101});
+    // An entry that is no count, beside entries that still add up to the figure on their own.
+    let mut uncounted = valid.clone();
+    uncounted["by_write"] = json!({"project":2,"task":200,"document":2,"note":"extra"});
+    let with = |field: &str, value: Value| {
+        let mut changed = valid.clone();
+        changed[field] = value;
+        Some(changed)
+    };
+    // A figure past what one budget can report, its breakdown made to add up so the range is
+    // what refuses it.
+    let mut huge = valid.clone();
+    huge["value"] = json!(u64::from(u32::MAX) + 1);
+    huge["by_write"] = json!({"task": u64::from(u32::MAX) + 1});
+    huge["by_read"] = json!({"project": u64::from(u32::MAX) + 1});
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (Some(foreign), "workload does not match"),
+        (Some(fewer), "workload does not match"),
+        (Some(unbalanced), "does not add up"),
+        (Some(uncounted), "does not add up"),
+        (with("value", json!(null)), "missing whole-number figure"),
+        (with("value", json!(204.5)), "missing whole-number figure"),
+        (
+            with("simulated_seconds", json!(null)),
+            "missing simulated seconds",
+        ),
+        (
+            with("simulated_seconds", json!(-1.0)),
+            "missing simulated seconds",
+        ),
+        (with("detail", json!(null)), "missing detail"),
+        (Some(huge), "figure out of range"),
+    ] {
+        let (output, written) = run(recorded);
+        assert!(!output.status.success(), "accepted: {message}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!written, "reported a figure over {message}");
+    }
+    let (output, written) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(written, "a valid recording is reported");
 }

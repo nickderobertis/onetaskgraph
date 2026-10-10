@@ -183,6 +183,7 @@ fn held() -> Task {
         repositories: Vec::new(),
         delivers: vec![TaskRef::new("T-9".to_owned()).expect("a task id")],
         delivered_by: vec![TaskRef::new("work:T-8".to_owned()).expect("a task id")],
+        classification: Default::default(),
     }
 }
 

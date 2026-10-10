@@ -611,6 +611,8 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
         "labels": [{"id": "L-1", "name": "sdk"}],
         "metadata": {"caller.note": "a string", "onetaskgraph.origin": "memory:D-1"},
         "repositories": ["github.com/nickderobertis/onetaskgraph"],
+        # Left off the wire while public, and read as its default.
+        "classification": "public",
     }
 
     with pytest.raises(OnetaskgraphError) as refused:

@@ -20,6 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::assets;
+use super::boundary::{Exposure, Held};
 use super::fetch::{fits, unrepeated};
 use super::{Answer, ConfiguredSource, Engine, EngineError, Qualified, delivery};
 use crate::GlobalId;
@@ -385,6 +386,15 @@ impl Engine {
         comment: &NewComment,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
+        self.admit_existing(
+            source,
+            &task.to_string(),
+            &task.native,
+            Held::Task,
+            &Exposure::text(comment.body.as_str())
+                .and(Exposure::metadata(comment.author.iter().cloned())),
+        )
+        .await?;
         match source.source().add_comment(&task.native, comment).await {
             Ok(Some(added)) => Ok(added),
             Ok(None) => Err(no_such_task(task)),
@@ -405,6 +415,14 @@ impl Engine {
         body: &CommentBody,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
+        self.admit_existing(
+            source,
+            &task.to_string(),
+            &task.native,
+            Held::Task,
+            &Exposure::text(body.as_str()),
+        )
+        .await?;
         match source
             .source()
             .edit_comment(&task.native, comment, body)

@@ -1788,6 +1788,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -1809,6 +1810,7 @@ fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     }
 }
 
@@ -1836,6 +1838,7 @@ fn artifact_task(
         repositories: vec![],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     }
 }
 
@@ -1999,6 +2002,50 @@ pub const BOARD_WAIT: BoardWait = BoardWait {
     attempts: 30,
     interval: std::time::Duration::from_secs(1),
 };
+
+/// The journey's wait for a document it created to be found by a title search: twice
+/// [`BOARD_WAIT`]'s attempts, because GitHub's issue search indexes a new issue on its own
+/// schedule and one run waited out twenty seconds of it with the issue certainly written.
+pub const DOCUMENT_WAIT: BoardWait = BoardWait {
+    attempts: BOARD_WAIT.attempts * 2,
+    interval: BOARD_WAIT.interval,
+};
+
+/// Waits until a title search reports exactly the one document titled `title`.
+///
+/// The first search is `writer`'s, which is what a session that finds the document at once
+/// has always sent. Every later one is a **fresh** source's: a source answers a search it
+/// was already asked from the answer it holds for the command, so asking `writer` again
+/// would repeat its first miss without asking GitHub — which is how one run waited twenty
+/// seconds on an issue GitHub had by then certainly indexed. A search that answers without
+/// it is one more attempt, not the end of the wait; an error ends the wait at once. A wait
+/// that never sees it fails naming the titles its last search did report, so a lagging
+/// index reads differently from a search that found something else.
+pub async fn await_document_listed(
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    query: &DocumentQuery,
+    title: &str,
+    wait: BoardWait,
+) -> Result<(), String> {
+    let wanted = vec![title.to_owned()];
+    let mut last = Vec::new();
+    for attempt in 0..wait.attempts {
+        last = if attempt == 0 {
+            document_titles(writer, query, "document settling read").await?
+        } else {
+            document_titles(rebuilt().as_ref(), query, "document settling read").await?
+        };
+        if last == wanted {
+            return Ok(());
+        }
+        tokio::time::sleep(wait.interval).await;
+    }
+    Err(format!(
+        "the board never reported the document this run created ({title:?}); its last title \
+         search reported {last:?}"
+    ))
+}
 
 /// Waits until the board itself reports an item this run just created.
 ///
@@ -2341,20 +2388,14 @@ async fn drive_every_declared_capability(
         }),
         ..Default::default()
     };
-    let mut settled = false;
-    for _ in 0..20 {
-        if document_titles(writer, &by_prefix_document(), "document settling read").await?
-            == vec![design.clone()]
-        {
-            settled = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    ensure!(
-        settled,
-        "the board never reported the document this run created ({design:?})"
-    );
+    await_document_listed(
+        writer,
+        rebuilt,
+        &by_prefix_document(),
+        &design,
+        DOCUMENT_WAIT,
+    )
+    .await?;
     let read_design = writer
         .get_document(&design_id)
         .await

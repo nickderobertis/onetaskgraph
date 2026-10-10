@@ -948,6 +948,10 @@ struct GitHubBoard {
     /// Operations this board refuses once after answering that many requests carrying them —
     /// so a journey can let a read's first pages land and refuse a later one.
     refusing_after: Vec<(&'static str, usize)>,
+    /// Items this board replaces after answering that many requests naming them by id — with
+    /// another item, or with nothing — so a journey can let a command read one and then find it
+    /// changed or gone.
+    replacing: Vec<(String, usize, Option<Value>)>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
@@ -1003,7 +1007,82 @@ struct GitHubBoard {
     /// journey asserting these are byte-identical after a copy fails when something
     /// writes them, instead of passing because nothing could have.
     own: Value,
+    /// Whether the board's Project answers `public: true`. Private unless a journey says so.
+    project_public: bool,
+    /// How many reads of the Project's `public` field answer before a person makes it public,
+    /// so a change in the middle of one command can be driven; `None` for never.
+    project_public_after_reads: Option<usize>,
+    /// The reads of the Project's `public` field answered so far.
+    project_visibility_reads: usize,
+    /// What every read of the Project's `public` field is answered with as `projectV2`, in
+    /// place of the board's own answer; `None` for the board's own.
+    project_visibility_answer: Option<Value>,
+    /// The GraphQL error every read of the Project's `public` field is refused with, in place
+    /// of an answer; `None` to answer it.
+    project_visibility_error: Option<String>,
+    /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
+    /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
+    project_scope_withheld: bool,
+    /// How `GET /repos/{owner}/{name}` answers for each repository by `owner/name` —
+    /// [`RepositoryAnswer::Private`] for one no journey named.
+    repository_visibility: std::collections::BTreeMap<String, RepositoryAnswer>,
 }
+
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers its one REST read, which the board's own request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
+/// How the loopback GitHub answers `GET /repos/{owner}/{name}`, the read a write to a board
+/// declared private sends for the repository an issue lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepositoryAnswer {
+    /// `"visibility": "public"`, beside the `private: false` GitHub sends with it.
+    Public,
+    /// `"visibility": "private"`, beside `private: true`.
+    Private,
+    /// `"visibility": "internal"` — readable across an enterprise, so never public — beside
+    /// `private: true`.
+    Internal,
+    /// The older answer: the `private` flag alone, with no `visibility` field.
+    FlagOnly {
+        /// The flag's value.
+        private: bool,
+    },
+    /// A `visibility` field present but not a string.
+    MalformedVisibility,
+    /// A `visibility` string naming none of `public`, `private` and `internal`.
+    UnnamedVisibility,
+    /// A `200` whose body is not JSON.
+    NotJson,
+    /// A repository the token cannot see: `404`.
+    Unseen,
+}
+
+impl RepositoryAnswer {
+    /// The status line and body this answer is served as, for the repository `slug`.
+    fn served(self, slug: &str) -> (&'static str, String) {
+        let named = |visibility: &str| {
+            json!({"id": 123_456, "full_name": slug,
+                   "private": visibility != "public", "visibility": visibility})
+            .to_string()
+        };
+        match self {
+            Self::Public => ("200 OK", named("public")),
+            Self::Private => ("200 OK", named("private")),
+            Self::Internal => ("200 OK", named("internal")),
+            Self::FlagOnly { private } => (
+                "200 OK",
+                json!({"id": 123_456, "full_name": slug, "private": private}).to_string(),
+            ),
+            Self::MalformedVisibility => (
+                "200 OK",
+                json!({"id": 123_456, "full_name": slug, "private": true, "visibility": 7})
+                    .to_string(),
+            ),
+            Self::UnnamedVisibility => ("200 OK", named("restricted")),
+            Self::NotJson => ("200 OK", "<html>not a repository</html>".to_owned()),
+            Self::Unseen => ("404 Not Found", json!({"message": "Not Found"}).to_string()),
+        }
+    }
+}
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// A read-only handle on one fixture board's own fields.
 pub struct GitHubBoardFields {
@@ -1039,6 +1118,44 @@ impl GitHubBoardFields {
             .collect()
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] Controls of the loopback board's visibility answers, which its request loop reads from its private state: like `refuse_once` below, they can only be methods of this handle, and a suite of one plugin could not add them from outside.
+    /// Make the board's Project public, or private again.
+    pub fn set_project_public(&self, public: bool) {
+        self.board.lock().unwrap().project_public = public;
+    }
+
+    /// Answer the next `reads` reads of the Project's `public` field as they stand, and every
+    /// read after them as public — a person making the board public part way through a command.
+    pub fn make_public_after_visibility_reads(&self, reads: usize) {
+        self.board.lock().unwrap().project_public_after_reads = Some(reads);
+    }
+
+    /// Withhold `read:project` from the token, so the Project's `public` field is refused.
+    pub fn withhold_project_scope(&self) {
+        self.board.lock().unwrap().project_scope_withheld = true;
+    }
+
+    /// Answer `GET /repos/{owner}/{name}` for `owner/name` as `answer`.
+    pub fn set_repository_visibility(&self, slug: &str, answer: RepositoryAnswer) {
+        self.board
+            .lock()
+            .unwrap()
+            .repository_visibility
+            .insert(slug.to_owned(), answer);
+    }
+
+    /// Answer every read of the Project's `public` field with `project` as `projectV2`, in
+    /// place of the board's own answer — a response GitHub's schema does not describe.
+    pub fn malform_project_visibility(&self, project: Value) {
+        self.board.lock().unwrap().project_visibility_answer = Some(project);
+    }
+
+    /// Refuse every read of the Project's `public` field with the GraphQL error `message`.
+    pub fn refuse_project_visibility(&self, message: &str) {
+        self.board.lock().unwrap().project_visibility_error = Some(message.to_owned());
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
     /// Refuse the next request carrying `operation`, once, from here on.
     pub fn refuse_once(&self, operation: &'static str) {
         self.board.lock().unwrap().refusing.push(operation);
@@ -1053,6 +1170,18 @@ impl GitHubBoardFields {
             .unwrap()
             .refusing_after
             .push((operation, answered));
+    }
+
+    /// Answer the next `answered` requests naming the item `id`, then hold `replacement` in its
+    /// place — or nothing at all — so every later read finds it as a person changed or deleted it
+    /// part way through a command.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: the items it replaces are the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_after`, and a suite could not add it from outside.
+    pub fn replace_after(&self, id: &str, answered: usize, replacement: Option<Value>) {
+        self.board
+            .lock()
+            .unwrap()
+            .replacing
+            .push((id.to_owned(), answered, replacement));
     }
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
@@ -1889,6 +2018,7 @@ fn github_projects_board_at(
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
+        replacing: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
@@ -1937,13 +2067,48 @@ fn github_projects_board_at(
         own: json!({"title":"Fixture board",
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
+        project_public: false,
+        project_public_after_reads: None,
+        project_visibility_reads: 0,
+        project_visibility_answer: None,
+        project_visibility_error: None,
+        project_scope_withheld: false,
+        repository_visibility: std::collections::BTreeMap::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
-            let request = read_http_json(&mut stream);
+            let (line, request) = read_http_request(&mut stream);
+            // The one REST read a write to a source declared private sends: the visibility of
+            // the repository an issue lives in. Recorded beside the GraphQL documents, so a
+            // journey counting what a write spent counts it too.
+            if let Some(slug) = line
+                .strip_prefix("GET /repos/")
+                .and_then(|rest| rest.split_whitespace().next())
+            {
+                let answer = {
+                    let mut served = board.lock().unwrap();
+                    served.documents.push(format!("GET /repos/{slug}"));
+                    served.variables.push(Value::Null);
+                    served
+                        .repository_visibility
+                        .get(slug)
+                        .copied()
+                        .unwrap_or(RepositoryAnswer::Private)
+                };
+                let (status, body) = answer.served(slug);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("GitHub fixture response");
+                continue;
+            }
+            let request = request.unwrap_or_else(|| panic!("a {line} carries no JSON body"));
             // Every one of these refuses a request the plugin should not have sent, and
             // each names the request it refused: a shape assumed silently here surfaces as
             // a journey failing about something else entirely.
@@ -1960,6 +2125,16 @@ fn github_projects_board_at(
                 let mut served = board.lock().unwrap();
                 served.documents.push(query.to_owned());
                 served.variables.push(variables.clone());
+                let named = variables["id"].as_str().unwrap_or_default().to_owned();
+                if let Some(at) = served.replacing.iter().position(|(id, ..)| *id == named) {
+                    if served.replacing[at].1 == 0 {
+                        let (_, _, replacement) = served.replacing.remove(at);
+                        served.items.retain(|item| item["id"] != named.as_str());
+                        served.items.extend(replacement);
+                    } else {
+                        served.replacing[at].1 -= 1;
+                    }
+                }
             }
             {
                 // Refusals named after the board was built join the ones it was built with.
@@ -2161,6 +2336,31 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
+        let mut held = board.lock().unwrap();
+        if held.project_scope_withheld {
+            held.owed_errors.push(
+                "Your token has not been granted the required scopes to execute this query. \
+                 The 'public' field requires one of the following scopes: ['read:project'], \
+                 but your token has only been granted the: ['repo'] scopes."
+                    .to_owned(),
+            );
+            return Value::Null;
+        }
+        held.project_visibility_reads += 1;
+        if let Some(error) = held.project_visibility_error.clone() {
+            held.owed_errors.push(error);
+            return Value::Null;
+        }
+        if let Some(project) = &held.project_visibility_answer {
+            return json!({"visibility": {"projectV2": project}});
+        }
+        let public = held.project_public
+            || held
+                .project_public_after_reads
+                .is_some_and(|reads| held.project_visibility_reads > reads);
+        return json!({"visibility": {"projectV2": {"public": public}}});
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -3034,6 +3234,12 @@ fn search_words(text: &str) -> Vec<String> {
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
+    let (line, body) = read_http_request(stream);
+    body.unwrap_or_else(|| panic!("a {line} carries no JSON body"))
+}
+
+/// One request's line and, when it carries one, its JSON body.
+fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     loop {
@@ -3049,16 +3255,20 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         .position(|window| window == b"\r\n\r\n")
         .expect("HTTP header terminator")
         + 4;
-    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+    let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
     assert!(headers.contains("authorization: Bearer test-token"));
-    let length = headers
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("content-length: ")
-                .and_then(|value| value.parse::<usize>().ok())
-        })
-        .expect("Content-Length");
+    let line = headers.lines().next().unwrap_or_default().to_owned();
+    let Some(length) = headers.lines().find_map(|line| {
+        line.to_ascii_lowercase()
+            .strip_prefix("content-length: ")
+            .and_then(|value| value.parse::<usize>().ok())
+    }) else {
+        assert!(
+            line.starts_with("GET "),
+            "a {line} carries no Content-Length"
+        );
+        return (line, None);
+    };
     while bytes.len() - header_end < length {
         let count = stream.read(&mut chunk).expect("fixture request body");
         assert!(count > 0, "fixture request ended before its declared body");
@@ -3068,12 +3278,13 @@ fn read_http_json(stream: &mut impl Read) -> Value {
     // Named rather than asserted away: this fixture's only client is the binary under
     // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
     // what says which one.
-    serde_json::from_slice(body).unwrap_or_else(|problem| {
+    let body = serde_json::from_slice(body).unwrap_or_else(|problem| {
         panic!(
             "fixture request body is not JSON ({problem}): {}",
             String::from_utf8_lossy(body)
         )
-    })
+    });
+    (line, Some(body))
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.
@@ -3977,7 +4188,13 @@ fn linear_response(
         } else {
             json!([])
         };
-        return Ok(json!({"teams":{"nodes":teams},
+        // The workspace the credential belongs to, which a source declared private is verified
+        // against; a journey withholding it sets `_linear_organization` to null.
+        let organization = match data.get("_linear_organization") {
+            None => json!({"id":"ORG-1"}),
+            Some(held) => held.clone(),
+        };
+        return Ok(json!({"organization":organization,"teams":{"nodes":teams},
             "projectStatuses":{"nodes":data["_linear_project_statuses"],
                 "pageInfo":{"hasNextPage":false}}}));
     }

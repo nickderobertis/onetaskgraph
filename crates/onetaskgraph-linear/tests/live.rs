@@ -290,6 +290,7 @@ async fn drive_every_declared_capability(
         updated_at: None,
         metadata: BTreeMap::new(),
         repositories: vec![],
+        classification: Default::default(),
     };
     let task = |name: &str, status: &Status, under: Option<&NativeId>, labels: Vec<Label>| Task {
         id: NativeId("live-source-item".into()),
@@ -308,6 +309,7 @@ async fn drive_every_declared_capability(
         repositories: vec![],
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     };
 
     let alpha_id = source
@@ -697,6 +699,7 @@ async fn drive_follow_ups(
         repositories: Vec::new(),
         delivers: Vec::new(),
         delivered_by: Vec::new(),
+        classification: Default::default(),
     };
     // `caller.live` is a key Linear autolinks anywhere but a code span, and `caller.site`
     // holds a URL-like value, an emphasis-shaped one and an array: each is something Linear
@@ -825,6 +828,7 @@ async fn drive_follow_ups(
                 updated_at: None,
                 metadata: serde_json::from_value(json!({"caller.live": tag})).unwrap_or_default(),
                 repositories: Vec::new(),
+                classification: Default::default(),
             },
             depends_on: Vec::new(),
         })
@@ -1018,6 +1022,7 @@ async fn drive_documents(
             .into_iter()
             .collect(),
         repositories: vec![],
+        classification: Default::default(),
     };
     let write = |item: Document| ItemWrite {
         target: None,

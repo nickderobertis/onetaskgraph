@@ -54,3 +54,12 @@ budgets:
     unit: percent
     direction: max
     threshold: 12.5
+  - id: visibility-write-requests
+    description: >-
+      An inner measure of headroom on a shared board token that no check may reach: the requests a 102-write plan copy onto a board declared private spends reading the board's and each issue repository's visibility. It protects that token's allowance from a third read per write.
+    labels: [github]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 204

@@ -49,6 +49,7 @@ pub use clock::{
     process_clock,
 };
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
+pub use engine::boundary;
 pub use engine::{
     Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup,
     CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered,

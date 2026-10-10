@@ -15,10 +15,13 @@
 //! plugins: `delivered_by` lives on the delivered task, in its own source, and every
 //! evaluation reads the deliverers afresh.
 
-use onetaskgraph_plugin_api::{SourceError, SourceName, Status, StatusCategory, Task, TaskRef};
+use onetaskgraph_plugin_api::{
+    Classification, SourceError, SourceName, Status, StatusCategory, Task, TaskRef,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::boundary::{Exposure, Held};
 use super::{ConfiguredSource, Engine, EngineError, Qualified};
 use crate::resolve::ResolvedSource;
 use crate::{Failure, GlobalId};
@@ -114,6 +117,14 @@ impl Engine {
         category: StatusCategory,
     ) -> Result<TaskStatusSet, EngineError> {
         let source = self.status_writable(&id.source)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::metadata([category_name(category)]),
+        )
+        .await?;
         let no_such_task = || EngineError::NoSuchTask { id: id.to_string() };
         // One call answering the task as it now reads, rather than a read and then a write: a
         // source whose status write answers the whole task saves the read, and every other
@@ -127,7 +138,13 @@ impl Engine {
         let status = task.status.clone();
         let delivers = targets(&task.delivers, &id.source);
         let delivered = self
-            .deliver(id, status.category, &delivers, &delivers)
+            .deliver(
+                id,
+                task.classification,
+                status.category,
+                &delivers,
+                &delivers,
+            )
             .await;
         Ok(TaskStatusSet {
             id: id.clone(),
@@ -138,9 +155,14 @@ impl Engine {
 
     /// Keep every task `deliverer` delivers `now`, and every one it delivered `before` and
     /// dropped, in step with it — one entry each, in that order.
+    ///
+    /// `classification` is the deliverer's own: a delivered task anywhere not declared private
+    /// is never handed the id of one classified private, nor of one in a source declared
+    /// private, in its `delivered_by` (see [`Engine::withholds`]).
     pub(crate) async fn deliver(
         &self,
         deliverer: &GlobalId,
+        classification: Classification,
         category: StatusCategory,
         now: &[GlobalId],
         before: &[GlobalId],
@@ -158,7 +180,10 @@ impl Engine {
         }
         let mut delivered = Vec::with_capacity(tickets.len());
         for (ticket, kept) in tickets {
-            delivered.push(self.evaluate(deliverer, category, ticket, kept).await);
+            delivered.push(
+                self.evaluate(deliverer, classification, category, ticket, kept)
+                    .await,
+            );
         }
         delivered
     }
@@ -168,6 +193,7 @@ impl Engine {
     async fn evaluate(
         &self,
         deliverer: &GlobalId,
+        classification: Classification,
         category: StatusCategory,
         ticket: &GlobalId,
         kept: bool,
@@ -239,11 +265,60 @@ impl Engine {
             .into_iter()
             .filter(|other| !pruned.contains(other))
             .collect();
-        if kept_by != held {
-            let list: Vec<TaskRef> = kept_by
+        // What the ticket's own record holds of them: a deliverer it withholds still counts
+        // toward the rule, and is kept only in the deliverer's own `delivers`.
+        let private = if classification == Classification::Private {
+            std::slice::from_ref(deliverer)
+        } else {
+            &[]
+        };
+        let written: Vec<&GlobalId> = kept_by
+            .iter()
+            .filter(|other| !self.withholds(&ticket.source, other, private))
+            .collect();
+        // The ticket is held to what it inherits as well as its record: while the boundary is
+        // active, the project it is filed under.
+        let ticket_class = match &task.project {
+            Some(filed) if self.boundary_active() => {
+                match self
+                    .source_project_class(
+                        &GlobalId::new(ticket.source.clone(), filed.clone()),
+                        &mut std::collections::HashMap::new(),
+                    )
+                    .await
+                {
+                    Ok(inherited) => task.classification.strictest(inherited),
+                    // Unclassified is held private where the ticket's source is, and refused
+                    // anywhere else.
+                    Err(EngineError::ProjectUnclassified { .. })
+                        if self.declared(&ticket.source)
+                            == crate::config::SourceVisibility::Private =>
+                    {
+                        Classification::Private
+                    }
+                    Err(error) => return entry(failed(Some(from), &error), Vec::new()),
+                }
+            }
+            _ => task.classification,
+        };
+        if !written.iter().copied().eq(&held) {
+            let list: Vec<TaskRef> = written
                 .iter()
                 .map(|other| TaskRef::qualified(&other.source, &other.native))
                 .collect();
+            if let Err(error) = self
+                .admit_known(
+                    source,
+                    &ticket.to_string(),
+                    &ticket.native,
+                    ticket_class,
+                    &task.repositories,
+                    &Exposure::metadata(list.iter().map(ToString::to_string)),
+                )
+                .await
+            {
+                return entry(failed(Some(from), &error), Vec::new());
+            }
             match source
                 .source()
                 .set_delivered_by(&ticket.native, &list)
@@ -268,6 +343,19 @@ impl Engine {
         let Some(to) = settled(&categories).filter(|to| *to != from) else {
             return entry(DeliveryOutcome::Unchanged { from }, pruned);
         };
+        if let Err(error) = self
+            .admit_known(
+                source,
+                &ticket.to_string(),
+                &ticket.native,
+                ticket_class,
+                &task.repositories,
+                &Exposure::metadata([category_name(to)]),
+            )
+            .await
+        {
+            return entry(failed(Some(from), &error), pruned);
+        }
         match source.source().set_task_status(&ticket.native, to).await {
             Ok(Some(status)) => entry(
                 DeliveryOutcome::Written {
@@ -404,4 +492,12 @@ pub(super) fn source_failed(source: &ResolvedSource, error: SourceError) -> Engi
         name: source.name().to_string(),
         error,
     }
+}
+
+/// A category as the wire spells it, for a check reading what a status write carries.
+fn category_name(category: StatusCategory) -> String {
+    serde_json::to_value(category)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }

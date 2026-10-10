@@ -1210,6 +1210,7 @@ name = "onetaskgraph-e2e"
 version = "0.3.11"
 dependencies = [
  "assert_cmd",
+ "async-trait",
  "jsonschema",
  "onetaskgraph-core",
  "onetaskgraph-e2e-support",

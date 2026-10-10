@@ -3926,6 +3926,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
                 onetaskgraph_plugin_api::Repository::try_from("github.com/acme/work".to_owned())
                     .expect("an origin"),
             ],
+            classification: Default::default(),
         },
         depends_on: Vec::new(),
     };
@@ -4054,6 +4055,7 @@ async fn a_document_write_refuses_by_name_what_this_source_cannot_carry() {
         updated_at: None,
         metadata: Default::default(),
         repositories: Vec::new(),
+        classification: Default::default(),
     };
 
     // A label, which Linear's own document type has no field for.
@@ -6657,6 +6659,7 @@ async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_content
                 .into_iter()
                 .collect(),
                 repositories: Vec::new(),
+                classification: Default::default(),
             },
             depends_on: Vec::new(),
         })

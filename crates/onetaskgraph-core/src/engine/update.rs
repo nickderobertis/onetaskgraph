@@ -18,6 +18,7 @@ use onetaskgraph_plugin_api::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::boundary::{Exposure, Held};
 use super::copy::{Spent, readings, spent_between};
 use super::delivery::{Delivered, qualified_task, source_failed, targets};
 use super::narrow::holds_priority;
@@ -93,6 +94,44 @@ impl Engine {
                 .map(|edges| near_edges(edges, &id.native, &id.source)),
             ..update.clone()
         };
+        // Each reference as the qualified id it names: a native one names a task of this source.
+        let qualified = |named: String| {
+            named
+                .parse::<GlobalId>()
+                .map_err(|_| EngineError::ReferenceUnclassified {
+                    item: id.to_string(),
+                    reference: named.clone(),
+                    destination: id.source.to_string(),
+                    why: "it is not a qualified id".to_owned(),
+                })
+        };
+        let mut references = Vec::new();
+        for edge in update.depends_on.iter().flatten() {
+            references.push((
+                if edge.to.is_qualified() {
+                    qualified(edge.to.id().to_owned())?
+                } else {
+                    GlobalId::new(id.source.clone(), NativeId(edge.to.id().to_owned()))
+                },
+                edge.to.kind,
+            ));
+        }
+        for entry in update.delivers.iter().flatten() {
+            references.push((
+                qualified(entry.in_source(&id.source).as_str().to_owned())?,
+                onetaskgraph_plugin_api::ItemKind::Task,
+            ));
+        }
+        self.refuse_private_references(&id.source, &id.to_string(), &references)
+            .await?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::of_update(&update),
+        )
+        .await?;
         let before = readings(&[source]).await;
         let outcome = source
             .source()
@@ -103,8 +142,14 @@ impl Engine {
         let delivered = if update.status.is_some() || update.delivers.is_some() {
             let now = targets(&outcome.task.delivers, &id.source);
             let dropped = targets(&outcome.delivers_before, &id.source);
-            self.deliver(id, outcome.task.status.category, &now, &dropped)
-                .await
+            self.deliver(
+                id,
+                outcome.task.classification,
+                outcome.task.status.category,
+                &now,
+                &dropped,
+            )
+            .await
         } else {
             Vec::new()
         };
