@@ -1449,9 +1449,12 @@ is not private; the correspondence is kept on the private side instead. A depend
 end, a task delivered and a delivering task each name their item by its source, so the same
 holds for them, whether or not any term list knows that source's name: a copy into a source
 not declared private leaves out every dependency edge and `delivers` entry naming an item of a
-source that is, or one classified private, and a delivered task there is never given such a
-deliverer in its `delivered_by` — the rule still moves it, and the private item keeps the
-relationship in its own record. Between public items nothing is left out. A `--depends-on` or
+source that is — which is where every item classified private lands — and a delivered task
+there is never given a deliverer of such a source, or one classified private, in its
+`delivered_by` — the rule still moves it, and the private item keeps the relationship in its
+own record. Between public items nothing is left out. A copy does not read the far end of an
+edge it does not carry, so an item classified private by hand in a source not declared private
+is withheld only once it is copied somewhere declared private. A `--depends-on` or
 `--delivers` naming such an item is the caller asking for it to be written, so that write is
 refused before anything is written rather than quietly answering something else.
 
