@@ -4849,13 +4849,7 @@ fn outgoing(
     }
 }
 
-/// The id a created item is offered to the destination under.
-///
-/// A task whose id is `<its project's id>/<rest>` is offered as `<rest>` under the
-/// destination project it is filed in, so a destination whose ids are paths files it in that
-/// project rather than the source's. Any other id, and every update, is left as it is. The
-/// `a_project_copied_*` journeys in `crates/onetaskgraph-e2e/tests/e2e/copy.rs` hold the Markdown
-/// plugin's id shape to this rule.
+/// Who may read `item`, as its own record says.
 fn classification_of(item: &Item) -> Classification {
     match item {
         Item::Task(task) => task.classification,
@@ -4911,6 +4905,13 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
     ))
 }
 
+/// The id a created item is offered to the destination under.
+///
+/// A task whose id is `<its project's id>/<rest>` is offered as `<rest>` under the
+/// destination project it is filed in, so a destination whose ids are paths files it in that
+/// project rather than the source's. Any other id, and every update, is left as it is. The
+/// `a_project_copied_*` journeys in `crates/onetaskgraph-e2e/tests/e2e/copy.rs` hold the Markdown
+/// plugin's id shape to this rule.
 fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
     if let (Item::Task(task), Some(filed)) = (item, filed)
         && let Some(own) = &task.project

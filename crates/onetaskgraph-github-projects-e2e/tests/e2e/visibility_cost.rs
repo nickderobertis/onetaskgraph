@@ -42,7 +42,11 @@ pub(super) const WORKLOAD: &str = "plan-copy-1-project-100-tasks-1-document";
 #[derive(Default)]
 struct Pairing {
     waiting: usize,
+    /// The pairs of reads that were in flight together, one per write that sent its two at once.
     generation: u64,
+    /// The reads that waited for a partner and none arrived: a write that sent them one after
+    /// the other.
+    alone: u64,
     /// The virtual intervals the reads were delayed over, one per pair.
     intervals: Vec<(Duration, Duration)>,
 }
@@ -77,6 +81,12 @@ impl VisibilityBoard {
             }
         });
         Self { endpoint, pairing }
+    }
+
+    /// How many pairs of reads were in flight together, and how many reads arrived alone.
+    fn overlap(&self) -> (u64, u64) {
+        let pairing = self.pairing.0.lock().expect("not poisoned");
+        (pairing.generation, pairing.alone)
     }
 
     /// The simulated seconds the visibility reads held the copy for.
@@ -134,6 +144,7 @@ fn serve(
             if state.generation == generation {
                 // Alone after all: it is delayed alone.
                 state.waiting = 0;
+                state.alone += 1;
             }
         }
         drop(state);
@@ -337,8 +348,11 @@ fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
     assert_eq!(by_read["project"], json!(WRITES), "{by_read}");
     assert_eq!(by_read["repository"], json!(WRITES), "{by_read}");
     assert_eq!(by_write, json!({"project": 2, "task": 200, "document": 2}));
-    assert!(
-        (seconds - WRITES as f64 * READ.as_secs_f64()).abs() < 1e-6,
-        "a write's two reads overlap: {seconds}"
+    // And each write sends its two reads together: both are in flight at once, never one
+    // after the other.
+    assert_eq!(
+        front.overlap(),
+        (WRITES, 0),
+        "pairs in flight together, reads alone"
     );
 }

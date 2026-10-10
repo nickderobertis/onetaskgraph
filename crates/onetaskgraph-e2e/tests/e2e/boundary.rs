@@ -753,6 +753,126 @@ fn a_private_document_alone_takes_its_project_and_every_public_task_in_it_to_the
 }
 
 #[test]
+fn a_public_classification_route_places_a_public_item_before_any_repository_route() {
+    // `vault` sends public work to `site` by classification, and work of `openco` repositories
+    // to `plan` by repository; a public item of an `openco` repository matches both.
+    let store = Store::new(
+        Some(registered),
+        json!({"vault": {"routes": [
+            {"repositories": ["github.com/openco/*"], "to": "plan"},
+            {"classification": "public", "to": "site"},
+        ]}}),
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        &format!("title: Open work\nstatus: todo\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "closed",
+        &format!(
+            "title: Closed work\nstatus: todo\nclassification: private\nrepositories: [{OPEN}]"
+        ),
+        PLAIN,
+    );
+    let report: Value =
+        serde_json::from_str(&store.ok(&["task", "copy", "plan:open", "--to", "vault", "--json"]))
+            .expect("a copy report");
+    assert_eq!(
+        report["items"][0]["placed"]["destination"], "site",
+        "{report:#}"
+    );
+    assert_eq!(report["items"][0]["placed"]["route"], 1, "{report:#}");
+    assert!(one_file(&store, "site", "tasks").contains("Open work"));
+    // A private item is never sent by a route to a source not declared private: the public
+    // entry is passed over, and the repository entry places it.
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "copy",
+        "plan:closed",
+        "--to",
+        "vault",
+        "--json",
+    ]))
+    .expect("a copy report");
+    assert_eq!(
+        report["items"][0]["placed"]["destination"], "plan",
+        "{report:#}"
+    );
+    assert_eq!(report["items"][0]["placed"]["route"], 0, "{report:#}");
+    // `sources route` answers both placements from configuration alone.
+    for (classification, destination) in [("public", "site"), ("private", "plan")] {
+        let route: Value = serde_json::from_str(&store.ok(&[
+            "sources",
+            "route",
+            "vault",
+            "--classification",
+            classification,
+            "--repository",
+            OPEN,
+            "--json",
+        ]))
+        .expect("a route");
+        assert_eq!(
+            route["destination"], destination,
+            "{classification}: {route:#}"
+        );
+    }
+}
+
+#[test]
+fn a_private_document_replaced_by_an_explicitly_public_request_stays_private() {
+    // An inactive store, so nothing but the record being replaced says the document is private:
+    // its project is public, and no declaration or policy reads it.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    sandbox.project_document(
+        &json!({"sources": {"plan": {"plugin": "local-md", "config": {"root": plan}}}}).to_string(),
+    );
+    let store = Store {
+        sandbox,
+        onevcs: None,
+    };
+    store.record("plan", "projects", "p", "title: P\nstatus: todo", PLAIN);
+    store.record(
+        "plan",
+        "documents",
+        "secret",
+        "title: Secret\nproject: p\nclassification: private",
+        PLAIN,
+    );
+    let held = std::fs::read(store.folder("plan").join("documents/secret.md")).expect("held");
+    let body = store.body(PLAIN);
+    // The replacement keeps the private classification it replaces, so it is held to it — a
+    // public project holds no private member — rather than written as public.
+    let (kind, said) = store.refused(&[
+        "document",
+        "create",
+        "plan",
+        "--project",
+        "p",
+        "--id",
+        "secret",
+        "--title",
+        "Replaced",
+        "--body-file",
+        &body,
+        "--classification",
+        "public",
+    ]);
+    assert_eq!(kind, "private-member", "{said}");
+    assert_eq!(
+        std::fs::read(store.folder("plan").join("documents/secret.md")).expect("held"),
+        held,
+        "the private document is as it was"
+    );
+}
+
+#[test]
 fn a_mixed_project_is_refused_whole_where_no_private_source_is_reachable() {
     let store = Store::new(Some(registered), json!({}));
     store.record(
