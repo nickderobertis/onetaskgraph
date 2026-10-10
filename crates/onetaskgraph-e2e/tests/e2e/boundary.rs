@@ -236,11 +236,17 @@ fn files_under(store: &Store, folder: &str) -> Vec<String> {
     tree(&store.folder(folder)).into_keys().collect()
 }
 
-/// Whether `site` holds nothing but the project [`Store::public_project_p`] recorded.
-fn site_holds_only_p(store: &Store) -> bool {
-    files_under(store, "site")
-        .iter()
-        .all(|path| path.ends_with("projects/p.md"))
+/// Assert `site` holds nothing but the project [`Store::public_project_p`] recorded, naming
+/// every file it does hold otherwise. The path is built the way the record was, so it is spelled
+/// with the platform's separator.
+fn assert_site_holds_only_p(store: &Store) {
+    let p = store
+        .folder("site")
+        .join("projects")
+        .join("p.md")
+        .display()
+        .to_string();
+    assert_eq!(files_under(store, "site"), vec![p], "site holds only p");
 }
 
 fn one_file(store: &Store, folder: &str, kind: &str) -> String {
@@ -1321,7 +1327,7 @@ fn an_asset_named_after_a_private_repository_is_refused_onto_a_public_source() {
         &image.display().to_string(),
     ]);
     assert_eq!(kind, "boundary-refused", "{said}");
-    assert!(site_holds_only_p(&store));
+    assert_site_holds_only_p(&store);
 }
 
 #[test]
@@ -1559,7 +1565,7 @@ async fn a_linking_caller_s_missing_or_unreachable_policy_never_approves_a_publi
             .expect_err("unknown is private");
         assert_eq!(kind_of(&refused), "private-member");
     }
-    assert!(site_holds_only_p(&store));
+    assert_site_holds_only_p(&store);
 }
 
 #[tokio::test]
