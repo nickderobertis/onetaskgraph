@@ -2960,17 +2960,37 @@ impl Engine {
                     .map_err(unread)?
                     .ok_or_else(missing)?;
                 let own = self.classify(task.classification, &task.repositories).await;
-                Ok(match &task.project {
-                    Some(filed) => own.strictest(
-                        self.source_project_class(
-                            &GlobalId::new(far.source.clone(), filed.clone()),
-                            known,
-                        )
+                let Some(filed) = &task.project else {
+                    return Ok(own);
+                };
+                // A task that names a project inherits from it, so that project has to be there
+                // to read: one its source cannot read or does not hold leaves the task
+                // unclassified, never classified as though it named none.
+                let project = GlobalId::new(far.source.clone(), filed.clone());
+                if !known.contains_key(&project) {
+                    if !source.source().capabilities().projects.is_native() {
+                        return Err(format!(
+                            "it is filed under project {project}, and its source cannot read \
+                             projects"
+                        ));
+                    }
+                    if source
+                        .source()
+                        .get_project(filed)
+                        .await
+                        .map_err(unread)?
+                        .is_none()
+                    {
+                        return Err(format!(
+                            "it is filed under project {project}, which its source does not hold"
+                        ));
+                    }
+                }
+                Ok(own.strictest(
+                    self.source_project_class(&project, known)
                         .await
                         .map_err(|error| error.to_string())?,
-                    ),
-                    None => own,
-                })
+                ))
             }
             ItemKind::Project => {
                 if let Some(class) = known.get(far) {

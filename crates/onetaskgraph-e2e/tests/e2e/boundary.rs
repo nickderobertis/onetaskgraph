@@ -3334,8 +3334,9 @@ fn a_project_replaced_over_one_holding_a_private_member_is_held_private() {
 }
 
 #[test]
-fn an_external_task_whose_project_its_source_does_not_hold_is_classified_by_its_own_record() {
-    // Nothing inherits from a project that is not there, so `stray` is what its record says.
+fn an_external_task_naming_a_project_its_source_does_not_hold_is_refused_before_any_write() {
+    // `stray` names a project `shelf` does not hold, so what it inherits cannot be read: it is
+    // not classified by ignoring that project. `alone` names none, and its own record decides.
     let store = Store::laid(
         Some(registered),
         |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
@@ -3350,23 +3351,32 @@ fn an_external_task_whose_project_its_source_does_not_hold_is_classified_by_its_
     store.record(
         "shelf",
         "tasks",
-        "stray-secret",
-        "title: Stray secret\nstatus: todo\nproject: gone-plan\nclassification: private",
+        "alone",
+        "title: Alone\nstatus: todo",
         PLAIN,
     );
     store.record(
         "plan",
         "tasks",
-        "open",
-        "title: Open\nstatus: todo\n\
-         depends_on: [{id: \"shelf:stray\", item: task}, {id: \"shelf:stray-secret\", item: task}]",
+        "dangling",
+        "title: Dangling\nstatus: todo\ndepends_on: [{id: \"shelf:stray\", item: task}]",
         PLAIN,
     );
-    store.ok(&["task", "copy", "plan:open", "--to", "site"]);
-    let landed = held_text(&store, "site");
-    assert!(
-        landed.contains("shelf:stray\n") || landed.contains("shelf:stray\""),
-        "{landed}"
+    store.record(
+        "plan",
+        "tasks",
+        "standalone",
+        "title: Standalone\nstatus: todo\ndepends_on: [{id: \"shelf:alone\", item: task}]",
+        PLAIN,
     );
-    assert!(!landed.contains("shelf:stray-secret"), "{landed}");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["task", "copy", "plan:dangling", "--to", "site"]);
+    assert_eq!(kind, "reference-unclassified", "{said}");
+    assert!(
+        said.contains("shelf:stray") && said.contains("gone-plan"),
+        "{said}"
+    );
+    assert_eq!(store.tree(), before, "nothing was written");
+    store.ok(&["task", "copy", "plan:standalone", "--to", "site"]);
+    assert!(held_text(&store, "site").contains("shelf:alone"));
 }
