@@ -34,10 +34,7 @@ beforeAll(() => {
   // Each holds the project `p` its items are filed under, public on `site` and private on
   // `plan`: while the boundary is active, a project its source does not hold is no project to
   // file under.
-  for (const [folder, classification] of [
-    ["site", "public"],
-    ["plan", "private"],
-  ] as const) {
+  for (const [folder, classification] of Object.entries({ site: "public", plan: "private" })) {
     mkdirSync(resolve(root, folder, "projects"), { recursive: true });
     writeFileSync(
       resolve(root, folder, "projects", "p.md"),
