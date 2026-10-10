@@ -562,7 +562,13 @@ impl Engine {
             .classify(request.classification, &request.repositories)
             .await;
         let classification = self
-            .filed_under(named, &request.project, "the new task", classification)
+            .filed_under(
+                named,
+                &request.project,
+                "the new task",
+                classification,
+                super::boundary::Absent::Unclassifies,
+            )
             .await?;
         // A task goes where its classification and its repositories route it from the source
         // named. Routed away, it is filed under the named project's member project in the
@@ -777,7 +783,13 @@ impl Engine {
         );
         let classification = self.classify(declared, &request.repositories).await;
         let classification = self
-            .filed_under(source, &request.project, "the document", classification)
+            .filed_under(
+                source,
+                &request.project,
+                "the document",
+                classification,
+                super::boundary::Absent::Unclassifies,
+            )
             .await?;
         let write = ItemWrite {
             target,

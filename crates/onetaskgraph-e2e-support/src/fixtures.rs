@@ -948,9 +948,10 @@ struct GitHubBoard {
     /// Operations this board refuses once after answering that many requests carrying them —
     /// so a journey can let a read's first pages land and refuse a later one.
     refusing_after: Vec<(&'static str, usize)>,
-    /// Items this board stops holding after answering that many requests naming them by id —
-    /// so a journey can let a command read one and then find it gone.
-    vanishing: Vec<(String, usize)>,
+    /// Items this board replaces after answering that many requests naming them by id — with
+    /// another item, or with nothing — so a journey can let a command read one and then find it
+    /// changed or gone.
+    replacing: Vec<(String, usize, Option<Value>)>,
     blocked_by: Vec<(String, Vec<String>)>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
@@ -1165,15 +1166,16 @@ impl GitHubBoardFields {
             .push((operation, answered));
     }
 
-    /// Answer the next `answered` requests naming the item `id`, then stop holding it — a
-    /// person deleting it part way through a command, so every later read finds nothing there.
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: the items it removes are the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_after`, and a suite could not add it from outside.
-    pub fn vanish_after(&self, id: &str, answered: usize) {
+    /// Answer the next `answered` requests naming the item `id`, then hold `replacement` in its
+    /// place — or nothing at all — so every later read finds it as a person changed or deleted it
+    /// part way through a command.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: the items it replaces are the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_after`, and a suite could not add it from outside.
+    pub fn replace_after(&self, id: &str, answered: usize, replacement: Option<Value>) {
         self.board
             .lock()
             .unwrap()
-            .vanishing
-            .push((id.to_owned(), answered));
+            .replacing
+            .push((id.to_owned(), answered, replacement));
     }
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
@@ -1960,7 +1962,7 @@ fn github_projects_board_at(
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
-        vanishing: Vec::new(),
+        replacing: Vec::new(),
         blocked_by: github_blockers(),
         created: 0,
         lagging_reads,
@@ -2066,12 +2068,13 @@ fn github_projects_board_at(
                 served.documents.push(query.to_owned());
                 served.variables.push(variables.clone());
                 let named = variables["id"].as_str().unwrap_or_default().to_owned();
-                if let Some(at) = served.vanishing.iter().position(|(id, _)| *id == named) {
-                    if served.vanishing[at].1 == 0 {
-                        served.vanishing.remove(at);
+                if let Some(at) = served.replacing.iter().position(|(id, ..)| *id == named) {
+                    if served.replacing[at].1 == 0 {
+                        let (_, _, replacement) = served.replacing.remove(at);
                         served.items.retain(|item| item["id"] != named.as_str());
+                        served.items.extend(replacement);
                     } else {
-                        served.vanishing[at].1 -= 1;
+                        served.replacing[at].1 -= 1;
                     }
                 }
             }

@@ -37,8 +37,15 @@ def run[T](call: Coroutine[object, object, T]) -> T:
 
 def store(binary: Path, tmp_path: Path) -> tuple[Client, Path]:
     """A client over a public folder `site` and a private one `plan`, and the check's record."""
-    for folder in ("site", "plan"):
-        (tmp_path / folder).mkdir()
+    # Each holds the project `p` its items are filed under, public on `site` and private on
+    # `plan`: while the boundary is active, a project its source does not hold is no project to
+    # file under.
+    for folder, classification in (("site", "public"), ("plan", "private")):
+        (tmp_path / folder / "projects").mkdir(parents=True)
+        (tmp_path / folder / "projects" / "p.md").write_text(
+            f"---\ntitle: P\nstatus: todo\nclassification: {classification}\n---\n",
+            encoding="utf-8",
+        )
     (tmp_path / "onetaskgraph.yaml").write_text(
         json.dumps(
             {
@@ -123,5 +130,5 @@ def test_a_private_item_stays_in_a_private_source_and_a_refusal_reaches_the_call
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.task_create("site", "p", "Refused", body="REFUSE this", term_scope=[]))
     assert "term of a private repository in its text" in str(refused.value)
-    assert not list((tmp_path / "site").rglob("*.md"))
+    assert not list((tmp_path / "site" / "tasks").rglob("*.md"))
     assert scopes(record) == [[]]

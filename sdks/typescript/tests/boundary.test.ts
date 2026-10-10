@@ -31,7 +31,19 @@ let client: OnetaskgraphClient;
 
 beforeAll(() => {
   root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-boundary-"));
-  for (const folder of ["site", "plan"]) mkdirSync(resolve(root, folder));
+  // Each holds the project `p` its items are filed under, public on `site` and private on
+  // `plan`: while the boundary is active, a project its source does not hold is no project to
+  // file under.
+  for (const [folder, classification] of [
+    ["site", "public"],
+    ["plan", "private"],
+  ] as const) {
+    mkdirSync(resolve(root, folder, "projects"), { recursive: true });
+    writeFileSync(
+      resolve(root, folder, "projects", "p.md"),
+      `---\ntitle: P\nstatus: todo\nclassification: ${classification}\n---\n`,
+    );
+  }
   record = resolve(root, "checked.jsonl");
   writeFileSync(
     resolve(root, "onetaskgraph.yaml"),

@@ -2721,6 +2721,7 @@ impl Engine {
                             filed,
                             &item.source.to_string(),
                             item.classification,
+                            super::boundary::Absent::Carried,
                         )
                         .await?;
                     let declared = self.declared(&item.to);
@@ -2968,6 +2969,10 @@ impl Engine {
             return Ok(Classification::Public);
         };
         if let Some(class) = cached {
+            // Read again, its record may have tightened since; nothing loosens it.
+            let class =
+                class.strictest(self.classify(held.classification, &held.repositories).await);
+            known.insert(project.clone(), class);
             return Ok(class);
         }
         let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;

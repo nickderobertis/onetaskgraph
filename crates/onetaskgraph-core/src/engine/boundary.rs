@@ -890,15 +890,46 @@ impl Engine {
     /// is not, which is refused under a public project either way. A public item in an inactive
     /// store inherits nothing, although its project may be private by hand: reading the project
     /// would be a request a store that has not opted in never made.
+    ///
+    /// While the boundary is active and `source` is not declared private, what the project is
+    /// is everything it holds — its record, its repositories, its tasks and its documents. A
+    /// project `source` does not hold, or cannot read, is [`EngineError::ProjectUnclassified`]
+    /// for an item `Absent::Unclassifies`, which is a create naming it; a copy carries a
+    /// project id the destination holds no counterpart of as an opaque value, its item already
+    /// classified at its source with that project, so `Absent::Carried` inherits nothing from
+    /// it. A source declared private takes the item whatever the project is, so it is spared
+    /// that reading.
     pub(crate) async fn filed_under(
         &self,
         source: &ResolvedSource,
         project: &NativeId,
         item: &str,
         classification: Classification,
+        absent: Absent,
     ) -> Result<Classification, EngineError> {
         if !self.boundary.active && classification.is_public() {
             return Ok(classification);
+        }
+        if self.boundary.active && self.declared(source.name()) != SourceVisibility::Private {
+            let filed = match self
+                .source_project_class(
+                    &crate::GlobalId::new(source.name().clone(), project.clone()),
+                    &mut std::collections::HashMap::new(),
+                )
+                .await
+            {
+                Err(EngineError::ProjectUnclassified { .. }) if absent == Absent::Carried => {
+                    return Ok(classification);
+                }
+                other => other?,
+            };
+            if classification == Classification::Private && filed.is_public() {
+                return Err(EngineError::PrivateMemberOfPublicProject {
+                    item: item.to_owned(),
+                    project: format!("{}:{}", source.name(), project),
+                });
+            }
+            return Ok(classification.strictest(filed));
         }
         let Some(held) = source
             .source()
@@ -1031,4 +1062,14 @@ pub(crate) enum Held {
     Task,
     Project,
     Document,
+}
+
+/// What [`Engine::filed_under`] makes of a project its destination does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Absent {
+    /// The item is created naming it, so what it inherits cannot be established.
+    Unclassifies,
+    /// A copy carries it as its source's opaque project id, and the item was already
+    /// classified at its source.
+    Carried,
 }

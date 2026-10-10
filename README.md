@@ -1478,8 +1478,10 @@ The refusals name what happened and what to do: `not-private-destination`,
 `boundary-unavailable`, `private-member`, `private-reference`, `reference-unclassified` and
 `project-unclassified` are their `--json` failure kinds. While the boundary is active, an item
 filed under a project its source does not hold, or cannot read, is unclassified rather than
-public: it reaches a source declared private as private, and every other write of it — a copy,
-a narrow write, a delivery — is refused as `project-unclassified` before anything is written.
+public: it reaches a source declared private as private, and every other write of it — a create,
+a copy, a narrow write, a delivery — is refused as `project-unclassified` before anything is
+written. A project found public earlier in the same command is read again before that answer is
+used, so one deleted, made unreadable or made private part way through is never taken as public.
 
 A private source and its routes need no checkout to live in: the user-level document,
 `$XDG_CONFIG_HOME/onetaskgraph/config.yaml`, is read beneath every project document, so a

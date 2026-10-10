@@ -163,6 +163,12 @@ impl Store {
         std::fs::write(&path, format!("---\n{front}\n---\n{body}\n")).expect("a record");
     }
 
+    /// Record the public project `p` on `site`, which a create there names — while the boundary
+    /// is active, a project its source does not hold is no project to file under.
+    fn public_project_p(&self) {
+        self.record("site", "projects", "p", "title: P\nstatus: todo", PLAIN);
+    }
+
     /// A body file holding `text`, for a create.
     fn body(&self, text: &str) -> String {
         let path = self
@@ -228,6 +234,13 @@ fn registered(home: &mut OnevcsHome) {
 
 fn files_under(store: &Store, folder: &str) -> Vec<String> {
     tree(&store.folder(folder)).into_keys().collect()
+}
+
+/// Whether `site` holds nothing but the project [`Store::public_project_p`] recorded.
+fn site_holds_only_p(store: &Store) -> bool {
+    files_under(store, "site")
+        .iter()
+        .all(|path| path.ends_with("projects/p.md"))
 }
 
 fn one_file(store: &Store, folder: &str, kind: &str) -> String {
@@ -362,6 +375,7 @@ fn an_inactive_store_still_refuses_an_explicitly_private_item_anywhere_not_decla
 #[test]
 fn a_task_of_a_private_or_unknown_repository_is_refused_onto_a_public_source() {
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     store.record(
         "plan",
         "tasks",
@@ -403,7 +417,9 @@ fn a_task_of_a_private_or_unknown_repository_is_refused_onto_a_public_source() {
         "--repository",
         A,
     ]);
-    assert_eq!(kind, "not-private-destination");
+    // Private by its repository, under the public project `p`: a public project never holds a
+    // private member, so that is what refuses it first.
+    assert_eq!(kind, "private-member");
     assert_eq!(store.tree(), before, "no refused write left anything");
     // A public repository's task, naming nothing private, is written.
     store.ok(&["task", "copy", "plan:public-repo", "--to", "site"]);
@@ -416,6 +432,7 @@ fn a_task_of_a_private_or_unknown_repository_is_refused_onto_a_public_source() {
 #[test]
 fn a_public_write_naming_a_private_repository_in_its_text_title_or_metadata_is_refused_neutrally() {
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     store.record(
         "plan",
         "tasks",
@@ -596,6 +613,7 @@ fn written(store: &Store, arguments: &[String]) {
 #[test]
 fn a_caller_supplied_term_scope_decides_which_private_repositories_terms_are_derived() {
     let mut store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     let a = store.body(A_TEXT);
     let b = store.body(B_TEXT);
     // Scoped to A: A's owner/name refuses, B's alone is written.
@@ -1285,6 +1303,7 @@ fn every_write_adding_to_a_private_item_held_by_a_public_source_is_refused() {
 #[test]
 fn an_asset_named_after_a_private_repository_is_refused_onto_a_public_source() {
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     let image = store.sandbox.config_home().join("quietharbor.png");
     std::fs::write(&image, onetaskgraph_e2e_support::images::png(7, 60_000)).expect("an image");
     let body = store.body("Diagram: ![flow](./quietharbor.png)");
@@ -1302,7 +1321,7 @@ fn an_asset_named_after_a_private_repository_is_refused_onto_a_public_source() {
         &image.display().to_string(),
     ]);
     assert_eq!(kind, "boundary-refused", "{said}");
-    assert!(files_under(&store, "site").is_empty());
+    assert!(site_holds_only_p(&store));
 }
 
 #[test]
@@ -1470,6 +1489,7 @@ fn kind_of(error: &onetaskgraph_core::EngineError) -> String {
 #[tokio::test]
 async fn a_linking_caller_s_own_policy_and_term_scope_reach_the_verdicts_the_command_line_does() {
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     let home = store
         .onevcs
         .as_ref()
@@ -1509,7 +1529,7 @@ async fn a_linking_caller_s_own_policy_and_term_scope_reach_the_verdicts_the_com
         .create_task(&task_on_site(PLAIN, &[A]))
         .await
         .expect_err("a private repository's task");
-    assert_eq!(kind_of(&refused), "not-private-destination");
+    assert_eq!(kind_of(&refused), "private-member");
     linked()
         .create_task(&task_on_site(PLAIN, &[OPEN]))
         .await
@@ -1519,6 +1539,7 @@ async fn a_linking_caller_s_own_policy_and_term_scope_reach_the_verdicts_the_com
 #[tokio::test]
 async fn a_linking_caller_s_missing_or_unreachable_policy_never_approves_a_public_write() {
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     for engine in [
         linked_engine(&store).with_write_policy(std::sync::Arc::new(
             onetaskgraph_core::boundary::MissingWritePolicy,
@@ -1536,9 +1557,9 @@ async fn a_linking_caller_s_missing_or_unreachable_policy_never_approves_a_publi
             .create_task(&task_on_site(PLAIN, &[OPEN]))
             .await
             .expect_err("unknown is private");
-        assert_eq!(kind_of(&refused), "not-private-destination");
+        assert_eq!(kind_of(&refused), "private-member");
     }
-    assert!(files_under(&store, "site").is_empty());
+    assert!(site_holds_only_p(&store));
 }
 
 #[tokio::test]
@@ -1554,6 +1575,7 @@ async fn a_linking_caller_s_policy_alone_activates_a_store_that_declares_nothing
         sandbox,
         onevcs: None,
     };
+    store.public_project_p();
     let inactive = linked_engine(&store);
     assert!(!inactive.boundary_active());
     inactive
@@ -1567,7 +1589,9 @@ async fn a_linking_caller_s_policy_alone_activates_a_store_that_declares_nothing
         .create_task(&task_on_site(PLAIN, &[]))
         .await
         .expect_err("a policy that cannot answer never approves");
-    assert_eq!(kind_of(&refused), "boundary-unavailable");
+    // The task the inactive store wrote under `p` names a repository this policy cannot answer
+    // for, so it reads private — and so does `p`, which holds it, and the task filed under it.
+    assert_eq!(kind_of(&refused), "not-private-destination");
     assert_eq!(
         files_under(&store, "site"),
         written,
@@ -2042,6 +2066,7 @@ fn a_reference_a_caller_names_to_a_private_source_is_refused_onto_a_public_one()
     // `--depends-on` or a `--delivers` is the caller's own request to write it, so leaving it
     // off would answer a different request — it is refused instead.
     let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
     store.record(
         "vault",
         "tasks",
@@ -3084,6 +3109,7 @@ fn a_reference_a_caller_names_to_an_item_private_by_record_or_inheritance_is_ref
         Some(registered),
         |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
     );
+    store.public_project_p();
     store.record(
         "shelf",
         "tasks",
@@ -3510,15 +3536,31 @@ fn a_document_created_public_under_a_private_project_is_held_private_and_refused
     assert_eq!(store.tree(), before, "nothing was written");
 }
 
-/// One item of the loopback board, in its own repository `repo`, filed under `parent`; a project
-/// when `project` is set.
-fn board_item(id: &str, parent: Option<&str>, project: bool) -> Value {
-    let body = if project {
-        format!(
-            "{PLAIN}\n\n<!-- onetaskgraph.metadata\n{{\"onetaskgraph.item_kind\":\"project\"}}\n-->"
-        )
-    } else {
+/// One item of the loopback board, in the public repository `openco/openwidget`, filed under
+/// `parent`; a project when `project` is set, and declaring `classification` when one is given.
+fn board_item(
+    id: &str,
+    parent: Option<&str>,
+    project: bool,
+    classification: Option<&str>,
+) -> Value {
+    let mut slot = serde_json::Map::new();
+    if project {
+        slot.insert("onetaskgraph.item_kind".to_owned(), json!("project"));
+    }
+    if let Some(classification) = classification {
+        slot.insert(
+            "onetaskgraph.classification".to_owned(),
+            json!(classification),
+        );
+    }
+    let body = if slot.is_empty() {
         PLAIN.to_owned()
+    } else {
+        format!(
+            "{PLAIN}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+            Value::Object(slot)
+        )
     };
     json!({"item": format!("ITEM-{id}"), "id": id, "type": "Issue", "title": id, "body": body,
            "state": "OPEN", "reason": null, "parent": parent, "repo": "openco/openwidget",
@@ -3533,9 +3575,9 @@ fn store_over_board() -> (Store, crate::fixtures::GitHubBoardFields) {
         let (config, board) = crate::fixtures::github_projects_with_items(
             sandbox,
             vec![
-                board_item("HOME-1", None, true),
-                board_item("W-1", Some("HOME-1"), false),
-                board_item("W-2", Some("HOME-1"), false),
+                board_item("HOME-1", None, true, None),
+                board_item("W-1", Some("HOME-1"), false, None),
+                board_item("W-2", Some("HOME-1"), false, None),
             ],
         );
         handle = Some(board);
@@ -3549,32 +3591,42 @@ fn store_over_board() -> (Store, crate::fixtures::GitHubBoardFields) {
 const ITEM_READ: &str = "query($id:ID!,$first:Int!,$nestedFirst:Int!";
 
 #[test]
-fn a_public_classification_cached_before_its_project_went_is_never_trusted() {
+fn a_public_classification_cached_before_its_project_changed_is_never_trusted() {
     // One copy reads `W-1`, then `HOME-1` and its members — classifying the project public and
     // keeping that for the rest of the command — then `W-2` itself, or `W-2` as what `plan:ref`
-    // names. Before that the board deletes `HOME-1`, or refuses to read it: nothing filed under
-    // it may then reach `site` on the strength of what was read before.
+    // names. Before that the board deletes `HOME-1`, refuses to read it, or has it made private:
+    // nothing filed under it may then reach `site` on the strength of what was read before. A
+    // copy withholds a reference to an item it reads as private, rather than refusing, so the
+    // last of these lands without it.
     type Make = fn(&crate::fixtures::GitHubBoardFields);
-    let cases: [(&str, Make); 2] = [
-        ("absent", |board| board.vanish_after("HOME-1", 2)),
-        ("unreadable", |board| board.refuse_after(ITEM_READ, 3)),
+    let cases: [(&str, Make, [Option<&str>; 2]); 3] = [
+        (
+            "absent",
+            |board| board.replace_after("HOME-1", 2, None),
+            [Some("project-unclassified"), Some("reference-unclassified")],
+        ),
+        (
+            "unreadable",
+            |board| board.refuse_after(ITEM_READ, 3),
+            [Some("refused"), Some("reference-unclassified")],
+        ),
+        (
+            "made private",
+            |board| {
+                board.replace_after(
+                    "HOME-1",
+                    2,
+                    Some(board_item("HOME-1", None, true, Some("private"))),
+                );
+            },
+            [Some("not-private-destination"), None],
+        ),
     ];
-    for (gone, make) in cases {
+    for (gone, make, expected) in cases {
         for (ids, expected) in [
-            (
-                ["board:W-1", "board:W-2"],
-                ["project-unclassified", "refused"],
-            ),
-            (
-                ["board:W-1", "plan:ref"],
-                ["reference-unclassified", "reference-unclassified"],
-            ),
+            (["board:W-1", "board:W-2"], expected[0]),
+            (["board:W-1", "plan:ref"], expected[1]),
         ] {
-            let expected = if gone == "absent" {
-                expected[0]
-            } else {
-                expected[1]
-            };
             let (store, board) = store_over_board();
             store.record(
                 "plan",
@@ -3588,6 +3640,24 @@ fn a_public_classification_cached_before_its_project_went_is_never_trusted() {
             let mut arguments = vec!["task", "copy"];
             arguments.extend(ids);
             arguments.extend(["--to", "site"]);
+            let served_before = board.served().len();
+            let Some(expected) = expected else {
+                store.ok(&arguments);
+                let landed = held_text(&store, "site");
+                assert!(landed.contains("W-1") && landed.contains("Ref"), "{landed}");
+                assert!(!landed.contains("board:W-2"), "{gone} {ids:?}: {landed}");
+                let reads: Vec<Value> = board.served()[served_before..]
+                    .iter()
+                    .filter(|(document, _)| document.contains(ITEM_READ))
+                    .map(|(_, variables)| variables["id"].clone())
+                    .collect();
+                assert_eq!(
+                    reads.last(),
+                    Some(&json!("HOME-1")),
+                    "{gone} {ids:?}: {reads:?}"
+                );
+                continue;
+            };
             let (kind, said) = store.refused(&arguments);
             assert_eq!(kind, expected, "{gone} {ids:?}: {said}");
             assert_eq!(store.tree(), before, "{gone} {ids:?}: nothing was written");
@@ -3614,4 +3684,71 @@ fn a_public_classification_cached_before_its_project_went_is_never_trusted() {
     store.ok(&["task", "copy", "board:W-1", "board:W-2", "--to", "site"]);
     let landed = held_text(&store, "site");
     assert!(landed.contains("W-1") && landed.contains("W-2"), "{landed}");
+}
+
+#[test]
+fn a_create_under_a_project_held_private_by_its_members_or_not_held_at_all_writes_nothing() {
+    // `mixed` reads public by its own record and is private by the task it holds; `gone` is not
+    // there to read. Neither may take a new public task or document on `site`.
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "site",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "inner",
+        "title: Inner\nstatus: todo\nproject: mixed\nclassification: private",
+        PLAIN,
+    );
+    let body = store.body(PLAIN);
+    let before = store.tree();
+    for (project, expected) in [
+        ("mixed", "not-private-destination"),
+        ("gone", "project-unclassified"),
+    ] {
+        for kind in ["task", "document"] {
+            let (refused, said) = store.refused(&[
+                kind,
+                "create",
+                "site",
+                "--project",
+                project,
+                "--title",
+                "Filed",
+                "--body-file",
+                &body,
+            ]);
+            assert_eq!(refused, expected, "{kind} under {project}: {said}");
+            assert_eq!(
+                store.tree(),
+                before,
+                "{kind} under {project}: nothing was written"
+            );
+        }
+    }
+    // A source declared private takes either, held private under the project that holds a
+    // private member.
+    store.record(
+        "vault",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.ok(&[
+        "task",
+        "create",
+        "vault",
+        "--project",
+        "mixed",
+        "--title",
+        "Filed",
+        "--body-file",
+        &body,
+    ]);
 }
