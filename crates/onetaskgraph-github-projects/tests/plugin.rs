@@ -18884,3 +18884,96 @@ async fn a_refused_field_write_stops_a_metadata_set_and_an_update_before_the_bod
     );
     untouched(&fixture, "task update");
 }
+
+#[tokio::test]
+async fn a_clear_rides_the_first_request_while_writes_past_six_follow_in_the_next() {
+    let (fixture, config) = eight_fields();
+    let source = || configured(&fixture.endpoint, config.clone());
+    let id = write_kind(source().as_ref(), Kind::Task, None, batch(0..8, "a"))
+        .await
+        .unwrap();
+    let before = fixture.documents().len();
+    // Seven moved and one cleared: six writes and the clear, then the seventh write.
+    write_kind(source().as_ref(), Kind::Task, Some(&id.0), batch(0..7, "b"))
+        .await
+        .unwrap();
+    let requests = fixture.documents()[before..]
+        .iter()
+        .filter(|document| *document == graphql::UPDATE_FIELDS)
+        .count();
+    assert_eq!(requests, 2);
+    let order = fixture
+        .seen()
+        .iter()
+        .filter(|call| {
+            call[0]
+                .as_str()
+                .is_some_and(|op| op.contains("ProjectV2ItemFieldValue"))
+        })
+        .map(|call| {
+            (
+                call[0].as_str().unwrap().to_owned(),
+                call[1]["fieldId"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = (0..6)
+        .map(|n| ("updateProjectV2ItemFieldValue", n))
+        .chain([
+            ("clearProjectV2ItemFieldValue", 7),
+            ("updateProjectV2ItemFieldValue", 6),
+        ])
+        .map(|(op, n)| (op.to_owned(), json!(format!("FIELD_b{n}"))))
+        .collect::<Vec<_>>();
+    assert_eq!(order[order.len() - 8..], expected);
+    for n in 0..7 {
+        assert_eq!(
+            text_of(&fixture, &id.0, &format!("FIELD_b{n}")),
+            Some(format!("b{n}"))
+        );
+    }
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_b7"), None);
+}
+
+#[tokio::test]
+async fn a_projected_value_follows_a_copy_over_a_board_draft() {
+    let fixture =
+        board(vec![Item::draft("DI_1", "a draft").status("Todo")]).with_field(host_field());
+    for host in ["alpha", "alpha", "beta"] {
+        write_kind(
+            projecting(&fixture).as_ref(),
+            Kind::Task,
+            Some("DI_1"),
+            follow_up(json!(host)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(host_of(&fixture, "DI_1").as_deref(), Some(host));
+    }
+    write_kind(
+        projecting(&fixture).as_ref(),
+        Kind::Task,
+        Some("DI_1"),
+        follow_up(Value::Null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(host_of(&fixture, "DI_1"), None);
+    assert_eq!(
+        host_writes(&fixture),
+        [Some("alpha".to_owned()), Some("beta".to_owned()), None]
+    );
+    // The draft's body — the value's home — went through the draft's own mutation.
+    assert!(
+        fixture
+            .seen()
+            .iter()
+            .any(|call| call[0] == "updateProjectV2DraftIssue")
+    );
+    let read = projecting(&fixture)
+        .get_task(&NativeId("DI_1".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.metadata["orchestrator.follow-up"]["host"], Value::Null);
+}
