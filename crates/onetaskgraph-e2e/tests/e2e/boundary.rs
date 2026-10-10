@@ -3035,3 +3035,43 @@ fn a_copy_withholds_an_external_reference_private_only_by_its_project_or_its_mem
         assert!(kept.contains(named), "{named}: {kept}");
     }
 }
+
+#[test]
+fn a_narrow_write_to_a_record_a_public_source_does_not_hold_is_refused_writing_nothing() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
+    let before = store.tree();
+    for (arguments, named) in [
+        (
+            vec!["task", "status", "set", "site:gone-1", "done"],
+            "site:gone-1",
+        ),
+        (
+            vec![
+                "project",
+                "metadata",
+                "set",
+                "site:gone-2",
+                "team.note",
+                "\"x\"",
+            ],
+            "gone-2",
+        ),
+        (
+            vec![
+                "document",
+                "metadata",
+                "set",
+                "site:gone-3",
+                "team.note",
+                "\"x\"",
+            ],
+            "gone-3",
+        ),
+    ] {
+        let output = store.run(&arguments);
+        assert_ne!(output.status.code(), Some(0), "{arguments:?}");
+        assert!(stderr(&output).contains(named), "{}", stderr(&output));
+    }
+    assert_eq!(store.tree(), before, "nothing was written");
+}

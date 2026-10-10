@@ -892,3 +892,54 @@ fn a_project_read_refused_for_another_grant_is_not_reported_as_a_missing_scope()
     assert!(message.contains("Resource not accessible"), "{message}");
     assert!(!message.contains("read:project"), "{message}");
 }
+
+#[test]
+fn a_board_item_two_carried_tasks_reference_is_read_once_for_its_classification() {
+    // Copying into a public folder from a board that declares nothing, so each reference into
+    // the board is read for its classification rather than withheld by the board's own.
+    let setup = Setup::laid(github_projects_with_board, |sandbox, configured| {
+        configured["sources"]["board"]
+            .as_object_mut()
+            .expect("the board")
+            .remove("visibility");
+        configured["sources"]["site"] = json!({"plugin": "local-md",
+            "config": {"root": sandbox.subdirectory("site")}, "visibility": "public"});
+        // Its repository answered public, so the item it names is public and its id is kept.
+        configured["write_policy"] = json!({
+            "check_command": ["python3", "-c",
+                "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"],
+            "visibility_command": ["python3", "-c",
+                "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"],
+        });
+    });
+    for id in ["first", "second"] {
+        setup.record(
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\ndepends_on: [{{id: \"board:T-3\", item: task}}]"),
+        );
+    }
+    let one = setup
+        .ok(&["task", "copy", "plan:first", "--to", "site"])
+        .len();
+    let setup_two = || {
+        let (output, served) =
+            setup.run(&["task", "copy", "plan:first", "plan:second", "--to", "site"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        served.len()
+    };
+    assert!(one > 0, "the reference was read");
+    assert_eq!(
+        setup_two(),
+        one,
+        "a second reference to it reads nothing more"
+    );
+    let landed = files_in(&setup, "site")
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("a record"))
+        .collect::<String>();
+    assert!(
+        landed.contains("board:T-3"),
+        "a public reference is kept: {landed}"
+    );
+}
