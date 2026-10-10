@@ -319,6 +319,10 @@ impl Drop for SimulatedRequest {
     }
 }
 
+/// How long an attach as a client still attached waits for that client's last connection to
+/// detach before it is refused as a second live process under one number.
+const REATTACH_GRACE: Duration = Duration::from_secs(5);
+
 /// Serve one client connection until it closes.
 fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
     let _ = stream.set_nodelay(true);
@@ -344,6 +348,19 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
             sleeps: BTreeMap::new(),
             delayed: 0,
         };
+        // A driver spawns its next process as client `n` the moment the last one exits, and
+        // that one's connection may not have been read to its end yet. Its process is gone, so
+        // its reader is about to detach it: wait for that rather than refuse the next one.
+        // A connection still live never detaches, so it is refused once the wait runs out.
+        if state.clients.contains_key(&client) {
+            let disconnected = Arc::clone(&state.disconnected);
+            state = disconnected
+                .wait_timeout_while(state, REATTACH_GRACE, |state| {
+                    state.clients.contains_key(&client)
+                })
+                .expect("the coordinator is not poisoned")
+                .0;
+        }
         // A client number this coordinator was not started for, or one already attached, would
         // count toward the clients it waits for without being one of them: refused, and the
         // binary that sent it stops naming the answer.
