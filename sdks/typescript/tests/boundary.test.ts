@@ -141,3 +141,28 @@ test("the check's refusal reaches the caller and nothing is written", async () =
   const listed = await client.taskList({ sources: ["site"], search: "Refused" });
   expect(listed.items).toEqual([]);
 });
+
+test("a classification or a term scope of the wrong shape is refused before anything is written", async () => {
+  const before = checked();
+  const attempts: (() => Promise<unknown>)[] = [
+    // @ts-expect-error A classification outside the contract's two, refused at run time.
+    () => client.taskCreate("site", "p", "Bad", { body: "Generic.", classification: "secret" }),
+    // @ts-expect-error A scope that is a string rather than a list, refused at run time.
+    () => client.taskCreate("site", "p", "Bad", { body: "Generic.", termScope: "github.com/a/b" }),
+    // @ts-expect-error A scope holding a non-string, refused at run time.
+    () => client.taskStatusSet("site:missing", "done", { termScope: [7] }),
+  ];
+  for (const attempt of attempts) {
+    // The client refuses as it builds the call, before a promise exists, so it is run inside one.
+    const refused = await Promise.resolve()
+      .then(attempt)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    if (!(refused instanceof TypeError)) throw new Error("the call was not refused as a TypeError");
+  }
+  expect(checked()).toBe(before);
+  const listed = await client.taskList({ sources: ["site"], search: "Bad" });
+  expect(listed.items).toEqual([]);
+});
