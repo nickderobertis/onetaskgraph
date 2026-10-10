@@ -1368,11 +1368,13 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
     ),
 ];
 
-/// Every input and payload type those mutations reach, and the fields each must carry.
+/// Every input and payload type those mutations reach, and the one board type a write reads
+/// to tell its fields apart, with the fields each must carry — the whole of the type contract
+/// the introspection holds GitHub to.
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
+pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -1439,7 +1441,19 @@ pub const MUTATION_TYPES: [(&str, bool, &[&str]); 34] = [
     ("AddCommentPayload", false, &["commentEdge", "subject"]),
     ("UpdateIssueCommentPayload", false, &["issueComment"]),
     ("DeleteIssueCommentPayload", false, &["clientMutationId"]),
+    // Not a mutation type, but what a write reads to tell a text field a projected metadata
+    // value can be written to from a number or date field of the same GraphQL type, and what
+    // `sources fields` reads to report a conflict — so GitHub is held to it here too.
+    ("ProjectV2Field", false, &["id", "name", "dataType"]),
 ];
+
+/// Every enum a write reads a member of, with the members it reads.
+///
+/// `ProjectV2FieldType.TEXT` is what tells a board text field a projected metadata value can be
+/// written to, so GitHub is held to that member as the input and payload types above are held
+/// to theirs. Asked in the first introspection document beside its types, so it costs no
+/// request of its own.
+pub const CONTRACT_ENUMS: [(&str, &[&str]); 1] = [("ProjectV2FieldType", &["TEXT"])];
 
 /// How many times one document may select a given introspection field.
 ///
@@ -1485,7 +1499,7 @@ pub fn contract_schema_documents() -> Vec<String> {
         ),
     ];
     let mut selected_input_fields = Vec::new();
-    for (type_name, input, _) in MUTATION_TYPES {
+    for (type_name, input, _) in CONTRACT_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let selected = format!(
             "{type_name}:__type(name:\"{type_name}\"){{{selection}{{name type{{kind name \
@@ -1509,7 +1523,15 @@ pub fn contract_schema_documents() -> Vec<String> {
         if roots.is_empty() {
             return documents;
         }
-        documents.push(format!("query MutationContract{{{}}}", roots.concat()));
+        let mut roots = roots.concat();
+        if documents.is_empty() {
+            for (enum_name, _) in CONTRACT_ENUMS {
+                roots.push_str(&format!(
+                    "{enum_name}:__type(name:\"{enum_name}\"){{enumValues{{name}}}}"
+                ));
+            }
+        }
+        documents.push(format!("query MutationContract{{{roots}}}"));
     }
 }
 
@@ -1601,7 +1623,21 @@ async fn verify_contract_schema(
             ));
         }
     }
-    for (type_name, input, expected_fields) in MUTATION_TYPES {
+    for (enum_name, members) in CONTRACT_ENUMS {
+        let values = response
+            .pointer(&format!("/data/{enum_name}/enumValues"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("GitHub schema has no {enum_name} enum values"))?;
+        for member in members {
+            if !values
+                .iter()
+                .any(|value| value.get("name").and_then(Value::as_str) == Some(member))
+            {
+                return Err(format!("GitHub enum {enum_name} has no {member} member"));
+            }
+        }
+    }
+    for (type_name, input, expected_fields) in CONTRACT_TYPES {
         let selection = if input { "inputFields" } else { "fields" };
         let fields = response
             .pointer(&format!("/data/{type_name}/{selection}"))
@@ -1617,7 +1653,7 @@ async fn verify_contract_schema(
                 ));
             }
         }
-        for (field_name, expected_type) in mutation_field_types(type_name) {
+        for (field_name, expected_type) in contract_field_types(type_name) {
             let field = fields
                 .iter()
                 .find(|field| field.get("name").and_then(Value::as_str) == Some(field_name))
@@ -1635,7 +1671,7 @@ async fn verify_contract_schema(
     Ok(())
 }
 
-pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
+pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'static str)] {
     match type_name {
         "CreateIssueInput" => &[
             ("repositoryId", "ID!"),
@@ -1701,6 +1737,7 @@ pub fn mutation_field_types(type_name: &str) -> &'static [(&'static str, &'stati
         "CreateProjectV2FieldPayload" | "DeleteProjectV2FieldPayload" => {
             &[("projectV2Field", "ProjectV2FieldConfiguration")]
         }
+        "ProjectV2Field" => &[("dataType", "ProjectV2FieldType!")],
         _ => &[],
     }
 }

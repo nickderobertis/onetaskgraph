@@ -92,6 +92,30 @@ pub fn fields(report: &FieldsReport) -> String {
         };
         rendered.push_str(&format!("{}: {line}\n", report.source));
     }
+    // A projected metadata field is a text field, with no options to report: it is there, it
+    // would be or was created, or a field of another type holds its name.
+    for field in &report.metadata_fields {
+        let name = &field.field;
+        let projects = if field.path.is_empty() {
+            field.key.clone()
+        } else {
+            format!("{} at {}", field.key, field.path.join("."))
+        };
+        let line = match (&field.conflict, field.outcome, field.exists) {
+            (Some(kind), _, _) => format!(
+                "the {name} field is a {kind} field, not a text field, so {projects} cannot be \
+                 projected onto it; it is left as it is — rename or remove it"
+            ),
+            (None, FieldOutcome::Created, _) => {
+                format!("created the {name} text field for {projects}")
+            }
+            (None, FieldOutcome::Planned, false) => {
+                format!("no {name} text field; would create it for {projects}")
+            }
+            (None, _, _) => format!("the {name} text field for {projects} is there"),
+        };
+        rendered.push_str(&format!("{}: {line}\n", report.source));
+    }
     rendered
 }
 

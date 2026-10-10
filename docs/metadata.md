@@ -296,6 +296,55 @@ do not: status goes to the board's `Status` single-select and the issue's own op
 closed state, `onetaskgraph.origin` goes to a source-owned `onetaskgraph.origin` text
 field, and dependencies go to `blockedBy` and to sub-issue links.
 
+### `github-projects` can also project a value onto a board text field
+
+A board filters on its fields and not on an issue's body, so a source can be configured to
+write chosen metadata values to board text fields as well — the way a board triaging
+follow-ups from several machines is sliced by the host each came from:
+
+```yaml
+metadata_fields:              # optional; absent or [] projects nothing
+  - field: Host               # the board text field's name
+    key: orchestrator.follow-up   # a top-level metadata key
+    path: [host]              # optional: object keys walked inside that key's value
+```
+
+**The field is a projection and the slot stays the value's one home.** Every read reports
+metadata from the body's slot exactly as it would without the entry, and a value a person types
+into the field on the board is never read back as metadata.
+
+On every item write that reaches the board — a create, an update and a copy, of a task, a
+project and a document alike, `metadata set` and `task update` of the projected key included —
+the value at `key` and `path` in the item's metadata decides the field:
+
+- **a string** — the empty string included, which is written as itself — is written to the
+  field, and nothing is sent when the field already holds it;
+- **nothing** — the key, or any step of the path, absent — **or `null`** clears the field when
+  it holds a value, and sends nothing when it does not;
+- **any other JSON type** — a number, a boolean, an object or an array — is refused before any
+  mutation, naming the source, the key, the path and the type found.
+
+The value travels in the one ordered field write a write already sends beside `Status`,
+`Priority` and the origin, so projecting adds no request to a copy. It adds one mutation
+operation to a first copy and one to a write whose value moved, and GitHub's secondary
+content-creation limit may count each aliased operation: the budget
+`github-metadata-field-content-creation-share` in
+`crates/onetaskgraph-github-projects-e2e/budgets.yaml` holds that share.
+
+**Reads and writes never create the field.** A board without it, or with a field of that name
+that is not a text field, refuses the write before any mutation, naming the source, the field
+and `onetaskgraph sources fields <source> --apply`. That command reports each configured field
+as there or missing, creates a missing one as a text field, and never alters a field that is
+there: a same-named field of another type is reported as a conflict and left as it is.
+
+The configuration read refuses, naming the source and the entry: a blank `field` or `key`; a
+`key` under the reserved `onetaskgraph.` prefix; a `field` equal, ignoring case, to `Status`,
+`Priority`, `onetaskgraph.origin` or a field GitHub owns on every board (Title, Assignees,
+Labels, Linked pull requests, Milestone, Repository, Reviewers, Parent issue, Sub-issues
+progress, Type); and two entries naming one field. `linear` takes no such key — its
+configuration refuses it as unknown — and keeps every metadata key in its slot; `local-md` and
+`in-memory` have no fields to project onto.
+
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This metadata guide must explain the two fields status occupies; the github-projects loopback tests and shared live journey reconcile the mapping, mutation order, and read-back at the real interface. -->
 For terminal status, those two GitHub fields move together: `done` selects the mapped
 `Done` option and closes as completed; `cancelled` selects the mapped `Cancelled` option
@@ -329,7 +378,7 @@ always the value it was handed, and the record's location when the source report
 | source | a metadata set |
 | --- | --- |
 | `local-md` | edits the one entry of the front matter's `metadata:` block and no other byte, atomically, and refuses by name a block it cannot edit that narrowly |
-| `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label, status or field request, and nothing at all when the key already holds the value |
+| `github-projects` | one update of the issue body that changes only its trailing metadata slot, for a task, a project and a document issue alike; no title, label or status request, no field request unless `metadata_fields` projects the key and its field's value moves, and nothing at all when the key already holds the value |
 | `in-memory` | holds the value for the life of its process |
 | `linear` | one update of the issue's `description`, or the project's or the document's `content`, that changes only its trailing metadata slot — every byte above the slot as it was; nothing at all when the key already holds the value |
 | a stdio plugin | answers the three methods of `docs/plugin-protocol.md` §4.18 when its handshake declares `metadata_updates` (§3.7), and is refused, without being asked, when it does not: `the <kind> plugin cannot write a task's metadata on its own`, with `a project's` or `a document's` for the other two verbs |

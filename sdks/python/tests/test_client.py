@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from onetaskgraph_sdk import (
     Client,
@@ -1139,7 +1140,15 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
                                         "id": "FIELD-status",
                                         "name": "Status",
                                         "options": statuses,
-                                    }
+                                    },
+                                    # A number field named as a projected text field is, which
+                                    # the setup reports as a conflict rather than changing.
+                                    {
+                                        "__typename": "ProjectV2Field",
+                                        "id": "FIELD-rank",
+                                        "name": "Rank",
+                                        "dataType": "NUMBER",
+                                    },
                                 ],
                                 "pageInfo": {"hasNextPage": False},
                             },
@@ -1202,6 +1211,10 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
                         "token_env": "TEST_GITHUB_TOKEN",
                         "endpoint": f"http://127.0.0.1:{server.server_port}",
                         "priority_mapping": {"medium": "Normal"},
+                        "metadata_fields": [
+                            {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+                            {"field": "Rank", "key": "orchestrator.rank"},
+                        ],
                     },
                 },
                 "memory": {"plugin": "in-memory", "config": {}},
@@ -1233,6 +1246,32 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
         )
         assert priority.missing == ["Urgent", "High", "Normal", "Low"]
         assert priority.existing == []
+        host, rank = report.metadata_fields
+        assert (host.field, host.key, host.path, host.exists, host.conflict) == (
+            "Host",
+            "orchestrator.follow-up",
+            ["host"],
+            False,
+            None,
+        )
+        assert host.outcome.value == "planned"
+        assert (rank.field, rank.path, rank.exists, rank.outcome.value) == (
+            "Rank",
+            [],
+            False,
+            "planned",
+        )
+        assert rank.conflict is not None and rank.conflict.root == "NUMBER"
+        # The generated model refuses a conflict the binary never reports: a text field is
+        # no conflict, and a type is never blank.
+        answered = report.model_dump(mode="json")
+        for refused_type in ("TEXT", " NUMBER", ""):
+            answered["metadata_fields"][1]["conflict"] = refused_type
+            with pytest.raises(ValidationError):
+                FieldsReport.model_validate(answered)
+        answered["metadata_fields"][1]["conflict"] = "TEXTUAL"
+        textual = FieldsReport.model_validate(answered).metadata_fields[1].conflict
+        assert textual is not None and textual.root == "TEXTUAL"
 
         with pytest.raises(OnetaskgraphError) as refused:
             run(client.sources_fields("memory", apply=True))

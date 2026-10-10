@@ -80,6 +80,20 @@
 //! value. The link a copy records on an item it copied, `onetaskgraph.copies`, is small and
 //! is kept in that same slot, written by that same update.
 //!
+//! **A caller's value can also be projected onto a board text field**, so the board can filter
+//! on it: each [`GitHubProjectsConfig::metadata_fields`] entry names a text field, a top-level
+//! metadata key and a path inside its value. The slot stays the value's one home — every read
+//! reports metadata from it alone — and the field follows it on every write of an item, a
+//! create, an update and a copy alike: a string is written, and not sent again while the field
+//! holds it — an empty string included, which is written as itself; nothing there or `null`
+//! clears a field holding a value; any other
+//! JSON type is refused before any mutation. It rides the ordered [`graphql::UPDATE_FIELDS`]
+//! write beside `Status`, `Priority` and the origin, so it adds no request; a key set on its
+//! own moves its field first and the body last, as every write of an existing item does. A
+//! board without the field, or with a non-text field of that name, is refused before any
+//! mutation pointing at `sources fields`, whose [`GitHubProjectsSource::fields`] creates it as
+//! a text field and never changes a field that is there.
+//!
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This public module documentation is a required user-facing description; the loopback plugin tests and shared live journey drive StatusMapping resolution, both mutations, and observed read-back together.
 //! **Status.** `status_mapping` is per-instance configuration, in the shared grammar
 //! [`onetaskgraph_plugin_api::StatusMapping`] documents, from a status category to an
@@ -141,7 +155,7 @@
 //! | `orphan_tasks` | **Supported and proven.** A task issue with no `parent` is in no project. |
 //! | `filter_by_label` | **Supported and proven,** over the issue's own labels. |
 //! | `filter_by_status` | **Supported and proven,** over the board's `Status` option and the issue's open or closed state, through this instance's own `status_mapping` for the item's kind — a task query by the task half, a project query by the project half, `unknown` included. |
-//! | `filter_by_metadata` | **Supported, and asked of GitHub.** A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. **A value with no letter or digit is refused** — the empty string, whitespace or punctuation alone — before any request, as a `SourceError::Refused` (wire kind `refused`) naming the value: GitHub's index holds words, so no bounded query can find such a value, and this source neither reads the whole board for it nor answers it as empty. |
+//! | `filter_by_metadata` | **Supported, and asked of GitHub** — through the body and never through a projected `metadata_fields` text field, which is the board's to filter on and not this source's to read. A query naming metadata values is one board-scoped issue search with each value a quoted phrase `in:body` — GitHub's index covers the metadata comment at the end of the body, which is where caller metadata lives — and every candidate is confirmed against its own parsed metadata comment, so only an item holding that string at that key and path is returned. **A value with no letter or digit is refused** — the empty string, whitespace or punctuation alone — before any request, as a `SourceError::Refused` (wire kind `refused`) naming the value: GitHub's index holds words, so no bounded query can find such a value, and this source neither reads the whole board for it nor answers it as empty. |
 //! | `filter_by_origin` | **Supported, and asked of GitHub without enumerating the board.** The union of three reads, each confirmed by an exact match against the item's own origin field: the board's field filter over the `onetaskgraph.origin` text field, the issue search for the id as a phrase in the body where a write of this release mirrors it, and this process's own writes. See *Where a read-after-write guarantee comes from* for the window the three leave. |
 //! | `search_title` | **Supported, and asked of GitHub for a task,** over `Issue.title`: a task query's text is one board-scoped issue search for it as a phrase `in:title`, every candidate confirmed by the case-insensitive substring rule. GitHub matches whole words, so a task holding the text only inside a longer word is not returned — a narrowing this source declares rather than hides. **A text with no letter or digit that is not blank is refused** — `--` for one — before any request, as the same `refused` error naming the text, for the reason a metadata value like it is; a blank text is not refused, and keeps the board read it always had, confirmed by the same substring rule. A project query's text, and a document query's text when the query is scoped to no project, is that same board-scoped search for the same phrase in the same fields, refused on the same terms, every candidate confirmed by its kind and by the same substring rule, so it narrows exactly as a task's does; a document query scoped to one project sends no search, reads that project's sub-issues and confirms its text over them by the substring rule alone, so it is neither narrowed to whole words nor refused for a text with no letter or digit. A board draft is not an issue, so no text search lists one, a draft titled as a document included. |
 //! | `search_content` | **Supported,** on the same terms, `in:body`, over the visible body — the trailing metadata comment is not part of what the substring rule confirms. |
@@ -919,7 +933,7 @@ pub mod graphql {
       node(id:$id){__typename ...BoardIssue ... on Issue{
         boards:projectItems(first:$boardItems){nodes{project{id number fields(first:$nestedFirst){nodes{
           ... on ProjectV2SingleSelectField{__typename id name options{id name}}
-          ... on ProjectV2Field{__typename id name}
+          ... on ProjectV2Field{__typename id name dataType}
         }pageInfo{hasNextPage}}}}}
         blockedBy(first:$first){nodes{...Related}pageInfo{hasNextPage endCursor}}
       }}
@@ -981,7 +995,7 @@ pub mod graphql {
     } fragment Board on ProjectV2 { id title
       fields(first:$nestedFirst){nodes{
         ... on ProjectV2SingleSelectField{__typename id name options{id name}}
-        ... on ProjectV2Field{__typename id name}
+        ... on ProjectV2Field{__typename id name dataType}
       }pageInfo{hasNextPage}}
       items(first:$first,after:$after){nodes{id "#,
         board_item_values!(),
@@ -1049,7 +1063,7 @@ pub mod graphql {
         ... on ProjectV2Owner{projectV2(number:$number){id
           fields(first:$nestedFirst){nodes{
             ... on ProjectV2SingleSelectField{__typename id name options{id name}}
-            ... on ProjectV2Field{__typename id name}
+            ... on ProjectV2Field{__typename id name dataType}
           }pageInfo{hasNextPage}}
         }}
       }
@@ -1122,7 +1136,7 @@ pub mod graphql {
         ... on ProjectV2Owner{projectV2(number:$number){id
           fields(first:$nestedFirst){nodes{
             ... on ProjectV2SingleSelectField{__typename id name options{id name}}
-            ... on ProjectV2Field{__typename id name}
+            ... on ProjectV2Field{__typename id name dataType}
           }pageInfo{hasNextPage}}
         }}
       }
@@ -1153,12 +1167,15 @@ pub mod graphql {
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
     pub const UPDATE_FIELD: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
-    /// Writes up to three board fields and an optional clear in one ordered mutation.
-    pub const UPDATE_FIELDS: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$second:UpdateProjectV2ItemFieldValueInput!,$third:UpdateProjectV2ItemFieldValueInput!,$clear:ClearProjectV2ItemFieldValueInput!,$writeSecond:Boolean!,$writeThird:Boolean!,$writeClear:Boolean!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}} second:updateProjectV2ItemFieldValue(input:$second) @include(if:$writeSecond){projectV2Item{id}} third:updateProjectV2ItemFieldValue(input:$third) @include(if:$writeThird){projectV2Item{id}} cleared:clearProjectV2ItemFieldValue(input:$clear) @include(if:$writeClear){projectV2Item{id}}}"#;
+    /// Writes up to six board fields and clears up to three in one ordered mutation: every
+    /// aliased field is included by its own boolean, as [`FIELD_WRITE_SLOTS`](super::FIELD_WRITE_SLOTS)
+    /// and [`FIELD_CLEAR_SLOTS`](super::FIELD_CLEAR_SLOTS) name them, writes before clears.
+    pub const UPDATE_FIELDS: &str = r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$second:UpdateProjectV2ItemFieldValueInput!,$third:UpdateProjectV2ItemFieldValueInput!,$fourth:UpdateProjectV2ItemFieldValueInput!,$fifth:UpdateProjectV2ItemFieldValueInput!,$sixth:UpdateProjectV2ItemFieldValueInput!,$clear:ClearProjectV2ItemFieldValueInput!,$clearSecond:ClearProjectV2ItemFieldValueInput!,$clearThird:ClearProjectV2ItemFieldValueInput!,$writeFirst:Boolean!,$writeSecond:Boolean!,$writeThird:Boolean!,$writeFourth:Boolean!,$writeFifth:Boolean!,$writeSixth:Boolean!,$writeClear:Boolean!,$writeClearSecond:Boolean!,$writeClearThird:Boolean!){updateProjectV2ItemFieldValue(input:$input) @include(if:$writeFirst){projectV2Item{id}} second:updateProjectV2ItemFieldValue(input:$second) @include(if:$writeSecond){projectV2Item{id}} third:updateProjectV2ItemFieldValue(input:$third) @include(if:$writeThird){projectV2Item{id}} fourth:updateProjectV2ItemFieldValue(input:$fourth) @include(if:$writeFourth){projectV2Item{id}} fifth:updateProjectV2ItemFieldValue(input:$fifth) @include(if:$writeFifth){projectV2Item{id}} sixth:updateProjectV2ItemFieldValue(input:$sixth) @include(if:$writeSixth){projectV2Item{id}} cleared:clearProjectV2ItemFieldValue(input:$clear) @include(if:$writeClear){projectV2Item{id}} clearedSecond:clearProjectV2ItemFieldValue(input:$clearSecond) @include(if:$writeClearSecond){projectV2Item{id}} clearedThird:clearProjectV2ItemFieldValue(input:$clearThird) @include(if:$writeClearThird){projectV2Item{id}}}"#;
     /// Clears one project item's value of one field, which is what a `none` priority is.
     pub const CLEAR_FIELD: &str = r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"#;
-    /// Creates one single-select field with its options. Only the guarded field setup may use
-    /// this document, and only for a field the board lacks.
+    /// Creates one field: a single-select one with its options, or a text one for a projected
+    /// metadata value. Only the guarded field setup may use this document, and only for a
+    /// field the board lacks.
     pub const CREATE_FIELD: &str = r#"mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id name options{id name color description}}}}}"#;
     /// Replaces a single-select field's options. Only the guarded field setup — the
     /// `status-options` and `fields` operations — may use this document, because GitHub
@@ -1373,6 +1390,71 @@ pub mod graphql {
         (DELETE_COMMENT, "deleting a comment"),
     ];
 }
+
+/// One aliased mutation field of [`graphql::UPDATE_FIELDS`]: the key its answer comes back
+/// under, the variable carrying its input, and the boolean variable that includes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldSlot {
+    /// The key of the answer's `data` this field's payload is under.
+    pub alias: &'static str,
+    /// The variable carrying this field's input.
+    pub variable: &'static str,
+    /// The boolean variable whose `true` sends this field.
+    pub include: &'static str,
+}
+
+/// The value writes [`graphql::UPDATE_FIELDS`] carries, in the order GitHub runs them.
+pub const FIELD_WRITE_SLOTS: [FieldSlot; 6] = [
+    FieldSlot {
+        alias: "updateProjectV2ItemFieldValue",
+        variable: "input",
+        include: "writeFirst",
+    },
+    FieldSlot {
+        alias: "second",
+        variable: "second",
+        include: "writeSecond",
+    },
+    FieldSlot {
+        alias: "third",
+        variable: "third",
+        include: "writeThird",
+    },
+    FieldSlot {
+        alias: "fourth",
+        variable: "fourth",
+        include: "writeFourth",
+    },
+    FieldSlot {
+        alias: "fifth",
+        variable: "fifth",
+        include: "writeFifth",
+    },
+    FieldSlot {
+        alias: "sixth",
+        variable: "sixth",
+        include: "writeSixth",
+    },
+];
+
+/// The clears [`graphql::UPDATE_FIELDS`] carries, run after every write of the same request.
+pub const FIELD_CLEAR_SLOTS: [FieldSlot; 3] = [
+    FieldSlot {
+        alias: "cleared",
+        variable: "clear",
+        include: "writeClear",
+    },
+    FieldSlot {
+        alias: "clearedSecond",
+        variable: "clearSecond",
+        include: "writeClearSecond",
+    },
+    FieldSlot {
+        alias: "clearedThird",
+        variable: "clearThird",
+        include: "writeClearThird",
+    },
+];
 
 /// Which of GitHub's two rate limiters refused a request.
 ///
@@ -1740,7 +1822,11 @@ impl ClosedState {
 }
 
 /// Configuration for one GitHub Projects v2 board.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+///
+/// It serializes to a document this same type reads back as itself, so a caller writing a
+/// configuration — a consumer filing onto a board it configures — can build one here rather
+/// than spell the shape again; an empty `metadata_fields` is left out, as one never set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitHubProjectsConfig {
     /// Login of the user or organization which owns the board.
@@ -1796,6 +1882,24 @@ pub struct GitHubProjectsConfig {
     /// the board lacks is refused pointing there.
     #[serde(default)]
     pub priority_mapping: Option<PriorityMappingConfig>,
+    /// Caller metadata values this source also writes to board text fields, so the board can
+    /// filter on them.
+    ///
+    /// Absent or empty, nothing is projected. Each entry names a board text `field`, a
+    /// top-level metadata `key` and an optional `path` of object keys walked inside that key's
+    /// value. On every item write — create, update and copy, of a task, a project or a
+    /// document — a string found there is written to the field, and nothing is sent when the
+    /// field already holds it; nothing there, or `null`, clears the field when it holds a
+    /// value; any other JSON type is refused before any mutation. The metadata comment in the
+    /// issue body stays the one home of the value, and every read reports metadata from it.
+    /// Reads and writes never create the field: `onetaskgraph sources fields <source>
+    /// --apply` does, as a text field, and a write to a board lacking it, or holding a
+    /// non-text field of that name, is refused pointing there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although a serialized configuration leaves an empty
+    // list out, so both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub metadata_fields: Vec<MetadataFieldConfig>,
     /// How fast this source writes, and how long it waits out a rate-limit refusal.
     ///
     /// Every field keeps its shipped default when it is absent, and the defaults are
@@ -1809,7 +1913,7 @@ pub struct GitHubProjectsConfig {
 /// One member per level rather than a map, so a key that is not a level is refused where
 /// the configuration is read, naming the levels there are. `none` is not a member: it is no
 /// value in the field, not an option of it.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PriorityMappingConfig {
     /// The option `urgent` lands on; `Urgent` when absent.
@@ -1937,6 +2041,176 @@ impl PriorityMapping {
     }
 }
 
+/// One metadata value this source projects onto a board text field.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataFieldConfig {
+    /// The name of the board text field the value is written to.
+    pub field: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `MetadataField::resolve` refuses a blank, reserved, GitHub-owned or repeated name before the private validated entry is built.
+    /// The top-level metadata key the value is read from. A key under the reserved
+    /// `onetaskgraph.` prefix is refused.
+    pub key: String, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `MetadataField::resolve` refuses a blank or reserved key before the private validated entry is built.
+    /// Object keys walked inside that key's value, outermost first. Absent or empty, the
+    /// key's own value is the one projected. Left out of a serialized entry when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []`, for the reason `metadata_fields`' is.
+    #[schemars(!skip_serializing_if)]
+    pub path: Vec<String>,
+}
+
+/// The board fields no metadata value may be projected onto, compared ignoring case: the
+/// three this source writes itself, and those GitHub owns on every board.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This list is the configuration contract `metadata_fields`' consumers agreed, refused at read so a mistaken entry is named early — not a mirror GitHub's field set has to stay in step with. What keeps a write off a field GitHub owns is the write's own check, `projection_field`, which refuses any field whose `dataType` is not `TEXT`: every built-in board field reports its own type (TITLE, ASSIGNEES, LABELS, …), and the live contract introspection holds GitHub to `ProjectV2Field.dataType`. So a built-in field GitHub adds later and this list lacks is still never written.
+const UNPROJECTABLE_FIELDS: [&str; 13] = [
+    STATUS_FIELD,
+    PRIORITY_FIELD,
+    ORIGIN_FIELD,
+    "Title",
+    "Assignees",
+    "Labels",
+    "Linked pull requests",
+    "Milestone",
+    "Repository",
+    "Reviewers",
+    "Parent issue",
+    "Sub-issues progress",
+    "Type",
+];
+
+/// One validated [`MetadataFieldConfig`] entry.
+#[derive(Debug, Clone)]
+struct MetadataField {
+    field: ProjectedField,
+    key: ProjectedKey,
+    path: Vec<String>,
+}
+
+/// The name of a board text field a metadata value is projected onto: never blank, never one
+/// this source or GitHub writes, and never one another entry of the same source names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedField(String);
+
+/// The top-level metadata key a projected value is read from: never blank, and never under
+/// the namespace this product reserves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedKey(String);
+
+impl std::ops::Deref for ProjectedField {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for ProjectedKey {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What one item's metadata says one projected field should hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Projected {
+    /// A string to hold.
+    Text(String),
+    /// Nothing: the key or a step of the path is absent, or the value is `null`.
+    Nothing,
+}
+
+impl MetadataField {
+    /// Validate every entry of one instance's `metadata_fields`, refusing the first that
+    /// cannot stand, naming the source and the entry.
+    fn resolve(
+        configured: Vec<MetadataFieldConfig>,
+        instance: &SourceName,
+    ) -> Result<Vec<Self>, SourceError> {
+        let mut resolved: Vec<Self> = Vec::with_capacity(configured.len());
+        for (index, entry) in configured.into_iter().enumerate() {
+            let refuse = |why: String| SourceError::Config {
+                message: format!(
+                    "metadata_fields[{index}] of source {instance} (field {:?}, key {:?}) {why}",
+                    entry.field, entry.key
+                ),
+            };
+            if entry.field.trim().is_empty() {
+                return Err(refuse("names a blank field".to_owned()));
+            }
+            if entry.key.trim().is_empty() {
+                return Err(refuse("names a blank key".to_owned()));
+            }
+            if entry.key.split('.').next() == Some(MetadataKey::RESERVED_NAMESPACE) {
+                return Err(refuse(format!(
+                    "names a key under the reserved \"{}.\" prefix, which this product keeps \
+                     for its own keys; next: project a caller key instead",
+                    MetadataKey::RESERVED_NAMESPACE
+                )));
+            }
+            if let Some(owned) = UNPROJECTABLE_FIELDS
+                .iter()
+                .find(|owned| owned.eq_ignore_ascii_case(&entry.field))
+            {
+                return Err(refuse(format!(
+                    "names the board field {owned:?}, which this source or GitHub already \
+                     writes; next: name a text field of your own"
+                )));
+            }
+            if let Some(earlier) = resolved
+                .iter()
+                .position(|other| other.field.eq_ignore_ascii_case(&entry.field))
+            {
+                return Err(refuse(format!(
+                    "names the same board field as metadata_fields[{earlier}]; one field \
+                     cannot hold two values"
+                )));
+            }
+            resolved.push(Self {
+                field: ProjectedField(entry.field),
+                key: ProjectedKey(entry.key),
+                path: entry.path,
+            });
+        }
+        Ok(resolved)
+    }
+
+    /// The path as a refusal spells it: `[]` for the key's own value.
+    fn spelled_path(&self) -> String {
+        serde_json::to_string(&self.path).unwrap_or_else(|_| format!("{:?}", self.path))
+    }
+
+    /// What `metadata` says this field should hold, or the refusal for a value no text field
+    /// can hold.
+    fn projected(
+        &self,
+        metadata: &BTreeMap<String, Value>,
+        instance: &SourceName,
+    ) -> Result<Projected, SourceError> {
+        let mut value = metadata.get(&*self.key);
+        for step in &self.path {
+            value = value.and_then(|held| held.get(step.as_str()));
+        }
+        let found = match value {
+            None | Some(Value::Null) => return Ok(Projected::Nothing),
+            Some(Value::String(text)) => return Ok(Projected::Text(text.clone())),
+            Some(Value::Bool(_)) => "a boolean",
+            Some(Value::Number(_)) => "a number",
+            Some(Value::Array(_)) => "an array",
+            Some(Value::Object(_)) => "an object",
+        };
+        Err(SourceError::Refused {
+            message: format!(
+                "source {instance} projects metadata key {:?} at path {} onto its board text \
+                 field {:?}, and this item holds {found} there; only a string, null or nothing \
+                 can be written to a text field; next: store a string there, or remove the \
+                 value",
+                &*self.key,
+                self.spelled_path(),
+                &*self.field
+            ),
+        })
+    }
+}
+
 /// What one item's `Priority` field says, read through this instance's mapping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HeldPriority {
@@ -1951,7 +2225,7 @@ enum HeldPriority {
 /// Configurable because a GitHub Enterprise installation sets its own limits and an
 /// operator who has already been refused may want to go slower still — not because the
 /// defaults are guesses.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacingConfig {
     /// Shortest interval between two content-creating mutations, in milliseconds.
@@ -2476,6 +2750,8 @@ pub struct GitHubProjectsSource {
     statuses: BoardStatuses,
     /// Where each priority lands on this board, or `None` when this instance holds none.
     priorities: Option<PriorityMapping>,
+    /// The metadata values this instance projects onto board text fields, in configured order.
+    metadata_fields: Vec<MetadataField>,
     client: Client,
     asset_client: Client,
     /// Every item this source has created in this command, in the order it created them —
@@ -2851,6 +3127,74 @@ pub struct FieldsReport {
     // contract forbids cannot be built: `GitHubProjectsSource::fields` is the one constructor,
     // and it pushes `Status` first and exactly once, then `Priority` exactly when configured.
     pub fields: Vec<FieldReport>,
+    /// Each board text field the source's `metadata_fields` projects a value onto, in
+    /// configured order. Empty — and left out of the JSON — when it projects none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although the JSON leaves an empty list out, so
+    // both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub metadata_fields: Vec<MetadataFieldReport>,
+}
+
+/// The type of a board field that is not a text field, as GitHub names it — its `dataType`, or
+/// its GraphQL type when it has none — which is what a projected field's conflict reports.
+///
+/// Never empty, never beginning with whitespace, and never `TEXT`: a text field of that name is
+/// no conflict.
+// The schema states that rule as `NON_TEXT_FIELD_TYPE_PATTERN`, so a generated SDK model
+// refuses exactly what `try_from` below does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct NonTextFieldType(#[schemars(regex(pattern = NON_TEXT_FIELD_TYPE_PATTERN))] String);
+
+/// What a [`NonTextFieldType`] may be, as the emitted schema states it: a first character that
+/// is not whitespace, and anything but exactly `TEXT` — spelled without a lookahead, which
+/// neither SDK's validator can be relied on to support.
+const NON_TEXT_FIELD_TYPE_PATTERN: &str =
+    r"^(?:[^T\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\s\S])";
+
+impl TryFrom<String> for NonTextFieldType {
+    type Error = String;
+
+    fn try_from(kind: String) -> Result<Self, Self::Error> {
+        if kind.is_empty() || kind.starts_with(char::is_whitespace) {
+            return Err("a board field's type cannot be blank or begin with whitespace".to_owned());
+        }
+        if kind == "TEXT" {
+            return Err("a TEXT field is no conflict for a projected text field".to_owned());
+        }
+        Ok(Self(kind))
+    }
+}
+
+impl std::fmt::Display for NonTextFieldType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// One projected metadata text field's plan, or its verified outcome.
+///
+/// The setup creates a missing one as a text field and never alters a field that is there:
+/// a same-named field of another type is reported in `conflict` and left as it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct MetadataFieldReport {
+    /// The board field's name.
+    pub field: String, // llmlint: ignore[invalid_states_unrepresentable] Copied from a configuration entry `MetadataField::resolve` already validated; the serialized string is the report's intentionally simple public contract, as `FieldReport::missing`'s names are.
+    /// The metadata key the value is read from.
+    pub key: String, // llmlint: ignore[invalid_states_unrepresentable] As `field`: a validated configuration value reported back as written.
+    /// The object keys walked inside that key's value; empty for the key's own value.
+    pub path: Vec<String>,
+    /// Whether the board had a text field of that name before the operation.
+    // llmlint: ignore[invalid_states_unrepresentable] `exists` beside `outcome` mirrors `FieldReport`'s published shape; `GitHubProjectsSource::fields` is the one constructor and derives `outcome` from `exists` and `conflict` in one match.
+    pub exists: bool,
+    /// The type of a field of that name that is not a text field, which the setup leaves as
+    /// it is; absent — and left out of the JSON — when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<NonTextFieldType>,
+    /// What the requested operation did: `planned`; `created` for a field that was not
+    /// there; `unchanged` for one that was, and for a conflict, which is never changed.
+    pub outcome: FieldOutcome,
 }
 
 /// Which options one field is configured with, in the order a new field would list them.
@@ -3321,16 +3665,68 @@ impl GitHubProjectsSource {
                 existing,
             });
         }
+        // A projected field is a text field, which the single-select snapshot cannot see, so
+        // it is asked of the board's own field list — and only when one is configured.
+        let mut metadata_fields = Vec::new();
+        if !self.metadata_fields.is_empty() {
+            let board = self.board_fields().await?;
+            for projection in &self.metadata_fields {
+                let conflict = match Board::field(&board.fields, &projection.field)? {
+                    None => None,
+                    Some(field) => {
+                        let typename = optional_str(field, "__typename")?;
+                        let data_type = optional_str(field, "dataType")?;
+                        if typename == Some("ProjectV2Field") && data_type == Some("TEXT") {
+                            None
+                        } else {
+                            let named = data_type
+                                .filter(|kind| *kind != "TEXT")
+                                .or(typename)
+                                .unwrap_or("field of another type");
+                            Some(NonTextFieldType::try_from(named.to_owned()).map_err(
+                                |message| SourceError::Malformed {
+                                    message: format!(
+                                        "GitHub answered the board's {} field with a type this \
+                                         setup cannot read: {message}",
+                                        &*projection.field
+                                    ),
+                                },
+                            )?)
+                        }
+                    }
+                };
+                let exists =
+                    conflict.is_none() && Board::field(&board.fields, &projection.field)?.is_some();
+                metadata_fields.push(MetadataFieldReport {
+                    field: projection.field.to_string(),
+                    key: projection.key.to_string(),
+                    path: projection.path.clone(),
+                    exists,
+                    outcome: match (mode, exists || conflict.is_some()) {
+                        (SetupMode::Plan, _) => FieldOutcome::Planned,
+                        (SetupMode::Apply, true) => FieldOutcome::Unchanged,
+                        (SetupMode::Apply, false) => FieldOutcome::Created,
+                    },
+                    conflict,
+                });
+            }
+        }
         let report = FieldsReport {
             source: self.name.clone(),
             fields: reports,
+            metadata_fields,
         };
         let writes: Vec<&FieldReport> = report
             .fields
             .iter()
             .filter(|field| !field.missing.is_empty() || !field.exists)
             .collect();
-        if mode == SetupMode::Plan || writes.is_empty() {
+        let creates: Vec<&MetadataFieldReport> = report
+            .metadata_fields
+            .iter()
+            .filter(|field| field.outcome == FieldOutcome::Created)
+            .collect();
+        if mode == SetupMode::Plan || (writes.is_empty() && creates.is_empty()) {
             return Ok(report);
         }
         let mut landed: Vec<&str> = Vec::new();
@@ -3395,6 +3791,31 @@ impl GitHubProjectsSource {
                 }
             }
         }
+        for field in &creates {
+            let sent = self
+                .graphql(
+                    graphql::CREATE_FIELD,
+                    json!({"input": {
+                        "projectId": before.board_id, "dataType": "TEXT", "name": field.field,
+                    }}),
+                )
+                .await;
+            if let Err(error) = sent {
+                let changed = if landed.is_empty() {
+                    String::new()
+                } else {
+                    format!("changed the {} field and then ", landed.join(" and "))
+                };
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the guarded field setup {changed}failed creating the {} text field: \
+                         {error}; run it again to create what is still missing",
+                        field.field
+                    ),
+                });
+            }
+            landed.push(&field.field);
+        }
         // The board has been written, so a verification read that fails leaves it unverified
         // rather than unchanged, and says what to put back.
         let after = match self.board_snapshot(&owned).await {
@@ -3431,6 +3852,32 @@ impl GitHubProjectsSource {
             }
             if after.assignments(field.field) != before.assignments(field.field) {
                 moved.push(format!("an item's {name} value"));
+            }
+        }
+        if !creates.is_empty() {
+            // Read afresh: the view held for this command is the one from before the creates.
+            *self.fields_cache()? = None;
+            let board = match self.board_fields().await {
+                Ok(board) => board,
+                Err(error) => {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "the guarded field setup changed the {} field and then could not \
+                             read the board back to verify it: {error}; run it again to verify \
+                             it, which creates nothing a second time",
+                            landed.join(" and ")
+                        ),
+                    });
+                }
+            };
+            for field in &creates {
+                let text = Board::field(&board.fields, &field.field)?.is_some_and(|held| {
+                    held.get("__typename").and_then(Value::as_str) == Some("ProjectV2Field")
+                        && held.get("dataType").and_then(Value::as_str) == Some("TEXT")
+                });
+                if !text {
+                    moved.push(format!("the created {} text field", field.field));
+                }
             }
         }
         if !moved.is_empty() {
@@ -3529,6 +3976,7 @@ impl GitHubProjectsSource {
                 .priority_mapping
                 .map(|mapping| PriorityMapping::resolve(mapping, name))
                 .transpose()?,
+            metadata_fields: MetadataField::resolve(config.metadata_fields, name)?,
             client: Client::builder()
                 .user_agent("onetaskgraph")
                 .build()
@@ -4535,6 +4983,10 @@ impl GitHubProjectsSource {
             && item.defines(ORIGIN_FIELD)
             && (!writes_status || item.defines("Status"))
             && (!selects_priority || item.defines(PRIORITY_FIELD))
+            && self
+                .metadata_fields
+                .iter()
+                .all(|projection| item.defines(&projection.field))
         {
             return Ok(BoardFields {
                 id: board_id,
@@ -5514,6 +5966,7 @@ impl GitHubProjectsSource {
             labels: labels(content)?,
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
+            projected: self.held_projections(nodes)?,
             number: match content_kind {
                 ContentKind::Issue => Some(issue_number(content)?),
                 // A draft is filed in no repository, so nothing ever numbered it:
@@ -5596,6 +6049,21 @@ impl GitHubProjectsSource {
             || HeldPriority::Unmapped(option.to_owned()),
             HeldPriority::Read,
         ))
+    }
+
+    /// What each projected metadata field holds for one board item, by field name — every text
+    /// value GitHub answers, an empty one included.
+    fn held_projections(
+        &self,
+        field_values: &[Value],
+    ) -> Result<BTreeMap<String, String>, SourceError> {
+        let mut held = BTreeMap::new();
+        for projection in &self.metadata_fields {
+            if let Some(text) = text_field(field_values, &projection.field)? {
+                held.insert(projection.field.to_string(), text);
+            }
+        }
+        Ok(held)
     }
 
     /// What one board item's status is read from: its `Status` option, whether its issue
@@ -5852,9 +6320,51 @@ impl GitHubProjectsSource {
         }
         let mut slot = item.slot.clone();
         slot.insert(key.as_str().to_owned(), value.clone());
+        // A key a board text field projects moves that field first, so the body — the value's
+        // one authoritative home — is written last, as every write of an existing item is.
+        if self
+            .metadata_fields
+            .iter()
+            .any(|projection| &*projection.key == key.as_str())
+        {
+            let board = self.projection_board(&item).await?;
+            let (writes, projected) = self.projection_writes(
+                &board.fields,
+                Some(&item.projected),
+                &slot,
+                Some(&[key.as_str()]),
+            )?;
+            let (mut values, mut clears) = (Vec::new(), Vec::new());
+            for write in &writes {
+                write.join(&mut values, &mut clears);
+            }
+            self.set_item_fields(board.id.as_str(), &item.item_id, &values, &clears)
+                .await?;
+            item.projected = projected;
+        }
         self.write_slot(&mut item, &slot).await?;
         self.remember_written(item.clone(), false)?;
         Ok(Some(item))
+    }
+
+    /// What a projection write to `item` needs of the board, read off the item when it says
+    /// enough, as [`Self::fields_for`] reads it.
+    async fn projection_board(&self, item: &Resolved) -> Result<BoardFields, SourceError> {
+        if let Some(board) = item.carried_board() {
+            return Ok(board);
+        }
+        if let Some(board_id) = item.named_board()
+            && self
+                .metadata_fields
+                .iter()
+                .all(|projection| item.defines(&projection.field))
+        {
+            return Ok(BoardFields {
+                id: board_id,
+                fields: json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+            });
+        }
+        self.board_fields().await
     }
 
     /// Put `slot` in one item's metadata slot with a single update of its body, and bring
@@ -5993,6 +6503,80 @@ impl GitHubProjectsSource {
             field: required_str(field, "id")?.to_owned(),
             option: required_str(option, "id")?.to_owned(),
         }))
+    }
+
+    /// What writing `metadata` does to each projected text field of one item, and what those
+    /// fields hold after it — or the refusal, before anything is sent.
+    ///
+    /// `held` is what the item's fields hold now, `None` for an item not created yet. `keys`
+    /// narrows the work to the entries projecting one of those metadata keys, for a write that
+    /// touches only them; `None` is every entry. A string the field already holds, and nothing
+    /// for a field holding nothing, sends nothing. A value no text field can hold is refused,
+    /// and so is a board without the field, or with a field of that name that is not a text
+    /// field: reads and writes never create a field.
+    fn projection_writes(
+        &self,
+        fields: &Value,
+        held: Option<&BTreeMap<String, String>>,
+        metadata: &BTreeMap<String, Value>,
+        keys: Option<&[&str]>,
+    ) -> Result<(Vec<ProjectionWrite>, BTreeMap<String, String>), SourceError> {
+        let mut projected = held.cloned().unwrap_or_default();
+        let mut writes = Vec::new();
+        for projection in self
+            .metadata_fields
+            .iter()
+            .filter(|projection| keys.is_none_or(|keys| keys.contains(&&*projection.key)))
+        {
+            let wanted = projection.projected(metadata, &self.name)?;
+            let field = self.projection_field(fields, projection)?;
+            let holding = projected.get(&*projection.field);
+            match wanted {
+                Projected::Text(text) if holding != Some(&text) => {
+                    writes.push(ProjectionWrite::Set {
+                        field,
+                        text: text.clone(),
+                    });
+                    projected.insert(projection.field.to_string(), text);
+                }
+                Projected::Nothing if holding.is_some() => {
+                    writes.push(ProjectionWrite::Clear { field });
+                    projected.remove(&*projection.field);
+                }
+                Projected::Text(_) | Projected::Nothing => {}
+            }
+        }
+        Ok((writes, projected))
+    }
+
+    /// The id of the board text field one projection writes, or the refusal naming what the
+    /// board has instead.
+    fn projection_field(
+        &self,
+        fields: &Value,
+        projection: &MetadataField,
+    ) -> Result<String, SourceError> {
+        let refuse = |detail: String| SourceError::Refused {
+            message: format!(
+                "source {} projects metadata key {:?} onto the board text field {:?}, and \
+                 {detail}; next: run `onetaskgraph sources fields {} --apply` to create it as a \
+                 text field, or name another field in metadata_fields",
+                self.name, &*projection.key, &*projection.field, self.name
+            ),
+        };
+        let Some(field) = Board::field(fields, &projection.field)? else {
+            return Err(refuse("this board has no field of that name".to_owned()));
+        };
+        let typename = optional_str(field, "__typename")?.unwrap_or("field of another type");
+        let data_type = optional_str(field, "dataType")?;
+        if typename != "ProjectV2Field" || data_type != Some("TEXT") {
+            return Err(refuse(format!(
+                "this board's field of that name is not a text field (it is a {}), so it is \
+                 left as it is; rename or remove that field first",
+                data_type.unwrap_or(typename)
+            )));
+        }
+        Ok(required_str(field, "id")?.to_owned())
     }
 
     /// Apply one priority write to one board item.
@@ -6310,6 +6894,38 @@ impl GitHubProjectsSource {
             }
         }
 
+        // The metadata keys this update names that a board text field projects, and what
+        // that does to those fields — refused, as a whole write refuses it, before anything
+        // is sent.
+        let touched: Vec<&str> = update
+            .metadata_set
+            .keys()
+            .chain(update.metadata_remove.iter())
+            .map(MetadataKey::as_str)
+            .collect();
+        let mut projection_move = None;
+        if self
+            .metadata_fields
+            .iter()
+            .any(|projection| touched.contains(&&*projection.key))
+        {
+            let mut metadata = item.slot.clone();
+            for (key, value) in &update.metadata_set {
+                metadata.insert(key.as_str().to_owned(), value.clone());
+            }
+            for key in &update.metadata_remove {
+                metadata.remove(key.as_str());
+            }
+            let board = self.projection_board(&item).await?;
+            let (writes, projected) = self.projection_writes(
+                &board.fields,
+                Some(&item.projected),
+                &metadata,
+                Some(&touched),
+            )?;
+            projection_move = Some((board.id, writes, projected));
+        }
+
         // Resolved before the body is composed, because a far end `blockedBy` cannot name is
         // recorded in the slot, and the slot travels in the one body update below.
         let edges = match &update.depends_on {
@@ -6389,7 +7005,7 @@ impl GitHubProjectsSource {
         // first, together in one request — a terminal option selected before the issue
         // closes, as a whole write does — then the `blockedBy` difference, then the body.
         let mut board_writes: Vec<(&BoardId, (String, Value))> = Vec::new();
-        let mut clear: Option<(&BoardId, &str)> = None;
+        let mut clears: Vec<(&BoardId, &str)> = Vec::new();
         if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.option()) {
             board_writes.push((
                 &moving.board,
@@ -6404,11 +7020,19 @@ impl GitHubProjectsSource {
                 board,
                 (field.clone(), json!({"singleSelectOptionId": option})),
             )),
-            Some((board, PriorityWrite::Clear { field }, _)) => clear = Some((board, field)),
+            Some((board, PriorityWrite::Clear { field }, _)) => clears.push((board, field)),
             None => {}
         }
+        if let Some((board, writes, _)) = &projection_move {
+            for write in writes {
+                let (mut values, mut cleared) = (Vec::new(), Vec::new());
+                write.join(&mut values, &mut cleared);
+                board_writes.extend(values.into_iter().map(|value| (board, value)));
+                clears.extend(cleared.into_iter().map(|field| (board, field)));
+            }
+        }
         let mut boards: Vec<&BoardId> = board_writes.iter().map(|(board, _)| *board).collect();
-        boards.extend(clear.map(|(board, _)| board));
+        boards.extend(clears.iter().map(|(board, _)| *board));
         boards.dedup_by(|one, other| one.as_str() == other.as_str());
         for board in boards {
             let writes = board_writes
@@ -6416,10 +7040,12 @@ impl GitHubProjectsSource {
                 .filter(|(on, _)| on.as_str() == board.as_str())
                 .map(|(_, write)| write.clone())
                 .collect::<Vec<_>>();
-            let cleared = clear
+            let cleared = clears
+                .iter()
                 .filter(|(on, _)| on.as_str() == board.as_str())
-                .map(|(_, field)| field);
-            self.set_item_fields(board.as_str(), &item.item_id, &writes, cleared)
+                .map(|(_, field)| *field)
+                .collect::<Vec<_>>();
+            self.set_item_fields(board.as_str(), &item.item_id, &writes, &cleared)
                 .await?;
         }
         let mut blocked_by_moved = false;
@@ -6456,6 +7082,9 @@ impl GitHubProjectsSource {
         }
         if let Some((_, _, priority)) = priority_move {
             item.priority = HeldPriority::Read(priority);
+        }
+        if let Some((_, _, projected)) = projection_move {
+            item.projected = projected;
         }
         let task = item.task()?;
         let mut written = update.changed(&before, &task);
@@ -6559,65 +7188,92 @@ impl GitHubProjectsSource {
     }
 
     /// GitHub accepts one value per field mutation; aliases combine those mutations in
-    /// one request. Every returned item id is checked, including optional aliases.
+    /// one request — writes in the order given, then clears. A lone write is
+    /// [`graphql::UPDATE_FIELD`] and a lone clear [`graphql::CLEAR_FIELD`]; more than one
+    /// request's slots hold go in further requests of the same document, in order. Every
+    /// returned item id is checked, including optional aliases.
     async fn set_item_fields(
         &self,
         board: &str,
         item: &str,
         fields: &[(String, Value)],
-        clear: Option<&str>,
+        clears: &[&str],
     ) -> Result<(), SourceError> {
-        if fields.len() <= 1 && clear.is_none() {
-            if let Some((field, value)) = fields.first() {
-                self.set_item_field(board, item, field, value.clone())
-                    .await?;
+        match (fields, clears) {
+            ([], []) => return Ok(()),
+            ([(field, value)], []) => {
+                return self.set_item_field(board, item, field, value.clone()).await;
             }
-            return Ok(());
+            ([], [field]) => {
+                return self
+                    .write_priority(
+                        board,
+                        item,
+                        &PriorityWrite::Clear {
+                            field: (*field).to_owned(),
+                        },
+                    )
+                    .await;
+            }
+            _ => {}
         }
-        if fields.is_empty() {
-            if let Some(field) = clear {
-                self.write_priority(
-                    board,
-                    item,
-                    &PriorityWrite::Clear {
-                        field: field.to_owned(),
-                    },
-                )
+        // Any field of the request stands in for an input a slot leaves out, which GitHub
+        // still requires to be well formed although it never runs it.
+        let filler = fields
+            .first()
+            .map_or_else(|| clears[0], |(field, _)| field.as_str());
+        let mut writes = fields.iter();
+        let mut cleared = clears.iter();
+        loop {
+            let batch: Vec<&(String, Value)> =
+                writes.by_ref().take(FIELD_WRITE_SLOTS.len()).collect();
+            let batch_clears: Vec<&&str> = cleared.by_ref().take(FIELD_CLEAR_SLOTS.len()).collect();
+            if batch.is_empty() && batch_clears.is_empty() {
+                return Ok(());
+            }
+            let mut variables = serde_json::Map::new();
+            for (index, slot) in FIELD_WRITE_SLOTS.iter().enumerate() {
+                let input = match batch.get(index) {
+                    Some((field, value)) => {
+                        json!({"projectId":board,"itemId":item,"fieldId":field,"value":value})
+                    }
+                    None => json!({"projectId":board,"itemId":item,"fieldId":filler,
+                                   "value":{"text":""}}),
+                };
+                variables.insert(slot.variable.to_owned(), input);
+                variables.insert(slot.include.to_owned(), json!(index < batch.len()));
+            }
+            for (index, slot) in FIELD_CLEAR_SLOTS.iter().enumerate() {
+                let field = batch_clears.get(index).map_or(filler, |field| **field);
+                variables.insert(
+                    slot.variable.to_owned(),
+                    json!({"projectId":board,"itemId":item,"fieldId":field}),
+                );
+                variables.insert(slot.include.to_owned(), json!(index < batch_clears.len()));
+            }
+            let data = self
+                .graphql(graphql::UPDATE_FIELDS, Value::Object(variables))
                 .await?;
-            }
-            return Ok(());
-        }
-        let input = |index: usize| {
-            let (field, value) = fields.get(index).unwrap_or(&fields[0]);
-            json!({"projectId":board,"itemId":item,"fieldId":field,"value":value})
-        };
-        let data = self.graphql(graphql::UPDATE_FIELDS, json!({
-            "input":input(0),"second":input(1),"third":input(2),
-            "writeSecond":fields.len()>1,"writeThird":fields.len()>2,"writeClear":clear.is_some(),
-            "clear":{"projectId":board,"itemId":item,"fieldId":clear.unwrap_or(&fields[0].0)}
-        })).await?;
-        for alias in [
-            Some("updateProjectV2ItemFieldValue"),
-            (fields.len() > 1).then_some("second"),
-            (fields.len() > 2).then_some("third"),
-            clear.map(|_| "cleared"),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let returned = data
-                .get(alias)
-                .and_then(|value| value.get("projectV2Item"))
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!("GitHub field update {alias} returned no project item"),
-                })?;
-            if required_str(returned, "id")? != item {
-                return Err(SourceError::Malformed {
-                    message: format!("GitHub field update {alias} returned the wrong project item"),
-                });
+            let sent = FIELD_WRITE_SLOTS[..batch.len()]
+                .iter()
+                .chain(&FIELD_CLEAR_SLOTS[..batch_clears.len()]);
+            for slot in sent {
+                let alias = slot.alias;
+                let returned = data
+                    .get(alias)
+                    .and_then(|value| value.get("projectV2Item"))
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!("GitHub field update {alias} returned no project item"),
+                    })?;
+                if required_str(returned, "id")? != item {
+                    return Err(SourceError::Malformed {
+                        message: format!(
+                            "GitHub field update {alias} returned the wrong project item"
+                        ),
+                    });
+                }
             }
         }
-        Ok(())
     }
 
     async fn native_dependency_ids(&self, id: &NativeId) -> Result<Vec<String>, SourceError> {
@@ -7095,6 +7751,14 @@ impl GitHubProjectsSource {
             Some(priority) => self.priority_write(&board.fields, existing, priority)?,
             None => None,
         };
+        // And for the reason the priority is: a value no projected field can hold, or a board
+        // that cannot hold the field, is refused while nothing has been written.
+        let (projections, projected) = self.projection_writes(
+            &board.fields,
+            existing.map(|item| &item.projected),
+            incoming.metadata,
+            None,
+        )?;
         let content_kind = existing.map_or(ContentKind::Issue, |item| item.content_kind);
         if content_kind == ContentKind::DraftIssue {
             if let (Some(StatusTarget::Terminal(_, _)), Some(status)) =
@@ -7255,6 +7919,7 @@ impl GitHubProjectsSource {
                 column,
                 status_target.as_ref(),
                 priority_write.as_ref(),
+                &projections,
                 &native,
                 &mut origin_landed,
             )
@@ -7376,6 +8041,7 @@ impl GitHubProjectsSource {
             labels: incoming.labels.to_vec(),
             parent: incoming.parent.cloned(),
             origin: (!origin.is_empty()).then(|| origin.to_owned()),
+            projected,
             number,
             // In the update path this is the item's own url, read off `existing` where the
             // record above was bound, so one expression serves both halves.
@@ -7429,6 +8095,7 @@ impl GitHubProjectsSource {
         column: Option<(String, String)>,
         status_target: Option<&StatusTarget>,
         priority: Option<&PriorityWrite>,
+        projections: &[ProjectionWrite],
         native: &[String],
         origin_landed: &mut bool,
     ) -> Result<(), SourceError> {
@@ -7443,15 +8110,18 @@ impl GitHubProjectsSource {
         if let Some((field_id, option_id)) = column {
             fields.push((field_id, json!({"singleSelectOptionId":option_id})));
         }
-        let clear = match priority {
+        let mut clears = Vec::new();
+        match priority {
             Some(PriorityWrite::Select { field, option }) => {
                 fields.push((field.clone(), json!({"singleSelectOptionId":option})));
-                None
             }
-            Some(PriorityWrite::Clear { field }) => Some(field.as_str()),
-            None => None,
-        };
-        self.set_item_fields(board_id, item_id, &fields, clear)
+            Some(PriorityWrite::Clear { field }) => clears.push(field.as_str()),
+            None => {}
+        }
+        for projection in projections {
+            projection.join(&mut fields, &mut clears);
+        }
+        self.set_item_fields(board_id, item_id, &fields, &clears)
             .await?;
         *origin_landed = true;
 
@@ -8537,6 +9207,11 @@ struct Resolved {
     parent: Option<NativeId>,
     // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
     origin: Option<String>,
+    /// What each board text field this instance projects metadata onto holds for this item,
+    /// by field name — only the fields holding a value, an empty text included. What a write compares the
+    /// item's metadata against, so a field already holding its value is not written again;
+    /// never read back as metadata, which the slot alone reports.
+    projected: BTreeMap<String, String>,
     /// The issue's own number on its repository, as GitHub reports it.
     ///
     /// `None` in exactly two cases: a draft, which has no number at all — `DraftIssue`
@@ -8856,6 +9531,28 @@ struct Incoming<'a> {
     /// project, a document, and every write to an instance with no `priority_mapping` —
     /// which is what keeps such a write's requests exactly what they were before.
     priority: Option<Priority>,
+}
+
+/// What one write does to one projected metadata text field, by the field's id.
+#[derive(Debug, Clone)]
+enum ProjectionWrite {
+    /// Write this text.
+    Set {
+        field: String, // llmlint: ignore[invalid_states_unrepresentable] A private opaque GraphQL field id passed straight back to GitHub, as `PriorityWrite`'s are; GitHub publishes no grammar for it.
+        text: String,
+    },
+    /// Clear the field's value.
+    Clear { field: String }, // llmlint: ignore[invalid_states_unrepresentable] As above.
+}
+
+impl ProjectionWrite {
+    /// Add this write to a field write's list of values and list of clears.
+    fn join<'a>(&'a self, values: &mut Vec<(String, Value)>, clears: &mut Vec<&'a str>) {
+        match self {
+            Self::Set { field, text } => values.push((field.clone(), json!({"text": text}))),
+            Self::Clear { field } => clears.push(field),
+        }
+    }
 }
 
 /// What one write does to an item's `Priority` field.
@@ -10110,6 +10807,10 @@ fn field_definitions(field_values: &[Value]) -> Vec<Value> {
             };
             let mut defined = field.clone();
             defined.insert("__typename".to_owned(), json!(typename));
+            // Only a text field holds a text value, so the value says the field's type too.
+            if typename == "ProjectV2Field" {
+                defined.insert("dataType".to_owned(), json!("TEXT"));
+            }
             Some(Value::Object(defined))
         })
         .collect()
@@ -10823,5 +11524,64 @@ mod end_command_tests {
         );
         end(&source);
         assert_dropped(&source);
+    }
+}
+
+#[cfg(test)]
+mod unprojectable_fields_tests {
+    use super::*;
+
+    /// The field names `docs/metadata.md` says a `metadata_fields` entry may not name.
+    fn documented() -> std::collections::BTreeSet<String> {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+        )
+        .expect("docs/metadata.md is readable");
+        let document = document.split_whitespace().collect::<Vec<_>>().join(" ");
+        let lead = "a `field` equal, ignoring case, to ";
+        let start = document.find(lead).expect("the refused-field sentence") + lead.len();
+        let sentence = &document[start..];
+        let sentence = &sentence[..sentence
+            .find("; and two entries naming one field")
+            .expect("the refused-field sentence ends at the duplicate rule")];
+        let (own, github) = sentence
+            .split_once(" or a field GitHub owns on every board (")
+            .expect("the sentence names GitHub's own fields");
+        own.split('`')
+            .skip(1)
+            .step_by(2)
+            .chain(
+                github
+                    .strip_suffix(')')
+                    .expect("GitHub's own fields close the sentence")
+                    .split(", "),
+            )
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn the_documented_refused_fields_are_exactly_the_ones_the_configuration_refuses() {
+        let refused: std::collections::BTreeSet<String> = UNPROJECTABLE_FIELDS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect();
+        assert_eq!(documented(), refused, "the fields docs/metadata.md lists");
+        let instance = SourceName::new("work").unwrap();
+        for name in UNPROJECTABLE_FIELDS {
+            for spelled in [name.to_owned(), name.to_uppercase()] {
+                let entry = MetadataFieldConfig {
+                    field: spelled.clone(),
+                    key: "team.machine".to_owned(),
+                    path: Vec::new(),
+                };
+                let refused = MetadataField::resolve(vec![entry], &instance)
+                    .expect_err("an unprojectable field is refused");
+                assert!(
+                    refused.to_string().contains(&format!("{name:?}")),
+                    "{spelled}: {refused}"
+                );
+            }
+        }
     }
 }

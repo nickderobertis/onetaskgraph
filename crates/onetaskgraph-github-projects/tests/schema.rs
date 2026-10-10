@@ -701,3 +701,147 @@ fn the_priority_levels_and_their_configuration_are_reconciled_against_the_vocabu
         .expect("the configuration schema serializes");
     assert!(whole["properties"]["priority_mapping"].is_object());
 }
+
+/// Each aliased field of `UPDATE_FIELDS`, in the order GitHub runs them: the key its answer
+/// comes back under, the mutation it is, the variable carrying its input and the boolean that
+/// includes it.
+fn update_fields_slots(document: &str) -> Vec<(String, String, String, String)> {
+    let document = query::parse_query::<String>(document).expect("a valid document");
+    let query::Definition::Operation(query::OperationDefinition::Mutation(mutation)) =
+        &document.definitions[0]
+    else {
+        panic!("UPDATE_FIELDS is a mutation");
+    };
+    let variable = |value: &query::Value<String>| match value {
+        query::Value::Variable(name) => name.clone(),
+        other => panic!("a slot is bound to a variable, not {other:?}"),
+    };
+    mutation
+        .selection_set
+        .items
+        .iter()
+        .map(|selection| {
+            let query::Selection::Field(field) = selection else {
+                panic!("UPDATE_FIELDS selects fields alone");
+            };
+            let input = field
+                .arguments
+                .iter()
+                .find(|(name, _)| name == "input")
+                .map(|(_, value)| variable(value))
+                .expect("an input");
+            let include = field
+                .directives
+                .iter()
+                .find(|directive| directive.name == "include")
+                .and_then(|directive| directive.arguments.first())
+                .map(|(_, value)| variable(value))
+                .expect("every slot is included by its own boolean");
+            (
+                field.alias.clone().unwrap_or_else(|| field.name.clone()),
+                field.name.clone(),
+                input,
+                include,
+            )
+        })
+        .collect()
+}
+
+/// `FIELD_WRITE_SLOTS` and `FIELD_CLEAR_SLOTS` are what the source and every loopback board
+/// read `UPDATE_FIELDS`' aliases off, so they are held to the document itself, both ways and in
+/// order: a slot added to one and not the other fails here rather than as a write whose answer
+/// is read under the wrong key.
+#[test]
+fn the_field_slots_are_exactly_the_aliased_fields_of_update_fields() {
+    use onetaskgraph_github_projects::{FIELD_CLEAR_SLOTS, FIELD_WRITE_SLOTS, graphql};
+    let declared = FIELD_WRITE_SLOTS
+        .iter()
+        .map(|slot| (slot, "updateProjectV2ItemFieldValue"))
+        .chain(
+            FIELD_CLEAR_SLOTS
+                .iter()
+                .map(|slot| (slot, "clearProjectV2ItemFieldValue")),
+        )
+        .map(|(slot, mutation)| {
+            (
+                slot.alias.to_owned(),
+                mutation.to_owned(),
+                slot.variable.to_owned(),
+                slot.include.to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(update_fields_slots(graphql::UPDATE_FIELDS), declared);
+    // And the comparison is one that can fail: the same document with two slots' includes
+    // swapped is refused.
+    let swapped = graphql::UPDATE_FIELDS
+        .replacen("@include(if:$writeSecond)", "@include(if:$PLACEHOLDER)", 1)
+        .replacen("@include(if:$writeThird)", "@include(if:$writeSecond)", 1)
+        .replacen("@include(if:$PLACEHOLDER)", "@include(if:$writeThird)", 1);
+    assert_ne!(update_fields_slots(&swapped), declared);
+}
+
+/// A `github-projects` configuration serializes to a document it reads back as itself, with an
+/// empty `metadata_fields`, and an entry's empty `path`, left out — so a configuration written
+/// before either existed and one written with them empty are the same document.
+#[test]
+fn a_configuration_round_trips_and_leaves_its_empty_lists_out() {
+    use onetaskgraph_github_projects::GitHubProjectsConfig;
+    use serde_json::{Value, json};
+    let base = json!({"owner": "octo-org", "project_number": 7, "repository": "acme/work"});
+    let read = |document: &Value| -> GitHubProjectsConfig {
+        serde_json::from_value(document.clone())
+            .unwrap_or_else(|error| panic!("{document} does not read: {error}"))
+    };
+    let written = |config: &GitHubProjectsConfig| serde_json::to_value(config).unwrap();
+    let with = |entries: Value| {
+        let mut document = base.clone();
+        document["metadata_fields"] = entries;
+        document
+    };
+
+    // Absent and empty read alike, and both write no key at all.
+    for document in [base.clone(), with(json!([]))] {
+        let config = read(&document);
+        assert!(config.metadata_fields.is_empty(), "{document}");
+        let serialized = written(&config);
+        assert_eq!(serialized.get("metadata_fields"), None, "{serialized}");
+        assert_eq!(read(&serialized), config, "{serialized}");
+    }
+    assert_eq!(read(&base), read(&with(json!([]))));
+
+    // Populated: every entry kept in order; a path is written only when it has a step.
+    let populated = read(&with(json!([
+        {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+        {"field": "Team", "key": "team.name", "path": []},
+        {"field": "Owner", "key": "team.owner"},
+    ])));
+    let serialized = written(&populated);
+    assert_eq!(
+        serialized["metadata_fields"],
+        json!([
+            {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]},
+            {"field": "Team", "key": "team.name"},
+            {"field": "Owner", "key": "team.owner"},
+        ])
+    );
+    let again = read(&serialized);
+    assert_eq!(again, populated);
+    assert_eq!(
+        written(&again),
+        serialized,
+        "a second round trip writes the same bytes"
+    );
+    assert_eq!(populated.metadata_fields[1].path, Vec::<String>::new());
+
+    // Every other member survives the trip too, defaults included.
+    let full = read(&json!({
+        "owner": "octo-org", "project_number": 7, "repository": "acme/work",
+        "token_env": "BOARD_TOKEN", "endpoint": "https://github.example/api/graphql",
+        "status_mapping": {"todo": "Ready", "draft": null},
+        "priority_mapping": {"urgent": "P0"},
+        "pacing": {"min_mutation_interval_ms": 0, "retry_budget_ms": 0},
+        "metadata_fields": [{"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]}],
+    }));
+    assert_eq!(read(&written(&full)), full);
+}

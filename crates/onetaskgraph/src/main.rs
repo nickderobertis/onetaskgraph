@@ -1620,6 +1620,107 @@ mod tests {
         emit(out, schema_bundle()?.trim_end(), "the schema bundle")
     }
 
+    include!("../../onetaskgraph-core/tests/support/bundle_digest.rs");
+
+    /// The schema-bundle golden — `PUBLISHED_BUNDLES` and its rows' constants — as the engine's
+    /// test holds it.
+    const BUNDLE_GOLDEN: &str = include_str!("../../onetaskgraph-core/tests/engine.rs");
+
+    /// The `binary/<root>` entries the golden's row for `version` records, or why it has none.
+    ///
+    /// Read off the row as the formatter lays it out: `(<version>,`, its
+    /// `Published::Whole { .., beside: &<CONST> }`, and that constant's `("binary/…", 0x…)`
+    /// lines. A row of another shape answers with the refusal rather than with nothing, so a
+    /// golden this cannot read fails here instead of passing.
+    fn recorded_binary_roots(version: u32) -> Result<Vec<(String, u64)>, String> {
+        let table = BUNDLE_GOLDEN
+            .split_once("const PUBLISHED_BUNDLES")
+            .ok_or("the golden has no PUBLISHED_BUNDLES")?
+            .1;
+        let row = table
+            .split_once(&format!(
+                "(\n        {version},\n        Published::Whole {{"
+            ))
+            .ok_or(format!("the golden has no whole row for version {version}"))?
+            .1;
+        let constant = row
+            .split_once("beside: &")
+            .and_then(|(_, rest)| rest.split_once(','))
+            .ok_or(format!("version {version}'s row names no beside constant"))?
+            .0
+            .trim();
+        let body = BUNDLE_GOLDEN
+            .split_once(&format!("const {constant}: "))
+            .and_then(|(_, rest)| rest.split_once("];"))
+            .ok_or(format!("the golden does not define {constant}"))?
+            .0;
+        body.lines()
+            .filter_map(|line| line.trim().strip_prefix("(\"binary/"))
+            .map(|entry| {
+                let (root, digest) = entry
+                    .split_once("\", 0x")
+                    .ok_or(format!("an unreadable entry of {constant}: {entry}"))?;
+                let digest = u64::from_str_radix(digest.trim_end_matches("),"), 16)
+                    .map_err(|error| format!("{constant}: {entry}: {error}"))?;
+                Ok((root.to_owned(), digest))
+            })
+            .collect()
+    }
+
+    /// The roots this binary adds over the engine's bundle are what the schema-bundle golden's
+    /// row for the current version records as `binary/<root>`, digest for digest — the half of
+    /// that row the engine's own test cannot see. So a root added here, or one whose schema
+    /// moved, fails until the golden records it, and the version moves with it.
+    #[test]
+    fn the_roots_this_binary_adds_are_the_ones_the_bundle_golden_records() {
+        let mut out = Vec::new();
+        write_schema_bundle(&mut out).expect("the bundle renders");
+        let bundle: serde_json::Value =
+            serde_json::from_slice(&out).expect("the bundle is valid JSON");
+        let engine = onetaskgraph_core::schema_bundle();
+        let engine_roots = engine["roots"].as_object().expect("roots");
+        let mut added: Vec<(String, u64)> = bundle["roots"]
+            .as_object()
+            .expect("roots")
+            .iter()
+            .filter(|(root, _)| !engine_roots.contains_key(*root))
+            .map(|(root, schema)| (root.clone(), digest(schema)))
+            .collect();
+        added.sort_unstable();
+        let mut recorded = recorded_binary_roots(onetaskgraph_core::SCHEMA_BUNDLE_VERSION)
+            .unwrap_or_else(|why| panic!("{why}"));
+        recorded.sort_unstable();
+        let rows: Vec<String> = added
+            .iter()
+            .map(|(root, digest)| format!("    (\"binary/{root}\", {digest:#018x}),"))
+            .collect();
+        assert_eq!(
+            added,
+            recorded,
+            "the roots this binary adds are not what version {} of the schema bundle records. \
+             If this change is deliberate, append a row to PUBLISHED_BUNDLES in \
+             crates/onetaskgraph-core/tests/engine.rs and bump SCHEMA_BUNDLE_VERSION to match; \
+             its binary entries are:\n{}",
+            onetaskgraph_core::SCHEMA_BUNDLE_VERSION,
+            rows.join("\n")
+        );
+        assert!(
+            !added.is_empty(),
+            "the binary adds its reports to the bundle"
+        );
+        assert_eq!(bundle["plugin_config"], engine["plugin_config"]);
+        assert_eq!(bundle["version"], onetaskgraph_core::SCHEMA_BUNDLE_VERSION);
+    }
+
+    /// The row reader refuses a version the golden has no whole row for rather than answering
+    /// an empty list, which would compare equal to a binary adding nothing.
+    #[test]
+    fn the_golden_reader_refuses_a_version_it_has_no_whole_row_for() {
+        assert!(recorded_binary_roots(34).is_err());
+        assert!(recorded_binary_roots(9_999).is_err());
+        assert!(!recorded_binary_roots(35).unwrap().is_empty());
+    }
+
     #[test]
     fn the_schema_verb_writes_a_bundle_with_every_contract_root() {
         let mut out = Vec::new();

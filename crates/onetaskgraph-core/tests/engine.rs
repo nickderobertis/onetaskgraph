@@ -155,6 +155,15 @@ enum Published {
     Names(&'static [&'static str]),
     /// Every root's name beside a digest of the schema it emitted.
     Shapes(&'static [(&'static str, u64)]),
+    /// Every root's digest, and beside them the rest of the document both SDKs are generated
+    /// from: each plugin's configuration schema, as `plugin_config/<kind>`, which this file
+    /// verifies — see [`plugin_configs`] — and each root the binary adds to this bundle, as
+    /// `binary/<root>`, which the binary's own test verifies against this same row. From
+    /// [`WHOLE_FROM`].
+    Whole {
+        roots: &'static [(&'static str, u64)],
+        beside: &'static [(&'static str, u64)],
+    },
 }
 
 impl Published {
@@ -162,9 +171,35 @@ impl Published {
     fn names(&self) -> Vec<&'static str> {
         match self {
             Self::Names(names) => names.to_vec(),
-            Self::Shapes(shapes) => shapes.iter().map(|(name, _)| *name).collect(),
+            Self::Shapes(shapes) | Self::Whole { roots: shapes, .. } => {
+                shapes.iter().map(|(name, _)| *name).collect()
+            }
         }
     }
+}
+
+/// The first version whose row records the whole emitted document rather than the engine's
+/// roots alone.
+///
+/// Before it, a change to a plugin's configuration or to a root the binary adds — a
+/// `github-projects` source's `metadata_fields`, and the `FieldsReport` that reports them —
+/// moved both SDKs' generated models while this table could not tell that version from the
+/// one before, and refused the bump as republishing it.
+const WHOLE_FROM: u32 = 35;
+
+/// The `plugin_config/<kind>` half of what a [`Published::Whole`] row records beside the roots,
+/// as `bundle` emits it. The `binary/<root>` half is the binary's to verify, because the binary
+/// is what adds those roots; `crates/onetaskgraph/src/main.rs`'s test reads this file's row for
+/// the current version and holds every root it adds to it.
+fn plugin_configs(bundle: &Value) -> Vec<(String, u64)> {
+    let mut emitted: Vec<(String, u64)> = bundle["plugin_config"]
+        .as_object()
+        .expect("plugin_config is an object")
+        .iter()
+        .map(|(kind, schema)| (format!("plugin_config/{kind}"), digest(schema)))
+        .collect();
+    emitted.sort_unstable();
+    emitted
 }
 
 /// The first version whose row records the shape of every root rather than its name alone.
@@ -2036,53 +2071,33 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
     (32, Published::Shapes(&THIRTY_SECOND_BUNDLE_SHAPE)),
     (33, Published::Shapes(&THIRTY_THIRD_BUNDLE_SHAPE)),
     (34, Published::Shapes(&THIRTY_FOURTH_BUNDLE_SHAPE)),
+    // The engine's roots did not move: what moved is the `github-projects` configuration,
+    // which gained `metadata_fields`, and the `FieldsReport` the binary adds, which reports
+    // them — the first version recorded whole, see `WHOLE_FROM`.
+    (
+        35,
+        Published::Whole {
+            roots: &THIRTY_FOURTH_BUNDLE_SHAPE,
+            beside: &THIRTY_FIFTH_BUNDLE_BESIDE,
+        },
+    ),
 ];
 
-/// One root's schema rendered so that two equal documents render equally.
-///
-/// Object keys sorted at every depth, so nothing about the order `schemars` happened to
-/// build a map in reaches the digest. Arrays keep their order, because in JSON Schema an
-/// array's order is part of what it says.
-fn canonical(value: &Value) -> String {
-    match value {
-        Value::Object(fields) => {
-            let mut keys: Vec<&String> = fields.keys().collect();
-            keys.sort_unstable();
-            let rendered: Vec<String> = keys
-                .iter()
-                .map(|key| {
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(key).expect("a key renders"),
-                        canonical(&fields[*key])
-                    )
-                })
-                .collect();
-            format!("{{{}}}", rendered.join(","))
-        }
-        Value::Array(items) => {
-            let rendered: Vec<String> = items.iter().map(canonical).collect();
-            format!("[{}]", rendered.join(","))
-        }
-        other => serde_json::to_string(other).expect("a scalar renders"),
-    }
-}
+/// What version 35 publishes beside the engine's roots.
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] `SCHEMA_BUNDLE_VERSION` is one number for the whole document both SDKs are generated from, so the record that holds it — append-only, one row per version, no shape republished — has to be one table: split per owner, no table could tell whether a version republishes an earlier shape, which is the gap this row closes. Each entry is verified where it is emitted — the `plugin_config/` ones by this file, the `binary/` ones by `crates/onetaskgraph/src/main.rs` — and `schema.rs` registers the Linear configuration as a root under this rule's same suppression for the same reason.
+const THIRTY_FIFTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
+    ("binary/FieldsReport", 0x29439ba93e5e343a),
+    ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
+    ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
+    ("plugin_config/github-projects", 0x0766f20fcf444bfe),
+    ("plugin_config/in-memory", 0x28f47016ca48d445),
+    ("plugin_config/linear", 0x10a5b658053e0912),
+    ("plugin_config/local-md", 0x73e221b1e7df9de3),
+    ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
+];
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
-/// A change-detecting digest of one root's emitted schema.
-///
-/// FNV-1a over the canonical rendering above, written out here rather than taken from a
-/// crate: what this has to catch is a schema that changed without the version moving, and
-/// any digest that changes when its input does catches that. It defends against nothing
-/// adversarial and does not pretend to — whoever can edit a row of the table above can edit
-/// the digest beside it, which the table already says of itself.
-fn digest(schema: &Value) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in canonical(schema).as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
+include!("support/bundle_digest.rs");
 
 /// The shape version 10 of the bundle publishes: every root, and a digest of its schema.
 ///
@@ -3027,9 +3042,16 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
         // Once a version records the shape, no later version may record less: a row that
         // fell back to names would silently stop noticing a changed root.
         assert!(
-            *version < SHAPES_FROM || matches!(published, Published::Shapes(_)),
+            *version < SHAPES_FROM
+                || matches!(published, Published::Shapes(_) | Published::Whole { .. }),
             "version {version} is at or past {SHAPES_FROM} and must record every root's \
              schema, not its name alone."
+        );
+        // And once a version records the whole document, no later version records less.
+        assert!(
+            *version < WHOLE_FROM || matches!(published, Published::Whole { .. }),
+            "version {version} is at or past {WHOLE_FROM} and must record every plugin's \
+             configuration and every root the binary adds beside the engine's roots."
         );
         // A shape may not be republished under a second version, and a version may not
         // describe two shapes — either would make the version useless for the SDK that
@@ -3046,6 +3068,21 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
                         earlier.sort_unstable();
                         now.sort_unstable();
                         earlier == now
+                    }
+                    (
+                        Published::Whole {
+                            roots: earlier_roots,
+                            beside: earlier_beside,
+                        },
+                        Published::Whole { roots, beside },
+                    ) => {
+                        let sorted = |entries: &[(&'static str, u64)]| {
+                            let mut entries = entries.to_vec();
+                            entries.sort_unstable();
+                            entries
+                        };
+                        sorted(earlier_roots) == sorted(roots)
+                            && sorted(earlier_beside) == sorted(beside)
                     }
                     _ => false,
                 }
@@ -3076,7 +3113,11 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
     // And what each root *contains*, which the root names alone cannot see. A property
     // added to `CopyReport` is a new field in both SDKs' generated models exactly as a new
     // root is a new model, so it moves the version or it fails here.
-    if let Published::Shapes(published) = expected {
+    if let Published::Shapes(published)
+    | Published::Whole {
+        roots: published, ..
+    } = expected
+    {
         let mut emitted: Vec<(&str, u64)> = roots
             .iter()
             .map(|(name, schema)| (name.as_str(), digest(schema)))
@@ -3091,6 +3132,41 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
              binary emits. If this change is deliberate, append a row to PUBLISHED_BUNDLES \
              and bump SCHEMA_BUNDLE_VERSION to match; the row to paste is:\n{}",
             literal(&emitted)
+        );
+    }
+    // And what a whole row records beside them: every plugin's configuration schema, which moves
+    // both SDKs' models exactly as an engine root does. Its `binary/<root>` entries are the
+    // binary's to verify; nothing else may be recorded there.
+    if let Published::Whole {
+        beside: published, ..
+    } = expected
+    {
+        assert!(
+            published
+                .iter()
+                .all(|(name, _)| name.starts_with("plugin_config/") || name.starts_with("binary/")),
+            "a whole row records plugin_config/<kind> and binary/<root> entries alone: \
+             {published:?}"
+        );
+        let emitted = plugin_configs(&bundle);
+        let mut recorded: Vec<(String, u64)> = published
+            .iter()
+            .filter(|(name, _)| name.starts_with("plugin_config/"))
+            .map(|(name, digest)| ((*name).to_owned(), *digest))
+            .collect();
+        recorded.sort_unstable();
+        let rows: Vec<String> = emitted
+            .iter()
+            .map(|(name, digest)| format!("    (\"{name}\", {digest:#018x}),"))
+            .collect();
+        assert_eq!(
+            emitted,
+            recorded,
+            "the plugin configurations version {SCHEMA_BUNDLE_VERSION} publishes are not the \
+             ones the bundle emits. If this change is deliberate, append a row to \
+             PUBLISHED_BUNDLES and bump SCHEMA_BUNDLE_VERSION to match; its plugin_config \
+             entries are:\n{}",
+            rows.join("\n")
         );
     }
 

@@ -143,7 +143,266 @@ fn report_visibility_reads() {
     let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+#[test]
+fn report_metadata_fields() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
 // llmlint: ignore-end[tests_assert_real_behavior]
+
+/// The workload `metadata_fields.rs` records: one follow-up copied once and re-copied twice
+/// unchanged, with a projected host and without one.
+pub(super) const METADATA_FIELD_WORKLOAD: &str = "metadata-field-follow-up";
+
+/// The 10x hour of follow-up filing the budget states: first copies and unchanged re-copies
+/// over the hour, and in its peak minute, when two runs' copies land together.
+const BURST_HOUR: (u64, u64) = (50, 100);
+const BURST_MINUTE: (u64, u64) = (10, 20);
+
+/// A well-formed recording broken one way at a time, each with the refusal it must meet:
+/// another workload, a count that is missing or not a whole number, and re-copies that are
+/// absent, not a list, or not the two the workload makes.
+fn malformed_metadata_recordings(valid: Value) -> Vec<(Value, Result<f64, &'static str>)> {
+    use serde_json::json;
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed
+            .pointer_mut(pointer)
+            .expect("the recording has that member") = value;
+        changed
+    };
+    vec![
+        (
+            with("/workload", json!("another-workload")),
+            Err("workload does not match"),
+        ),
+        (
+            with("/first/with/operations", Value::Null),
+            Err("a first copy with the projection is missing a whole operations count"),
+        ),
+        (
+            with("/first/without/requests", json!(5.5)),
+            Err("a first copy without the projection is missing a whole requests count"),
+        ),
+        (
+            with("/unchanged/with/0/points", json!("one")),
+            Err("an unchanged re-copy with the projection is missing a whole points count"),
+        ),
+        (
+            with("/unchanged/without", Value::Null),
+            Err("two unchanged re-copies without the projection"),
+        ),
+        (
+            with("/unchanged/with", json!({"operations": 0})),
+            Err("two unchanged re-copies with the projection"),
+        ),
+        (
+            with(
+                "/unchanged/with",
+                json!([{"operations": 0, "requests": 1, "points": 1}]),
+            ),
+            Err("two unchanged re-copies with the projection"),
+        ),
+    ]
+}
+
+/// One copy kind's spend as the telemetry records it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Spent {
+    operations: f64,
+    requests: f64,
+    points: f64,
+}
+
+fn spent(value: &Value, what: &str) -> Result<Spent, String> {
+    let figure = |name: &str| {
+        value[name]
+            .as_u64()
+            .map(|figure| figure as f64)
+            .ok_or(format!("{what} is missing a whole {name} count"))
+    };
+    Ok(Spent {
+        operations: figure("operations")?,
+        requests: figure("requests")?,
+        points: figure("points")?,
+    })
+}
+
+/// The mean of the unchanged re-copies the telemetry records for one side.
+fn unchanged(value: &Value, side: &str) -> Result<Spent, String> {
+    let recopies = value["unchanged"][side]
+        .as_array()
+        .filter(|recopies| recopies.len() == 2)
+        .ok_or(format!(
+            "the workload records two unchanged re-copies {side} the projection"
+        ))?;
+    let each = recopies
+        .iter()
+        .map(|recopy| {
+            spent(
+                recopy,
+                &format!("an unchanged re-copy {side} the projection"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mean = |pick: fn(&Spent) -> f64| each.iter().map(pick).sum::<f64>() / each.len() as f64;
+    Ok(Spent {
+        operations: mean(|spent| spent.operations),
+        requests: mean(|spent| spent.requests),
+        points: mean(|spent| spent.points),
+    })
+}
+
+/// The larger of the two shares of GitHub's content-creation allowance projecting one field
+/// adds to the stated burst, in percent, and the breakdown it is reported with.
+pub(super) fn metadata_field_share(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(METADATA_FIELD_WORKLOAD) {
+        return Err("workload does not match expected shape".into());
+    }
+    let first_with = spent(&value["first"]["with"], "a first copy with the projection")?;
+    let first_without = spent(
+        &value["first"]["without"],
+        "a first copy without the projection",
+    )?;
+    let unchanged_with = unchanged(&value, "with")?;
+    let unchanged_without = unchanged(&value, "without")?;
+    for (kind, with, without) in [
+        ("first copy", first_with, first_without),
+        ("unchanged re-copy", unchanged_with, unchanged_without),
+    ] {
+        if with.requests != without.requests {
+            return Err(format!(
+                "a {kind} sends {} HTTP requests with the projection and {} without it; the \
+                 projection must ride a request the copy already sends",
+                with.requests, without.requests
+            ));
+        }
+        if with.operations < without.operations {
+            return Err(format!(
+                "a {kind} records fewer operations with the projection"
+            ));
+        }
+    }
+    let added_first = first_with.operations - first_without.operations;
+    let added_unchanged = unchanged_with.operations - unchanged_without.operations;
+    let added = |(first, recopies): (u64, u64)| {
+        first as f64 * added_first + recopies as f64 * added_unchanged
+    };
+    let minute_writes = added(BURST_MINUTE);
+    let hour_writes = added(BURST_HOUR);
+    let per_minute = onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE as f64;
+    let per_hour = onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR as f64;
+    let minute_share = 100.0 * minute_writes / per_minute;
+    let hour_share = 100.0 * hour_writes / per_hour;
+    let row = |kind: &str, with: Spent, without: Spent| {
+        format!(
+            "{kind}: {} operations, {} requests, {} points with metadata_fields; {} \
+             operations, {} requests, {} points without",
+            with.operations,
+            with.requests,
+            with.points,
+            without.operations,
+            without.requests,
+            without.points
+        )
+    };
+    // Points are the primary GraphQL allowance's unit, which `GET /rate_limit` reports per
+    // token; what projecting adds to it over the burst hour is reported beside the shares.
+    let hour_points = BURST_HOUR.0 as f64 * (first_with.points - first_without.points)
+        + BURST_HOUR.1 as f64 * (unchanged_with.points - unchanged_without.points);
+    let detail = format!(
+        "peak minute: {minute_writes} added writes of {per_minute} a minute = {minute_share}%; \
+         hour: {hour_writes} added writes of {per_hour} an hour = {hour_share}%; hour: \
+         {hour_points} added modelled primary points against the token's hourly GraphQL points \
+         allowance; burst {} first copies and {} unchanged re-copies an hour, {} and {} in its \
+         peak minute; {}; {}",
+        BURST_HOUR.0,
+        BURST_HOUR.1,
+        BURST_MINUTE.0,
+        BURST_MINUTE.1,
+        row("first copy", first_with, first_without),
+        row("unchanged re-copy", unchanged_with, unchanged_without),
+    );
+    Ok((minute_share.max(hour_share), detail))
+}
+
+#[test]
+fn the_metadata_field_share_is_the_larger_of_the_minute_and_the_hour() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("metadata-telemetry");
+    std::fs::create_dir_all(&directory).unwrap();
+    let spent = |operations: u64, requests: u64| json!({"operations": operations, "requests": requests, "points": requests});
+    let recorded = |first: (u64, u64), unchanged: (u64, u64), requests: (u64, u64)| {
+        json!({"budget": "recorded-share", "detail": "observed",
+               "workload": METADATA_FIELD_WORKLOAD,
+               "first": {"with": spent(first.0, requests.0), "without": spent(first.1, 5)},
+               "unchanged": {"with": [spent(unchanged.0, requests.1), spent(unchanged.0, requests.1)],
+                             "without": [spent(unchanged.1, 1), spent(unchanged.1, 1)]}})
+    };
+    for (telemetry, expected) in [
+        // One added write per first copy and none per re-copy: 10 / 80 against 50 / 500.
+        (recorded((3, 2), (0, 0), (5, 1)), Ok(12.5)),
+        // One per re-copy too: 30 / 80 against 150 / 500.
+        (recorded((3, 2), (1, 0), (5, 1)), Ok(37.5)),
+        (recorded((3, 2), (0, 0), (6, 1)), Err("must ride a request")),
+        (recorded((3, 2), (0, 0), (5, 2)), Err("must ride a request")),
+        (recorded((1, 2), (0, 0), (5, 1)), Err("fewer operations")),
+    ]
+    .into_iter()
+    .chain(malformed_metadata_recordings(recorded(
+        (3, 2),
+        (0, 0),
+        (5, 1),
+    ))) {
+        std::fs::write(
+            onetaskgraph_e2e_support::telemetry::file_in(&directory, "recorded-share"),
+            telemetry.to_string(),
+        )
+        .unwrap();
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_metadata_fields",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", "recorded-share")
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stderr);
+        match expected {
+            Ok(share) => {
+                assert!(output.status.success(), "{said}");
+                let reported: Value =
+                    serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
+                assert_eq!(reported["value"].as_f64(), Some(share), "{reported}");
+                let detail = reported["detail"].as_str().unwrap_or_default();
+                for named in [
+                    "peak minute",
+                    "of 80 a minute",
+                    "of 500 an hour",
+                    "first copy",
+                ] {
+                    assert!(detail.contains(named), "{named}: {detail}");
+                }
+            }
+            Err(message) => {
+                assert!(!output.status.success(), "accepted: {message}");
+                assert!(said.contains(message), "{message}: {said}");
+                assert!(!result.exists());
+            }
+        }
+    }
+}
 
 /// The budget the report command was selected for, or `None` for an ordinary test run.
 fn selected() -> Option<String> {

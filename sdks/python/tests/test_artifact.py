@@ -271,7 +271,19 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 34
+    assert emitted_bundle["version"] == 35
+    # Version 35 published a `github-projects` source's `metadata_fields`: its configuration's
+    # list of `{field, key, path}` entries, and the `metadata_fields` list `sources fields`
+    # answers with in a `FieldsReport`, each left out when empty.
+    github_config = emitted_bundle["plugin_config"]["github-projects"]
+    assert "metadata_fields" in github_config["properties"]
+    assert github_config["properties"]["metadata_fields"]["default"] == []
+    fields_report = emitted_bundle["roots"]["FieldsReport"]
+    assert "metadata_fields" in fields_report["properties"]
+    assert "metadata_fields" not in fields_report.get("required", [])
+    from onetaskgraph_sdk import FieldsReport
+
+    assert FieldsReport.model_validate({"source": "board", "fields": []}).metadata_fields == []
     # Version 34 published the public boundary: `classification` on a task, a project and a
     # document, and the shapes a store's `write_policy` and a caller's policy exchange.
     for root in ("Task", "Project", "Document"):

@@ -643,14 +643,20 @@ fn priority_writes(board: &GitHubBoardFields) -> Vec<String> {
         .flat_map(|(query, variables)| {
             let mut writes = Vec::new();
             if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
-                for (key, enabled) in [
-                    ("input", true),
-                    ("second", variables["writeSecond"] == true),
-                    ("third", variables["writeThird"] == true),
-                    ("clear", variables["writeClear"] == true),
-                ] {
-                    if enabled && variables[key]["fieldId"] == "FIELD-priority" {
-                        writes.push(if key == "clear" {
+                let writes_then_clears = onetaskgraph_github_projects::FIELD_WRITE_SLOTS
+                    .iter()
+                    .map(|slot| (slot, false))
+                    .chain(
+                        onetaskgraph_github_projects::FIELD_CLEAR_SLOTS
+                            .iter()
+                            .map(|slot| (slot, true)),
+                    );
+                for (slot, clears) in writes_then_clears {
+                    let key = slot.variable;
+                    if variables[slot.include] == true
+                        && variables[key]["fieldId"] == "FIELD-priority"
+                    {
+                        writes.push(if clears {
                             "clear".to_owned()
                         } else {
                             variables[key]["value"]["singleSelectOptionId"]

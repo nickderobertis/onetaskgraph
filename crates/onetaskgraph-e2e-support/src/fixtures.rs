@@ -984,6 +984,12 @@ struct GitHubBoard {
     /// Fields of a person's own beside the ones this product sets up, each with one item's
     /// value of it.
     persons_fields: Vec<Value>,
+    /// Text fields beyond the origin's — what a source's `metadata_fields` projects onto —
+    /// each as the board's field list answers it. An item's value of one is under its
+    /// `texts`, by field id.
+    text_fields: Vec<Value>,
+    /// Whether the next text-field create is answered as landed without the board keeping it.
+    omits_created_text_field: bool,
     /// Whether the `Priority` field answers its `options` as something other than a list.
     malformed_priority_options: bool,
     /// A field whose value the board snapshot answers twice on `T-1`, the second time naming
@@ -1239,6 +1245,51 @@ impl GitHubBoardFields {
     /// field's option list.
     pub fn drift_after_priority_update(&self) {
         self.board.lock().unwrap().drift_after_priority_update = true;
+    }
+
+    /// Give the board a text field called `name`, which a source's `metadata_fields` may
+    /// project a value onto, holding nothing on any item.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: its field list and every item's values are the board's private state, read by its own request loop, so a handle on them can only be a method beside `with_persons_field` and `refuse_once`, and a suite of one plugin could not add it from outside.
+    pub fn with_text_field(&self, name: &str) {
+        self.board.lock().unwrap().text_fields.push(
+            json!({"__typename":"ProjectV2Field","id":format!("FIELD-text-{name}"),
+                   "name":name,"dataType":"TEXT"}),
+        );
+    }
+
+    /// What the text field called `name` holds on the board item whose content is `id`, or
+    /// `None` when it holds nothing — or the board has no such field.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private item state, beside `status_options` and `priority_options`, for the reason `with_text_field` above states.
+    #[must_use]
+    pub fn text_of(&self, id: &str, name: &str) -> Option<String> {
+        let board = self.board.lock().unwrap();
+        let field = board
+            .text_fields
+            .iter()
+            .find(|field| field["name"] == name)?;
+        let item = board.items.iter().find(|item| item["id"] == id)?;
+        item["texts"][field["id"].as_str()?]
+            .as_str()
+            .map(str::to_owned)
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+    /// The board's fields as its own field list answers them.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private field list, for the reason `with_text_field` above states.
+    #[must_use]
+    pub fn field_list(&self) -> Vec<Value> {
+        self.board.lock().unwrap().fields()["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+    /// Answer the next text-field create as landed without keeping the field, as a response
+    /// the setup's verification read has to catch would.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's private field list, for the reason `with_text_field` above states.
+    pub fn omit_created_text_field(&self) {
+        self.board.lock().unwrap().omits_created_text_field = true;
     }
 
     /// Give the board a single-select field of a person's own, `field`, holding the first of
@@ -1519,7 +1570,7 @@ impl GitHubBoard {
 
     fn fields(&self) -> Value {
         let mut nodes = vec![json!({"__typename":"ProjectV2Field","id":"FIELD-origin",
-            "name":"onetaskgraph.origin"})];
+            "name":"onetaskgraph.origin","dataType":"TEXT"})];
         if self.status_field_present {
             nodes.insert(
                 0,
@@ -1532,6 +1583,7 @@ impl GitHubBoard {
                 "id":"FIELD-priority","name":"Priority","options":options}));
         }
         nodes.extend(self.persons_fields.iter().cloned());
+        nodes.extend(self.text_fields.iter().cloned());
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -1740,6 +1792,12 @@ impl GitHubBoard {
                 json!({"name":name,"field":{"id":"FIELD-priority","name":"Priority",
                                "options":options}}),
             );
+        }
+        // A text field holding nothing carries no node, as GitHub leaves it out.
+        for field in &self.text_fields {
+            if let Some(text) = item["texts"][field["id"].as_str().unwrap_or_default()].as_str() {
+                values.push(json!({"text":text,"field":{"id":field["id"],"name":field["name"]}}));
+            }
         }
         json!({"id":item["item"],
                "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
@@ -1998,6 +2056,8 @@ fn github_projects_board_at(
         remints_after_priority_update: false,
         omits_added_priority_option: false,
         persons_fields: Vec::new(),
+        text_fields: Vec::new(),
+        omits_created_text_field: false,
         malformed_priority_options: false,
         repeated_snapshot_value: None,
         drift_after_status_update: false,
@@ -2305,36 +2365,23 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
-        for (alias, variable, enabled, document, key) in [
+        let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
             (
-                "updateProjectV2ItemFieldValue",
-                "input",
-                true,
+                slot,
                 onetaskgraph_github_projects::graphql::UPDATE_FIELD,
                 "updateProjectV2ItemFieldValue",
-            ),
+            )
+        });
+        let clears = onetaskgraph_github_projects::FIELD_CLEAR_SLOTS.map(|slot| {
             (
-                "second",
-                "second",
-                variables["writeSecond"] == true,
-                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
-            (
-                "third",
-                "third",
-                variables["writeThird"] == true,
-                onetaskgraph_github_projects::graphql::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
-            (
-                "cleared",
-                "clear",
-                variables["writeClear"] == true,
+                slot,
                 onetaskgraph_github_projects::graphql::CLEAR_FIELD,
                 "clearProjectV2ItemFieldValue",
-            ),
-        ] {
+            )
+        });
+        for (slot, document, key) in writes.into_iter().chain(clears) {
+            let (alias, variable, enabled) =
+                (slot.alias, slot.variable, variables[slot.include] == true);
             if enabled {
                 let failing = {
                     let mut held = board.lock().unwrap();
@@ -2406,6 +2453,25 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return json!({"updateProjectV2Field":{"projectV2Field":{"id":"FIELD-priority",
             "options":next}}});
     }
+    if query.contains("createProjectV2Field(input:$input)") && input["dataType"] == "TEXT" {
+        assert_eq!(input["projectId"], "PVT-board");
+        let name = input["name"].as_str().expect("a field name");
+        assert!(
+            !board.fields()["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["name"] == name),
+            "createProjectV2Field names a field this board already has"
+        );
+        let field = json!({"__typename":"ProjectV2Field","id":format!("FIELD-text-{name}"),
+            "name":name,"dataType":"TEXT"});
+        if std::mem::take(&mut board.omits_created_text_field) {
+            return json!({"createProjectV2Field":{"projectV2Field":{}}});
+        }
+        board.text_fields.push(field);
+        return json!({"createProjectV2Field":{"projectV2Field":{}}});
+    }
     if query.contains("createProjectV2Field(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
         assert_eq!(input["dataType"], "SINGLE_SELECT");
@@ -2421,6 +2487,25 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.priority_options = Some(created.clone());
         return json!({"createProjectV2Field":{"projectV2Field":{"id":"FIELD-priority",
             "name":"Priority","options":created}}});
+    }
+    if query.contains("clearProjectV2ItemFieldValue(input:$input)")
+        && board
+            .text_fields
+            .iter()
+            .any(|field| field["id"] == input["fieldId"])
+    {
+        assert_eq!(input["projectId"], "PVT-board");
+        let item_id = input["itemId"].clone();
+        let field = input["fieldId"].as_str().unwrap().to_owned();
+        let held = board
+            .items
+            .iter_mut()
+            .find(|item| item["item"] == item_id)
+            .expect("a field clear names a board item");
+        if let Some(texts) = held["texts"].as_object_mut() {
+            texts.remove(&field);
+        }
+        return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":null}}});
     }
     if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
@@ -2742,11 +2827,22 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .clone()
         });
         let text = input["value"]["text"].clone();
+        let projected = board
+            .text_fields
+            .iter()
+            .any(|field| field["id"] == input["fieldId"]);
         let held = board
             .items
             .iter_mut()
             .find(|item| item["item"] == item_id)
             .expect("a field update names a board item");
+        if projected {
+            if !held["texts"].is_object() {
+                held["texts"] = json!({});
+            }
+            held["texts"][input["fieldId"].as_str().unwrap()] = text;
+            return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":null}}});
+        }
         match option {
             Some(_) if priority_field && drops_priority_writes => {}
             Some(option) if priority_field => held["priority"] = option,

@@ -2270,6 +2270,26 @@ fn factory_validates_config_and_missing_credentials() {
     );
 }
 
+/// A Linear source keeps every metadata key in its description slot, so the `metadata_fields`
+/// a GitHub Projects source projects onto board fields is not a key its configuration takes.
+#[test]
+fn a_linear_configuration_refuses_metadata_fields_as_an_unknown_field() {
+    let refused = match onetaskgraph_linear::Plugin.build(
+        &SourceName::new("work").unwrap(),
+        &serde_json::json!({"team": "ENG", "metadata_fields": [
+            {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]}
+        ]}),
+        &Secrets(Some("fixture-key".into())),
+    ) {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("a Linear source took metadata_fields"),
+    };
+    assert!(
+        refused.contains("unknown field `metadata_fields`"),
+        "{refused}"
+    );
+}
+
 #[tokio::test]
 async fn tasks_use_real_http_parse_mapping_filters_and_paging() {
     let body = include_str!("fixtures/issues.json");
