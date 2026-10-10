@@ -455,6 +455,26 @@ pub enum EngineError {
         named: String,
     },
 
+    /// A write to a source not declared private would name an item whose classification
+    /// cannot be established.
+    #[error(
+        "{item} names {reference}, whose classification could not be established ({why}), and \
+         source {destination} is not declared private; an id that might name a private item is \
+         never written where it would name it, so nothing was written\n\
+         next: configure that item's source and make it readable, copy it along, take the \
+         reference off, or write to a source declared private."
+    )]
+    ReferenceUnclassified {
+        /// How the write named the item.
+        item: String,
+        /// The reference, qualified.
+        reference: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// Why its classification could not be established.
+        why: String,
+    },
+
     /// A private item was to be filed under a project held public.
     #[error(
         "{item} is private, and project {project} it would be filed under is public; a \

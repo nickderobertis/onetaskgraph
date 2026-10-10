@@ -881,6 +881,9 @@ struct Running {
     /// where it lands: an id naming one is withheld from a write anywhere not declared
     /// private (see [`Engine::withholds`]), whichever source it was read from.
     private: Vec<GlobalId>,
+    /// Every item outside this copy that a carried reference names and whose classification
+    /// this command has read as public, so a second reference to it is not read again.
+    public_references: Vec<GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1821,6 +1824,7 @@ impl Engine {
             plans
                 .iter()
                 .flat_map(|(project, tasks)| std::iter::once(project).chain(tasks)),
+            running,
         )
         .await?;
         running.preflighted = true;
@@ -2670,7 +2674,8 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written.
         if !running.preflighted {
-            self.preflight_copy(request, planned.iter()).await?;
+            self.preflight_copy(request, planned.iter(), running)
+                .await?;
         }
 
         for item in &planned {
@@ -3000,11 +3005,26 @@ impl Engine {
     /// one refused anywhere not declared private, and every one landing anywhere not declared
     /// private put to the caller's check. A dry run, which writes nothing, also reads each
     /// destination declared private once, so it reports the refusal its copy would meet.
+    ///
+    /// While the boundary is active it first learns who may read every item outside the copy
+    /// that a carried dependency or delivery names, so a write anywhere not declared private
+    /// withholds the id of a private one — and refuses, before anything is written, a
+    /// reference whose classification it cannot establish.
     async fn preflight_copy<'a>(
         &self,
         request: &CopyRequest,
         planned: impl Iterator<Item = &'a Planned>,
+        running: &mut Running,
     ) -> Result<(), EngineError> {
+        let planned: Vec<&Planned> = planned.collect();
+        for item in &planned {
+            note_private(running, item);
+        }
+        if self.boundary_active() {
+            for item in &planned {
+                self.classify_references(item, running).await?;
+            }
+        }
         for item in planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
@@ -3022,7 +3042,7 @@ impl Engine {
                         .map_or(Classification::Public, |held| classification_of(&held.item)),
                 ),
                 target,
-                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &[])),
+                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &running.private)),
             };
             self.preflight(destination, &outbound).await?;
             // Every item, not one per destination: who can read a write depends on where in
@@ -3030,6 +3050,94 @@ impl Engine {
             if request.dry_run {
                 self.at_write(destination, &outbound.item, &outbound.target)
                     .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Learn who may read each item outside the copy that `item`'s dependencies and deliveries
+    /// name, when `item` lands anywhere not declared private, recording each private one in
+    /// `running.private`.
+    ///
+    /// An item of a source declared private, one of the destination itself, and one this copy
+    /// carries need no read: the first is withheld by its source, the second names nothing
+    /// elsewhere, and the third's classification is already known. Every other is read once
+    /// per command; one whose source is not configured, cannot be read, or holds no such item
+    /// is refused, because an id that cannot be shown public is never written where it would
+    /// name a private item.
+    async fn classify_references(
+        &self,
+        item: &Planned,
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+            return Ok(());
+        }
+        let origin = &item.source.source;
+        let mut named: Vec<(GlobalId, ItemKind)> = item
+            .edges
+            .iter()
+            .filter_map(|edge| far_end(&edge.to, origin).map(|far| (far, edge.to.kind)))
+            .collect();
+        if let Item::Task(task) = &item.item {
+            named.extend(task.delivers.iter().filter_map(|entry| {
+                entry
+                    .in_source(origin)
+                    .as_str()
+                    .parse::<GlobalId>()
+                    .ok()
+                    .map(|far| (far, ItemKind::Task))
+            }));
+        }
+        for (far, kind) in named {
+            if far.source == item.to
+                || self.declared(&far.source) == crate::config::SourceVisibility::Private
+                || running.resolvable.contains(&far)
+                || running.private.contains(&far)
+                || running.public_references.contains(&far)
+            {
+                continue;
+            }
+            let unclassified = |why: String| EngineError::ReferenceUnclassified {
+                item: item.source.to_string(),
+                reference: far.to_string(),
+                destination: item.to.to_string(),
+                why,
+            };
+            let Ok(source) = self.readable(&far.source) else {
+                return Err(unclassified(
+                    "no source of that name is configured to read it from".to_owned(),
+                ));
+            };
+            let read = match kind {
+                ItemKind::Task => source
+                    .source()
+                    .get_task(&far.native)
+                    .await
+                    .map(|task| task.map(|task| (task.classification, task.repositories))),
+                ItemKind::Project => {
+                    source
+                        .source()
+                        .get_project(&far.native)
+                        .await
+                        .map(|project| {
+                            project.map(|project| (project.classification, project.repositories))
+                        })
+                }
+            };
+            let class = match read {
+                Ok(Some((declared, repositories))) => self.classify(declared, &repositories).await,
+                Ok(None) => return Err(unclassified("its source holds no such item".to_owned())),
+                Err(error) => {
+                    return Err(unclassified(format!(
+                        "its source could not be read: {error}"
+                    )));
+                }
+            };
+            if class == Classification::Private {
+                running.private.push(far);
+            } else {
+                running.public_references.push(far);
             }
         }
         Ok(())

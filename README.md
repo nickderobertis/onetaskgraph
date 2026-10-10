@@ -1453,10 +1453,12 @@ source that is, or an item the copy carries classified private under any id it i
 whatever its source declares — and a delivered task there is never given a deliverer of such a
 source, or one classified private, in its
 `delivered_by` — the rule still moves it, and the private item keeps the relationship in its
-own record. Between public items nothing is left out. A copy does not follow an edge to an
-item it does not carry, so such an item classified private by hand in a source not declared
-private is withheld only when the copy carries it too, or once it sits in a source declared
-private. A `--depends-on` or
+own record. Between public items nothing is left out. While the boundary is active, a copy
+into a source not declared private first reads, once per command, every item outside the copy
+that a carried dependency or delivery names in a source not declared private, and withholds
+its id when that item is private by its own record or its repositories — whatever its source
+declares; a reference whose classification cannot be read — its source not configured, not
+readable, or holding no such item — is refused before anything is written. A `--depends-on` or
 `--delivers` naming such an item is the caller asking for it to be written, so that write is
 refused before anything is written rather than quietly answering something else.
 
@@ -1468,8 +1470,8 @@ list, or none), and a program linking the engine sets it with `Engine::with_term
 
 The refusals name what happened and what to do: `not-private-destination`,
 `destination-not-private`, `visibility-unreadable`, `boundary-refused`,
-`boundary-unavailable`, `private-member` and `private-reference` are their `--json` failure
-kinds.
+`boundary-unavailable`, `private-member`, `private-reference` and `reference-unclassified`
+are their `--json` failure kinds.
 
 A private source and its routes need no checkout to live in: the user-level document,
 `$XDG_CONFIG_HOME/onetaskgraph/config.yaml`, is read beneath every project document, so a

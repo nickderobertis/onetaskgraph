@@ -2790,3 +2790,90 @@ fn a_copy_withholds_a_carried_private_item_s_id_though_its_source_is_not_declare
     assert!(kept.contains("shelf:secret"), "{kept}");
     assert!(kept.contains("shelf:plain"), "{kept}");
 }
+
+#[test]
+fn a_copy_withholds_an_external_private_item_s_id_though_its_source_declares_nothing() {
+    // `shelf` declares nothing; `secret` is private by its own record and is not copied.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\n\
+         depends_on: [{id: \"shelf:secret\", item: task}, {id: \"shelf:plain\", item: task}]\n\
+         delivers: [\"shelf:secret\", \"shelf:plain\"]",
+        PLAIN,
+    );
+    // Keeping the private delivered task in step from a public deliverer would write that
+    // deliverer onto a private item a source declaring nothing holds, so it is reported failed —
+    // exit 4 — while the copy itself lands. From a private deliverer there is nothing to write:
+    // its own id is withheld from `shelf` in turn.
+    let copied = |to: &str, failed_on: Option<&str>| {
+        let output = store.run(&["task", "copy", "plan:open", "--to", to, "--json"]);
+        let report: Value = serde_json::from_str(&stdout(&output)).expect("a copy report");
+        let failed: Vec<&Value> = report["delivered"]
+            .as_array()
+            .expect("delivered")
+            .iter()
+            .filter(|entry| entry["outcome"] == "failed")
+            .collect();
+        match failed_on {
+            Some(ticket) => {
+                assert_eq!(output.status.code(), Some(4), "{report:#}");
+                assert_eq!(failed.len(), 1, "{report:#}");
+                assert_eq!(failed[0]["ticket"], ticket, "{report:#}");
+            }
+            None => {
+                assert_eq!(output.status.code(), Some(0), "{report:#}");
+                assert!(failed.is_empty(), "{report:#}");
+            }
+        }
+    };
+    copied("site", Some("shelf:secret"));
+    let landed = held_text(&store, "site");
+    assert!(!landed.contains("shelf:secret"), "{landed}");
+    // Public-to-public references are written as before.
+    assert!(landed.contains("shelf:plain"), "{landed}");
+    // A destination declared private keeps the private one.
+    copied("vault", None);
+    let kept = held_text(&store, "vault");
+    assert!(kept.contains("shelf:secret"), "{kept}");
+    assert!(kept.contains("shelf:plain"), "{kept}");
+}
+
+#[test]
+fn a_copy_whose_external_reference_cannot_be_classified_is_refused_before_any_write() {
+    // `nowhere` is no configured source, so nothing can say whether its item is private.
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\ndepends_on: [{id: \"nowhere:x-1\", item: task}]",
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["task", "copy", "plan:open", "--to", "site"]);
+    assert_eq!(kind, "reference-unclassified", "{said}");
+    assert!(said.contains("nowhere:x-1"), "{said}");
+    assert_eq!(store.tree(), before, "nothing was written");
+    // A destination declared private needs no answer, and takes it.
+    store.ok(&["task", "copy", "plan:open", "--to", "vault"]);
+}
