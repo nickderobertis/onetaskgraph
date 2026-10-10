@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-status-options-v0.3.12...onetaskgraph-status-options-v0.4.0) - 2026-10-10
+
+### Added
+
+- *(github-projects)* [**breaking**] project configured metadata onto board text fields ([#3583](https://github.com/nickderobertis/onetaskgraph/pull/3583))
+
 ## [0.2.45](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-status-options-v0.2.44...onetaskgraph-status-options-v0.2.45) - 2026-09-26
 
 ### Added
