@@ -230,17 +230,29 @@ async fn disposable_task_and_document_asset_copies() {
                 {
                     return Err(format!("unrewritten or wrong attachment URL {url}"));
                 }
-                let response = reqwest::Client::new()
-                    .get(url)
-                    .header("user-agent", "onetaskgraph-live-assets")
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                journey::say(&format!(
-                    "authenticated live rendering read {file} {url}: HTTP {}",
-                    response.status()
-                ));
+                // A gateway error from GitHub's attachment host says nothing about the image:
+                // one run met a `504` here for an asset the upload's own verification had
+                // just read back `200`. So a 5xx is asked again, a few times, and any other
+                // answer — a `404` above all — decides at once.
+                let mut attempt = 0;
+                let response = loop {
+                    attempt += 1;
+                    let response = reqwest::Client::new()
+                        .get(url)
+                        .header("user-agent", "onetaskgraph-live-assets")
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    journey::say(&format!(
+                        "authenticated live rendering read {file} {url}: HTTP {}",
+                        response.status()
+                    ));
+                    if !response.status().is_server_error() || attempt == 4 {
+                        break response;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2 * attempt)).await;
+                };
                 if !response.status().is_success() {
                     return Err(format!("broken live image {file}: {}", response.status()));
                 }

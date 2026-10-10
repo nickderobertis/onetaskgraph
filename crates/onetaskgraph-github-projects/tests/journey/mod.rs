@@ -2307,19 +2307,20 @@ async fn drive_every_declared_capability(
         }),
         ..Default::default()
     };
-    let mut settled = false;
-    for _ in 0..20 {
-        if document_titles(writer, &by_prefix_document(), "document settling read").await?
-            == vec![design.clone()]
-        {
-            settled = true;
+    // GitHub's issue search indexes a new issue on its own schedule, and one run waited out
+    // twenty seconds of it with the issue certainly written; so the wait is the journey's
+    // own board wait, and a failure says what the last read did report.
+    let mut last = Vec::new();
+    for _ in 0..BOARD_WAIT.attempts * 2 {
+        last = document_titles(writer, &by_prefix_document(), "document settling read").await?;
+        if last == vec![design.clone()] {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(BOARD_WAIT.interval).await;
     }
     ensure!(
-        settled,
-        "the board never reported the document this run created ({design:?})"
+        last == vec![design.clone()],
+        "the board never reported the document this run created ({design:?}); its last title search reported {last:?}"
     );
     let read_design = writer
         .get_document(&design_id)
