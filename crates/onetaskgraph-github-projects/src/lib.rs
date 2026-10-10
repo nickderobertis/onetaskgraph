@@ -11526,3 +11526,62 @@ mod end_command_tests {
         assert_dropped(&source);
     }
 }
+
+#[cfg(test)]
+mod unprojectable_fields_tests {
+    use super::*;
+
+    /// The field names `docs/metadata.md` says a `metadata_fields` entry may not name.
+    fn documented() -> std::collections::BTreeSet<String> {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+        )
+        .expect("docs/metadata.md is readable");
+        let document = document.split_whitespace().collect::<Vec<_>>().join(" ");
+        let lead = "a `field` equal, ignoring case, to ";
+        let start = document.find(lead).expect("the refused-field sentence") + lead.len();
+        let sentence = &document[start..];
+        let sentence = &sentence[..sentence
+            .find("; and two entries naming one field")
+            .expect("the refused-field sentence ends at the duplicate rule")];
+        let (own, github) = sentence
+            .split_once(" or a field GitHub owns on every board (")
+            .expect("the sentence names GitHub's own fields");
+        own.split('`')
+            .skip(1)
+            .step_by(2)
+            .chain(
+                github
+                    .strip_suffix(')')
+                    .expect("GitHub's own fields close the sentence")
+                    .split(", "),
+            )
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn the_documented_refused_fields_are_exactly_the_ones_the_configuration_refuses() {
+        let refused: std::collections::BTreeSet<String> = UNPROJECTABLE_FIELDS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect();
+        assert_eq!(documented(), refused, "the fields docs/metadata.md lists");
+        let instance = SourceName::new("work").unwrap();
+        for name in UNPROJECTABLE_FIELDS {
+            for spelled in [name.to_owned(), name.to_uppercase()] {
+                let entry = MetadataFieldConfig {
+                    field: spelled.clone(),
+                    key: "team.machine".to_owned(),
+                    path: Vec::new(),
+                };
+                let refused = MetadataField::resolve(vec![entry], &instance)
+                    .expect_err("an unprojectable field is refused");
+                assert!(
+                    refused.to_string().contains(&format!("{name:?}")),
+                    "{spelled}: {refused}"
+                );
+            }
+        }
+    }
+}
