@@ -411,3 +411,29 @@ fn a_board_with_no_declared_visibility_spends_nothing_learning_it() {
         .collect();
     assert!(visibility_reads(&served).is_empty(), "{served:#?}");
 }
+
+#[test]
+fn a_dry_run_reads_the_board_it_would_write_to_and_reports_the_refusal_its_copy_would_meet() {
+    let setup = Setup::new();
+    setup.record(
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+    );
+    let arguments = ["task", "copy", "plan:secret", "--to", "board", "--dry-run"];
+    // A board that reads private: the dry run reads it once, as the copy's write would, and
+    // writes nothing.
+    let served = setup.ok(&arguments);
+    let mut reads = visibility_reads(&served);
+    reads.sort_unstable();
+    assert_eq!(reads, ["project", "repository"], "{served:#?}");
+    assert!(
+        !served.iter().any(|document| is_mutation(document)),
+        "{served:#?}"
+    );
+    // One a person has made public: the dry run is refused exactly as the copy would be.
+    setup.board.set_project_public(true);
+    let (kind, _, served) = setup.refused(&arguments);
+    assert_eq!(kind, "destination-not-private");
+    assert!(!visibility_reads(&served).is_empty(), "{served:#?}");
+}

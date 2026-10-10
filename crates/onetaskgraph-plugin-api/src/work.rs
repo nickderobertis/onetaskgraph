@@ -247,6 +247,8 @@ impl Classification {
 
     /// Whether this is [`Public`](Self::Public) — the value left out of the wire.
     #[must_use]
+    // serde's `skip_serializing_if` calls its predicate with a reference to the field, so this
+    // takes `&self` although the type is `Copy`.
     #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn is_public(&self) -> bool {
         *self == Self::Public

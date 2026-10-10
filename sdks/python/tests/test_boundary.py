@@ -74,7 +74,9 @@ def scopes(record: Path) -> list[list[str] | None]:
     ]
 
 
-def test_every_write_passes_its_term_scope_through_unchanged(binary: Path, tmp_path: Path) -> None:
+def test_a_create_status_metadata_and_update_pass_their_term_scope_through_unchanged(
+    binary: Path, tmp_path: Path
+) -> None:
     """A list, an empty list and none each reach the check exactly as they were passed."""
     client, record = store(binary, tmp_path)
     named = run(

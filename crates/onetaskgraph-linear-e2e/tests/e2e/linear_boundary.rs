@@ -183,7 +183,7 @@ fn a_private_declaration_is_verified_inside_the_cold_read_and_spends_no_request(
 }
 
 #[test]
-fn a_warm_write_to_a_declared_source_sends_nothing_more() {
+fn a_fresh_invocations_write_to_a_declared_source_sends_only_its_resolution_and_mutation() {
     let setup = Setup::new(Some("private"), held(), true, 1);
     setup.ok(&["project", "copy", "plan:goal", "--to", "linear"]);
     // A status write by a fresh invocation is one resolution and one mutation, declared or not:

@@ -56,11 +56,28 @@ pub fn onevcs() -> &'static Path {
     })
 }
 
+/// What a registered identity's rule declares about who can read it.
+#[derive(Clone, Copy)]
+enum Declared {
+    Public,
+    Private,
+}
+
+impl Declared {
+    /// The value onevcs's rules file spells it as.
+    fn spelled(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+}
+
 /// One identity this run registers: an invented `owner/name`, and what its rule declares.
 struct Identity {
     owner: String,
     name: String,
-    visibility: &'static str,
+    visibility: Declared,
 }
 
 /// An onevcs home inside one sandbox, and the synthetic identities registered in it.
@@ -95,12 +112,12 @@ impl OnevcsHome {
 
     /// Register `owner/name` on `github.com` as a private identity.
     pub fn private(&mut self, owner: &str, name: &str) -> &mut Self {
-        self.register(owner, name, "private", &[])
+        self.register(owner, name, Declared::Private, &[])
     }
 
     /// Register `owner/name` on `github.com` as a public identity.
     pub fn public(&mut self, owner: &str, name: &str) -> &mut Self {
-        self.register(owner, name, "public", &[])
+        self.register(owner, name, Declared::Public, &[])
     }
 
     /// Register `owner/name` as a private identity whose committed `Cargo.toml` does not parse,
@@ -109,7 +126,7 @@ impl OnevcsHome {
         self.register(
             owner,
             name,
-            "private",
+            Declared::Private,
             &[("Cargo.toml", "[package\nname = \"broken")],
         )
     }
@@ -128,7 +145,7 @@ impl OnevcsHome {
         &mut self,
         owner: &str,
         name: &str,
-        visibility: &'static str,
+        visibility: Declared,
         files: &[(&str, &str)],
     ) -> &mut Self {
         self.identities.push(Identity {
@@ -190,7 +207,9 @@ impl OnevcsHome {
         for identity in &self.identities {
             rules.push_str(&format!(
                 "  - match: {{host: github.com, owner: {}, name: {}}}\n    visibility: {}\n",
-                identity.owner, identity.name, identity.visibility
+                identity.owner,
+                identity.name,
+                identity.visibility.spelled()
             ));
         }
         if self.identities.is_empty() {

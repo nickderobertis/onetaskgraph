@@ -381,7 +381,7 @@ fn a_task_of_a_private_or_unknown_repository_is_refused_onto_a_public_source() {
 }
 
 #[test]
-fn a_public_write_naming_a_private_repository_is_refused_and_an_unavailable_check_never_passes() {
+fn a_public_write_naming_a_private_repository_in_its_text_title_or_metadata_is_refused_neutrally() {
     let store = Store::new(Some(registered), json!({}));
     store.record(
         "plan",
@@ -899,7 +899,7 @@ fn a_project_stays_private_after_the_members_that_made_it_so_are_removed() {
 }
 
 #[test]
-fn every_narrow_write_to_a_private_item_held_by_a_public_source_is_refused() {
+fn every_write_adding_to_a_private_item_held_by_a_public_source_is_refused() {
     let store = Store::new(Some(registered), json!({}));
     // Held there before the boundary existed: a hand-made record a public source holds.
     store.record(
@@ -907,7 +907,13 @@ fn every_narrow_write_to_a_private_item_held_by_a_public_source_is_refused() {
         "tasks",
         "stray",
         "title: Stray\nstatus: todo\nclassification: private",
-        PLAIN,
+        &format!(
+            "{PLAIN}\n\n## Comments\n\n\
+             <!-- onetaskgraph:comment id=\"C-1\" created_at=\"2026-09-13T15:11:07Z\" \
+             updated_at=\"2026-09-13T15:11:07Z\" -->\n\
+             ### comment — 2026-09-13T15:11:07Z\n\nAn earlier note.\n\n\
+             <!-- /onetaskgraph:comment -->"
+        ),
     );
     store.record("site", "tasks", "fine", "title: Fine\nstatus: todo", PLAIN);
     store.record(
@@ -935,6 +941,29 @@ fn every_narrow_write_to_a_private_item_held_by_a_public_source_is_refused() {
     let before = store.tree();
     for arguments in [
         vec!["task", "render", "site:stray", "--template", &template],
+        vec![
+            "project",
+            "render",
+            "site:stray-project",
+            "--template",
+            &template,
+        ],
+        vec![
+            "document",
+            "render",
+            "site:stray-document",
+            "--template",
+            &template,
+        ],
+        vec![
+            "task",
+            "comment",
+            "edit",
+            "site:stray",
+            "C-1",
+            "--body-file",
+            &content,
+        ],
         vec![
             "project",
             "metadata",
@@ -1021,7 +1050,7 @@ fn an_asset_named_after_a_private_repository_is_refused_onto_a_public_source() {
 }
 
 #[test]
-fn a_hosted_plugin_is_never_verified_private_and_its_public_writes_are_still_checked() {
+fn a_hosted_plugin_declared_private_is_never_verified_private_so_a_private_item_is_refused_there() {
     let store = Store::new(
         Some(registered),
         json!({"hosted": {
@@ -1714,4 +1743,214 @@ fn a_reference_a_caller_names_to_a_private_source_is_refused_onto_a_public_one()
         assert!(said.contains("source vault"), "{said}");
     }
     assert_eq!(store.tree(), before, "no refused write left anything");
+}
+
+/// A check command that records the scope of every input it is handed, one JSON line each, in
+/// the file its one argument names, and passes it.
+const RECORDING_CHECK: &str = "import json, sys\n\
+    payload = json.load(sys.stdin)\n\
+    with open(sys.argv[1], 'a', encoding='utf-8') as record:\n\
+    \x20   record.write(json.dumps(payload.get('scope', 'absent')) + '\\n')\n\
+    print(json.dumps({'verdict': 'pass'}))\n";
+
+#[test]
+fn every_writing_verb_hands_its_term_scope_to_the_check_unchanged() {
+    let recorded = tempfile::tempdir().expect("a directory for the record");
+    let record = recorded.path().join("scopes.jsonl");
+    let store = Store::with_policy(Some(json!({
+        "check_command": ["python3", "-c", RECORDING_CHECK, record.display().to_string()],
+    })));
+    let comment = "\n\n## Comments\n\n\
+        <!-- onetaskgraph:comment id=\"C-1\" created_at=\"2026-09-13T15:11:07Z\" \
+        updated_at=\"2026-09-13T15:11:07Z\" -->\n\
+        ### comment — 2026-09-13T15:11:07Z\n\nAn earlier note.\n\n\
+        <!-- /onetaskgraph:comment -->";
+    store.record(
+        "site",
+        "tasks",
+        "held",
+        "title: Held\nstatus: todo\nproject: home",
+        &format!("{PLAIN}{comment}"),
+    );
+    store.record(
+        "site",
+        "projects",
+        "home",
+        "title: Home\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "documents",
+        "notes",
+        "title: Notes\nproject: home",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "source",
+        "title: Source\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "projects",
+        "away",
+        "title: Away\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "documents",
+        "memo",
+        "title: Memo\nproject: away",
+        PLAIN,
+    );
+    let body = store.body(PLAIN);
+    let template = store.sandbox.config_home().join("scoped-template.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables: {}\n---\nRendered afresh.\n",
+    )
+    .expect("a template");
+    let template = template.display().to_string();
+    let verbs: Vec<Vec<&str>> = vec![
+        vec![
+            "task",
+            "create",
+            "site",
+            "--project",
+            "home",
+            "--title",
+            "New",
+            "--body-file",
+            &body,
+        ],
+        vec!["task", "copy", "plan:source", "--to", "site"],
+        vec!["task", "status", "set", "site:held", "in-progress"],
+        vec!["task", "priority", "set", "site:held", "high"],
+        vec!["task", "content", "set", "site:held", "--file", &body],
+        vec![
+            "task",
+            "metadata",
+            "set",
+            "site:held",
+            "team.note",
+            "\"generic\"",
+        ],
+        vec!["task", "update", "site:held", "--title", "Renamed"],
+        vec!["task", "render", "site:held", "--template", &template],
+        vec!["task", "comment", "add", "site:held", "--body-file", &body],
+        vec![
+            "task",
+            "comment",
+            "edit",
+            "site:held",
+            "C-1",
+            "--body-file",
+            &body,
+        ],
+        vec![
+            "project",
+            "create",
+            "site",
+            "--id",
+            "fresh",
+            "--title",
+            "Fresh",
+            "--body-file",
+            &body,
+        ],
+        vec!["project", "copy", "plan:away", "--to", "site", "--no-tasks"],
+        vec![
+            "project",
+            "metadata",
+            "set",
+            "site:home",
+            "team.note",
+            "\"generic\"",
+        ],
+        vec!["project", "render", "site:home", "--template", &template],
+        vec![
+            "document",
+            "create",
+            "site",
+            "--project",
+            "home",
+            "--title",
+            "Fresh",
+            "--body-file",
+            &body,
+        ],
+        vec!["document", "copy", "plan:memo", "--to", "site"],
+        vec![
+            "document",
+            "metadata",
+            "set",
+            "site:notes",
+            "team.note",
+            "\"generic\"",
+        ],
+        vec!["document", "render", "site:notes", "--template", &template],
+    ];
+    let lines = || {
+        std::fs::read_to_string(&record)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("a recorded scope"))
+            .collect::<Vec<Value>>()
+    };
+    for (index, verb) in verbs.iter().enumerate() {
+        let before = lines().len();
+        // A scope of its own for every verb, so a scope reaching the wrong write is seen too.
+        let scope = format!("github.com/scoped/verb-{index}");
+        let mut arguments = verb.clone();
+        arguments.extend(["--term-scope", &scope]);
+        store.ok(&arguments);
+        let seen = lines();
+        assert!(seen.len() > before, "{verb:?} was never checked");
+        for handed in &seen[before..] {
+            assert_eq!(handed, &json!([scope]), "{verb:?}");
+        }
+    }
+    // An empty scope and none at all are told apart, through the same command line.
+    let before = lines().len();
+    store.ok(&[
+        "task",
+        "status",
+        "set",
+        "site:held",
+        "done",
+        "--term-scope-empty",
+    ]);
+    store.ok(&["task", "status", "set", "site:held", "todo"]);
+    assert_eq!(lines()[before..], [json!([]), json!("absent")]);
+}
+
+#[test]
+fn an_in_memory_source_declared_private_is_a_host_local_destination_a_private_item_lands_in() {
+    let store = Store::new(
+        Some(registered),
+        json!({"memory": {"plugin": "in-memory", "config": {}, "visibility": "private"}}),
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+        A_TEXT,
+    );
+    // Nothing written to this process's memory leaves the host, so the source's own answer is
+    // private, and a private item naming a private repository lands there unchecked.
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "copy",
+        "plan:secret",
+        "--to",
+        "memory",
+        "--json",
+    ]))
+    .expect("a copy report");
+    assert_eq!(report["items"][0]["action"], "created", "{report:#}");
 }
