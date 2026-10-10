@@ -582,6 +582,9 @@ struct State {
     /// The board's own text fields beyond the origin's — and a same-named field of another
     /// type a case puts there — as the board's field list answers each.
     extra_fields: Vec<Value>,
+    /// One alias of the next batched field write this board answers with this value instead
+    /// of what it did — a response the source must refuse to read as landed.
+    answers_alias_with: Option<(&'static str, Value)>,
     blocked_by: BTreeMap<String, Vec<String>>,
     /// Mutations this board answers with a GraphQL error rather than performing. GitHub
     /// fails one call of the several a write is, and what the source does about the calls
@@ -851,6 +854,10 @@ impl Fixture {
             .filter(|held| held.issue == issue)
             .cloned()
             .collect()
+    }
+    /// Answer `alias` of the next batched field write that sends it with `value`.
+    fn answer_alias_with(&self, alias: &'static str, value: Value) {
+        self.state.lock().unwrap().answers_alias_with = Some((alias, value));
     }
     /// Put a field on this board beside the ones it already has, as its field list answers it.
     fn with_field(self, field: Value) -> Self {
@@ -1203,6 +1210,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         origin_field,
         status_field,
         extra_fields: Vec::new(),
+        answers_alias_with: None,
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
@@ -1414,6 +1422,15 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 let answer = answer(state, document, &json!({"input":variables[variable]}));
                 result.insert(alias.to_owned(), answer[key].clone());
             }
+        }
+        let mut held = state.lock().unwrap();
+        if held
+            .answers_alias_with
+            .as_ref()
+            .is_some_and(|(alias, _)| result.contains_key(*alias))
+            && let Some((alias, value)) = held.answers_alias_with.take()
+        {
+            result.insert(alias.to_owned(), value);
         }
         return Value::Object(result);
     }
@@ -18594,4 +18611,139 @@ async fn more_writes_than_one_request_holds_go_in_further_requests_and_a_refusal
         "the first request landed"
     );
     assert_eq!(text_of(&fixture, &id.0, "FIELD_b7"), None);
+}
+
+/// A board with the eight `B*` text fields, and a source projecting `batch.values` at `f<n>`
+/// onto each.
+fn eight_fields() -> (Fixture, Value) {
+    let mut fixture = board(vec![]);
+    let mut entries = Vec::new();
+    for n in 0..8 {
+        fixture = fixture.with_field(text_field_def(&format!("FIELD_b{n}"), &format!("B{n}")));
+        entries
+            .push(json!({"field":format!("B{n}"),"key":"batch.values","path":[format!("f{n}")]}));
+    }
+    (fixture, json!({"metadata_fields": entries}))
+}
+
+/// `batch.values` holding `text<n>` at `f<n>` for each `n` in `set`, and nothing else.
+fn batch(set: std::ops::Range<usize>, text: &str) -> BTreeMap<String, Value> {
+    BTreeMap::from([(
+        "batch.values".to_owned(),
+        Value::Object(
+            set.map(|n| (format!("f{n}"), json!(format!("{text}{n}"))))
+                .collect(),
+        ),
+    )])
+}
+
+#[tokio::test]
+async fn writes_and_clears_together_span_requests_in_order_and_a_refused_one_stops_the_rest() {
+    let (fixture, config) = eight_fields();
+    let source = || configured(&fixture.endpoint, config.clone());
+    let id = write_kind(source().as_ref(), Kind::Task, None, batch(0..8, "a"))
+        .await
+        .unwrap();
+    let before = fixture.documents().len();
+    // Four moved and four cleared: four writes and three clears in one request, then the last
+    // clear in the next — writes run before clears within each.
+    write_kind(source().as_ref(), Kind::Task, Some(&id.0), batch(0..4, "b"))
+        .await
+        .unwrap();
+    let sent = fixture.documents()[before..]
+        .iter()
+        .filter(|document| *document == graphql::UPDATE_FIELDS)
+        .count();
+    assert_eq!(sent, 2);
+    let order = fixture
+        .seen()
+        .iter()
+        .filter(|call| {
+            call[0]
+                .as_str()
+                .is_some_and(|op| op.contains("ProjectV2ItemFieldValue"))
+        })
+        .map(|call| {
+            (
+                call[0].as_str().unwrap().to_owned(),
+                call[1]["fieldId"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let order = order[order.len() - 8..].to_vec();
+    let expected = (0..4)
+        .map(|n| {
+            (
+                "updateProjectV2ItemFieldValue".to_owned(),
+                json!(format!("FIELD_b{n}")),
+            )
+        })
+        .chain((4..8).map(|n| {
+            (
+                "clearProjectV2ItemFieldValue".to_owned(),
+                json!(format!("FIELD_b{n}")),
+            )
+        }))
+        .collect::<Vec<_>>();
+    assert_eq!(order, expected);
+    for n in 0..4 {
+        assert_eq!(
+            text_of(&fixture, &id.0, &format!("FIELD_b{n}")),
+            Some(format!("b{n}"))
+        );
+    }
+    for n in 4..8 {
+        assert_eq!(text_of(&fixture, &id.0, &format!("FIELD_b{n}")), None);
+    }
+
+    // Four moved back and four set again, the second request refused: what the first carried
+    // landed, the rest did not, and the body was never sent.
+    let body = fixture.item(&id.0).body.clone();
+    fixture.refuse_after("updateProjectV2ItemFieldValue", 1);
+    write_kind(source().as_ref(), Kind::Task, Some(&id.0), batch(0..7, "c"))
+        .await
+        .expect_err("the second request is refused");
+    assert_eq!(fixture.item(&id.0).body, body);
+    assert_eq!(text_of(&fixture, &id.0, "FIELD_b5").as_deref(), Some("c5"));
+    assert_eq!(
+        text_of(&fixture, &id.0, "FIELD_b6"),
+        None,
+        "the seventh write never ran"
+    );
+}
+
+#[tokio::test]
+async fn every_added_alias_answering_no_item_or_the_wrong_one_is_refused_by_name() {
+    for alias in ["fourth", "fifth", "sixth", "clearedSecond", "clearedThird"] {
+        for response in [Value::Null, json!({"projectV2Item":{"id":"wrong"}})] {
+            let (fixture, config) = eight_fields();
+            let source = || configured(&fixture.endpoint, config.clone());
+            // A create sends the Status option and eight writes, six of them in its first
+            // request; a copy over it moving five and clearing three sends one request of
+            // five writes and three clears.
+            let id = if alias.starts_with("cleared") {
+                let id = write_kind(source().as_ref(), Kind::Task, None, batch(0..8, "a"))
+                    .await
+                    .unwrap();
+                fixture.answer_alias_with(alias, response.clone());
+                let error =
+                    write_kind(source().as_ref(), Kind::Task, Some(&id.0), batch(0..5, "b"))
+                        .await
+                        .expect_err("a malformed answer");
+                assert!(
+                    refusal(error).contains(&format!("field update {alias}")),
+                    "{alias} {response}"
+                );
+                continue;
+            } else {
+                fixture.answer_alias_with(alias, response.clone());
+                write_kind(source().as_ref(), Kind::Task, None, batch(0..8, "a")).await
+            };
+            let error = id.expect_err("a malformed answer");
+            assert!(
+                refusal(error).contains(&format!("field update {alias}")),
+                "{alias} {response}"
+            );
+        }
+    }
 }

@@ -21,9 +21,10 @@
 #
 # `ProjectV2Field.dataType: ProjectV2FieldType!` — "The field's type." — and that enum's members
 # were read from GitHub.com's own published schema artifact
-# <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-10. A text field and a
-# number or date field are all `ProjectV2Field`, so `dataType` is what tells a board text field a
-# projected metadata value can be written to from one it cannot. The same artifact declares
+# <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-10, the enum reduced to the
+# one member this plugin reads: a text field and a number or date field are all
+# `ProjectV2Field`, so `dataType` is what tells a board text field a projected metadata value can
+# be written to from one it cannot, and every other member reads as not a text field. The same artifact declares
 # `CreateProjectV2FieldInput.dataType: ProjectV2CustomFieldType!`, whose `TEXT` member is what
 # the guarded field setup creates a missing projected field with.
 #
@@ -341,27 +342,7 @@ type ProjectV2Field {
   dataType: ProjectV2FieldType!
 }
 enum ProjectV2FieldType {
-  ASSIGNEES
-  CLOSED
-  CREATED
-  DATE
-  ISSUE_TYPE
-  ITERATION
-  LABELS
-  LINKED_PULL_REQUESTS
-  MILESTONE
-  MULTI_SELECT
-  NUMBER
-  PARENT_ISSUE
-  REPOSITORY
-  REVIEWERS
-  SINGLE_SELECT
-  SUB_ISSUES_PROGRESS
   TEXT
-  TITLE
-  TRACKED_BY
-  TRACKS
-  UPDATED
 }
 type ProjectV2SingleSelectFieldOption {
   id: ID!

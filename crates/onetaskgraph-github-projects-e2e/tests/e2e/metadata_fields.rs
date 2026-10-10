@@ -523,3 +523,32 @@ fn a_created_text_field_the_board_does_not_hold_afterwards_is_refused_as_drift()
         "{said}"
     );
 }
+
+#[test]
+fn a_verification_read_refused_after_a_create_says_what_changed_and_a_rerun_verifies_it() {
+    let setup = Setup::new(true, false);
+    // The setup's own read of the board's fields lands; the read verifying the create is
+    // refused.
+    setup.board.refuse_after("boardFields:repositoryOwner", 1);
+    let output = setup
+        .sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let said = stderr(&output);
+    assert!(
+        said.contains("changed the Host field and then could not read the board back to verify it"),
+        "{said}"
+    );
+    let (rerun, served) = setup.run(&["--json", "sources", "fields", "board", "--apply"]);
+    assert_eq!(rerun["metadata_fields"][0]["outcome"], "unchanged");
+    assert!(
+        !served
+            .iter()
+            .any(|(query, _)| query == graphql::CREATE_FIELD),
+        "the field it created is not created again"
+    );
+}

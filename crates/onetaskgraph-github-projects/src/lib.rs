@@ -2042,6 +2042,7 @@ pub struct MetadataFieldConfig {
 
 /// The board fields no metadata value may be projected onto, compared ignoring case: the
 /// three this source writes itself, and those GitHub owns on every board.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This list is the configuration contract `metadata_fields`' consumers agreed, refused at read so a mistaken entry is named early — not a mirror GitHub's field set has to stay in step with. What keeps a write off a field GitHub owns is the write's own check, `projection_field`, which refuses any field whose `dataType` is not `TEXT`: every built-in board field reports its own type (TITLE, ASSIGNEES, LABELS, …), and the live contract introspection holds GitHub to `ProjectV2Field.dataType`. So a built-in field GitHub adds later and this list lacks is still never written.
 const UNPROJECTABLE_FIELDS: [&str; 13] = [
     STATUS_FIELD,
     PRIORITY_FIELD,
@@ -2061,9 +2062,33 @@ const UNPROJECTABLE_FIELDS: [&str; 13] = [
 /// One validated [`MetadataFieldConfig`] entry.
 #[derive(Debug, Clone)]
 struct MetadataField {
-    field: String,
-    key: String,
+    field: ProjectedField,
+    key: ProjectedKey,
     path: Vec<String>,
+}
+
+/// The name of a board text field a metadata value is projected onto: never blank, never one
+/// this source or GitHub writes, and never one another entry of the same source names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedField(String);
+
+/// The top-level metadata key a projected value is read from: never blank, and never under
+/// the namespace this product reserves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedKey(String);
+
+impl std::ops::Deref for ProjectedField {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for ProjectedKey {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
 }
 
 /// What one item's metadata says one projected field should hold.
@@ -2122,8 +2147,8 @@ impl MetadataField {
                 )));
             }
             resolved.push(Self {
-                field: entry.field,
-                key: entry.key,
+                field: ProjectedField(entry.field),
+                key: ProjectedKey(entry.key),
                 path: entry.path,
             });
         }
@@ -2142,7 +2167,7 @@ impl MetadataField {
         metadata: &BTreeMap<String, Value>,
         instance: &SourceName,
     ) -> Result<Projected, SourceError> {
-        let mut value = metadata.get(&self.key);
+        let mut value = metadata.get(&*self.key);
         for step in &self.path {
             value = value.and_then(|held| held.get(step.as_str()));
         }
@@ -2161,9 +2186,9 @@ impl MetadataField {
                  field {:?}, and this item holds {found} there; only a string, null or nothing \
                  can be written to a text field; next: store a string there, or remove the \
                  value",
-                self.key,
+                &*self.key,
                 self.spelled_path(),
-                self.field
+                &*self.field
             ),
         })
     }
@@ -3610,8 +3635,8 @@ impl GitHubProjectsSource {
                 let exists =
                     conflict.is_none() && Board::field(&board.fields, &projection.field)?.is_some();
                 metadata_fields.push(MetadataFieldReport {
-                    field: projection.field.clone(),
-                    key: projection.key.clone(),
+                    field: projection.field.to_string(),
+                    key: projection.key.to_string(),
                     path: projection.path.clone(),
                     exists,
                     outcome: match (mode, exists || conflict.is_some()) {
@@ -3769,7 +3794,19 @@ impl GitHubProjectsSource {
         if !creates.is_empty() {
             // Read afresh: the view held for this command is the one from before the creates.
             *self.fields_cache()? = None;
-            let board = self.board_fields().await?;
+            let board = match self.board_fields().await {
+                Ok(board) => board,
+                Err(error) => {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "the guarded field setup changed the {} field and then could not \
+                             read the board back to verify it: {error}; run it again to verify \
+                             it, which creates nothing a second time",
+                            landed.join(" and ")
+                        ),
+                    });
+                }
+            };
             for field in &creates {
                 let text = Board::field(&board.fields, &field.field)?.is_some_and(|held| {
                     held.get("__typename").and_then(Value::as_str) == Some("ProjectV2Field")
@@ -5959,7 +5996,7 @@ impl GitHubProjectsSource {
             if let Some(text) =
                 text_field(field_values, &projection.field)?.filter(|text| !text.is_empty())
             {
-                held.insert(projection.field.clone(), text);
+                held.insert(projection.field.to_string(), text);
             }
         }
         Ok(held)
@@ -6224,7 +6261,7 @@ impl GitHubProjectsSource {
         if self
             .metadata_fields
             .iter()
-            .any(|projection| projection.key == key.as_str())
+            .any(|projection| &*projection.key == key.as_str())
         {
             let board = self.projection_board(&item).await?;
             let (writes, projected) = self.projection_writes(
@@ -6425,22 +6462,22 @@ impl GitHubProjectsSource {
         for projection in self
             .metadata_fields
             .iter()
-            .filter(|projection| keys.is_none_or(|keys| keys.contains(&projection.key.as_str())))
+            .filter(|projection| keys.is_none_or(|keys| keys.contains(&&*projection.key)))
         {
             let wanted = projection.projected(metadata, &self.name)?;
             let field = self.projection_field(fields, projection)?;
-            let holding = projected.get(&projection.field);
+            let holding = projected.get(&*projection.field);
             match wanted {
                 Projected::Text(text) if holding != Some(&text) => {
                     writes.push(ProjectionWrite::Set {
                         field,
                         text: text.clone(),
                     });
-                    projected.insert(projection.field.clone(), text);
+                    projected.insert(projection.field.to_string(), text);
                 }
                 Projected::Nothing if holding.is_some() => {
                     writes.push(ProjectionWrite::Clear { field });
-                    projected.remove(&projection.field);
+                    projected.remove(&*projection.field);
                 }
                 Projected::Text(_) | Projected::Nothing => {}
             }
@@ -6460,7 +6497,7 @@ impl GitHubProjectsSource {
                 "source {} projects metadata key {:?} onto the board text field {:?}, and \
                  {detail}; next: run `onetaskgraph sources fields {} --apply` to create it as a \
                  text field, or name another field in metadata_fields",
-                self.name, projection.key, projection.field, self.name
+                self.name, &*projection.key, &*projection.field, self.name
             ),
         };
         let Some(field) = Board::field(fields, &projection.field)? else {
@@ -6806,7 +6843,7 @@ impl GitHubProjectsSource {
         if self
             .metadata_fields
             .iter()
-            .any(|projection| touched.contains(&projection.key.as_str()))
+            .any(|projection| touched.contains(&&*projection.key))
         {
             let mut metadata = item.slot.clone();
             for (key, value) in &update.metadata_set {
