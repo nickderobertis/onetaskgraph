@@ -16,7 +16,7 @@ use std::time::Duration;
 use onetaskgraph_core::{
     BudgetSpent, Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
     CopyRequest, CopyScope, DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging,
-    ResolvedSource, Spent, TaskRequest,
+    ProjectGraphRequest, ResolvedSource, Spent, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
@@ -3034,6 +3034,37 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
         ),
         "{refused}"
     );
+}
+
+#[tokio::test]
+async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_graph() {
+    // `project graph` reads a project's tasks through the very walk a copy reads its members
+    // through, so the same source meets the same guard there — and is refused as a failed
+    // read, naming the graph, rather than as a copy to run again.
+    let (engine, pages) = from_misbehaving(
+        Misbehaving::new(At::Tasks, Fault::CyclesItsCursors, Onset::FirstRead).holding_a_project(),
+    );
+
+    let refused = engine
+        .project_graph(&ProjectGraphRequest {
+            project: id("from:P-1"),
+            direction: None,
+            group_by: None,
+        })
+        .await
+        .expect_err("a source whose cursors cycle is refused")
+        .to_string();
+
+    assert!(refused.contains("source from could not do it"), "{refused}");
+    assert!(
+        refused.contains(
+            "the source returned the cursor it was given while the tasks of a project \
+             were being read for a graph"
+        ),
+        "{refused}"
+    );
+    assert!(refused.contains("run the command again"), "{refused}");
+    assert!(pages.load(Ordering::SeqCst) < 10, "the walk stopped");
 }
 
 #[tokio::test]

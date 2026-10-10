@@ -27,6 +27,7 @@ export const binaryCommands = [
   "project list",
   "project show",
   "project deps",
+  "project graph",
   "project copy",
   "project metadata set",
   "project create",

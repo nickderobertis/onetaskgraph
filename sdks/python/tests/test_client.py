@@ -23,6 +23,7 @@ from onetaskgraph_sdk import (
     MetadataSet,
     OnetaskgraphError,
     Priority,
+    ProjectGraph,
     SourceName,
     StatusCategory,
     StatusNamesReport,
@@ -511,6 +512,51 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
         run(client.project_copy(id="from:P-1", to="into", member=["from:T-9"]))
     assert refused.value.exit_code == 1
     assert "from:T-9 is not a task of from:P-1" in str(refused.value)
+
+
+def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Read a project's graph as the JSON form names it, grouped and refused."""
+    root = folders(tmp_path)
+    (root / "from" / "projects").mkdir()
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\n", encoding="utf-8"
+    )
+    for name, title, extra in (
+        ("T-1", "Design", "metadata:\n  unit: core\n"),
+        ("T-2", "Build", "depends_on: [T-1]\nmetadata:\n  unit: core\n"),
+        ("T-3", "Ship", "depends_on: [T-2]\n"),
+    ):
+        (root / "from" / "tasks" / f"{name}.md").write_text(
+            f"---\ntitle: {title}\nstatus: todo\nproject: P-1\n{extra}---\n", encoding="utf-8"
+        )
+    client = Client(binary, cwd=root)
+
+    graph = run(client.project_graph(id="from:P-1", group_by="unit", direction="lr"))
+    assert isinstance(graph, ProjectGraph)
+    assert graph.schema_version == 1
+    assert graph.direction.value == "lr"
+    assert graph.group_by is not None
+    assert graph.group_by.root == "unit"
+    assert [(node.key, node.id.root, node.title, node.group) for node in graph.nodes] == [
+        ("n1", "from:T-1", "Design", "core"),
+        ("n2", "from:T-2", "Build", "core"),
+        ("n3", "from:T-3", "Ship", None),
+    ]
+    assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [
+        ("from:T-1", "from:T-2"),
+        ("from:T-2", "from:T-3"),
+    ]
+    assert run(client.project_graph(id="from:P-1")).direction.value == "td"
+
+    (root / "from" / "tasks" / "T-3.md").write_text(
+        "---\ntitle: Ship\nstatus: todo\nproject: P-1\nmetadata:\n  unit: 3\n---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.project_graph(id="from:P-1", group_by="unit"))
+    assert refused.value.exit_code == 1
+    assert "from:T-3" in str(refused.value)
+    assert "unit" in str(refused.value)
 
 
 def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_documents(

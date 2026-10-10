@@ -271,8 +271,8 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 33
-    # Version 33 published the public boundary: `classification` on a task, a project and a
+    assert emitted_bundle["version"] == 34
+    # Version 34 published the public boundary: `classification` on a task, a project and a
     # document, and the shapes a store's `write_policy` and a caller's policy exchange.
     for root in ("Task", "Project", "Document"):
         assert "classification" in emitted_bundle["roots"][root]["properties"], root
@@ -289,6 +289,17 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
 
     defaulted = PublicWriteInput.model_validate({"destination": "public"})
     assert (defaulted.text, defaulted.paths, defaulted.metadata) == ([], [], [])
+    # Version 33 published `ProjectGraph`, what `project graph --format json` answers with: a
+    # project's tasks and edges keyed by qualified id, the nodes and edges its Mermaid form draws.
+    assert generate.RESPONSE_ROOTS["project_graph"] == "ProjectGraph"
+    assert "ProjectGraph" in bundle["roots"]
+    assert set(emitted_bundle["roots"]["ProjectGraph"]["required"]) == {
+        "schema_version",
+        "project",
+        "direction",
+        "nodes",
+        "edges",
+    }
     # Version 32 published the image assets a task and a document hold: `assets` beside a task
     # in what `task show` answers, the `DocumentDetail` `document show` and `document create`
     # now answer with, and the asset roots the stdio plugin protocol carries beside a write.

@@ -15,6 +15,7 @@ mod boundary;
 mod copy_cost;
 mod fields;
 mod github_status_by_kind;
+mod graph;
 mod write_order;
 
 mod asset_board;

@@ -20,6 +20,7 @@ from .models import (
     MetadataSet,
     NativeId,
     Priority,
+    ProjectGraph,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
@@ -55,6 +56,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "copy"): ("id",),
     ("project", "create"): ("source",),
     ("project", "deps"): ("id",),
+    ("project", "graph"): ("id",),
     ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "render"): ("id",),
     ("project", "show"): ("id",),
@@ -596,6 +598,29 @@ class GeneratedClient:
             page=page,
             page_size=page_size,
             set=set,
+        )
+
+    async def project_graph(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["auto", "td", "lr"] | None = None,
+        group_by: str | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectGraph:
+        """Run ``onetaskgraph project graph``."""
+        return await self._invoke(
+            ["project", "graph"],
+            ProjectGraph,
+            id=id,
+            default_sources=default_sources,
+            direction=direction,
+            group_by=group_by,
+            page_size=page_size,
+            set=set,
+            format="json",
         )
 
     async def project_list(

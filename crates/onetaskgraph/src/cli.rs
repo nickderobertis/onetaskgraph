@@ -972,6 +972,12 @@ pub enum ProjectCommand {
     Show(ShowArgs),
     /// Walk one project's dependency edges.
     Deps(DependencyArgs),
+    /// Print one project's tasks and their dependency edges as Mermaid flowchart text, or
+    /// as the JSON document that describes the same graph.
+    ///
+    /// It draws nothing itself: hand the text to whatever renders Mermaid.
+    #[command(after_long_help = GRAPH_CONTRACT)]
+    Graph(GraphArgs),
     /// Copy one project, and the tasks in it, into another configured source.
     Copy(ProjectCopyArgs),
     /// Set one key of one project's metadata, and nothing else about it.
@@ -1343,6 +1349,151 @@ pub struct DependencyArgs {
     #[command(flatten)]
     pub paging: PageArgs,
 }
+
+/// `onetaskgraph project graph`.
+#[derive(Debug, Args)]
+pub struct GraphArgs {
+    /// The project's qualified id, `<source>:<native-id>`.
+    #[arg(value_name = "ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] As `DependencyArgs::id`: a `GlobalId` here would refuse an unqualified id as a bad invocation, exit 2, in clap's words, where `qualified` in `main` converts it through `GlobalId::from_str` immediately and refuses it as `project show` and `project deps` refuse theirs — and `graph::an_empty_project_a_long_one_and_an_unknown_one` holds the graph's refusal to be `project show`'s, byte for byte.
+    pub id: String,
+
+    /// Which form to print.
+    #[arg(long, value_name = "FORMAT", default_value = "mermaid")]
+    pub format: GraphFormat,
+
+    /// Which way to lay the graph out.
+    #[arg(long, value_name = "DIRECTION", default_value = "auto")]
+    pub direction: GraphDirectionArg,
+
+    /// Group the project's tasks by the non-empty string each holds under this metadata key.
+    #[arg(long = "group-by", value_name = "KEY", value_parser = group_key)]
+    pub group_by: Option<onetaskgraph_core::GroupKey>,
+}
+
+/// A `--group-by` key, refused when it is empty: an empty key names no metadata at all.
+fn group_key(value: &str) -> Result<onetaskgraph_core::GroupKey, String> {
+    onetaskgraph_core::GroupKey::new(value)
+}
+
+/// The two forms `project graph` prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GraphFormat {
+    /// Mermaid flowchart text, for a renderer.
+    Mermaid,
+    /// The JSON document describing the same graph, keyed by task id, for a program.
+    Json,
+}
+
+/// Which way `project graph` lays the graph out, as the command line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GraphDirectionArg {
+    /// Left to right when the widest rank holds more tasks than there are ranks; top-down
+    /// otherwise.
+    Auto,
+    /// Top-down: `flowchart TD`.
+    Td,
+    /// Left to right: `flowchart LR`.
+    Lr,
+}
+
+impl GraphDirectionArg {
+    /// The direction asked for, or `None` for `auto`, which the engine resolves.
+    #[must_use]
+    pub const fn direction(self) -> Option<onetaskgraph_core::GraphDirection> {
+        match self {
+            Self::Auto => None,
+            Self::Td => Some(onetaskgraph_core::GraphDirection::Td),
+            Self::Lr => Some(onetaskgraph_core::GraphDirection::Lr),
+        }
+    }
+}
+
+/// What `project graph` prints, stated whole: the contract every consumer of the verb builds
+/// against, and its one statement. The README's "Drawing a project's dependency graph"
+/// carries this text verbatim, and the journeys in `crates/onetaskgraph-e2e/tests/e2e/graph.rs`
+/// hold the binary to it and the README to this text.
+const GRAPH_CONTRACT: &str = "\
+The graph:
+  Every task of the project is drawn, across every page its source answers, with each
+  dependency a project task has on another task. A task's rank is 0 when it depends on no
+  task of the project, and otherwise one more than the highest rank among its prerequisites
+  in the project; tasks outside the project have no rank. The number of ranks is one more
+  than the highest rank, or 0 for a project with no tasks, and the widest rank is the most
+  project tasks sharing one rank.
+
+Direction:
+  auto (the default) lays the graph out left to right (lr) when the widest rank holds more
+  tasks than there are ranks, and top-down (td) otherwise; td and lr are taken as given.
+
+Mermaid form (the default), UTF-8, every line ending in a newline:
+  1. `flowchart TD` or `flowchart LR`, after auto is resolved.
+  2. One line `  n<k>[\"<label>\"]` per task of the project, in topological order: each
+     after every task of the project it depends on, ties broken by title and then by
+     qualified id, each compared byte by byte. <k> counts from 1 in that order.
+  3. One line `  x<k>[\"<label> (<qualified id>)\"]:::external` per task outside the
+     project that a project task depends on, ordered by title and then qualified id, <k>
+     counting from 1. The qualified id there is escaped as a label is.
+  4. One line `  <prerequisite> --> <dependent>` per dependency, so an arrow points from the
+     task depended on to the task that depends on it, ordered by the prerequisite's position
+     and then the dependent's, every n node before every x node.
+  5. Last, only when an x node was printed: `  classDef external stroke-dasharray: 5 5`.
+  A project with no tasks prints the first line alone, which auto makes `flowchart TD`.
+
+Grouped (--group-by <KEY>):
+  A project task's group is the value its metadata holds under KEY when that is a non-empty
+  JSON string. A task without the key, or holding null or \"\" under it, has no group; any
+  other value is refused, naming the task's qualified id and the key, with nothing on
+  standard output. A task outside the project never has a group. Groups are ordered by the
+  position of their first member and numbered g<j> from 1 in that order. Grouping changes
+  no rank, no direction, no node number and no edge order. The Mermaid lines are
+  rearranged:
+  1. The first line, as above.
+  2. For each group in order: `  subgraph g<j>[\"<label of the group's value>\"]`; each
+     member's node line indented by four spaces, in <k> order; each edge whose two ends are
+     both members of this group, indented by four spaces, in edge order; then `  end`.
+  3. The node line of each project task with no group, in <k> order.
+  4. The x node lines.
+  5. Every remaining edge, in edge order.
+  6. The classDef line, as above.
+
+Labels:
+  A task's label is its title with each line break (\\r\\n, \\n or \\r) written as one space;
+  then, in this order, # is written #35;, \" is written #quot;, < is written #lt; and > is
+  written #gt;. Nothing else is altered. A group's label is its value escaped the same way,
+  and the qualified id in an x line is escaped the same way too.
+
+JSON form (--format json): one document and a newline, describing exactly the graph the
+Mermaid form draws, and the form to read when a program has to know which task a node is:
+  {
+    \"schema_version\": 1,
+    \"project\": \"<qualified project id>\",
+    \"direction\": \"td\" | \"lr\",
+    \"group_by\": \"<the --group-by key>\" | null,
+    \"nodes\": [
+      {\"key\": \"n1\", \"id\": \"<qualified task id>\", \"title\": \"<the title, unescaped>\",
+       \"external\": false, \"group\": \"<the task's group>\" | null}
+    ],
+    \"edges\": [
+      {\"from\": \"<qualified id of the prerequisite>\", \"to\": \"<qualified id of the dependent>\"}
+    ]
+  }
+  direction is the resolved direction, never auto. nodes holds every n node and then every
+  x node, in the Mermaid form's order; key is the Mermaid node id, external is true exactly
+  for the x nodes, and group is null for a task with no group, for every external task, and
+  for every task without --group-by. edges follows the Mermaid form's edge order.
+
+Determinism:
+  The output is a function of the project's task titles, their dependency edges, the
+  qualified ids of the tasks outside it, the direction and, grouped, the key and each
+  task's value under it. Two calls over an unchanged project print the same bytes.
+
+Failure:
+  An id naming no project, a source that cannot answer a read, a dependency naming a task
+  its source does not hold, and tasks that depend on each other in a cycle each exit
+  non-zero with nothing on standard output and the problem on standard error; a graph is
+  never printed in part.
+";
 
 /// The arguments both copy verbs share.
 ///

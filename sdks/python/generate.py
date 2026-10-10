@@ -39,6 +39,8 @@ RESPONSE_ROOTS = {
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
+    # One project's tasks and edges as the JSON form of `project graph` describes them.
+    "project_graph": "ProjectGraph",
     "project_copy": "CopyReport",
     "project_metadata_set": "MetadataSet",
     "document_list": "QueryResponseOfQualifiedDocument",
@@ -154,6 +156,7 @@ OPTION_TYPES = {
     "direction": "choices",
     "explain": "bool",
     "file": "str",
+    "group_by": "str",
     "id": "str",
     "in_": "choices",
     "kind": "choices",
@@ -211,6 +214,7 @@ OPTION_PLACEHOLDERS = {
     "direction": "DIRECTION",
     "explain": None,
     "file": "PATH",
+    "group_by": "KEY",
     "id": "DOC",
     "in_": "FIELDS",
     "kind": "KIND",
@@ -280,6 +284,12 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
         "priority": OptionShape(type="choices", placeholder="PRIORITY"),
     },
 }
+
+
+# Options one command always passes with one value, which its generated method therefore does
+# not take: `project graph` prints Mermaid text unless `--format json` is asked for, and a
+# generated method answers with the JSON document the schema describes, never with text.
+FIXED_OPTIONS: dict[tuple[str, ...], dict[str, str]] = {("project", "graph"): {"format": "json"}}
 
 
 # Global flags no generated method takes: `--json` and `--output`, because the client always
@@ -395,7 +405,8 @@ def option_names(command: tuple[str, ...]) -> list[str]:
         re.MULTILINE,
     )
     names = [name for name, _ in discovered]
-    normalized = {name.replace("-", "_") for name in names} - UNEXPOSED_OPTIONS
+    fixed = set(FIXED_OPTIONS.get(command, {}))
+    normalized = {name.replace("-", "_") for name in names} - UNEXPOSED_OPTIONS - fixed
     result = sorted(f"{name}_" if keyword.iskeyword(name) else name for name in normalized)
     placeholders = {
         (
@@ -404,7 +415,7 @@ def option_names(command: tuple[str, ...]) -> list[str]:
             else name.replace("-", "_")
         ): (placeholder or None)
         for name, placeholder in discovered
-        if name.replace("-", "_") not in UNEXPOSED_OPTIONS
+        if name.replace("-", "_") not in UNEXPOSED_OPTIONS | fixed
     }
     validate_option_placeholders(placeholders, result, command)
     return result
@@ -702,6 +713,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "key", "value")
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
+        case ("project", "graph"):
+            return ("id",)
         case ("template", "variables" | "render"):
             return ("file",)
         case ("task" | "project" | "document", "create"):
@@ -995,6 +1008,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             else entry
             for item, entry in zip([*taken, *required, *keywords], passed, strict=True)
         ]
+        passed.extend(
+            f"{option}={value!r}" for option, value in FIXED_OPTIONS.get(command, {}).items()
+        )
         if command in ANSWERS_COMMANDS:
             passed.append('answers=None if answers is None else "-"')
             if command in BODY_COMMANDS:

@@ -60,7 +60,10 @@ fn every_document_this_source_sends_stays_under_githubs_node_limit() {
 fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headroom() {
     let count = |document: &str| worst_case_node_count(document).expect("a countable document");
     assert_eq!(count(graphql::SEARCH_ISSUES), 20_400);
-    assert_eq!(count(graphql::SUB_ISSUES), 20_400);
+    // The search's count, plus a page of `$nestedFirst` blockers under each of its hundred
+    // issues: what lets a project's tasks answer their own forward edges.
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] This figure is not a threshold but the instrument this test exists to be, as its own documentation says: the worst-case count recomputed from the production text, pinned so a change to a document is a number a reviewer sees move. This change moved it deliberately, and `session-cost.md` says why.
+    assert_eq!(count(graphql::SUB_ISSUES), 25_400);
     assert_eq!(count(graphql::BOARD), 10_150);
     assert_eq!(count(graphql::ISSUE_BOARD_ITEMS), 5_100);
     // One issue with its board half, the field definitions of the boards it sits on and the

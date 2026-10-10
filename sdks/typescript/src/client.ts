@@ -15,6 +15,7 @@ import type {
   MetadataSet,
   NativeId,
   Priority,
+  ProjectGraph,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -48,6 +49,14 @@ export type QueryOptions = {
 };
 export type DependencyOptions = Omit<QueryOptions, "sources"> & {
   direction?: "depends-on" | "depended-on-by";
+};
+// `project graph` lays the graph out `auto`matically unless told which way, and groups its tasks
+// only when given the metadata key to group them by. The directions are the binary's own
+// `--direction` vocabulary, which tests/client.test.ts reads back from its `--help`.
+export const projectGraphDirections = ["auto", "td", "lr"] as const;
+export type ProjectGraphOptions = {
+  direction?: (typeof projectGraphDirections)[number];
+  groupBy?: string;
 };
 export type FilterOptions = QueryOptions & {
   labels?: string[];
@@ -208,6 +217,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
+  // The JSON form of `project graph`: one project's tasks and edges, keyed by qualified id.
+  "project graph": "ProjectGraph",
   "project copy": "CopyReport",
   "project metadata set": "MetadataSet",
   // A created project as `project show` answers with it.
@@ -249,7 +260,8 @@ export const commandAlternateRoots: Readonly<
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails, and `sources route` reads configuration alone. A template verb reads no source at all. Of the verbs that create and regenerate from
+// fails, and `sources route` reads configuration alone. `project graph` prints a graph whole or
+// not at all, so it never answers in part. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -258,6 +270,7 @@ const partialResponseCommands = new Set(
       command !== "sources list" &&
       command !== "sources fields" &&
       command !== "sources route" &&
+      command !== "project graph" &&
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
@@ -968,6 +981,19 @@ export class OnetaskgraphClient {
     addPage(args, options);
     if (options.direction) args.push("--direction", options.direction);
     return this.run("project deps", args);
+  }
+  // The JSON form, always: the Mermaid text is for a renderer, and what a program reads is the
+  // document that says which task each node is.
+  projectGraph(id: string, options: ProjectGraphOptions = {}): Promise<ProjectGraph> {
+    const args = [id, "--format", "json"];
+    if (options.direction !== undefined) args.push("--direction", options.direction);
+    if (options.groupBy !== undefined) {
+      if (typeof options.groupBy !== "string" || options.groupBy.length === 0) {
+        throw new TypeError("projectGraph: groupBy must be a non-empty metadata key");
+      }
+      args.push("--group-by", options.groupBy);
+    }
+    return this.run("project graph", args);
   }
   projectCopy(
     id: string,

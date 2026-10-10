@@ -966,31 +966,37 @@ them do; this is the inventory of what is owed, not a status board.
 84. The simulated clock advances only while every attached process and every loopback handler
     is waiting, never sleeps in real time, and gives the same virtual times on every run; the
     binary attaches to it as the client its environment names, and to nothing without it.
-85. An explicitly private task, project or document is refused onto every source not declared
+85. `project graph` prints a project's tasks and edges as the Mermaid text and the JSON document
+    its `--help` and the README state, byte for byte: topological order with its title and id
+    tie-breaks, `n`/`x` numbering, edge order, label escapes, the direction `auto` picks on the
+    measured plan shapes, `--group-by`'s blocks and its refusal of a non-string group; the same
+    bytes twice and from another store; and over a GitHub board, one request per listing page
+    and no part of a graph when a later page or a dependency read is refused.
+86. An explicitly private task, project or document is refused onto every source not declared
     private while the boundary is inactive, and everything else writes as it did; active, a task
     naming a private or unknown repository is refused onto a public source on create and copy,
     and every narrow write — status, priority, content, metadata, update, comment — to a private
     item a public source holds is refused, each before anything is written.
-86. A public write is refused when the released onevcs check finds a private term in its text,
+87. A public write is refused when the released onevcs check finds a private term in its text,
     title, metadata or asset names, neutrally; a missing, failing or out-of-schema check never
     passes; and the caller's term scope — `--term-scope`, `--term-scope-empty`, the SDKs'
     `term_scope` and `Engine::with_term_scope` — decides which registered private identities'
     terms are derived, a malformed third identity making only an unscoped check unavailable.
-87. A mixed project goes, with every task and document in it, wholly to the private source a
+88. A mixed project goes, with every task and document in it, wholly to the private source a
     `classification: private` route names, over any repository route; with none reachable it is
     refused whole; a private member is refused by a project held public; an explicit `public`
     never loosens an inherited classification; and a project stays private after its private
     members are removed.
-88. A copy out of a private source into a public one records no origin naming it, and keeps
+89. A copy out of a private source into a public one records no origin naming it, and keeps
     its correspondence on the private side; a dependency, a `delivers` entry or a delivered
     task's `delivered_by` that would name a private source on a public one is refused before
     any write, whatever the term lists hold; a stdio-hosted source is never verified private.
-89. A GitHub board declared private is held, at every write, to its Project and the issue's
+90. A GitHub board declared private is held, at every write, to its Project and the issue's
     repository both reading private, read with its own credential — a change between writes
     refused at the next, an unreadable read never guessed, a missing `read:project` named; and a
     Linear source declared private is verified once per instance inside the cold resolution,
     spending no request a declared-nothing source does not, an unverifiable one refused.
-90. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
+91. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
     every payload the store sends and every verdict it reads is held to it.
 
 ## The public boundary
