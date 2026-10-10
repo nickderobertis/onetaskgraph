@@ -492,3 +492,82 @@ fn a_board_made_public_part_way_through_a_copy_refuses_the_next_write_and_undoes
         "the board holds nothing of the refused copy"
     );
 }
+
+#[test]
+fn a_private_task_project_and_document_read_back_private_from_the_board() {
+    let setup = Setup::new();
+    setup.record(
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nclassification: private",
+    );
+    setup.record(
+        "tasks",
+        "step",
+        "title: Step\nstatus: todo\nproject: goal\nclassification: private",
+    );
+    setup.record(
+        "documents",
+        "design",
+        "title: Design\nproject: goal\nclassification: private",
+    );
+    let (output, _) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let (output, _) = setup.run(&["document", "copy", "plan:design", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let document: Value = serde_json::from_str(&stdout(&output)).expect("a copy report");
+    let landed = |kind: &str, id: &str| {
+        let (output, _) = setup.run(&[kind, "show", id, "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let shown: Value = serde_json::from_str(&stdout(&output)).expect("a show");
+        shown["items"][0]["item"].clone()
+    };
+    let project = landed("project", "plan:goal");
+    let task = landed("task", "plan:step");
+    let copies = |item: &Value| {
+        item["metadata"]["onetaskgraph.copies"]["board"]
+            .as_str()
+            .unwrap_or_else(|| panic!("where it landed: {item:#}"))
+            .to_owned()
+    };
+    let document_at = document["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("where the document landed: {document:#}"))
+        .to_owned();
+    for (kind, id) in [
+        ("project", copies(&project)),
+        ("task", copies(&task)),
+        ("document", document_at),
+    ] {
+        let read = landed(kind, &id);
+        assert_eq!(read["classification"], "private", "{kind}: {read:#}");
+        // The reserved key is how the board keeps it, never the caller's own metadata.
+        assert!(
+            read["metadata"]
+                .get("onetaskgraph.classification")
+                .is_none(),
+            "{kind}: {read:#}"
+        );
+    }
+}
+
+#[test]
+fn a_board_item_whose_stored_classification_is_malformed_is_refused_rather_than_read_public() {
+    let setup = Setup::over(|sandbox| {
+        github_projects_with_items(
+            sandbox,
+            vec![json!({"item": "ITEM-ODD-1", "id": "ODD-1", "type": "Issue",
+                "title": "Odd", "state": "OPEN", "reason": null, "parent": null,
+                "repo": "nickderobertis/onetaskgraph", "status": "Todo", "origin": "",
+                "labels": [],
+                "body": "Odd.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.classification\":\"secret\"}\n-->"})],
+        )
+    });
+    let (output, _) = setup.run(&["task", "show", "board:ODD-1"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.classification"),
+        "{}",
+        stderr(&output)
+    );
+}

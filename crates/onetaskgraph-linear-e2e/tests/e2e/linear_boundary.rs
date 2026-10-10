@@ -231,3 +231,63 @@ fn a_declaration_that_cannot_be_verified_is_refused_before_any_mutation() {
         assert_eq!(mutations(&served), 0, "{served:#?}");
     }
 }
+
+#[test]
+fn a_private_task_project_and_document_read_back_private_from_linear() {
+    let setup = Setup::new(Some("private"), held(), true, 1);
+    let design = setup.sandbox.project().join("plan/documents/design.md");
+    std::fs::create_dir_all(design.parent().expect("a parent")).expect("a folder");
+    std::fs::write(
+        &design,
+        "---\ntitle: Design\nproject: goal\nclassification: private\n---\nThe design.\n",
+    )
+    .expect("a record");
+    setup.ok(&["project", "copy", "plan:goal", "--to", "linear"]);
+    setup.ok(&["document", "copy", "plan:design", "--to", "linear"]);
+    let shown = |kind: &str, id: &str| {
+        let (output, _) = setup.run(&[kind, "show", id, "--json"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let shown: Value = serde_json::from_str(&stdout(&output)).expect("a show");
+        shown["items"][0]["item"].clone()
+    };
+    let landed = |kind: &str, id: &str| {
+        shown(kind, id)["metadata"]["onetaskgraph.copies"]["linear"]
+            .as_str()
+            .unwrap_or_else(|| panic!("where {id} landed"))
+            .to_owned()
+    };
+    for (kind, id) in [
+        ("project", "plan:goal"),
+        ("task", "plan:t-0"),
+        ("document", "plan:design"),
+    ] {
+        let read = shown(kind, &landed(kind, id));
+        assert_eq!(read["classification"], "private", "{kind}: {read:#}");
+        // The reserved key is how Linear keeps it, in its own slot, never caller metadata.
+        assert!(
+            read["metadata"]
+                .get("onetaskgraph.classification")
+                .is_none(),
+            "{kind}: {read:#}"
+        );
+    }
+}
+
+#[test]
+fn a_linear_item_whose_stored_classification_is_malformed_is_refused_rather_than_read_public() {
+    let mut dataset = held();
+    dataset["tasks"] = json!([{
+        "id": "ISS-9", "title": "Odd", "labels": [], "priority": null,
+        "status": {"name": "Ready", "category": "todo"},
+        "_linear_description":
+            "Odd.\n\n<!-- onetaskgraph.metadata `{\"onetaskgraph.classification\":\"secret\"}` -->",
+    }]);
+    let setup = Setup::new(None, dataset, true, 0);
+    let (output, _) = setup.run(&["task", "show", "linear:ISS-9"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.classification"),
+        "{}",
+        stderr(&output)
+    );
+}

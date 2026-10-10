@@ -2172,3 +2172,84 @@ fn an_in_memory_source_declared_private_is_a_host_local_destination_a_private_it
     .expect("a copy report");
     assert_eq!(report["items"][0]["action"], "created", "{report:#}");
 }
+
+/// A check command that records every input it is handed whole, one JSON line each, in the
+/// file its one argument names, and passes it.
+const PAYLOAD_CHECK: &str = "import json, sys\n\
+    payload = json.load(sys.stdin)\n\
+    with open(sys.argv[1], 'a', encoding='utf-8') as record:\n\
+    \x20   record.write(json.dumps(payload) + '\\n')\n\
+    print(json.dumps({'verdict': 'pass'}))\n";
+
+#[test]
+fn a_targeted_update_puts_every_field_it_writes_in_front_of_the_check() {
+    let recorded = tempfile::tempdir().expect("a directory for the record");
+    let record = recorded.path().join("payloads.jsonl");
+    let store = Store::with_policy(Some(json!({
+        "check_command": ["python3", "-c", PAYLOAD_CHECK, record.display().to_string()],
+    })));
+    for id in ["held", "other", "dep"] {
+        store.record(
+            "site",
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo"),
+            PLAIN,
+        );
+    }
+    let body = store.body("Content marker.");
+    store.ok(&[
+        "task",
+        "update",
+        "site:held",
+        "--title",
+        "Title marker",
+        "--body-file",
+        &body,
+        "--status",
+        "in-progress",
+        "--status-name",
+        "in progress",
+        "--metadata",
+        "team.note=\"Metadata marker\"",
+        "--delivers",
+        "site:other",
+        "--depends-on",
+        "site:dep",
+    ]);
+    let payloads: Vec<Value> = std::fs::read_to_string(&record)
+        .expect("the check was run")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a payload"))
+        .collect();
+    let update = payloads
+        .iter()
+        .find(|payload| {
+            payload["text"]
+                .as_array()
+                .is_some_and(|text| text.iter().any(|entry| entry == "Content marker."))
+        })
+        .unwrap_or_else(|| panic!("no check was shown the new content: {payloads:#?}"));
+    let metadata: Vec<&str> = update["metadata"]
+        .as_array()
+        .expect("metadata strings")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for shown in [
+        "Title marker",
+        "in progress",
+        "team.note",
+        "Metadata marker",
+        "dep",
+    ] {
+        assert!(
+            metadata.iter().any(|entry| entry.contains(shown)),
+            "{shown} was not shown to the check: {update:#}"
+        );
+    }
+    assert!(
+        metadata.iter().any(|entry| entry.contains("other")),
+        "the delivered task was not shown to the check: {update:#}"
+    );
+}
