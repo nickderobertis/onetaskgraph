@@ -18761,3 +18761,126 @@ async fn every_added_alias_answering_no_item_or_the_wrong_one_is_refused_by_name
         }
     }
 }
+
+/// The board-field type a write reads the pinned schema to select, and the one member of its
+/// enum the write reads, are exactly what the credentialed lane holds GitHub to on every run —
+/// so the pinned copy cannot drift from what is re-read.
+#[test]
+fn the_pinned_field_type_is_the_one_the_live_lane_introspects() {
+    use graphql_parser::schema::{Definition, TypeDefinition, parse_schema};
+    let pinned = parse_schema::<String>(include_str!("fixtures/schema.graphql")).unwrap();
+    let field_type = pinned
+        .definitions
+        .iter()
+        .find_map(|definition| match definition {
+            Definition::TypeDefinition(TypeDefinition::Object(object))
+                if object.name == "ProjectV2Field" =>
+            {
+                object
+                    .fields
+                    .iter()
+                    .find(|field| field.name == "dataType")
+                    .map(|field| field.field_type.to_string())
+            }
+            _ => None,
+        })
+        .expect("the pinned ProjectV2Field selects dataType");
+    assert_eq!(
+        [("dataType", field_type.as_str())],
+        journey::contract_field_types("ProjectV2Field")
+    );
+    for (enum_name, members) in journey::CONTRACT_ENUMS {
+        let pinned_members = pinned
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                Definition::TypeDefinition(TypeDefinition::Enum(declared))
+                    if declared.name == enum_name =>
+                {
+                    Some(
+                        declared
+                            .values
+                            .iter()
+                            .map(|value| value.name.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the pinned schema declares no {enum_name}"));
+        assert_eq!(pinned_members, members.to_vec(), "{enum_name}");
+    }
+    // And the members are asked of GitHub, once, without a request of their own.
+    let documents = journey::contract_schema_documents();
+    assert_eq!(
+        documents
+            .concat()
+            .matches("ProjectV2FieldType:__type(name:\"ProjectV2FieldType\"){enumValues{name}}")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_refused_field_write_stops_a_metadata_set_and_an_update_before_the_body() {
+    let key = MetadataKey::new("orchestrator.follow-up").unwrap();
+    let body = slotted(
+        "prose",
+        &json!({"orchestrator.follow-up": {"host": "alpha"}}),
+    );
+    let fresh = || {
+        board(vec![
+            Item::issue("I_1", "held")
+                .holding_text("FIELD_host", "alpha")
+                .body(&body),
+        ])
+        .with_field(host_field())
+    };
+    let untouched = |fixture: &Fixture, what: &str| {
+        assert!(
+            !fixture
+                .seen()
+                .iter()
+                .any(|call| call[0] == "updateIssue" || call[0] == "addBlockedBy"),
+            "{what}: nothing after the refused field write was sent: {:?}",
+            fixture.seen()
+        );
+        let item = fixture.item("I_1");
+        assert_eq!(item.body.as_deref(), Some(body.as_str()), "{what}");
+        assert_eq!(item.title, "held", "{what}");
+        assert_eq!(host_of(fixture, "I_1").as_deref(), Some("alpha"), "{what}");
+    };
+
+    let fixture = fresh();
+    fixture.refuse("updateProjectV2ItemFieldValue");
+    let message = refusal(
+        projecting(&fixture)
+            .set_task_metadata(&NativeId("I_1".to_owned()), &key, &json!({"host": "beta"}))
+            .await
+            .expect_err("the field write is refused"),
+    );
+    assert!(
+        message.contains("updateProjectV2ItemFieldValue"),
+        "{message}"
+    );
+    untouched(&fixture, "metadata set");
+
+    let fixture = fresh();
+    fixture.refuse("updateProjectV2ItemFieldValue");
+    let mut update = TaskUpdate {
+        title: Some("retitled".to_owned()),
+        ..TaskUpdate::default()
+    };
+    update.metadata_set.insert(key, json!({"host": "beta"}));
+    let message = refusal(
+        projecting(&fixture)
+            .update_task(&NativeId("I_1".to_owned()), &update)
+            .await
+            .expect_err("the field write is refused"),
+    );
+    assert!(
+        message.contains("updateProjectV2ItemFieldValue"),
+        "{message}"
+    );
+    untouched(&fixture, "task update");
+}

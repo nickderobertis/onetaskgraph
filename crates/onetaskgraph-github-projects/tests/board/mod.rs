@@ -186,6 +186,16 @@ fn introspected(query: &str) -> Value {
 
 /// One introspected type's members, as the selection for its kind spells them.
 fn introspected_type_members(name: &str) -> Value {
+    if let Some((_, members)) = crate::journey::CONTRACT_ENUMS
+        .iter()
+        .find(|(held, _)| *held == name)
+    {
+        let values = members
+            .iter()
+            .map(|member| json!({ "name": member }))
+            .collect::<Vec<_>>();
+        return json!({ "enumValues": values });
+    }
     if name == "DraftIssue" {
         return json!({"fields":[{"name":"projectV2Items",
             "type":introspected_type("ProjectV2ItemConnection!"),

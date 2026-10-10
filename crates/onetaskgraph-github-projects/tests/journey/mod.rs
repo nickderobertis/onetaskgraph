@@ -1447,6 +1447,14 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     ("ProjectV2Field", false, &["id", "name", "dataType"]),
 ];
 
+/// Every enum a write reads a member of, with the members it reads.
+///
+/// `ProjectV2FieldType.TEXT` is what tells a board text field a projected metadata value can be
+/// written to, so GitHub is held to that member as the input and payload types above are held
+/// to theirs. Asked in the first introspection document beside its types, so it costs no
+/// request of its own.
+pub const CONTRACT_ENUMS: [(&str, &[&str]); 1] = [("ProjectV2FieldType", &["TEXT"])];
+
 /// How many times one document may select a given introspection field.
 ///
 /// GitHub's own number, stated in its refusal of a document that went over — `__Type.fields
@@ -1515,7 +1523,15 @@ pub fn contract_schema_documents() -> Vec<String> {
         if roots.is_empty() {
             return documents;
         }
-        documents.push(format!("query MutationContract{{{}}}", roots.concat()));
+        let mut roots = roots.concat();
+        if documents.is_empty() {
+            for (enum_name, _) in CONTRACT_ENUMS {
+                roots.push_str(&format!(
+                    "{enum_name}:__type(name:\"{enum_name}\"){{enumValues{{name}}}}"
+                ));
+            }
+        }
+        documents.push(format!("query MutationContract{{{roots}}}"));
     }
 }
 
@@ -1605,6 +1621,20 @@ async fn verify_contract_schema(
             return Err(format!(
                 "GitHub mutation {field_name} payload changed: expected {payload_name}, got {payload:?}"
             ));
+        }
+    }
+    for (enum_name, members) in CONTRACT_ENUMS {
+        let values = response
+            .pointer(&format!("/data/{enum_name}/enumValues"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("GitHub schema has no {enum_name} enum values"))?;
+        for member in members {
+            if !values
+                .iter()
+                .any(|value| value.get("name").and_then(Value::as_str) == Some(member))
+            {
+                return Err(format!("GitHub enum {enum_name} has no {member} member"));
+            }
         }
     }
     for (type_name, input, expected_fields) in CONTRACT_TYPES {
