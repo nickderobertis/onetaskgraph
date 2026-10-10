@@ -144,11 +144,15 @@ impl Store {
         self.sandbox.project().join(name)
     }
 
-    /// Every file under every folder of this store, with its bytes.
+    /// Every file under every folder of this store's project — each source's, a journey's own
+    /// added ones included — with its bytes.
     fn tree(&self) -> BTreeMap<String, Vec<u8>> {
         let mut held = BTreeMap::new();
-        for name in ["plan", "vault", "site"] {
-            held.extend(tree(&self.folder(name)));
+        for entry in std::fs::read_dir(self.sandbox.project()).expect("the project directory") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                held.extend(tree(&path));
+            }
         }
         held
     }
@@ -2606,4 +2610,85 @@ fn a_copy_over_an_item_the_destination_holds_private_keeps_it_private() {
         assert!(held.contains("revised"), "{kind}: {held}");
         assert!(held.contains("classification: private"), "{kind}: {held}");
     }
+}
+
+#[test]
+fn a_policy_command_with_no_program_is_refused_when_the_configuration_is_read() {
+    for command in [json!([]), json!(["   ", "--flag"])] {
+        for key in ["check_command", "visibility_command"] {
+            let store = Store::with_policy(Some(json!({ key: command })));
+            let output = store.run(&["sources", "list"]);
+            assert_ne!(
+                output.status.code(),
+                Some(0),
+                "{key} {command}: {}",
+                stdout(&output)
+            );
+            assert!(
+                stderr(&output).contains("names the program to run"),
+                "{key} {command}: {}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_delivered_task_the_boundary_refuses_is_reported_failed_and_left_as_it_was() {
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({ "shelf": folder(sandbox, "shelf", "public") }),
+    );
+    // Held private by hand in a public source, as no write here could leave one: the rule may
+    // neither name its deliverer there nor move its status.
+    store.record(
+        "site",
+        "tasks",
+        "unnamed",
+        "title: Unnamed\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "named",
+        "title: Named\nstatus: todo\nclassification: private\ndelivered_by: [\"shelf:helper\"]",
+        PLAIN,
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "helper",
+        "title: Helper\nstatus: todo\ndelivers: [\"site:unnamed\", \"site:named\"]",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let output = store.run(&[
+        "task",
+        "status",
+        "set",
+        "shelf:helper",
+        "in-progress",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
+    let delivered = set["delivered"]
+        .as_array()
+        .expect("one entry per delivered task");
+    assert_eq!(delivered.len(), 2, "{set:#}");
+    for entry in delivered {
+        // `unnamed` is refused writing its `delivered_by`; `named` already lists the deliverer,
+        // so its refusal is the status write's.
+        assert_eq!(entry["outcome"], "failed", "{set:#}");
+        assert_eq!(
+            entry["failure"]["kind"], "not-private-destination",
+            "{set:#}"
+        );
+    }
+    assert_eq!(tree(&store.folder("site")), before, "both are as they were");
+    // The deliverer's own write landed.
+    let helper =
+        std::fs::read_to_string(store.folder("shelf").join("tasks/helper.md")).expect("the helper");
+    assert!(helper.contains("status: in progress"), "{helper}");
 }
