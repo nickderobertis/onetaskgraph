@@ -201,6 +201,20 @@ fn a_copied_follow_up_lands_its_host_on_the_board_and_keeps_it_in_step() {
         host_writes(&setup.board, &recopied),
         Vec::<Option<String>>::new()
     );
+    let (_, recopied_again) = setup.copy();
+    assert_eq!(
+        host_writes(&setup.board, &recopied_again),
+        Vec::<Option<String>>::new()
+    );
+    // What this journey's first copy and two unchanged re-copies spent is the budget's
+    // telemetry, recorded beside the same copies made without the projection.
+    record_share(
+        (
+            Spent::of(&first),
+            [Spent::of(&recopied), Spent::of(&recopied_again)],
+        ),
+        unprojected_follow_up(),
+    );
     setup.follow_up(Some("build-9"));
     let (_, moved) = setup.copy();
     assert_eq!(
@@ -384,25 +398,21 @@ impl Spent {
     }
 }
 
-/// One follow-up copied once and re-copied twice unchanged, with the projection configured or
-/// not: what the first copy and each re-copy spent.
-fn one_follow_up(projecting: bool) -> (Spent, [Spent; 2]) {
-    let setup = Setup::new(projecting, true);
+/// The baseline the budget compares against: the same follow-up copied once and re-copied
+/// twice unchanged onto a board with the `Host` field and no projection configured.
+fn unprojected_follow_up() -> (Spent, [Spent; 2]) {
+    let setup = Setup::new(false, true);
     setup.follow_up(Some("build-7"));
-    let (id, first) = setup.copy();
-    if projecting {
-        assert_eq!(setup.board.text_of(&id, "Host").as_deref(), Some("build-7"));
-    }
+    let (_, first) = setup.copy();
     let (_, second) = setup.copy();
     let (_, third) = setup.copy();
     (Spent::of(&first), [Spent::of(&second), Spent::of(&third)])
 }
 
-#[test]
-fn projecting_a_field_adds_no_request_to_a_copy_and_records_what_it_spends() {
-    let (first_with, unchanged_with) = one_follow_up(true);
-    let (first_without, unchanged_without) = one_follow_up(false);
-    // The one property this asserts: the write rides a request the copy already sends.
+/// Hold the one property the budget asserts — the projection rides a request the copy already
+/// sends, for each copy kind — and record what each kind spent with and without it.
+fn record_share(with: (Spent, [Spent; 2]), without: (Spent, [Spent; 2])) {
+    let ((first_with, unchanged_with), (first_without, unchanged_without)) = (with, without);
     assert_eq!(
         first_with.requests, first_without.requests,
         "a first copy: {first_with:?} against {first_without:?}"

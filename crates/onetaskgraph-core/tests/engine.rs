@@ -156,8 +156,10 @@ enum Published {
     /// Every root's name beside a digest of the schema it emitted.
     Shapes(&'static [(&'static str, u64)]),
     /// Every root's digest, and beside them the rest of the document both SDKs are generated
-    /// from: each plugin's configuration schema, as `plugin_config/<kind>`, and each root the
-    /// binary adds to this bundle, as `binary/<root>` — see [`beside`]. From [`WHOLE_FROM`].
+    /// from: each plugin's configuration schema, as `plugin_config/<kind>`, which this file
+    /// verifies — see [`plugin_configs`] — and each root the binary adds to this bundle, as
+    /// `binary/<root>`, which the binary's own test verifies against this same row. From
+    /// [`WHOLE_FROM`].
     Whole {
         roots: &'static [(&'static str, u64)],
         beside: &'static [(&'static str, u64)],
@@ -185,46 +187,16 @@ impl Published {
 /// one before, and refused the bump as republishing it.
 const WHOLE_FROM: u32 = 34;
 
-/// The roots the binary adds to the engine's bundle in `crates/onetaskgraph/src/main.rs`'s
-/// `schema_bundle`, each with the schema it emits there. That function's own test holds the
-/// binary to exactly these names, so a root added there and not here fails rather than going
-/// unrecorded.
-fn binary_roots() -> Vec<(&'static str, Value)> {
-    let value = |schema| serde_json::to_value(schema).expect("a schema renders");
-    vec![
-        (
-            "StatusOptionsReport",
-            value(schemars::schema_for!(
-                onetaskgraph_github_projects::StatusOptionsReport
-            )),
-        ),
-        (
-            "FieldsReport",
-            value(schemars::schema_for!(
-                onetaskgraph_github_projects::FieldsReport
-            )),
-        ),
-        (
-            "StatusNamesReport",
-            value(schemars::schema_for!(
-                onetaskgraph_linear::StatusNamesReport
-            )),
-        ),
-    ]
-}
-
-/// What a [`Published::Whole`] row records beside the roots, as `bundle` and the binary emit it.
-fn beside(bundle: &Value) -> Vec<(String, u64)> {
+/// The `plugin_config/<kind>` half of what a [`Published::Whole`] row records beside the roots,
+/// as `bundle` emits it. The `binary/<root>` half is the binary's to verify, because the binary
+/// is what adds those roots; `crates/onetaskgraph/src/main.rs`'s test reads this file's row for
+/// the current version and holds every root it adds to it.
+fn plugin_configs(bundle: &Value) -> Vec<(String, u64)> {
     let mut emitted: Vec<(String, u64)> = bundle["plugin_config"]
         .as_object()
         .expect("plugin_config is an object")
         .iter()
         .map(|(kind, schema)| (format!("plugin_config/{kind}"), digest(schema)))
-        .chain(
-            binary_roots()
-                .into_iter()
-                .map(|(root, schema)| (format!("binary/{root}"), digest(&schema))),
-        )
         .collect();
     emitted.sort_unstable();
     emitted
@@ -2003,51 +1975,7 @@ const THIRTY_FOURTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
 
-/// One root's schema rendered so that two equal documents render equally.
-///
-/// Object keys sorted at every depth, so nothing about the order `schemars` happened to
-/// build a map in reaches the digest. Arrays keep their order, because in JSON Schema an
-/// array's order is part of what it says.
-fn canonical(value: &Value) -> String {
-    match value {
-        Value::Object(fields) => {
-            let mut keys: Vec<&String> = fields.keys().collect();
-            keys.sort_unstable();
-            let rendered: Vec<String> = keys
-                .iter()
-                .map(|key| {
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(key).expect("a key renders"),
-                        canonical(&fields[*key])
-                    )
-                })
-                .collect();
-            format!("{{{}}}", rendered.join(","))
-        }
-        Value::Array(items) => {
-            let rendered: Vec<String> = items.iter().map(canonical).collect();
-            format!("[{}]", rendered.join(","))
-        }
-        other => serde_json::to_string(other).expect("a scalar renders"),
-    }
-}
-
-/// A change-detecting digest of one root's emitted schema.
-///
-/// FNV-1a over the canonical rendering above, written out here rather than taken from a
-/// crate: what this has to catch is a schema that changed without the version moving, and
-/// any digest that changes when its input does catches that. It defends against nothing
-/// adversarial and does not pretend to — whoever can edit a row of the table above can edit
-/// the digest beside it, which the table already says of itself.
-fn digest(schema: &Value) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in canonical(schema).as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
+include!("support/bundle_digest.rs");
 
 /// The shape version 10 of the bundle publishes: every root, and a digest of its schema.
 ///
@@ -3084,15 +3012,24 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
             literal(&emitted)
         );
     }
-    // And what a whole row records beside them: every plugin's configuration schema and every
-    // root the binary adds, which move both SDKs' models exactly as an engine root does.
+    // And what a whole row records beside them: every plugin's configuration schema, which moves
+    // both SDKs' models exactly as an engine root does. Its `binary/<root>` entries are the
+    // binary's to verify; nothing else may be recorded there.
     if let Published::Whole {
         beside: published, ..
     } = expected
     {
-        let emitted = beside(&bundle);
+        assert!(
+            published
+                .iter()
+                .all(|(name, _)| name.starts_with("plugin_config/") || name.starts_with("binary/")),
+            "a whole row records plugin_config/<kind> and binary/<root> entries alone: \
+             {published:?}"
+        );
+        let emitted = plugin_configs(&bundle);
         let mut recorded: Vec<(String, u64)> = published
             .iter()
+            .filter(|(name, _)| name.starts_with("plugin_config/"))
             .map(|(name, digest)| ((*name).to_owned(), *digest))
             .collect();
         recorded.sort_unstable();
@@ -3103,11 +3040,10 @@ fn the_schema_bundle_describes_every_contract_root_and_every_plugin_config() {
         assert_eq!(
             emitted,
             recorded,
-            "what version {SCHEMA_BUNDLE_VERSION} publishes beside the engine's roots is not \
-             what the bundle and the binary emit. If this change is deliberate, append a row to \
-             PUBLISHED_BUNDLES and bump SCHEMA_BUNDLE_VERSION to match; the list to paste is:\n\
-             const NEXT_BUNDLE_BESIDE: [(&str, u64); {}] = [\n{}\n];",
-            emitted.len(),
+            "the plugin configurations version {SCHEMA_BUNDLE_VERSION} publishes are not the \
+             ones the bundle emits. If this change is deliberate, append a row to \
+             PUBLISHED_BUNDLES and bump SCHEMA_BUNDLE_VERSION to match; its plugin_config \
+             entries are:\n{}",
             rows.join("\n")
         );
     }
