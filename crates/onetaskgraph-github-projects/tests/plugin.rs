@@ -245,6 +245,9 @@ struct Item {
     /// a check that agrees with itself over every tree is not evidence that it would
     /// catch a path serving another path's answer.
     path_labels: BTreeMap<&'static str, Vec<(&'static str, &'static str)>>,
+    /// What this item holds in each of the board's own text fields other than the origin's,
+    /// by field id — a field holding nothing is absent, as GitHub answers it.
+    texts: BTreeMap<String, String>,
 }
 
 /// What the document that just arrived asked for, as far as rendering an item needs it.
@@ -291,7 +294,13 @@ impl Item {
             origin_value: true,
             updated_at: None,
             path_labels: BTreeMap::new(),
+            texts: BTreeMap::new(),
         }
+    }
+    /// Hold `text` in the text field `field_id`. See [`Item::texts`].
+    fn holding_text(mut self, field_id: &str, text: &str) -> Self {
+        self.texts.insert(field_id.to_owned(), text.to_owned());
+        self
     }
     fn draft(id: &str, title: &str) -> Self {
         Self {
@@ -409,7 +418,16 @@ impl Item {
     }
 
     fn field_values(&self, options: &Value) -> Value {
-        let mut nodes = Vec::new();
+        let mut nodes = self
+            .texts
+            .iter()
+            .map(|(id, text)| {
+                json!({"text":text,"field":{"id":id,"name":TEXT_FIELD_NAMES
+                    .iter()
+                    .find(|(known, _)| known == id)
+                    .map_or("unnamed", |(_, name)| *name)}})
+            })
+            .collect::<Vec<_>>();
         if let Some(status) = &self.status {
             nodes.push(
                 json!({"name":status,"field":{"id":"FIELD_status","name":"Status","options":options}}),
@@ -561,6 +579,9 @@ struct State {
     blank_status_snapshot_id: Option<&'static str>,
     origin_field: bool,
     status_field: bool,
+    /// The board's own text fields beyond the origin's — and a same-named field of another
+    /// type a case puts there — as the board's field list answers each.
+    extra_fields: Vec<Value>,
     blocked_by: BTreeMap<String, Vec<String>>,
     /// Mutations this board answers with a GraphQL error rather than performing. GitHub
     /// fails one call of the several a write is, and what the source does about the calls
@@ -766,9 +787,10 @@ impl State {
         }
         if self.origin_field {
             nodes.push(
-                json!({"__typename":"ProjectV2Field","id":"FIELD_origin","name":"onetaskgraph.origin"}),
+                json!({"__typename":"ProjectV2Field","id":"FIELD_origin","name":"onetaskgraph.origin","dataType":"TEXT"}),
             );
         }
+        nodes.extend(self.extra_fields.iter().cloned());
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
     /// The next moment this board stamps a comment with, a second after the one before.
@@ -829,6 +851,11 @@ impl Fixture {
             .filter(|held| held.issue == issue)
             .cloned()
             .collect()
+    }
+    /// Put a field on this board beside the ones it already has, as its field list answers it.
+    fn with_field(self, field: Value) -> Self {
+        self.state.lock().unwrap().extra_fields.push(field);
+        self
     }
     fn item(&self, content_id: &str) -> Item {
         self.state
@@ -1136,6 +1163,9 @@ impl Fixture {
     }
 }
 
+/// The id and name of every text field beyond the origin's a case may put on this board.
+const TEXT_FIELD_NAMES: [(&str, &str); 2] = [("FIELD_host", "Host"), ("FIELD_team", "Team")];
+
 fn board(items: Vec<Item>) -> Fixture {
     board_with(items, true, true)
 }
@@ -1161,6 +1191,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         blank_status_snapshot_id: None,
         origin_field,
         status_field,
+        extra_fields: Vec::new(),
         blocked_by: BTreeMap::new(),
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
@@ -1720,10 +1751,25 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         if let Some(option) = option {
             item.status = Some(option);
         }
-        if let Some(text) = text {
-            item.origin = Some(text);
+        match (text, input["fieldId"].as_str()) {
+            (Some(text), Some(field)) if TEXT_FIELD_NAMES.iter().any(|(id, _)| *id == field) => {
+                item.texts.insert(field.to_owned(), text);
+            }
+            (Some(text), _) => item.origin = Some(text),
+            (None, _) => {}
         }
         return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
+    }
+    if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
+        let item_id = input["itemId"].as_str().unwrap().to_owned();
+        let item = state
+            .items
+            .iter_mut()
+            .find(|item| item.item_id == item_id)
+            .expect("a field clear names a board item");
+        item.texts
+            .remove(input["fieldId"].as_str().expect("a field id"));
+        return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
     }
     if query.contains("addSubIssue(input:$input)") || query.contains("removeSubIssue(input:$input)")
     {
@@ -17866,4 +17912,479 @@ async fn the_supplied_clock_spaces_writes_and_bounds_rate_limit_recovery() {
         *clock.waits.lock().unwrap(),
         vec![Duration::from_millis(50), Duration::from_millis(100)]
     );
+}
+
+/// The `Host` text field the projection cases put on the board.
+fn host_field() -> Value {
+    json!({"__typename":"ProjectV2Field","id":"FIELD_host","name":"Host","dataType":"TEXT"})
+}
+
+/// A source projecting `orchestrator.follow-up` at `host` onto the board's `Host` field — a
+/// fresh one per call, as each command line is.
+fn projecting(fixture: &Fixture) -> Box<dyn TaskSource> {
+    configured(
+        &fixture.endpoint,
+        json!({"metadata_fields":[{"field":"Host","key":"orchestrator.follow-up","path":["host"]}]}),
+    )
+}
+
+/// The writes of the `Host` field this board received, in order: the text written, or
+/// `None` for a clear.
+fn host_writes(fixture: &Fixture) -> Vec<Option<String>> {
+    fixture
+        .seen()
+        .into_iter()
+        .filter(|call| call[1]["fieldId"] == "FIELD_host")
+        .map(|call| match call[0].as_str() {
+            Some("updateProjectV2ItemFieldValue") => {
+                Some(call[1]["value"]["text"].as_str().unwrap().to_owned())
+            }
+            Some("clearProjectV2ItemFieldValue") => None,
+            other => panic!("an unexpected write of the Host field: {other:?}"),
+        })
+        .collect()
+}
+
+/// What the board's `Host` field holds for one item.
+fn host_of(fixture: &Fixture, content_id: &str) -> Option<String> {
+    fixture.item(content_id).texts.get("FIELD_host").cloned()
+}
+
+/// Caller metadata holding `host` at `orchestrator.follow-up.host`, beside a key of its own.
+fn follow_up(host: Value) -> BTreeMap<String, Value> {
+    BTreeMap::from([
+        (
+            "orchestrator.follow-up".to_owned(),
+            json!({"host": host, "run": "r-1"}),
+        ),
+        ("team.owner".to_owned(), json!("ada")),
+    ])
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    Task,
+    Project,
+    Document,
+}
+
+/// Write one item of `kind` with `metadata` — a create when `target` is `None`, and a copy
+/// over the item `target` names otherwise — answering its id.
+async fn write_kind(
+    source: &dyn TaskSource,
+    kind: Kind,
+    target: Option<&str>,
+    metadata: BTreeMap<String, Value>,
+) -> Result<NativeId, SourceError> {
+    let target = target.map(|id| NativeId(id.to_owned()));
+    match kind {
+        Kind::Task => {
+            let mut item = task("T-1", "Investigate", status(StatusCategory::Todo, "Todo"));
+            item.metadata = metadata;
+            source
+                .write_task(&ItemWrite {
+                    target,
+                    item,
+                    depends_on: vec![],
+                })
+                .await
+        }
+        Kind::Project => {
+            let mut item = project("P-1", "Follow-ups", status(StatusCategory::Todo, "Todo"));
+            item.metadata = metadata;
+            source
+                .write_project(&ItemWrite {
+                    target,
+                    item,
+                    depends_on: vec![],
+                })
+                .await
+        }
+        Kind::Document => {
+            let mut item = document("D-1", "Design");
+            item.metadata = metadata;
+            source
+                .write_document(&ItemWrite {
+                    target,
+                    item,
+                    depends_on: vec![],
+                })
+                .await
+        }
+    }
+}
+
+/// Set one metadata key of one item of `kind` on its own — `metadata set`, and for a task the
+/// targeted `task update` too, whichever `through_update` says.
+async fn update_kind(
+    source: &dyn TaskSource,
+    kind: Kind,
+    id: &NativeId,
+    value: Option<Value>,
+    through_update: bool,
+) {
+    let key = MetadataKey::new("orchestrator.follow-up").unwrap();
+    let value = value.map(|host| json!({"host": host, "run": "r-1"}));
+    match (kind, through_update) {
+        (Kind::Task, true) => {
+            let mut update = TaskUpdate::default();
+            match value {
+                Some(value) => {
+                    update.metadata_set.insert(key, value);
+                }
+                None => {
+                    update.metadata_remove.insert(key);
+                }
+            }
+            source.update_task(id, &update).await.unwrap().unwrap();
+        }
+        (Kind::Task, false) => {
+            source
+                .set_task_metadata(id, &key, &value.unwrap_or(Value::Null))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        (Kind::Project, _) => {
+            source
+                .set_project_metadata(id, &key, &value.unwrap_or(Value::Null))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        (Kind::Document, _) => {
+            source
+                .set_document_metadata(id, &key, &value.unwrap_or(Value::Null))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_metadata_fields_entry_that_cannot_stand_is_refused_naming_the_source_and_the_entry() {
+    let base = fixture_config("http://127.0.0.1:9/graphql", &json!({}));
+    let with = |entries: Value| {
+        let mut config = base.clone();
+        config["metadata_fields"] = entries;
+        config
+    };
+    let host = json!({"field":"Host","key":"orchestrator.follow-up","path":["host"]});
+    for (entries, said) in [
+        (
+            json!([{"field":" ","key":"orchestrator.follow-up"}]),
+            "blank field",
+        ),
+        (json!([{"field":"Host","key":""}]), "blank key"),
+        (
+            json!([{"field":"Host","key":"onetaskgraph.origin"}]),
+            "reserved \"onetaskgraph.\" prefix",
+        ),
+        (json!([{"field":"status","key":"team.state"}]), "\"Status\""),
+        (
+            json!([{"field":"PRIORITY","key":"team.state"}]),
+            "\"Priority\"",
+        ),
+        (
+            json!([{"field":"OneTaskGraph.Origin","key":"team.state"}]),
+            "\"onetaskgraph.origin\"",
+        ),
+        (json!([{"field":"title","key":"team.state"}]), "\"Title\""),
+        (
+            json!([{"field":"Sub-issues Progress","key":"team.state"}]),
+            "\"Sub-issues progress\"",
+        ),
+        (
+            json!([{"field":"Linked pull requests","key":"team.state"}]),
+            "GitHub",
+        ),
+        (
+            json!([host, {"field":"host","key":"team.machine"}]),
+            "same board field as metadata_fields[0]",
+        ),
+    ] {
+        let message = build_refusal(with(entries.clone()));
+        assert!(message.contains("source work"), "{entries}: {message}");
+        assert!(message.contains("metadata_fields["), "{entries}: {message}");
+        assert!(message.contains(said), "{entries}: {said}: {message}");
+    }
+    let unknown = build_refusal(with(json!([{"field":"Host","key":"a.b","depth":1}])));
+    assert!(unknown.contains("depth"), "{unknown}");
+    // A usable list, an empty one and none at all all build.
+    for config in [with(json!([host])), with(json!([])), base.clone()] {
+        Plugin
+            .build(&SourceName::new("work").unwrap(), &config, &Secrets)
+            .unwrap_or_else(|error| panic!("{config}: {error}"));
+    }
+}
+
+#[tokio::test]
+async fn a_projected_value_lands_is_kept_moves_and_clears_on_every_kind_and_every_write() {
+    for kind in [Kind::Task, Kind::Project, Kind::Document] {
+        let fixture = board(vec![]).with_field(host_field());
+        // Create: the string lands in the field.
+        let id = write_kind(
+            projecting(&fixture).as_ref(),
+            kind,
+            None,
+            follow_up(json!("alpha")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            host_of(&fixture, &id.0).as_deref(),
+            Some("alpha"),
+            "{kind:?}"
+        );
+        assert_eq!(
+            host_writes(&fixture),
+            [Some("alpha".to_owned())],
+            "{kind:?}"
+        );
+
+        // Copy over it, unchanged: no write of the field at all.
+        let copied = |host: Value| {
+            let fixture = &fixture;
+            let id = id.clone();
+            async move {
+                write_kind(
+                    projecting(fixture).as_ref(),
+                    kind,
+                    Some(&id.0),
+                    follow_up(host),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        copied(json!("alpha")).await;
+        assert_eq!(
+            host_writes(&fixture).len(),
+            1,
+            "{kind:?}: an unchanged copy"
+        );
+        // Changed: written again. Absent and null: cleared once, then nothing to clear.
+        copied(json!("beta")).await;
+        assert_eq!(
+            host_of(&fixture, &id.0).as_deref(),
+            Some("beta"),
+            "{kind:?}"
+        );
+        copied(Value::Null).await;
+        assert_eq!(host_of(&fixture, &id.0), None, "{kind:?}");
+        let mut absent = follow_up(json!("unused"));
+        absent.remove("orchestrator.follow-up");
+        write_kind(projecting(&fixture).as_ref(), kind, Some(&id.0), absent)
+            .await
+            .unwrap();
+        assert_eq!(
+            host_writes(&fixture),
+            [Some("alpha".to_owned()), Some("beta".to_owned()), None],
+            "{kind:?}: a field already empty is not cleared again"
+        );
+
+        // Update: setting the key on its own moves the field the same way.
+        update_kind(
+            projecting(&fixture).as_ref(),
+            kind,
+            &id,
+            Some(json!("gamma")),
+            false,
+        )
+        .await;
+        assert_eq!(
+            host_of(&fixture, &id.0).as_deref(),
+            Some("gamma"),
+            "{kind:?}"
+        );
+        update_kind(
+            projecting(&fixture).as_ref(),
+            kind,
+            &id,
+            Some(json!("gamma")),
+            false,
+        )
+        .await;
+        update_kind(projecting(&fixture).as_ref(), kind, &id, None, false).await;
+        assert_eq!(host_of(&fixture, &id.0), None, "{kind:?}");
+        update_kind(projecting(&fixture).as_ref(), kind, &id, None, false).await;
+        assert_eq!(
+            host_writes(&fixture)[3..],
+            [Some("gamma".to_owned()), None],
+            "{kind:?}: an unchanged update writes nothing, an empty field is not cleared"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_task_update_projects_the_keys_it_names_and_nothing_when_it_names_none() {
+    let fixture = board(vec![]).with_field(host_field());
+    let id = write_kind(
+        projecting(&fixture).as_ref(),
+        Kind::Task,
+        None,
+        follow_up(json!("alpha")),
+    )
+    .await
+    .unwrap();
+    update_kind(
+        projecting(&fixture).as_ref(),
+        Kind::Task,
+        &id,
+        Some(json!("beta")),
+        true,
+    )
+    .await;
+    assert_eq!(host_of(&fixture, &id.0).as_deref(), Some("beta"));
+    update_kind(
+        projecting(&fixture).as_ref(),
+        Kind::Task,
+        &id,
+        Some(json!("beta")),
+        true,
+    )
+    .await;
+    // An update naming another key leaves the field alone, and sends it nothing.
+    let mut update = TaskUpdate::default();
+    update
+        .metadata_set
+        .insert(MetadataKey::new("team.owner").unwrap(), json!("grace"));
+    projecting(&fixture)
+        .update_task(&id, &update)
+        .await
+        .unwrap()
+        .unwrap();
+    update_kind(projecting(&fixture).as_ref(), Kind::Task, &id, None, true).await;
+    assert_eq!(host_of(&fixture, &id.0), None);
+    assert_eq!(
+        host_writes(&fixture),
+        [Some("alpha".to_owned()), Some("beta".to_owned()), None]
+    );
+}
+
+#[tokio::test]
+async fn a_value_no_text_field_can_hold_is_refused_before_any_mutation() {
+    for (value, found) in [
+        (json!(7), "a number"),
+        (json!(true), "a boolean"),
+        (json!({"name": "alpha"}), "an object"),
+        (json!(["alpha"]), "an array"),
+    ] {
+        for kind in [Kind::Task, Kind::Project, Kind::Document] {
+            let fixture = board(vec![]).with_field(host_field());
+            let message = refusal(
+                write_kind(
+                    projecting(&fixture).as_ref(),
+                    kind,
+                    None,
+                    follow_up(value.clone()),
+                )
+                .await
+                .expect_err("a value no text field holds"),
+            );
+            for said in [
+                "source work",
+                "\"orchestrator.follow-up\"",
+                "[\"host\"]",
+                found,
+            ] {
+                assert!(
+                    message.contains(said),
+                    "{kind:?} {value}: {said}: {message}"
+                );
+            }
+            assert_eq!(fixture.seen(), Vec::<Value>::new(), "{kind:?} {value}");
+        }
+    }
+    // An update and a metadata set of an existing item are refused the same way.
+    let fixture = board(vec![Item::issue("I_1", "held")]).with_field(host_field());
+    let key = MetadataKey::new("orchestrator.follow-up").unwrap();
+    let message = refusal(
+        projecting(&fixture)
+            .set_task_metadata(&NativeId("I_1".to_owned()), &key, &json!({"host": 7}))
+            .await
+            .expect_err("a number"),
+    );
+    assert!(message.contains("a number"), "{message}");
+    let mut update = TaskUpdate::default();
+    update.metadata_set.insert(key, json!({"host": [1]}));
+    let message = refusal(
+        projecting(&fixture)
+            .update_task(&NativeId("I_1".to_owned()), &update)
+            .await
+            .expect_err("an array"),
+    );
+    assert!(message.contains("an array"), "{message}");
+    assert_eq!(fixture.seen(), Vec::<Value>::new());
+}
+
+#[tokio::test]
+async fn a_board_without_the_text_field_refuses_the_write_before_any_mutation() {
+    for field in [
+        None,
+        Some(
+            json!({"__typename":"ProjectV2Field","id":"FIELD_host","name":"Host","dataType":"NUMBER"}),
+        ),
+        Some(
+            json!({"__typename":"ProjectV2SingleSelectField","id":"FIELD_host","name":"Host","options":[]}),
+        ),
+    ] {
+        for kind in [Kind::Task, Kind::Project, Kind::Document] {
+            let mut fixture = board(vec![]);
+            if let Some(field) = field.clone() {
+                fixture = fixture.with_field(field);
+            }
+            let message = refusal(
+                write_kind(
+                    projecting(&fixture).as_ref(),
+                    kind,
+                    None,
+                    follow_up(json!("alpha")),
+                )
+                .await
+                .expect_err("no text field to hold it"),
+            );
+            for said in ["source work", "\"Host\"", "sources fields work --apply"] {
+                assert!(
+                    message.contains(said),
+                    "{kind:?} {field:?}: {said}: {message}"
+                );
+            }
+            assert_eq!(fixture.seen(), Vec::<Value>::new(), "{kind:?} {field:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_read_reports_the_metadata_comment_and_never_the_projected_field() {
+    // The field holds what a person typed on the board; the comment holds the value. A read
+    // reports the comment's, and nothing of the field joins the metadata.
+    let fixture = board(vec![
+        Item::issue("I_1", "held")
+            .holding_text("FIELD_host", "typed-on-the-board")
+            .body(&slotted(
+                "prose",
+                &json!({"orchestrator.follow-up": {"host": "alpha", "run": "r-1"}}),
+            )),
+    ])
+    .with_field(host_field());
+    let read = projecting(&fixture)
+        .get_task(&NativeId("I_1".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    let unprojected = source(&fixture)
+        .get_task(&NativeId("I_1".to_owned()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read.metadata,
+        BTreeMap::from([(
+            "orchestrator.follow-up".to_owned(),
+            json!({"host": "alpha", "run": "r-1"})
+        )])
+    );
+    assert_eq!(read.metadata, unprojected.metadata);
 }
