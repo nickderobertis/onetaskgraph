@@ -1503,6 +1503,95 @@ async fn a_linking_caller_s_missing_or_unreachable_policy_never_approves_a_publi
     assert!(files_under(&store, "site").is_empty());
 }
 
+#[tokio::test]
+async fn a_linking_caller_s_policy_alone_activates_a_store_that_declares_nothing() {
+    // No declared visibility and no write_policy: the store a program links is inactive, and
+    // writes as it always did until the program hands it a policy.
+    let sandbox = Sandbox::new();
+    let site = sandbox.subdirectory("site");
+    sandbox.project_document(
+        &json!({"sources": {"site": {"plugin": "local-md", "config": {"root": site}}}}).to_string(),
+    );
+    let store = Store {
+        sandbox,
+        onevcs: None,
+    };
+    let inactive = linked_engine(&store);
+    assert!(!inactive.boundary_active());
+    inactive
+        .create_task(&task_on_site(PLAIN, &[OPEN]))
+        .await
+        .expect("an inactive store asks nobody");
+    let written = files_under(&store, "site");
+    let active = linked_engine(&store).with_write_policy(std::sync::Arc::new(Unreachable));
+    assert!(active.boundary_active());
+    let refused = active
+        .create_task(&task_on_site(PLAIN, &[]))
+        .await
+        .expect_err("a policy that cannot answer never approves");
+    assert_eq!(kind_of(&refused), "boundary-unavailable");
+    assert_eq!(
+        files_under(&store, "site"),
+        written,
+        "nothing more was written"
+    );
+}
+
+#[test]
+fn a_private_deliverer_s_id_is_withheld_from_a_delivered_task_by_its_classification_alone() {
+    // An inactive store: nothing declares `plan` or `notes` private, so the deliverer's own
+    // classification is the one thing that says its id must not reach `notes`.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    let notes = sandbox.subdirectory("notes");
+    sandbox.project_document(
+        &json!({"sources": {
+            "plan": {"plugin": "local-md", "config": {"root": plan}},
+            "notes": {"plugin": "local-md", "config": {"root": notes}},
+        }})
+        .to_string(),
+    );
+    let store = Store {
+        sandbox,
+        onevcs: None,
+    };
+    store.record(
+        "plan",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private\ndelivers: [\"notes:ticket\"]",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        "title: Open\nstatus: todo\ndelivers: [\"notes:pair\"]",
+        PLAIN,
+    );
+    store.record(
+        "notes",
+        "tasks",
+        "ticket",
+        "title: Ticket\nstatus: todo",
+        PLAIN,
+    );
+    store.record("notes", "tasks", "pair", "title: Pair\nstatus: todo", PLAIN);
+    store.ok(&["task", "status", "set", "plan:secret", "in-progress"]);
+    let ticket =
+        std::fs::read_to_string(store.folder("notes").join("tasks/ticket.md")).expect("the ticket");
+    assert!(
+        ticket.contains("status: in progress"),
+        "the rule still applies: {ticket}"
+    );
+    assert!(!ticket.contains("plan:secret"), "{ticket}");
+    // A public deliverer in the same source is named as ever.
+    store.ok(&["task", "status", "set", "plan:open", "in-progress"]);
+    let pair =
+        std::fs::read_to_string(store.folder("notes").join("tasks/pair.md")).expect("the pair");
+    assert!(pair.contains("plan:open"), "{pair}");
+}
+
 #[test]
 fn the_boundary_payloads_reconcile_with_the_released_onevcs_schema() {
     use onetaskgraph_core::boundary::{
