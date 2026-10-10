@@ -671,23 +671,19 @@ impl Engine {
         &self,
         destination: &onetaskgraph_plugin_api::SourceName,
         item: &str,
-        references: impl IntoIterator<Item = (&'a str, &'a str)>,
+        references: impl IntoIterator<Item = &'a crate::GlobalId>,
     ) -> Result<(), EngineError> {
         if self.declared(destination) == SourceVisibility::Private {
             return Ok(());
         }
-        for (source, _) in references {
-            if source == destination.as_str() {
-                continue;
-            }
-            let Ok(named) = onetaskgraph_plugin_api::SourceName::new(source.to_owned()) else {
-                continue;
-            };
-            if self.declared(&named) == SourceVisibility::Private {
+        for reference in references {
+            if &reference.source != destination
+                && self.declared(&reference.source) == SourceVisibility::Private
+            {
                 return Err(EngineError::PrivateReference {
                     item: item.to_owned(),
                     destination: destination.to_string(),
-                    named: source.to_owned(),
+                    named: reference.source.to_string(),
                 });
             }
         }

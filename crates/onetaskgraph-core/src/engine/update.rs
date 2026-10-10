@@ -94,27 +94,29 @@ impl Engine {
                 .map(|edges| near_edges(edges, &id.native, &id.source)),
             ..update.clone()
         };
-        let near = id.source.as_str();
-        let references: Vec<(&str, &str)> = update
-            .depends_on
-            .iter()
-            .flatten()
-            .map(|edge| {
-                let far = edge.to.id();
-                match edge.to.source() {
-                    Some(source) => (source, &far[source.len() + 1..]),
-                    None => (near, far),
-                }
-            })
-            .chain(
-                update
-                    .delivers
-                    .iter()
-                    .flatten()
-                    .map(|entry| entry.parts(near)),
-            )
-            .collect();
-        self.refuse_private_references(&id.source, &id.to_string(), references)?;
+        // Each reference as the qualified id it names: a native one names a task of this source.
+        let qualified = |named: String| {
+            named
+                .parse::<GlobalId>()
+                .map_err(|_| EngineError::ReferenceUnclassified {
+                    item: id.to_string(),
+                    reference: named.clone(),
+                    destination: id.source.to_string(),
+                    why: "it is not a qualified id".to_owned(),
+                })
+        };
+        let mut references = Vec::new();
+        for edge in update.depends_on.iter().flatten() {
+            references.push(if edge.to.is_qualified() {
+                qualified(edge.to.id().to_owned())?
+            } else {
+                GlobalId::new(id.source.clone(), NativeId(edge.to.id().to_owned()))
+            });
+        }
+        for entry in update.delivers.iter().flatten() {
+            references.push(qualified(entry.in_source(&id.source).as_str().to_owned())?);
+        }
+        self.refuse_private_references(&id.source, &id.to_string(), &references)?;
         self.admit_existing(
             source,
             &id.to_string(),

@@ -2813,11 +2813,19 @@ fn a_copy_withholds_an_external_private_item_s_id_though_its_source_declares_not
         PLAIN,
     );
     store.record(
+        "shelf",
+        "projects",
+        "hidden-plan",
+        "title: Hidden plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
         "plan",
         "tasks",
         "open",
         "title: Open\nstatus: todo\n\
-         depends_on: [{id: \"shelf:secret\", item: task}, {id: \"shelf:plain\", item: task}]\n\
+         depends_on: [{id: \"shelf:secret\", item: task}, {id: \"shelf:plain\", item: task}, \
+         {id: \"shelf:hidden-plan\", item: project}]\n\
          delivers: [\"shelf:secret\", \"shelf:plain\"]",
         PLAIN,
     );
@@ -2849,13 +2857,50 @@ fn a_copy_withholds_an_external_private_item_s_id_though_its_source_declares_not
     copied("site", Some("shelf:secret"));
     let landed = held_text(&store, "site");
     assert!(!landed.contains("shelf:secret"), "{landed}");
+    // A project it depends on is read and withheld the same way.
+    assert!(!landed.contains("shelf:hidden-plan"), "{landed}");
     // Public-to-public references are written as before.
     assert!(landed.contains("shelf:plain"), "{landed}");
     // A destination declared private keeps the private one.
     copied("vault", None);
     let kept = held_text(&store, "vault");
     assert!(kept.contains("shelf:secret"), "{kept}");
+    assert!(kept.contains("shelf:hidden-plan"), "{kept}");
     assert!(kept.contains("shelf:plain"), "{kept}");
+}
+
+#[test]
+fn a_copy_whose_external_reference_is_missing_or_unreadable_is_refused_before_any_write() {
+    // A configured source declaring nothing that holds no such item, and one whose record of it
+    // cannot be read, refuse exactly as an unconfigured source does.
+    let store = Store::laid(
+        Some(registered),
+        |sandbox| json!({"shelf": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("shelf")}}}),
+    );
+    store.record(
+        "shelf",
+        "tasks",
+        "broken",
+        "title: Broken\nstatus: todo\nclassification: secret",
+        PLAIN,
+    );
+    for (id, far, why) in [
+        ("missing", "shelf:gone-1", "holds no such item"),
+        ("unreadable", "shelf:broken", "could not be read"),
+    ] {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\ndepends_on: [{{id: \"{far}\", item: task}}]"),
+            PLAIN,
+        );
+        let before = store.tree();
+        let (kind, said) = store.refused(&["task", "copy", &format!("plan:{id}"), "--to", "site"]);
+        assert_eq!(kind, "reference-unclassified", "{said}");
+        assert!(said.contains(far) && said.contains(why), "{said}");
+        assert_eq!(store.tree(), before, "nothing was written");
+    }
 }
 
 #[test]

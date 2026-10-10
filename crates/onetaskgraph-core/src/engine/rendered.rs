@@ -578,8 +578,7 @@ impl Engine {
             request
                 .depends_on
                 .iter()
-                .chain(&request.delivers)
-                .map(|far| (far.source.as_str(), far.native.0.as_str())),
+                .chain(&request.delivers),
         )?;
         if let Some(first) = carried.first() {
             assets::stores(source, &record, &first.name)?;
