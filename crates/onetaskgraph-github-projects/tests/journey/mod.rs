@@ -1783,6 +1783,7 @@ fn artifact_task(
     metadata: BTreeMap<String, Value>,
 ) -> Task {
     Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: title.to_owned(),

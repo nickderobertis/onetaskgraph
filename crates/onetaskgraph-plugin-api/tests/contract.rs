@@ -822,6 +822,7 @@ fn dependency_endpoints_validate_and_preserve_qualified_ids() {
 #[test]
 fn a_task_round_trips_through_json_with_every_field_populated() {
     let task = Task {
+        version: None,
         id: NativeId::from("ENG-1"),
         key: Some("ENG-1".to_owned()),
         title: "Ship the contract".to_owned(),
@@ -1436,6 +1437,7 @@ fn source_name_validation_agrees_with_the_pattern_it_publishes() {
 /// source it came from, which is what a destination creating one may derive a name from.
 fn outgoing() -> Task {
     Task {
+        version: None,
         id: NativeId::from("T-1"),
         // No handle: this item is authored for a write rather than read from a source,
         // and a source derives a handle only on a read.
@@ -1953,6 +1955,7 @@ fn a_comment_body_is_kept_byte_for_byte_and_refused_only_when_empty() {
 #[test]
 fn a_comment_carries_exactly_its_six_members_and_absent_ones_read_as_null() {
     let written = Comment {
+        origin: None,
         id: NativeId::from("c-1"),
         author: Some("ada".to_owned()),
         created_at: Some(Utc.with_ymd_and_hms(2026, 9, 13, 15, 11, 7).unwrap()),
@@ -2318,6 +2321,7 @@ fn comment_activity_matches_a_comment_created_or_edited_at_or_after_the_instant(
             .expect("a real instant")
     };
     let comment = |created: Option<u32>, updated: Option<u32>| Comment {
+        origin: None,
         id: NativeId::from("c"),
         author: None,
         created_at: created.map(at),

@@ -57,6 +57,7 @@ fn provenance() -> Value {
 
 fn task(content: &str) -> Task {
     Task {
+        version: None,
         id: id("alpha"),
         key: None,
         title: "Alpha".to_owned(),

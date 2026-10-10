@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
     MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
@@ -681,6 +681,39 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<NativeId>, SourceError> {
         let _ = (task, comment);
         Err(commentless(self.kind()))
+    }
+
+    /// Write one comment a copy carries onto `task`: a new one when `existing` is `None`, and
+    /// otherwise the comment `existing`, which a copy wrote before, made to say `copy` — or
+    /// `None` when this source holds no such task or no such comment.
+    ///
+    /// The answer reports [`Comment::origin`] as `copy.origin`, however the source keeps it.
+    ///
+    /// **Defaulted to the hidden marker**, which is right for every source that records a
+    /// comment's author and times itself: the body is written through
+    /// [`add_comment`](Self::add_comment) or [`edit_comment`](Self::edit_comment) with
+    /// [`CommentOrigin::mark`](crate::CommentOrigin::mark) appended, and read back
+    /// [`unmarked`](Comment::unmarked). A source that can store the origin natively — and so
+    /// takes the origin's own id, author and times for the copy — overrides this.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_comment`](Self::add_comment).
+    async fn write_comment_copy(
+        &self,
+        task: &NativeId,
+        existing: Option<&NativeId>,
+        copy: &CommentCopy,
+    ) -> Result<Option<Comment>, SourceError> {
+        let body = CommentBody::new(copy.origin.mark(copy.body.as_str()))?;
+        let written = match existing {
+            Some(comment) => self.edit_comment(task, comment, &body).await?,
+            None => {
+                self.add_comment(task, &NewComment { body, author: None })
+                    .await?
+            }
+        };
+        Ok(written.map(Comment::unmarked))
     }
 
     /// Whether this source keeps template answers beside its items at all.

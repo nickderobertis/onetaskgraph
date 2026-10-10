@@ -291,6 +291,7 @@ struct Misbehaving(Answer);
 
 fn a_task(native: &str) -> Task {
     Task {
+        version: None,
         id: NativeId::from(native),
         key: None,
         title: native.to_owned(),
@@ -315,6 +316,7 @@ fn a_task(native: &str) -> Task {
 
 fn a_comment(native: &str) -> Comment {
     Comment {
+        origin: None,
         id: NativeId::from(native),
         author: None,
         created_at: None,

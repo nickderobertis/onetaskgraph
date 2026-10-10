@@ -82,6 +82,7 @@ const HAND_BLOCK: &str = "<!-- onetaskgraph:template-answers\ngoal: Ship it\nste
 
 fn task(title: &str, content: &str, metadata: Value) -> Task {
     Task {
+        version: None,
         id: id(title),
         key: None,
         title: title.to_owned(),

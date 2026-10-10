@@ -4245,6 +4245,7 @@ async fn comments_are_read_oldest_first_across_pages_over_real_http() {
         first.items,
         vec![
             Comment {
+                origin: None,
                 id: "c1".into(),
                 // An integration wrote it, and Linear names no user for one.
                 author: None,
@@ -4254,6 +4255,7 @@ async fn comments_are_read_oldest_first_across_pages_over_real_http() {
                 url: Some("https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c1".into()),
             },
             Comment {
+                origin: None,
                 id: "c2".into(),
                 author: Some("ada".into()),
                 created_at: at("2026-08-02T12:00:00Z"),

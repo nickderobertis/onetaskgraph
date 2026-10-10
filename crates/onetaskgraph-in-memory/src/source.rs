@@ -1132,6 +1132,7 @@ impl TaskSource for InMemorySource {
         }
         let now = Utc::now();
         let added = Comment {
+            origin: None,
             id: held.unused_comment_id(),
             author: comment.author.clone(),
             created_at: Some(now),

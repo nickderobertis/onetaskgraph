@@ -212,6 +212,7 @@ async fn the_filter_keeps_exactly_the_tasks_holding_a_value_asked_for() {
 /// A task a copy would write, holding `priority`.
 fn outgoing(priority: Priority) -> Task {
     Task {
+        version: None,
         id: id("copied"),
         key: None,
         title: "Copied".to_owned(),

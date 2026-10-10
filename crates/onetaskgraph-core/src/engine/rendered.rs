@@ -588,6 +588,7 @@ impl Engine {
         let write = ItemWrite {
             target: None,
             item: Task {
+                version: None,
                 id,
                 key: None,
                 title: request.title.clone(),

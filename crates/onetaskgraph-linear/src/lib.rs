@@ -4117,6 +4117,7 @@ fn map_comment(v: &Value) -> Result<Comment, SourceError> {
         Some(user) => Some(str_at(user, "displayName")?.to_owned()),
     };
     Ok(Comment {
+        origin: None,
         id: NativeId(backend_id(v, "id")?.into()),
         author,
         created_at: time(v, "createdAt")?,
@@ -4310,6 +4311,7 @@ fn map_task(v: &Value, source: &SourceName, statuses: &StatusMapping) -> Result<
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
     Ok(Task {
+        version: None,
         id,
         // `Issue.identifier` is `String!` and every read of an issue selects it, so a
         // response without one is a response this source cannot read rather than an issue

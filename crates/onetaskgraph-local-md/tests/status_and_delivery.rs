@@ -276,6 +276,7 @@ async fn both_lists_are_read_as_stored_and_a_bad_entry_is_refused_naming_the_tas
 async fn a_written_task_carries_both_lists_and_refuses_one_naming_itself_or_one_task_twice() {
     let (root, source) = folder(&[], json!({}));
     let task = |delivers: Vec<TaskRef>, delivered_by: Vec<TaskRef>| Task {
+        version: None,
         id: id("a"),
         key: None,
         title: "Alpha".to_owned(),

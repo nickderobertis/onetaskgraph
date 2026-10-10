@@ -2997,7 +2997,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
     // of differing capability answer one query correctly by different routes, and
     // a user can see which.
     let response = QueryResponse {
-        items: vec![Task {
+        items: vec![Task { version: None,
             id: NativeId::from("ENG-1"),
             key: None,
             title: "Land the contract".to_owned(),

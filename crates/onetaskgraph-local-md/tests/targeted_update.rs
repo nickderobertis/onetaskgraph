@@ -126,6 +126,7 @@ const ARRANGEMENTS: [Arrangement; 4] = [
 
 fn task(arrangement: Arrangement, value: &Value) -> Task {
     Task {
+        version: None,
         id: NativeId::from("layout"),
         key: None,
         title: "Layout".to_owned(),

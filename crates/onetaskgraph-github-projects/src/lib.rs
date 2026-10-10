@@ -8667,6 +8667,7 @@ impl Resolved {
             }
         };
         Ok(Task {
+            version: None,
             id: self.id.clone(),
             key: self.key(),
             title: self.title.clone(),
@@ -9784,6 +9785,7 @@ type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 /// wrote it — which is what an absent author means, rather than an author called nothing.
 fn comment_from(value: &Value) -> Result<Comment, SourceError> {
     Ok(Comment {
+        origin: None,
         id: NativeId(required_str(value, "id")?.to_owned()),
         author: optional_str(value.get("author").unwrap_or(&Value::Null), "login")?
             .map(str::to_owned),

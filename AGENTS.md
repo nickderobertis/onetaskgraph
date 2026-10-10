@@ -77,7 +77,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
-  comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
+  comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy` and
+  `TaskDetailRead`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`

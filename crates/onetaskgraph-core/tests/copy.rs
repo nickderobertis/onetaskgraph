@@ -2507,6 +2507,7 @@ impl Misbehaving {
 
 fn reported(id: &NativeId) -> Task {
     Task {
+        version: None,
         id: id.clone(),
         key: None,
         title: "Alpha engine".to_owned(),

@@ -45,6 +45,7 @@ fn name(value: &str) -> AssetName {
 
 fn task(native: &str, content: &str) -> Task {
     Task {
+        version: None,
         id: id(native),
         key: None,
         title: native.to_owned(),

@@ -66,6 +66,7 @@ fn one_page() -> Paging {
 /// One task, enough to make a query that returns something.
 fn task() -> Task {
     Task {
+        version: None,
         id: NativeId::from("T-1"),
         key: None,
         title: "Land the engine".to_owned(),

@@ -173,6 +173,7 @@ async fn a_task_copied_in_is_found_by_its_origin_straight_after_the_write() {
         .write_task(&ItemWrite {
             target: None,
             item: Task {
+                version: None,
                 id: NativeId::from("ignored"),
                 key: None,
                 title: "copied in".to_owned(),

@@ -292,6 +292,7 @@ async fn drive_every_declared_capability(
         repositories: vec![],
     };
     let task = |name: &str, status: &Status, under: Option<&NativeId>, labels: Vec<Label>| Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: name.to_owned(),
@@ -678,6 +679,7 @@ async fn drive_follow_ups(
     let tag = format!("otg-live-{}", run.stamp_micros);
     let origin = format!("elsewhere:{tag}");
     let issue = |title: &str, content: String, metadata: Value, priority: Priority| Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: title.to_owned(),

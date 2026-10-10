@@ -1786,6 +1786,7 @@ impl TaskSource for LocalMdSource {
         };
         let now = this_second();
         let added = Comment {
+            origin: None,
             id: minted_comment_id(now, &file.comments),
             author: comment.author.clone(),
             created_at: Some(now),
@@ -2452,6 +2453,7 @@ fn block(text: &str) -> Option<(Comment, &str)> {
     let id = id.filter(|id| !id.is_empty())?;
     Some((
         Comment {
+            origin: None,
             id: NativeId(id),
             author,
             created_at: Some(timestamp(created_at?)?),
@@ -2622,6 +2624,7 @@ impl LocalMdSource {
 }
 fn task(d: Entry) -> Task {
     Task {
+        version: None,
         id: d.common.id,
         // A folder of Markdown has no handle of its own: a task's id *is* the path a
         // person reads it by, so a key here would be a second spelling of the id rather
