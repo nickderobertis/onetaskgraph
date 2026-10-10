@@ -1270,7 +1270,8 @@ def test_sources_fields_method_decodes_a_real_binary_plan(binary: Path, tmp_path
             with pytest.raises(ValidationError):
                 FieldsReport.model_validate(answered)
         answered["metadata_fields"][1]["conflict"] = "TEXTUAL"
-        assert FieldsReport.model_validate(answered).metadata_fields[1].conflict.root == "TEXTUAL"
+        textual = FieldsReport.model_validate(answered).metadata_fields[1].conflict
+        assert textual is not None and textual.root == "TEXTUAL"
 
         with pytest.raises(OnetaskgraphError) as refused:
             run(client.sources_fields("memory", apply=True))
