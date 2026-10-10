@@ -66,7 +66,10 @@ function scopes(from: number): (string[] | undefined)[] {
       const scope: unknown = Reflect.get(input, "scope");
       if (scope === undefined) return undefined;
       if (!Array.isArray(scope)) throw new Error("scope is not a list");
-      return scope.map(String);
+      return scope.map((entry: unknown) => {
+        if (typeof entry !== "string") throw new Error("a scope entry is not a string");
+        return entry;
+      });
     });
 }
 
@@ -80,7 +83,7 @@ function checked(): number {
   }
 }
 
-test("every write's termScope reaches the store's check unchanged", async () => {
+test("the scope of a create, a status, a metadata, an update and a comment write reaches the check unchanged", async () => {
   const before = checked();
   const named = await client.taskCreate("site", "p", "Named", {
     body: "Generic.",
@@ -104,7 +107,7 @@ test("every write's termScope reaches the store's check unchanged", async () => 
   ]);
 });
 
-test("a copy and a create into a private source carry their classification", async () => {
+test("a create into a private source carries its classification and a copy of it into a public one is refused", async () => {
   const before = checked();
   const secret = await client.taskCreate("plan", "p", "Secret", {
     body: "Generic.",
@@ -119,8 +122,8 @@ test("a copy and a create into a private source carry their classification", asy
       () => undefined,
       (error: unknown) => error,
     );
-  expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
-  expect(String((refused as Error).message)).toContain("not declared private");
+  if (!(refused instanceof OnetaskgraphExecutionError)) throw new Error("the copy was not refused");
+  expect(refused.message).toContain("not declared private");
   const route = await client.sourcesRoute("site", { classification: "private" });
   expect(route.destination).toBe("site");
 });
@@ -132,8 +135,9 @@ test("the check's refusal reaches the caller and nothing is written", async () =
       () => undefined,
       (error: unknown) => error,
     );
-  expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
-  expect(String((refused as Error).message)).toContain("term of a private repository in its text");
+  if (!(refused instanceof OnetaskgraphExecutionError))
+    throw new Error("the create was not refused");
+  expect(refused.message).toContain("term of a private repository in its text");
   const listed = await client.taskList({ sources: ["site"], search: "Refused" });
   expect(listed.items).toEqual([]);
 });

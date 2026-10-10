@@ -27,6 +27,7 @@ import type {
   SourceListings,
   SourceRoute,
   StatusCategory,
+  StatusNamesReport,
   StatusOptionsReport,
   TaskContentSet,
   TaskDetail,
@@ -36,7 +37,6 @@ import type {
   TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
-  StatusNamesReport,
 } from "./generated/models.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -515,7 +515,7 @@ export function taskUpdateFlags(options: unknown): string[] {
     if (ids.length === 0) args.push(flag.replace("--", "--no-"));
     for (const id of ids) args.push(flag, id);
   }
-  args.push(...termScopeFlags(method, options as WriteOptions));
+  args.push(...termScopeFlags(method, options));
   return args;
 }
 
@@ -755,8 +755,10 @@ function assetFlags(method: string, options: AssetOptions): string[] {
 }
 
 // `--term-scope` once per repository, `--term-scope-empty` for an empty scope, and nothing when
-// none is given, so the binary's check reads exactly the scope the caller passed.
-function termScopeFlags(method: string, options: WriteOptions): string[] {
+// none is given, so the binary's check reads exactly the scope the caller passed. Its member is
+// read as `unknown` and checked here, so an options object not yet narrowed to `WriteOptions`
+// is refused member by member rather than trusted.
+function termScopeFlags(method: string, options: { termScope?: unknown }): string[] {
   if (options.termScope === undefined) return [];
   const scope = stringList(method, "termScope", options.termScope);
   if (scope.length === 0) return ["--term-scope-empty"];
