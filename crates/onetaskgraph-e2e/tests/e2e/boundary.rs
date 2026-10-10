@@ -484,6 +484,55 @@ fn a_check_command_that_fails_or_answers_out_of_schema_is_unavailable_never_a_pa
     }
 }
 
+#[test]
+fn a_visibility_command_that_fails_or_answers_out_of_schema_leaves_a_repository_private() {
+    let passing = json!(["python3", "-c", "print('{\"verdict\": \"pass\"}')"]);
+    let answering = |answer: &str| {
+        json!([
+            "python3",
+            "-c",
+            format!("import sys; sys.stdin.read(); print('{answer}')")
+        ])
+    };
+    // A command that answers `public` lets the task through, so a refusal below is the failure
+    // being read as private rather than every repository being refused anyway.
+    let store = Store::with_policy(Some(json!({
+        "visibility_command": answering("{\"visibility\": \"public\"}"),
+        "check_command": passing,
+    })));
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        &format!("title: Open work\nstatus: todo\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    store.ok(&["task", "copy", "plan:open", "--to", "site"]);
+    for command in [
+        // Exits non-zero.
+        json!(["python3", "-c", "import sys; sys.stdin.read(); sys.exit(3)"]),
+        // Exits 0 with a visibility the schema does not name.
+        answering("{\"visibility\": \"sideways\"}"),
+        // Exits 0 with something that is not JSON at all.
+        answering("public"),
+    ] {
+        let store = Store::with_policy(Some(json!({
+            "visibility_command": command,
+            "check_command": passing,
+        })));
+        store.record(
+            "plan",
+            "tasks",
+            "open",
+            &format!("title: Open work\nstatus: todo\nrepositories: [{OPEN}]"),
+            PLAIN,
+        );
+        let (kind, said) = store.refused(&["task", "copy", "plan:open", "--to", "site"]);
+        assert_eq!(kind, "not-private-destination", "{command}: {said}");
+        assert!(files_under(&store, "site").is_empty(), "{command}");
+    }
+}
+
 /// `task create site` of `body` with `scope`'s flags, as an argument list.
 fn create_on_site(body: &str, scope: &[&str]) -> Vec<String> {
     let mut arguments = vec![
@@ -652,6 +701,55 @@ fn a_mixed_project_and_everything_in_it_goes_wholly_to_the_private_source_its_ro
     ]))
     .expect("a route");
     assert_eq!(route["destination"], "vault");
+}
+
+#[test]
+fn a_private_document_alone_takes_its_project_and_every_public_task_in_it_to_the_private_source() {
+    let store = Store::new(
+        Some(registered),
+        json!({"site": {"routes": [{"classification": "private", "to": "vault"}]}}),
+    );
+    store.record(
+        "plan",
+        "projects",
+        "goal",
+        "title: One goal\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "open",
+        &format!("title: Open work\nstatus: todo\nproject: goal\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    // Nothing but the document is private: no repository and no task makes the project so.
+    store.record(
+        "plan",
+        "documents",
+        "design",
+        "title: Design\nproject: goal\nclassification: private",
+        PLAIN,
+    );
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--to",
+        "site",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let items = report["items"].as_array().expect("outcomes");
+    assert_eq!(items.len(), 2, "the project and its task: {report:#}");
+    for outcome in items {
+        assert_eq!(outcome["placed"]["destination"], "vault", "{report:#}");
+    }
+    assert!(files_under(&store, "site").is_empty());
+    let project = one_file(&store, "vault", "projects");
+    assert!(project.contains("classification: private"), "{project}");
+    let task = one_file(&store, "vault", "tasks");
+    assert!(task.contains("classification: private"), "{task}");
 }
 
 #[test]

@@ -437,3 +437,58 @@ fn a_dry_run_reads_the_board_it_would_write_to_and_reports_the_refusal_its_copy_
     assert_eq!(kind, "destination-not-private");
     assert!(!visibility_reads(&served).is_empty(), "{served:#?}");
 }
+
+#[test]
+fn a_board_made_public_part_way_through_a_copy_refuses_the_next_write_and_undoes_the_ones_before() {
+    let setup = Setup::new();
+    setup.record(
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nclassification: private",
+    );
+    for task in ["first", "second"] {
+        setup.record(
+            "tasks",
+            task,
+            &format!("title: {task}\nstatus: todo\nproject: goal\nclassification: private"),
+        );
+    }
+    // Everything the board holds, tasks and projects alike.
+    let listed = || {
+        ["task", "project"]
+            .iter()
+            .map(|kind| {
+                let (output, _) = setup.run(&[kind, "list", "--source", "board", "--json"]);
+                let listed: Value = serde_json::from_str(&stdout(&output)).expect("a listing");
+                listed["items"].as_array().expect("items").len()
+            })
+            .sum::<usize>()
+    };
+    let before = listed();
+    // The project's write reads private; a person makes the board public before the next.
+    setup.board.make_public_after_visibility_reads(1);
+    let (output, served) = setup.run(&["project", "copy", "plan:goal", "--to", "board", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "destination-not-private",
+        "{failure:#}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|document| document.contains("createIssue(input:$input)")),
+        "the first write landed before the change: {served:#?}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|document| document.contains("deleteIssue(input:$input)")),
+        "and was taken back: {served:#?}"
+    );
+    assert_eq!(
+        listed(),
+        before,
+        "the board holds nothing of the refused copy"
+    );
+}

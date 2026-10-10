@@ -47,7 +47,7 @@ budgets:
     threshold: 240
   - id: visibility-write-requests
     description: >-
-      An inner measure of headroom on a shared board token that no check may reach: the GitHub requests one copy of a 100-task plan with its project and design document (102 writes) spends learning the visibility of the board's Project and of each issue's repository, preflights included, onto a board declared private, so every write is checked against live visibility. The detail breaks it down per write, by write kind and by read kind, and adds the simulated seconds those reads add at 0.38 s each with a write's two overlapping, as telemetry with no threshold of its own.
+      An inner measure of headroom on a shared board token that no check may reach: the requests a 102-write plan copy onto a board declared private spends reading the board's and each issue repository's visibility. It protects that token's allowance from a third read per write.
     labels: [github]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture"]

@@ -8,8 +8,10 @@
 //! loopback board answers each of those reads after 0.38 simulated seconds — what one took on
 //! the real API — and every other request at once, with a write's two reads overlapping, as the
 //! plugin sends them together. The journey records the reads the whole copy spent, preflights
-//! included, and the simulated seconds they added; `budget_runner::report_visibility_reads`
-//! reports the figure and runs no copy.
+//! included, with their breakdown per write, by write kind (project, task, document) and by
+//! read kind (Project, issue repository), and the simulated seconds they added, which is
+//! telemetry with no threshold of its own; `budget_runner::report_visibility_reads` reports the
+//! figure with that breakdown and those seconds as its detail, and runs no copy.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

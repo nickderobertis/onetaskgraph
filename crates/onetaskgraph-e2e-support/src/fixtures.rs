@@ -999,6 +999,11 @@ struct GitHubBoard {
     own: Value,
     /// Whether the board's Project answers `public: true`. Private unless a journey says so.
     project_public: bool,
+    /// How many reads of the Project's `public` field answer before a person makes it public,
+    /// so a change in the middle of one command can be driven; `None` for never.
+    project_public_after_reads: Option<usize>,
+    /// The reads of the Project's `public` field answered so far.
+    project_visibility_reads: usize,
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
@@ -1095,6 +1100,12 @@ impl GitHubBoardFields {
     /// Make the board's Project public, or private again.
     pub fn set_project_public(&self, public: bool) {
         self.board.lock().unwrap().project_public = public;
+    }
+
+    /// Answer the next `reads` reads of the Project's `public` field as they stand, and every
+    /// read after them as public — a person making the board public part way through a command.
+    pub fn make_public_after_visibility_reads(&self, reads: usize) {
+        self.board.lock().unwrap().project_public_after_reads = Some(reads);
     }
 
     /// Withhold `read:project` from the token, so the Project's `public` field is refused.
@@ -1958,6 +1969,8 @@ fn github_projects_board_at(
                     "shortDescription":"the board a person set up",
                     "readme":"# Fixture board\n\nA person wrote this."}),
         project_public: false,
+        project_public_after_reads: None,
+        project_visibility_reads: 0,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
     }));
@@ -2223,7 +2236,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             );
             return Value::Null;
         }
-        return json!({"visibility": {"projectV2": {"public": held.project_public}}});
+        held.project_visibility_reads += 1;
+        let public = held.project_public
+            || held
+                .project_public_after_reads
+                .is_some_and(|reads| held.project_visibility_reads > reads);
+        return json!({"visibility": {"projectV2": {"public": public}}});
     }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
