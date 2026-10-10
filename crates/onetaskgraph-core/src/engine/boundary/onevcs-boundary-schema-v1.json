@@ -13,9 +13,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "repository"
-      ]
+      "required": ["repository"]
     },
     "output": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29,9 +27,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "visibility"
-      ],
+      "required": ["visibility"],
       "$defs": {
         "Visibility": {
           "description": "Whether a repository is public.\n\nOnly [`Public`](Visibility::Public) is: see [`effective`](Visibility::effective).",
@@ -93,19 +89,14 @@
         },
         "scope": {
           "description": "Which private repositories the terms come from.",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "items": {
             "type": "string"
           }
         }
       },
       "additionalProperties": false,
-      "required": [
-        "destination"
-      ],
+      "required": ["destination"],
       "$defs": {
         "Visibility": {
           "description": "Whether a repository is public.\n\nOnly [`Public`](Visibility::Public) is: see [`effective`](Visibility::effective).",
@@ -143,9 +134,7 @@
               "const": "pass"
             }
           },
-          "required": [
-            "verdict"
-          ]
+          "required": ["verdict"]
         },
         {
           "description": "A private term was found.",
@@ -160,10 +149,7 @@
               "const": "refuse"
             }
           },
-          "required": [
-            "verdict",
-            "surface"
-          ]
+          "required": ["verdict", "surface"]
         },
         {
           "description": "The check could not decide, and the write must not go ahead.",
@@ -178,10 +164,7 @@
               "const": "unavailable"
             }
           },
-          "required": [
-            "verdict",
-            "reason"
-          ]
+          "required": ["verdict", "reason"]
         }
       ],
       "$defs": {
