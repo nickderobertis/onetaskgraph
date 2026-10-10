@@ -38,7 +38,7 @@
 //! through that source's own write interface into that source's own store, and is never
 //! read back to answer a query. That is what makes it a write and not a cache.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Cursor, DependencyEdge,
@@ -873,7 +873,7 @@ struct Running {
     /// Each source project's classification once this command has worked it out — its own,
     /// its repositories', and every task's and document's it holds — so a second item filed
     /// under it does not read the whole project again.
-    project_classes: BTreeMap<String, Classification>,
+    project_classes: HashMap<GlobalId, Classification>,
     /// Whether every item this command lands was already held to the public boundary, as a
     /// project copy does for all of them before it writes the first.
     preflighted: bool,
@@ -1864,7 +1864,7 @@ impl Engine {
             .await?;
         running
             .project_classes
-            .insert(project.source.to_string(), class);
+            .insert(project.source.clone(), class);
         Ok(class)
     }
 
@@ -2906,7 +2906,7 @@ impl Engine {
         project: &GlobalId,
         running: &mut Running,
     ) -> Result<Classification, EngineError> {
-        if let Some(known) = running.project_classes.get(&project.to_string()) {
+        if let Some(known) = running.project_classes.get(project) {
             return Ok(*known);
         }
         let source = self.readable(&project.source)?;
@@ -2923,7 +2923,7 @@ impl Engine {
         } else {
             Classification::Public
         };
-        running.project_classes.insert(project.to_string(), class);
+        running.project_classes.insert(project.clone(), class);
         Ok(class)
     }
 

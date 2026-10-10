@@ -151,7 +151,6 @@ impl Store {
         held
     }
 
-    /// Write one record into a folder.
     fn record(&self, folder: &str, kind: &str, id: &str, front: &str, body: &str) {
         let path = self.folder(folder).join(kind).join(format!("{id}.md"));
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("the kind's folder");
@@ -952,6 +951,11 @@ fn a_classification_route_to_a_source_not_declared_private_and_a_chain_are_refus
         (
             json!({"site": {"routes": [{"classification": "secret", "to": "vault"}]}}),
             "not a classification",
+        ),
+        (
+            json!({"site": {"routes": [{"classification": "private",
+                                        "repositories": ["github.com/openco/*"], "to": "vault"}]}}),
+            "names both",
         ),
     ] {
         let store = Store::new(Some(registered), extra);
@@ -1872,7 +1876,6 @@ fn a_term_carried_only_in_template_provenance_is_refused_onto_a_public_source() 
     assert!(files_under(&store, "site").is_empty());
 }
 
-/// Every file under `folder`, read and joined, for what a source holds as text.
 fn held_text(store: &Store, folder: &str) -> String {
     files_under(store, folder)
         .iter()
@@ -2445,4 +2448,114 @@ fn a_create_routed_by_classification_lands_in_the_private_source_and_a_refused_o
     assert_eq!(kind, "boundary-refused", "{said}");
     assert!(tree(&store.folder("elsewhere")).is_empty());
     assert_eq!(store.tree(), before);
+}
+
+#[test]
+fn a_markdown_record_whose_classification_is_malformed_is_refused_rather_than_read_public() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "plan",
+        "projects",
+        "odd",
+        "title: Odd\nstatus: todo\nclassification: secret",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "odd",
+        "title: Odd\nstatus: todo\nclassification: secret",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "documents",
+        "odd",
+        "title: Odd\nclassification: secret",
+        PLAIN,
+    );
+    for kind in ["task", "project", "document"] {
+        let output = store.run(&[kind, "show", "plan:odd"]);
+        assert_ne!(output.status.code(), Some(0), "{kind}: {}", stdout(&output));
+        assert!(
+            stderr(&output).contains("classification"),
+            "{kind}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_private_project_replaced_by_a_create_naming_public_or_nothing_stays_private() {
+    let store = Store::new(Some(registered), json!({}));
+    store.record(
+        "vault",
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    let body = store.body(PLAIN);
+    for classification in [None, Some("public")] {
+        let mut arguments = vec![
+            "project",
+            "create",
+            "vault",
+            "--id",
+            "goal",
+            "--title",
+            "Replaced",
+            "--body-file",
+            &body,
+        ];
+        if let Some(classification) = classification {
+            arguments.extend(["--classification", classification]);
+        }
+        store.ok(&arguments);
+        let replaced = one_file(&store, "vault", "projects");
+        assert!(replaced.contains("title: Replaced"), "{replaced}");
+        assert!(
+            replaced.contains("classification: private"),
+            "{classification:?}: {replaced}"
+        );
+    }
+}
+
+#[test]
+fn a_store_declaring_every_source_unknown_and_naming_no_policy_stays_inactive() {
+    // `unknown` is what an absent declaration means, so writing it out opts in to nothing.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    let notes = sandbox.subdirectory("notes");
+    sandbox.project_document(
+        &json!({"sources": {
+            "plan": {"plugin": "local-md", "config": {"root": plan}, "visibility": "unknown"},
+            "notes": {"plugin": "local-md", "config": {"root": notes}, "visibility": "unknown"},
+        }})
+        .to_string(),
+    );
+    let store = Store {
+        sandbox,
+        onevcs: None,
+    };
+    // Active, an unanswered repository would make this private and no check would pass it.
+    store.record(
+        "plan",
+        "tasks",
+        "named",
+        &format!("title: Named\nstatus: todo\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.ok(&["task", "copy", "plan:named", "--to", "notes"]);
+    assert!(!one_file(&store, "notes", "tasks").contains("classification"));
+    // And an explicitly private item still has nowhere to go.
+    store.record(
+        "plan",
+        "tasks",
+        "secret",
+        "title: Secret\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    let (kind, said) = store.refused(&["task", "copy", "plan:secret", "--to", "notes"]);
+    assert_eq!(kind, "not-private-destination", "{said}");
 }

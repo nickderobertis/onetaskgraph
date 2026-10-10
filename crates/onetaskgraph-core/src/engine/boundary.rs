@@ -257,31 +257,39 @@ async fn run(
     let arguments = command.arguments().to_vec();
     let document = serde_json::to_vec(input).expect("a JSON value serializes");
     let (answered, answer) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        let ran = (|| {
-            let mut child = std::process::Command::new(&program)
-                .args(&arguments)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|error| {
-                    PolicyError::new(format!(
-                        "the command {program} could not be started: {error}"
-                    ))
+    let runner = std::thread::Builder::new().name("onetaskgraph-policy".to_owned());
+    runner
+        .spawn(move || {
+            let ran = (|| {
+                let mut child = std::process::Command::new(&program)
+                    .args(&arguments)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(|error| {
+                        PolicyError::new(format!(
+                            "the command {program} could not be started: {error}"
+                        ))
+                    })?;
+                if let Some(mut stdin) = child.stdin.take() {
+                    // A command that exits without reading its input closes the pipe; what it
+                    // answered is still read below, and decides.
+                    let _ = stdin.write_all(&document);
+                }
+                let output = child.wait_with_output().map_err(|error| {
+                    PolicyError::new(format!("the command {program} could not be read: {error}"))
                 })?;
-            if let Some(mut stdin) = child.stdin.take() {
-                // A command that exits without reading its input closes the pipe; what it
-                // answered is still read below, and decides.
-                let _ = stdin.write_all(&document);
-            }
-            let output = child.wait_with_output().map_err(|error| {
-                PolicyError::new(format!("the command {program} could not be read: {error}"))
-            })?;
-            Ok((output.status.code(), output.stdout))
-        })();
-        let _ = answered.send(ran);
-    });
+                Ok((output.status.code(), output.stdout))
+            })();
+            let _ = answered.send(ran);
+        })
+        .map_err(|error| {
+            PolicyError::new(format!(
+                "the command {} could not be run: {error}",
+                command.program()
+            ))
+        })?;
     answer
         .await
         .map_err(|_| PolicyError::new("the command's runner stopped without an answer"))?

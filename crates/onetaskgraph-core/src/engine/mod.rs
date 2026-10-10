@@ -1246,7 +1246,6 @@ impl Engine {
         }
     }
 
-    /// The same engine, standing at `boundary`.
     fn with_boundary(mut self, boundary: boundary::Boundary) -> Self {
         self.boundary = boundary;
         self
