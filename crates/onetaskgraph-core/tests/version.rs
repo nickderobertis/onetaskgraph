@@ -9,7 +9,7 @@ use chrono::{TimeZone as _, Utc};
 use onetaskgraph_core::version::{VersionOrder, Versioned};
 use onetaskgraph_core::{Config, Engine, GlobalId};
 use onetaskgraph_github_projects::change_token as github;
-use onetaskgraph_plugin_api::SecretResolver;
+use onetaskgraph_plugin_api::{Repository, SecretResolver};
 use secrecy::SecretString;
 use serde_json::json;
 
@@ -39,6 +39,23 @@ fn id(text: &str) -> GlobalId {
     text.parse().expect("a qualified id")
 }
 
+/// A GitHub token of an issue in one repository, its board item last changed at `item`.
+fn board_token(
+    issue: chrono::DateTime<Utc>,
+    item: chrono::DateTime<Utc>,
+    comments: u64,
+    relationships: u64,
+) -> String {
+    github::spell(&github::Parts {
+        issue,
+        item,
+        comments,
+        relationships,
+        repository: Repository::try_from("github.com/acme/widgets".to_owned())
+            .expect("a repository origin"),
+    })
+}
+
 fn of<'a>(item: &'a GlobalId, version: &'a str) -> Versioned<'a> {
     Versioned { item, version }
 }
@@ -49,16 +66,17 @@ fn two_equal_versions_are_equal_and_a_change_orders_them() {
     let engine = engine(root.path());
     let item = id("board:I_1");
     let at = |second| Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, second).unwrap();
-    let before = github::spell(at(1), at(1), 2);
+    let before = board_token(at(1), at(1), 2, 0);
     assert_eq!(
         engine.compare_versions(of(&item, &before), of(&item, &before)),
         VersionOrder::Equal
     );
     for after in [
-        github::spell(at(2), at(1), 3),
-        github::spell(at(2), at(1), 2),
-        github::spell(at(1), at(1), 1),
-        github::spell(at(1), at(2), 2),
+        board_token(at(2), at(1), 3, 0),
+        board_token(at(2), at(1), 2, 0),
+        board_token(at(1), at(1), 1, 0),
+        board_token(at(1), at(2), 2, 0),
+        board_token(at(1), at(1), 2, 1),
     ] {
         assert_eq!(
             engine.compare_versions(of(&item, &after), of(&item, &before)),
@@ -76,7 +94,7 @@ fn versions_of_other_items_unbuilt_sources_and_unparseable_values_are_incomparab
     let root = tempfile::tempdir().unwrap();
     let engine = engine(root.path());
     let at = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
-    let token = github::spell(at, at, 0);
+    let token = board_token(at, at, 0, 0);
     let (one, other, elsewhere) = (id("board:I_1"), id("board:I_2"), id("folder:I_1"));
     assert_eq!(
         engine.compare_versions(of(&one, &token), of(&other, &token)),

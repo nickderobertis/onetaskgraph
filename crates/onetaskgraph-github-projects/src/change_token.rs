@@ -49,6 +49,7 @@
 use std::cmp::Ordering;
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use onetaskgraph_plugin_api::Repository;
 
 /// How long before the response that read it an item must last have changed for its token to
 /// be given.
@@ -78,7 +79,7 @@ pub const PREFIX: &str = "gh2|";
 
 /// What one token of this plugin is made of.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parts<'a> {
+pub struct Parts {
     /// When the issue last changed.
     pub issue: DateTime<Utc>,
     /// When its board item last changed.
@@ -88,34 +89,32 @@ pub struct Parts<'a> {
     /// How many relationship events — dependencies and project memberships added or removed —
     /// its timeline holds.
     pub relationships: u64,
-    /// The `owner/name` of the repository it is in.
-    pub repository: &'a str,
+    /// The repository it is in. Spelled last, and read back as everything after the fourth
+    /// count, so any origin a [`Repository`] admits comes back as it went.
+    pub repository: Repository,
 }
 
 /// The token these parts spell.
 #[must_use]
-pub fn spell(parts: &Parts<'_>) -> String {
+pub fn spell(parts: &Parts) -> String {
     format!(
         "{PREFIX}{}|{}|{}|{}|{}",
         parts.issue.to_rfc3339_opts(SecondsFormat::AutoSi, true),
         parts.item.to_rfc3339_opts(SecondsFormat::AutoSi, true),
         parts.comments,
         parts.relationships,
-        parts.repository
+        parts.repository.as_str()
     )
 }
 
 /// The parts of a token this plugin gave, or `None` for any other value.
-fn parts(token: &str) -> Option<Parts<'_>> {
-    let mut parts = token.strip_prefix(PREFIX)?.split('|');
+fn parts(token: &str) -> Option<Parts> {
+    let mut parts = token.strip_prefix(PREFIX)?.splitn(5, '|');
     let issue = DateTime::parse_from_rfc3339(parts.next()?).ok()?;
     let item = DateTime::parse_from_rfc3339(parts.next()?).ok()?;
     let comments = parts.next()?.parse().ok()?;
     let relationships = parts.next()?.parse().ok()?;
-    let repository = parts.next().filter(|repository| !repository.is_empty())?;
-    if parts.next().is_some() {
-        return None;
-    }
+    let repository = Repository::try_from(parts.next()?.to_owned()).ok()?;
     Some(Parts {
         issue: issue.with_timezone(&Utc),
         item: item.with_timezone(&Utc),
@@ -174,8 +173,12 @@ mod tests {
             item: at(item),
             comments,
             relationships,
-            repository: "acme/widgets",
+            repository: repository("github.com/acme/widgets"),
         })
+    }
+
+    fn repository(origin: &str) -> Repository {
+        Repository::try_from(origin.to_owned()).expect("a repository origin")
     }
 
     #[test]
@@ -227,7 +230,7 @@ mod tests {
             item: at(1),
             comments: 0,
             relationships: 0,
-            repository: "acme/gadgets",
+            repository: repository("github.com/acme/gadgets"),
         });
         assert_eq!(
             order(&transferred, &token(1, 1, 0, 0)),
@@ -236,7 +239,10 @@ mod tests {
         );
         assert_eq!(order("md1|abc", &token(1, 1, 0, 0)), None);
         assert_eq!(
-            order("gh2|not-a-time|x|1|0|a/b", "gh2|not-a-time|x|1|0|a/b"),
+            order(
+                "gh2|not-a-time|x|1|0|github.com/a/b",
+                "gh2|not-a-time|x|1|0|github.com/a/b"
+            ),
             None
         );
         assert_eq!(
@@ -249,6 +255,14 @@ mod tests {
         );
         assert_eq!(
             order(
+                "gh2|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|a/b",
+                "gh2|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|a/b"
+            ),
+            None,
+            "a token naming something that is no repository origin"
+        );
+        assert_eq!(
+            order(
                 "gh1|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0",
                 "gh1|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0"
             ),
@@ -257,7 +271,8 @@ mod tests {
         );
         assert_eq!(
             order(&format!("{}|extra", token(1, 1, 0, 0)), &token(1, 1, 0, 0)),
-            None
+            None,
+            "anything after the repository is part of it, and names another"
         );
     }
 }

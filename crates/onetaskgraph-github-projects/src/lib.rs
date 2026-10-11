@@ -9540,7 +9540,7 @@ impl Resolved {
                     item,
                     comments: self.comment_count?,
                     relationships: self.relationship_events?,
-                    repository: self.own_repository.as_ref()?.as_str(),
+                    repository: self.own_repository.clone()?,
                 };
                 change_token::settled(issue, item, self.served_at?)
                     .then(|| change_token::spell(&parts))

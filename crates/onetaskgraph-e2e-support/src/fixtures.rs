@@ -925,6 +925,7 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
 
 /// The timeline event types `query` counts: the default list of the
 /// `[IssueTimelineItemsItemType!]` variable it declares, or none.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board reads which timeline event types a GitHub document counts. It is the board's own request parsing, so it lives beside `GitHubBoard`, which the agreed e2e layout puts in this shared harness once because the journey-matrix table and the engine's suite drive both hosted plugins through it.
 fn counted_timeline_types(query: &str) -> Vec<String> {
     query
         .split_once("[IssueTimelineItemsItemType!]=[")
@@ -1250,6 +1251,7 @@ impl GitHubBoardFields {
     /// File the issue `id` under the project `parent`, or under none, as a person moving it
     /// between projects on GitHub would: a sub-issue removed from its old parent and added to
     /// the new one, each a relationship event on both of the issues it relates.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own project memberships, which every read of it answers from: that state is the board's private state, so a suite moving a task between projects can only do it through this handle, as `block` changes who blocks whom.
     pub fn file_under(&self, id: &str, parent: Option<&str>) {
         let mut board = self.board.lock().unwrap();
         let old = board.find(&json!(id))["parent"].as_str().map(str::to_owned);
@@ -1271,6 +1273,7 @@ impl GitHubBoardFields {
     /// Move the issue `id` to the repository `repository`, as a person transferring it on
     /// GitHub would — the issue keeps its node id and its board item, and the one thing this
     /// board says moved is its `repository`.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own record of each issue's repository, which every read of it answers from: that state is the board's private state, so a suite transferring an issue can only do it through this handle, beside `file_under`.
     pub fn transfer(&self, id: &str, repository: &str) {
         self.board.lock().unwrap().find(&json!(id))["repo"] = json!(repository);
     }
@@ -1582,6 +1585,7 @@ impl GitHubBoardFields {
 
     /// Write `value` into one item's `onetaskgraph.origin` text field, as a person editing that
     /// board field would — which moves the board item's `updatedAt` and not the issue's.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own text field values, which every read of it answers from: that state is the board's private state, so a suite editing a board field as a person would can only do it through this handle, as `set_card_field` does.
     pub fn set_origin_field(&self, id: &str, value: &str) {
         let mut board = self.board.lock().unwrap();
         let item = board.find(&json!(id));
@@ -1939,6 +1943,7 @@ impl GitHubBoard {
     /// blocked issue and `BLOCKING_ADDED_EVENT` on the blocking one, `PARENT_ISSUE_ADDED_EVENT`
     /// on a sub-issue and `SUB_ISSUE_ADDED_EVENT` on its parent — so a read counts only the
     /// types its document names, as GitHub's `itemTypes` filter does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback board's model of GitHub's relationship timeline, a method of `GitHubBoard` because it changes that board's private state; the board lives in this shared harness for the reason recorded on `GitHubBoard` itself.
     fn record_relationship_event(&mut self, near: (&str, &str), far: (&str, &str)) {
         for (end, kind) in [near, far] {
             if let Some(item) = self
@@ -1955,6 +1960,7 @@ impl GitHubBoard {
 
     /// How many of the issue `item`'s timeline events are of a type the request being answered
     /// counts, as `timelineItems(itemTypes:) { totalCount }` answers.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a filtered timeline count, a method of `GitHubBoard` because it reads that board's private state; the board lives in this shared harness for the reason recorded on `GitHubBoard` itself.
     fn timeline_count(&self, item: &Value) -> u64 {
         self.counted_types
             .iter()

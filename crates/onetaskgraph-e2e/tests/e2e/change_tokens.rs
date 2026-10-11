@@ -5,10 +5,10 @@
 //! one task of a loopback board by exactly one of those kinds — the way a person changes it on
 //! GitHub, through the board's own state — and holds the token to moving to a later one, by
 //! the store's own ordering, while every task the change did not touch keeps the token it had —
-//! a dependency touching both of the tasks it relates, as GitHub records it on both.
-//! `docs/plugin-protocol.md` §4.13d states what each plugin's token keys on; the loopback
-//! board models exactly those four parts, and moves neither time for a dependency, as GitHub
-//! moves neither.
+//! a dependency or a project membership touching both of the issues it relates, as GitHub
+//! records it on both. `docs/plugin-protocol.md` §4.13d states what each plugin's token keys
+//! on; the loopback board models exactly those five parts, and moves neither time for a
+//! dependency or a project membership, as GitHub moves neither for a dependency.
 
 use std::collections::BTreeMap;
 
@@ -361,7 +361,7 @@ fn a_board_hosted_over_the_stdio_protocol_has_its_tokens_ordered_by_equality_alo
 }
 
 #[test]
-fn a_later_time_beside_fewer_dependency_events_is_no_version_read_after_the_other() {
+fn a_later_time_beside_fewer_relationship_events_is_no_version_read_after_the_other() {
     let (sandbox, board, engine) = board();
     // Two dependency events on T-3, so a version of it can claim fewer than it holds.
     board.block("T-3", &["T-4".to_owned()]);
@@ -378,10 +378,18 @@ fn a_later_time_beside_fewer_dependency_events_is_no_version_read_after_the_othe
         VersionOrder::Later,
         "the body edit is the later version"
     );
-    // The edit's later time, beside a dependency count behind the earlier version's: GitHub's
-    // count only grows, so no read after the earlier one could give it.
-    let (times, _) = after.rsplit_once('|').expect("a token's parts");
-    let crossed = format!("{times}|0");
+    // The edit's later times, comment count and repository, beside a relationship count behind
+    // the earlier version's: GitHub's count only grows, so no read after the earlier one could
+    // give it. The count is the fifth `|`-separated field, after the prefix and before the
+    // repository.
+    let mut fields: Vec<&str> = after.splitn(6, '|').collect();
+    assert_eq!(fields.len(), 6, "a GitHub token's fields: {after}");
+    assert_eq!(
+        fields[4], "2",
+        "the two relationship events made above: {after}"
+    );
+    fields[4] = "0";
+    let crossed = fields.join("|");
     assert_eq!(
         ordered(&engine, "board:T-3", &crossed, &before),
         VersionOrder::Incomparable,
