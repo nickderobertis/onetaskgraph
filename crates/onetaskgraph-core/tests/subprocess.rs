@@ -909,6 +909,61 @@ async fn a_delete_result_is_read_as_an_object_rather_than_as_exactly_the_empty_o
 }
 
 #[tokio::test]
+async fn a_task_detail_whose_members_contradict_each_other_is_a_protocol_violation() {
+    // §4.4a answers a task with exactly one of a page and a comment refusal, or no task and
+    // neither. Every other shape decodes — each member is optional on the wire — and would
+    // otherwise be read as something §4.4a never says: comments for no task, or a task whose
+    // comments were neither read nor refused, which a copy would take as having none.
+    let task = json!({"id": "T-1", "title": "Alpha", "content": "",
+                      "status": {"category": "todo", "name": "Todo"}, "labels": []});
+    let comments = json!({"items": [], "next": null});
+    let refused = json!({"kind": "refused", "message": "a draft has no comments"});
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "task_details": true}})
+        .to_string(),
+        json!({"id": "1", "result": {"task": task, "page": comments}}).to_string(),
+        json!({"id": "2", "result": {"task": task, "comments_error": refused}}).to_string(),
+        json!({"id": "3", "result": {"task": null}}).to_string(),
+        json!({"id": "4", "result": {"task": null, "page": comments}}).to_string(),
+        json!({"id": "5", "result": {"task": task}}).to_string(),
+        json!({"id": "6", "result": {"task": task, "page": comments, "comments_error": refused}})
+            .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let ids = [NativeId("T-1".to_owned())];
+    let mut read = Vec::new();
+    for _ in 0..6 {
+        read.extend(source.get_task_details(&ids, Some(&page(50))).await);
+    }
+
+    let read_whole = read[0].as_ref().expect("a task and its page").as_ref();
+    assert!(
+        read_whole.is_some_and(|detail| matches!(detail.comments, Some(Ok(Some(_))))),
+        "{read_whole:?}"
+    );
+    let read_refused = read[1].as_ref().expect("a task and its refusal").as_ref();
+    assert!(
+        read_refused.is_some_and(|detail| matches!(
+            detail.comments,
+            Some(Err(SourceError::Refused { .. }))
+        )),
+        "{read_refused:?}"
+    );
+    assert!(matches!(read[2], Ok(None)), "{:?}", read[2]);
+    for (answer, named) in [
+        (&read[3], "comments for no task"),
+        (&read[4], "neither a page nor a comment refusal"),
+        (&read[5], "both a page and a comment refusal"),
+    ] {
+        let Err(SourceError::Malformed { message }) = answer else {
+            panic!("expected a protocol violation naming {named:?}, got {answer:?}");
+        };
+        assert!(message.contains(named), "{message}");
+    }
+}
+
+#[tokio::test]
 async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason() {
     // Both halves of §4.11 and §4.12, driven against each other over a real pipe. The
     // engine's side forwards these four the way it forwards every other method, and the

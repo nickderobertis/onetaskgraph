@@ -662,16 +662,7 @@ impl TaskSource for SubprocessSource {
                         }),
                     )
                     .await
-                    .map(|result| {
-                        let comments = match result.comments_error {
-                            Some(error) => Err(error),
-                            None => Ok(result.page),
-                        };
-                        result.task.map(|task| TaskDetailRead {
-                            task,
-                            comments: Some(comments),
-                        })
-                    }),
+                    .and_then(TaskDetailResult::into_read),
                 _ => match self.get_task(id).await {
                     Ok(Some(task)) => {
                         let comments = match comments {

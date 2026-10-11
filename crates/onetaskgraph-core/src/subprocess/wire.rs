@@ -17,8 +17,8 @@ use std::path::Path;
 use onetaskgraph_plugin_api::{
     AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
     DocumentQuery, ItemWrite, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef,
-    TaskUpdate, TaskUpdateOutcome, WriteSupport,
+    Priority, Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -593,6 +593,38 @@ pub(crate) struct TaskDetailResult {
     /// which has none — so the task is still answered. Omitted when they were read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) comments_error: Option<SourceError>,
+}
+
+impl TaskDetailResult {
+    /// The read the answer states, refused as malformed when its members contradict each other:
+    /// no task beside a page or a comment refusal, or a task with neither or both — the three
+    /// shapes the wire allows and §4.4a does not.
+    pub(crate) fn into_read(self) -> Result<Option<TaskDetailRead>, SourceError> {
+        let comments = match (self.task.is_some(), self.page, self.comments_error) {
+            (false, None, None) => return Ok(None),
+            (true, Some(page), None) => Ok(Some(page)),
+            (true, None, Some(error)) => Err(error),
+            (false, ..) => {
+                return Err(SourceError::Malformed {
+                    message: "get_task_detail answered comments for no task".into(),
+                });
+            }
+            (true, page, _) => {
+                return Err(SourceError::Malformed {
+                    message: if page.is_some() {
+                        "get_task_detail answered both a page and a comment refusal"
+                    } else {
+                        "get_task_detail answered a task with neither a page nor a comment refusal"
+                    }
+                    .into(),
+                });
+            }
+        };
+        Ok(self.task.map(|task| TaskDetailRead {
+            task,
+            comments: Some(comments),
+        }))
+    }
 }
 
 /// The `task_comments` result (§4.15): a page, or `null` when there is no such task.
