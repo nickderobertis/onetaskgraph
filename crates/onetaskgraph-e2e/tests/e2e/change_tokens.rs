@@ -322,3 +322,37 @@ fn a_board_hosted_over_the_stdio_protocol_has_its_tokens_ordered_by_equality_alo
         "one token of a hosted source is one version"
     );
 }
+
+#[test]
+fn a_later_time_beside_fewer_dependency_events_is_no_version_read_after_the_other() {
+    let (sandbox, board, engine) = board();
+    // Two dependency events on T-3, so a version of it can claim fewer than it holds.
+    board.block("T-3", &["T-4".to_owned()]);
+    board.unblock("T-3", "T-4");
+    let before = listed(&sandbox, &["--source", "board"])["board:T-3"]
+        .clone()
+        .expect("a board task carries a token");
+    board.edit_body("T-3", "a body a person rewrote");
+    let after = listed(&sandbox, &["--source", "board"])["board:T-3"]
+        .clone()
+        .expect("a board task carries a token");
+    assert_eq!(
+        ordered(&engine, "board:T-3", &after, &before),
+        VersionOrder::Later,
+        "the body edit is the later version"
+    );
+    // The edit's later time, beside a dependency count behind the earlier version's: GitHub's
+    // count only grows, so no read after the earlier one could give it.
+    let (times, _) = after.rsplit_once('|').expect("a token's parts");
+    let crossed = format!("{times}|0");
+    assert_eq!(
+        ordered(&engine, "board:T-3", &crossed, &before),
+        VersionOrder::Incomparable,
+        "{crossed} against {before}"
+    );
+    assert_eq!(
+        ordered(&engine, "board:T-3", &before, &crossed),
+        VersionOrder::Incomparable,
+        "and the other way round"
+    );
+}

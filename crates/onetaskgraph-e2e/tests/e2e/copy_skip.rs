@@ -1054,3 +1054,75 @@ fn a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped() 
         "a task with no token is read and compared: {again:#?}"
     );
 }
+
+#[test]
+fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and_then_skipped() {
+    let stores = Stores::new();
+    let query = [
+        "--to",
+        "notes",
+        "--source",
+        "board",
+        "--comments",
+        "--no-link",
+    ];
+    let (landed, _, _) = stores.copy(&query);
+    let note = landed
+        .iter()
+        .find(|(source, _)| source == "board:T-3")
+        .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
+        .expect("T-3 landed");
+    // What a build before the dependency count recorded: the same three parts, spelled `gh1`.
+    // A copy skips only on the recorded token being the listed one, so this record is never
+    // skipped on, and the read it costs is what brings it up to date.
+    let recorded = stores.metadata(&note)["onetaskgraph.copied_version"]
+        .as_str()
+        .expect("the copy records the source's token")
+        .to_owned();
+    let (parts, _) = recorded
+        .strip_prefix(change_token::PREFIX)
+        .and_then(|parts| parts.rsplit_once('|'))
+        .expect("a token of this build");
+    let older = format!("gh1|{parts}");
+    let file = stores
+        .sandbox
+        .subdirectory("notes")
+        .join("tasks")
+        .join(format!(
+            "{}.md",
+            note.strip_prefix("notes:").expect("a folder id")
+        ));
+    let text = std::fs::read_to_string(&file).expect("the copy's file");
+    assert_eq!(text.matches(&recorded).count(), 1, "{text}");
+    std::fs::write(&file, text.replace(&recorded, &older)).expect("the copy's file");
+
+    let (again, served, _) = stores.copy(&query);
+    for (source, outcome) in &again {
+        assert_eq!(
+            skipped(outcome),
+            source != "board:T-3",
+            "{source} is read again exactly when its record is a token this build never gives: \
+             {outcome:#}"
+        );
+    }
+    assert!(
+        !served.naming("T-3").is_empty(),
+        "the task recorded under the older spelling was read: {:?}",
+        served.names()
+    );
+    assert_eq!(
+        stores.metadata(&note)["onetaskgraph.copied_version"],
+        json!(recorded),
+        "the copy records the token this build gives"
+    );
+    let (settled, served, _) = stores.copy(&query);
+    assert!(
+        settled.iter().all(|(_, outcome)| skipped(outcome)),
+        "{settled:#?}"
+    );
+    assert!(
+        served.names().iter().all(|name| LISTING.contains(name)),
+        "and the next copy skips it on its listing alone: {:?}",
+        served.names()
+    );
+}
