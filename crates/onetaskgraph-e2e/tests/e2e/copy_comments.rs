@@ -328,6 +328,41 @@ fn a_markdown_tasks_comments_land_on_a_board_with_their_origin_and_follow_every_
 }
 
 #[test]
+fn a_copy_never_touches_a_copy_another_task_carried_onto_its_destination() {
+    for boundary in SOURCE_BOUNDARIES {
+        let who = format!("{boundary:?}");
+        let stores = Stores::new(boundary);
+        stores.note("A", "Written in the folder");
+        let gone = stores.comment("notes:A", "about to go");
+        let issue = destination(&stores.copy("notes:A", "board"));
+        // A copy of a comment of a task this copy has nothing to do with, carried onto the same
+        // issue by some other copy and marked as every copy onto a board is.
+        let elsewhere = json!({"task": "linear:L-9", "id": "C-77", "author": "grace",
+                               "created_at": null, "updated_at": null, "url": null});
+        stores.board.add_comment(
+            native(&issue),
+            &format!(
+                "carried from elsewhere\n\n<!-- onetaskgraph.comment_origin `{elsewhere}` -->"
+            ),
+        );
+        stores.delete("notes:A", &gone);
+        let new = stores.comment("notes:A", "a new word");
+
+        let followed = stores.copy("notes:A", "board");
+        assert_eq!(counts(&followed), [1, 0, 1, 0], "{who}: {followed:#}");
+        assert_eq!(
+            said(&stores.comments(&issue)),
+            said(&[
+                json!({"body": "carried from elsewhere",
+                       "origin": {"task": "linear:L-9", "id": "C-77"}}),
+                json!({"body": "a new word", "origin": {"task": "notes:A", "id": new}}),
+            ]),
+            "{who}: the copy of another task's comment is neither edited nor deleted"
+        );
+    }
+}
+
+#[test]
 fn linear_and_markdown_carry_each_others_comments_both_ways() {
     let stores = Stores::new(SourceBoundary::Direct);
     let first = stores.comment("linear:T-3", "said in Linear");
