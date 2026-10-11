@@ -628,6 +628,92 @@ async fn a_copied_comment_takes_its_origins_id_author_and_times_and_records_the_
 }
 
 #[tokio::test]
+async fn an_origin_time_finer_than_a_second_or_not_given_reads_back_as_the_origin_gave_it() {
+    let (root, source) = folder(&[("tasks/release.md", TASK)]);
+    // Linear gives its times to the millisecond, and an origin may give none at all; the
+    // comment's own marker holds a whole second, so the origin line records what it cannot.
+    let copy = onetaskgraph_plugin_api::CommentCopy {
+        body: body("From Linear."),
+        origin: onetaskgraph_plugin_api::CommentOrigin {
+            task: "linear:ENG-1".to_owned(),
+            id: id("c-1"),
+            author: None,
+            created_at: Some("2026-09-01T00:00:01.250Z".parse().unwrap()),
+            updated_at: None,
+            url: None,
+        },
+    };
+    let written = source
+        .write_comment_copy(&id("release"), None, &copy)
+        .await
+        .unwrap()
+        .expect("the task is held");
+    assert_eq!(written.origin, Some(copy.origin.clone()));
+    assert_eq!(
+        stamped(written.created_at.unwrap()),
+        "2026-09-01T00:00:01Z",
+        "the comment's own time is the marker's whole second"
+    );
+    assert!(
+        read(root.path(), "tasks/release.md").contains(
+            "<!-- onetaskgraph:comment-origin task=\"linear:ENG-1\" \
+             created_at=\"2026-09-01T00:00:01.250Z\" updated_at=\"\" -->\nFrom Linear."
+        ),
+        "{}",
+        read(root.path(), "tasks/release.md")
+    );
+    let read_back = listed(source.as_ref(), "release").await;
+    assert_eq!(
+        read_back,
+        vec![written],
+        "the copy reads back exactly as written"
+    );
+}
+
+#[tokio::test]
+async fn an_origin_the_origin_line_cannot_record_is_refused_and_nothing_is_written() {
+    let (root, source) = folder(&[("tasks/release.md", TASK)]);
+    let before = read(root.path(), "tasks/release.md");
+    for (origin, named) in [
+        (
+            onetaskgraph_plugin_api::CommentOrigin {
+                task: "I_kw1".to_owned(),
+                ..board_origin("2026-09-01T00:00:02Z")
+            },
+            "qualified task id",
+        ),
+        (
+            onetaskgraph_plugin_api::CommentOrigin {
+                id: id("IC\n7"),
+                ..board_origin("2026-09-01T00:00:02Z")
+            },
+            "origin id",
+        ),
+        (
+            onetaskgraph_plugin_api::CommentOrigin {
+                url: Some("https://example.invalid/\nI_kw1".to_owned()),
+                ..board_origin("2026-09-01T00:00:02Z")
+            },
+            "origin address",
+        ),
+    ] {
+        let copy = onetaskgraph_plugin_api::CommentCopy {
+            body: body("From the board."),
+            origin,
+        };
+        let refused = source
+            .write_comment_copy(&id("release"), None, &copy)
+            .await
+            .expect_err("an origin that cannot be recorded is refused");
+        assert!(
+            matches!(&refused, SourceError::Refused { message } if message.contains(named)),
+            "{refused:?}"
+        );
+        assert_eq!(read(root.path(), "tasks/release.md"), before, "{named}");
+    }
+}
+
+#[tokio::test]
 async fn a_copied_comment_whose_origin_id_is_taken_mints_one_and_records_the_origins() {
     let at = "2026-09-13T15:11:07Z";
     let (root, source) = folder(&[(

@@ -357,7 +357,12 @@ hand. The rules, all of which the plugin enforces:
 
   `task` is the qualified id of the task the comment was written on; `id` is added only when
   the comment's own id here had to differ from the origin's, because this task already held
-  one by that id; `url` is the origin's address when it has one. `task show` reports the line
+  one by that id; `url` is the origin's address when it has one; and `created_at` and
+  `updated_at` are added only when the marker's whole second is not the origin's own time —
+  the instant in full when the origin gave one finer than a second, as Linear does, and empty
+  when it gave none — so the origin reads back exactly as it was copied. An origin naming no
+  qualified task, or whose id or address holds a line break, is refused rather than written.
+  `task show` reports the line
   as the comment's `origin` and never as part of its body. It is a line of the body rather than
   attributes of the marker line on purpose: a release of this plugin from before comments had
   origins refuses a marker carrying an attribute it does not know — and would then read the

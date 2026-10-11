@@ -1901,6 +1901,7 @@ impl TaskSource for LocalMdSource {
         if let Some(author) = &copy.origin.author {
             representable_author(author)?;
         }
+        representable_origin(&copy.origin)?;
         representable_body(&copy.body)?;
         let Some(mut file) = self.task_file(task)? else {
             return Ok(None);
@@ -1909,8 +1910,9 @@ impl TaskSource for LocalMdSource {
         let written = |id: NativeId| Comment {
             id,
             author: copy.origin.author.clone(),
-            created_at: Some(copy.origin.created_at.unwrap_or(now)),
-            updated_at: Some(copy.origin.updated_at.unwrap_or(now)),
+            // To the second, as the marker records them: the answer is what a read gives back.
+            created_at: Some(to_the_second(copy.origin.created_at.unwrap_or(now))),
+            updated_at: Some(to_the_second(copy.origin.updated_at.unwrap_or(now))),
             body: copy.body.as_str().to_owned(),
             url: None,
             origin: Some(copy.origin.clone()),
@@ -2594,29 +2596,36 @@ fn block(text: &str) -> Option<(Comment, &str)> {
     // A copied comment's body opens with the line recording its origin.
     let (origin, body) = match origin_line(body) {
         Some((origin, rest)) => (origin, rest),
-        None => ((None, None, None), body),
+        None => (OriginLine::default(), body),
     };
-    let (origin_task, origin_id, origin_url) = origin;
     if body.is_empty() {
         return None;
     }
-    let timestamp = |value: String| {
-        DateTime::parse_from_rfc3339(&value)
+    let timestamp = |value: &str| {
+        DateTime::parse_from_rfc3339(value)
             .ok()
             .map(|at| at.with_timezone(&Utc))
     };
     let id = id.filter(|id| !id.is_empty())?;
-    let created_at = timestamp(created_at?)?;
-    let updated_at = timestamp(updated_at?)?;
+    let created_at = timestamp(&created_at?)?;
+    let updated_at = timestamp(&updated_at?)?;
+    // An origin time the line records overrides the marker's: empty when the origin gave none.
+    let origin_time = |recorded: Option<String>, own: DateTime<Utc>| match recorded {
+        None => Some(Some(own)),
+        Some(value) if value.is_empty() => Some(None),
+        Some(value) => timestamp(&value).map(Some),
+    };
+    let origin_created = origin_time(origin.created_at, created_at)?;
+    let origin_updated = origin_time(origin.updated_at, updated_at)?;
     // A copied comment: its own id, author and times are its origin's, and the origin line
     // records the rest.
-    let origin = origin_task.map(|task| CommentOrigin {
+    let origin = origin.task.map(|task| CommentOrigin {
         task,
-        id: NativeId(origin_id.unwrap_or_else(|| id.clone())),
+        id: NativeId(origin.id.unwrap_or_else(|| id.clone())),
         author: author.clone(),
-        created_at: Some(created_at),
-        updated_at: Some(updated_at),
-        url: origin_url,
+        created_at: origin_created,
+        updated_at: origin_updated,
+        url: origin.url,
     });
     Some((
         Comment {
@@ -2705,19 +2714,33 @@ fn rendered_section(comments: &[Comment]) -> String {
     section
 }
 
-/// The origin line a copied comment's body opens with — its task, and its id and address when
-/// it has them — and the body after it; `None` for a body that opens with no such line.
-type OriginLine = (Option<String>, Option<String>, Option<String>);
+/// The origin line a copied comment's body opens with: its task, and — each only when it
+/// differs from what the comment's own marker says — its id, its address, and its two times.
+#[derive(Default)]
+struct OriginLine {
+    task: Option<String>,
+    id: Option<String>,
+    url: Option<String>,
+    /// The origin's own time, when the marker's whole second is not it: an RFC 3339 instant,
+    /// or empty for an origin that gave none.
+    created_at: Option<String>,
+    /// As `created_at`, for when it last changed.
+    updated_at: Option<String>,
+}
 
+/// The origin line `body` opens with and the body after it; `None` for a body that opens with
+/// no such line.
 fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
     let (line, rest) = body.split_once('\n')?;
     let attributes = attributes(line.strip_prefix(ORIGIN_OPEN)?.strip_suffix(MARKER_END)?)?;
-    let (mut task, mut id, mut url) = (None, None, None);
+    let mut origin = OriginLine::default();
     for (name, value) in attributes {
         let slot = match name {
-            "task" => &mut task,
-            "id" => &mut id,
-            "url" => &mut url,
+            "task" => &mut origin.task,
+            "id" => &mut origin.id,
+            "url" => &mut origin.url,
+            "created_at" => &mut origin.created_at,
+            "updated_at" => &mut origin.updated_at,
             _ => return None,
         };
         if slot.replace(value).is_some() {
@@ -2725,13 +2748,31 @@ fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
         }
     }
     // A line naming no qualified task is no origin, and the body keeps it as written.
-    if !task
+    if !origin
+        .task
         .as_deref()
         .is_some_and(onetaskgraph_plugin_api::CommentOrigin::is_qualified_task)
     {
         return None;
     }
-    Some(((task, id, url), rest))
+    Some((origin, rest))
+}
+
+/// What an origin time reads back as from the marker alone: its whole second.
+fn to_the_second(at: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp(at.timestamp(), 0).unwrap_or(at)
+}
+
+/// An origin time as the origin line records it, when the comment's own marker would not read
+/// back as it: absent when the marker's second is the origin's time, and otherwise the instant
+/// in full or, for an origin that gave none, empty.
+fn origin_time(origin: Option<DateTime<Utc>>, own: Option<DateTime<Utc>>) -> Option<String> {
+    if origin.is_some() && origin == own.map(to_the_second) {
+        return None;
+    }
+    Some(origin.map_or_else(String::new, |at| {
+        at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    }))
 }
 
 /// One comment block, marker first and closing line last.
@@ -2756,6 +2797,14 @@ fn rendered_block(comment: &Comment) -> String {
         }
         if let Some(url) = &origin.url {
             body.push_str(&format!(" url=\"{}\"", escaped(url)));
+        }
+        for (name, origin, own) in [
+            ("created_at", origin.created_at, comment.created_at),
+            ("updated_at", origin.updated_at, comment.updated_at),
+        ] {
+            if let Some(at) = origin_time(origin, own) {
+                body.push_str(&format!(" {name}=\"{}\"", escaped(&at)));
+            }
         }
         body.push_str(MARKER_END);
         body.push('\n');
@@ -2821,6 +2870,37 @@ fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
 }
 
 /// Refuse an author the section cannot hold on one heading line.
+/// Refuse an origin the origin line cannot record so that it reads back as given: one naming
+/// no qualified task, which reads back as no origin at all, and an id or an address holding a
+/// line break or another control character, which would end the line part way through it.
+fn representable_origin(origin: &CommentOrigin) -> Result<(), SourceError> {
+    if !CommentOrigin::is_qualified_task(&origin.task) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot record a copied comment whose origin names the task {:?}: an origin \
+                 here names a qualified task id, `<source>:<native task id>`; next: copy it \
+                 from a configured source",
+                origin.task
+            ),
+        });
+    }
+    for (what, value) in [
+        ("id", Some(origin.id.as_str())),
+        ("address", origin.url.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.chars().any(char::is_control)) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "cannot record a copied comment whose origin {what} is {value:?}: it is \
+                     written on one line, so it must hold no line break or control character; \
+                     next: correct it at the origin"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn representable_author(author: &str) -> Result<(), SourceError> {
     if author.trim().is_empty() || author.chars().any(char::is_control) {
         return Err(SourceError::Refused {
