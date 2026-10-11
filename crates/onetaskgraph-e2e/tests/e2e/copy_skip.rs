@@ -1108,18 +1108,21 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
         .find(|(source, _)| source == "board:T-3")
         .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
         .expect("T-3 landed");
-    // What a build before the dependency count recorded: the same three parts, spelled `gh1`.
-    // A copy skips only on the recorded token being the listed one, so this record is never
-    // skipped on, and the read it costs is what brings it up to date.
+    // What a build before the relationship count and the repository recorded: the issue's and
+    // the board item's times and the comment count, the token's first three parts, spelled
+    // `gh1`. A copy skips only on the recorded token being the listed one, so this record is
+    // never skipped on, and the read it costs is what brings it up to date.
     let recorded = stores.metadata(&note)["onetaskgraph.copied_version"]
         .as_str()
         .expect("the copy records the source's token")
         .to_owned();
-    let (parts, _) = recorded
+    let parts: Vec<&str> = recorded
         .strip_prefix(change_token::PREFIX)
-        .and_then(|parts| parts.rsplit_once('|'))
-        .expect("a token of this build");
-    let older = format!("gh1|{parts}");
+        .expect("a token of this build")
+        .splitn(5, '|')
+        .collect();
+    assert_eq!(parts.len(), 5, "a GitHub token's five parts: {recorded}");
+    let gh1 = format!("gh1|{}", parts[..3].join("|"));
     let file = stores
         .sandbox
         .subdirectory("notes")
@@ -1130,7 +1133,7 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
         ));
     let text = std::fs::read_to_string(&file).expect("the copy's file");
     assert_eq!(text.matches(&recorded).count(), 1, "{text}");
-    std::fs::write(&file, text.replace(&recorded, &older)).expect("the copy's file");
+    std::fs::write(&file, text.replace(&recorded, &gh1)).expect("the copy's file");
 
     let (again, served, _) = stores.copy(&query);
     for (source, outcome) in &again {
