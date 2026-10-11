@@ -619,3 +619,81 @@ fn a_copy_by_query_copies_what_task_list_answers_and_reads_each_tasks_comments_o
     );
     assert!(stderr(&output).contains("--source"), "{}", stderr(&output));
 }
+
+#[test]
+fn a_copy_by_query_matching_nothing_succeeds_reading_only_the_listing_and_writes_nothing() {
+    let stores = Stores::new();
+    let (copied, served, second) = stores.copy(&[
+        "--to",
+        "second",
+        "--comments",
+        "--source",
+        "board",
+        "--metadata",
+        "orchestrator.follow-up/root_cause=nothing-says-this",
+    ]);
+    assert!(copied.is_empty(), "{copied:?}");
+    assert!(
+        served.names().iter().all(|name| LISTING.contains(name)),
+        "the source was sent its listing and nothing else: {:?}",
+        served.names()
+    );
+    assert!(
+        second.0.is_empty(),
+        "the destination was not asked anything: {:?}",
+        second.names()
+    );
+}
+
+#[test]
+fn a_copy_narrowed_by_comment_activity_without_comments_copies_the_right_tasks_and_no_comment() {
+    let stores = Stores::new();
+    for task in ["T-1", "T-3"] {
+        stores.board.add_comment(task, "recent activity");
+    }
+    let narrowing = [
+        "--source",
+        "board",
+        "--commented-since",
+        "2026-09-01T00:00:00Z",
+    ];
+    let listed: Vec<String> = stores.json(&[&["task", "list"][..], &narrowing].concat())["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|task| task["id"].as_str().expect("an id").to_owned())
+        .collect();
+    assert_eq!(listed, vec!["board:T-1", "board:T-3"]);
+
+    let copy = [&["--to", "notes", "--no-link"][..], &narrowing].concat();
+    let (copied, _, _) = stores.copy(&copy);
+    let sources: Vec<&str> = copied.iter().map(|(source, _)| source.as_str()).collect();
+    assert_eq!(sources, listed, "exactly what the list answers");
+    for (source, outcome) in &copied {
+        assert!(
+            outcome.get("comments").is_none(),
+            "{source}: a copy without --comments reports no comments: {outcome:#}"
+        );
+        let landed = outcome["destination"].as_str().expect("a destination");
+        assert!(
+            stores.comments(landed).is_empty(),
+            "{source}: no comment of the board's is carried without --comments"
+        );
+    }
+
+    // A comment written at the destination is the destination's own, and a copy without
+    // --comments leaves it exactly as it is.
+    let landed = copied[0].1["destination"]
+        .as_str()
+        .expect("a destination")
+        .to_owned();
+    let output = stores.run(&["task", "comment", "add", &landed], Some("written here"));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    stores.board.add_comment("T-1", "more activity");
+    let (again, _, _) = stores.copy(&copy);
+    assert_eq!(again.len(), 2, "{again:?}");
+    let held = stores.comments(&landed);
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held[0]["body"], "written here");
+    assert!(held[0].get("origin").is_none(), "{held:#?}");
+}
