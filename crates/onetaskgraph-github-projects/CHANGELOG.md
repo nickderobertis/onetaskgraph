@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.3.12...onetaskgraph-github-projects-v0.4.0) - 2026-10-10
+
+### Added
+
+- *(github-projects)* [**breaking**] project configured metadata onto board text fields ([#3583](https://github.com/nickderobertis/onetaskgraph/pull/3583))
+
 ## [0.3.12](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.3.11...onetaskgraph-github-projects-v0.3.12) - 2026-10-10
 
 ### Added

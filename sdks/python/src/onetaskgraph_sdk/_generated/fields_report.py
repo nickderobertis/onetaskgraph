@@ -47,6 +47,16 @@ class KindMissing(BaseModel):
     ]
 
 
+class NonTextFieldType(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever empty, never beginning with whitespace, and never `TEXT`: a text field of that name is\nno conflict.",
+            pattern="^(?:[^T\\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\\s\\S])",
+        ),
+    ]
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -74,6 +84,33 @@ class StatusOptionId(RootModel[str]):
         Field(
             description="A GitHub single-select option's opaque GraphQL node identifier.",
             min_length=1,
+        ),
+    ]
+
+
+class MetadataFieldReport(BaseModel):
+    conflict: Annotated[
+        NonTextFieldType | None,
+        Field(
+            description="The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none."
+        ),
+    ] = None
+    exists: Annotated[
+        bool,
+        Field(description="Whether the board had a text field of that name before the operation."),
+    ]
+    field: Annotated[str, Field(description="The board field's name.")]
+    key: Annotated[str, Field(description="The metadata key the value is read from.")]
+    outcome: Annotated[
+        FieldOutcome,
+        Field(
+            description="What the requested operation did: `planned`; `created` for a field that was not\nthere; `unchanged` for one that was, and for a conflict, which is never changed."
+        ),
+    ]
+    path: Annotated[
+        list[str],
+        Field(
+            description="The object keys walked inside that key's value; empty for the key's own value."
         ),
     ]
 
@@ -121,4 +158,11 @@ class FieldsReport(BaseModel):
             description="`Status`, always, and `Priority` when the source sets `priority_mapping`."
         ),
     ]
+    metadata_fields: Annotated[
+        list[MetadataFieldReport],
+        Field(
+            description="Each board text field the source's `metadata_fields` projects a value onto, in\nconfigured order. Empty — and left out of the JSON — when it projects none.",
+            validate_default=True,
+        ),
+    ] = []
     source: Annotated[SourceName, Field(description="The configured source name.")]

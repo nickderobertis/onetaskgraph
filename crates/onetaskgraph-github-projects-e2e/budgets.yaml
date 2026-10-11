@@ -45,6 +45,15 @@ budgets:
     unit: seconds
     direction: max
     threshold: 240
+  - id: github-metadata-field-content-creation-share
+    description: >-
+      An inner measure of headroom on the shared board token that no check may spend: the larger share of GitHub's per-minute and hourly content-creation allowances that projecting one metadata field adds to a 10x hour of follow-up filing, every aliased mutation counted as one write. It protects the write allowance every manager on the host draws from.
+    labels: [github]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_metadata_fields", "--exact", "--nocapture"]
+    unit: percent
+    direction: max
+    threshold: 12.5
   - id: visibility-write-requests
     description: >-
       An inner measure of headroom on a shared board token that no check may reach: the requests a 102-write plan copy onto a board declared private spends reading the board's and each issue repository's visibility. It protects that token's allowance from a third read per write.

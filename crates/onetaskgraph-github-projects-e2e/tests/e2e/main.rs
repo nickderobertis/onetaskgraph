@@ -17,6 +17,7 @@ mod copy_recopy;
 mod fields;
 mod github_status_by_kind;
 mod graph;
+mod metadata_fields;
 mod write_order;
 
 mod asset_board;

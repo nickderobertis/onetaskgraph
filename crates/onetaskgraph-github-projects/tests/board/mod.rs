@@ -186,6 +186,16 @@ fn introspected(query: &str) -> Value {
 
 /// One introspected type's members, as the selection for its kind spells them.
 fn introspected_type_members(name: &str) -> Value {
+    if let Some((_, members)) = crate::journey::CONTRACT_ENUMS
+        .iter()
+        .find(|(held, _)| *held == name)
+    {
+        let values = members
+            .iter()
+            .map(|member| json!({ "name": member }))
+            .collect::<Vec<_>>();
+        return json!({ "enumValues": values });
+    }
     if name == "DraftIssue" {
         return json!({"fields":[{"name":"projectV2Items",
             "type":introspected_type("ProjectV2ItemConnection!"),
@@ -202,11 +212,11 @@ fn introspected_type_members(name: &str) -> Value {
             .collect::<Vec<_>>();
         return json!({ "fields": fields });
     }
-    let (_, input, expected) = crate::journey::MUTATION_TYPES
+    let (_, input, expected) = crate::journey::CONTRACT_TYPES
         .iter()
         .find(|(held, _, _)| *held == name)
         .unwrap_or_else(|| panic!("the journey asked about a type it does not name: {name}"));
-    let declared = crate::journey::mutation_field_types(name);
+    let declared = crate::journey::contract_field_types(name);
     let mut fields = declared
         .iter()
         .map(|(field, signature)| json!({"name":field,"type":introspected_type(signature)}))

@@ -11,13 +11,14 @@ use onetaskgraph_github_projects::GitHubProjectsSource;
 use onetaskgraph_plugin_api::{SecretResolver, SourceError, SourceName};
 
 pub use onetaskgraph_github_projects::{
-    BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, SetupMode,
-    StatusOptionsMode, StatusOptionsOutcome, StatusOptionsReport,
+    BoardField, FieldOutcome, FieldReport, FieldsReport, GitHubProjectsConfig, MetadataFieldConfig,
+    MetadataFieldReport, NonTextFieldType, SetupMode, StatusOptionsMode, StatusOptionsOutcome,
+    StatusOptionsReport,
 };
 
 /// Plan or apply the guarded setup of every board field one configured source names: its
-/// Status options always, and its Priority field and options when it sets
-/// `priority_mapping`.
+/// Status options always, its Priority field and options when it sets `priority_mapping`,
+/// and the text field of each `metadata_fields` entry.
 ///
 /// # Errors
 ///
