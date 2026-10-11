@@ -40,6 +40,16 @@ import sys
 from dataclasses import dataclass
 
 
+def text_setting(settings, member):
+    """The string `settings` names as `member`, or a refusal naming it."""
+    value = settings.pop(member, None)
+    if not isinstance(value, str) or not value:
+        raise SystemExit(
+            f"rewriting relay: setting {member!r} must be a non-empty string, got {value!r}"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class Rewrite:
     """The one rewrite the relay makes: `text` into `file`, once `after` is answered `skip + 1` times."""
@@ -54,11 +64,22 @@ class Rewrite:
         """Remove the rewrite's members from `settings`, or `None` when it names no rewrite."""
         if "after" not in settings:
             return None
+        skip = settings.pop("skip", None)
+        # `bool` is an `int` to Python, and no journey means `true` by a count.
+        if not isinstance(skip, int) or isinstance(skip, bool) or skip < 0:
+            raise SystemExit(
+                f"rewriting relay: setting 'skip' must be a count of zero or more, got {skip!r}"
+            )
+        text = settings.pop("text", None)
+        if not isinstance(text, str):
+            raise SystemExit(
+                f"rewriting relay: setting 'text' must be a string, got {text!r}"
+            )
         return cls(
-            after=str(settings.pop("after")),
-            skip=int(settings.pop("skip")),
-            file=str(settings.pop("file")),
-            text=str(settings.pop("text")),
+            after=text_setting(settings, "after"),
+            skip=skip,
+            file=text_setting(settings, "file"),
+            text=text,
         )
 
 
@@ -73,13 +94,25 @@ class Relay:
 
     @classmethod
     def taken_from(cls, settings):
-        """Remove the relay's members from `settings`, leaving what the host is initialized with."""
-        log = settings.pop("log", None)
+        """Remove the relay's members from `settings`, leaving what the host is initialized with.
+
+        Each is refused naming it, before the host is started or a file is opened, when it is
+        not what a journey writes: a journey misconfiguring its relay fails as that, rather than
+        as the host or the copy misbehaving.
+        """
+        forget = settings.pop("forget", [])
+        if not isinstance(forget, list) or not all(
+            isinstance(member, str) and member for member in forget
+        ):
+            raise SystemExit(
+                f"rewriting relay: setting 'forget' must be a list of member names, got {forget!r}"
+            )
+        log = text_setting(settings, "log") if "log" in settings else None
         return cls(
-            host=str(settings.pop("host")),
+            host=text_setting(settings, "host"),
             rewrite=Rewrite.taken_from(settings),
-            forget=tuple(str(member) for member in settings.pop("forget", [])),
-            log=None if log is None else str(log),
+            forget=tuple(forget),
+            log=log,
         )
 
 
@@ -121,7 +154,9 @@ def main():
         rewrite = relay.rewrite
         if rewrite is not None and method == rewrite.after and not written:
             if answered == rewrite.skip:
-                with open(rewrite.file, "w", encoding="utf-8", newline="\n") as rewritten:
+                with open(
+                    rewrite.file, "w", encoding="utf-8", newline="\n"
+                ) as rewritten:
                     rewritten.write(rewrite.text)
                 written = True
             answered += 1
