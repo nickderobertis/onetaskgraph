@@ -708,3 +708,54 @@ fn a_copy_narrowed_by_comment_activity_without_comments_copies_the_right_tasks_a
     assert_eq!(held[0]["body"], "written here");
     assert!(held[0].get("origin").is_none(), "{held:#?}");
 }
+
+#[test]
+fn a_copy_by_query_one_of_whose_sources_fails_is_refused_and_writes_nothing_anywhere() {
+    let sandbox = Sandbox::new();
+    let (board_config, board) = github_projects_with_board(&sandbox);
+    let notes = sandbox.subdirectory("notes");
+    std::fs::create_dir_all(notes.join("tasks")).expect("the task folder");
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin": "github-projects", "config": board_config},
+        // Every status the board uses, so the half that answered could land if it were let.
+        "notes": {"plugin": "local-md", "config": {"root": notes, "status_mapping": {
+            "Todo": "todo", "Doing": "in-progress", "Shipped": "done", "Done": "done"}}},
+        // A plugin whose process cannot be started: its listing fails, the board's does not.
+        "dead": {"plugin": "subprocess", "config": {
+            "command": sandbox.subdirectory("nowhere").join("no-such-peer")}},
+    })));
+    let mark = board.served().len();
+    let output = sandbox
+        .command()
+        .args([
+            "task",
+            "copy",
+            "--to",
+            "notes",
+            "--source",
+            "board",
+            "--source",
+            "dead",
+            "--comments",
+            "--json",
+        ])
+        .write_stdin("")
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stderr(&output).contains("dead"), "{}", stderr(&output));
+    let written: Vec<_> = std::fs::read_dir(notes.join("tasks"))
+        .expect("the task folder")
+        .collect();
+    assert!(
+        written.is_empty(),
+        "nothing landed from the half of the query that answered: {written:?}"
+    );
+    let served = Served(board.served()[mark..].to_vec());
+    assert!(
+        served.reads_only(),
+        "nothing was written to the board: {:?}",
+        served.names()
+    );
+}
