@@ -109,10 +109,13 @@ async fn an_added_comment_lands_in_exactly_the_section_shape_and_reads_back_byte
     assert_eq!(added.updated_at, Some(at));
     assert_eq!(added.author.as_deref(), Some("ada"));
     assert_eq!(added.body, text);
-    assert_eq!(
-        added.id.as_str(),
-        format!("{}-1", at.format("%Y%m%dT%H%M%SZ"))
-    );
+    let microsecond: u32 = added
+        .id
+        .as_str()
+        .strip_prefix(&format!("{}-", at.format("%Y%m%dT%H%M%SZ")))
+        .and_then(|n| n.parse().ok())
+        .expect("the id names the second it was written in, then a number");
+    assert!((1..=1_000_000).contains(&microsecond), "{}", added.id);
     let written = stamped(at);
     assert_eq!(
         read(root.path(), "tasks/release.md"),
@@ -229,43 +232,35 @@ async fn a_body_holding_the_closing_line_is_refused_on_add_and_on_edit() {
 }
 
 #[tokio::test]
-async fn an_id_takes_the_smallest_free_number_for_its_second_and_is_never_renumbered() {
-    // The minted id depends on the second the comment is written in, so the file is seeded for
-    // the second the test starts in and the attempt repeated when the clock ticks between.
-    for _ in 0..5 {
-        let now = Utc::now();
-        let stamp = now.format("%Y%m%dT%H%M%SZ").to_string();
-        let at = stamped(now);
-        let seeded = format!(
-            "{TASK}\n{COMMENTS_HEADING}\n\n{}\n{}",
-            block(&format!("{stamp}-1"), &at, "one"),
-            block(&format!("{stamp}-3"), &at, "three")
+async fn a_deleted_comments_id_is_never_minted_again_and_no_id_is_renumbered() {
+    let (_root, source) = folder(&[("tasks/release.md", TASK)]);
+    let kept = add(source.as_ref(), "release", "kept", None).await;
+    // Deleted and added again and again, most of it inside one second: the smallest free
+    // number for that second would hand each new comment the id of the one just deleted.
+    let mut minted = vec![kept.id.clone()];
+    for n in 0..50 {
+        let added = add(source.as_ref(), "release", &format!("comment {n}"), None).await;
+        assert!(
+            !minted.contains(&added.id),
+            "{} was minted twice: {minted:?}",
+            added.id
         );
-        let (_root, source) = folder(&[("tasks/release.md", &seeded)]);
-        let added = add(source.as_ref(), "release", "two", None).await;
-        if added
-            .created_at
-            .map(|at| at.format("%Y%m%dT%H%M%SZ").to_string())
-            != Some(stamp.clone())
-        {
-            continue;
-        }
-        assert_eq!(added.id.as_str(), format!("{stamp}-2"));
-
+        minted.push(added.id.clone());
         source
-            .delete_comment(&id("release"), &id(&format!("{stamp}-1")))
+            .delete_comment(&id("release"), &added.id)
             .await
             .unwrap()
-            .expect("the seeded comment exists");
-        let ids: Vec<String> = listed(source.as_ref(), "release")
-            .await
-            .into_iter()
-            .map(|comment| comment.id.0)
-            .collect();
-        assert_eq!(ids, [format!("{stamp}-3"), format!("{stamp}-2")]);
-        return;
+            .expect("the comment was just added");
     }
-    panic!("the clock ticked over a second on every one of five attempts");
+    let last = add(source.as_ref(), "release", "last", None).await;
+    assert!(!minted.contains(&last.id), "{} was minted twice", last.id);
+
+    let ids: Vec<NativeId> = listed(source.as_ref(), "release")
+        .await
+        .into_iter()
+        .map(|comment| comment.id)
+        .collect();
+    assert_eq!(ids, [kept.id, last.id], "the comment kept keeps its id");
 }
 
 #[tokio::test]

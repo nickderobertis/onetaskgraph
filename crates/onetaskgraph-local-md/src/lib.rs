@@ -1838,10 +1838,10 @@ impl TaskSource for LocalMdSource {
         let Some(mut file) = self.task_file(task)? else {
             return Ok(None);
         };
-        let now = this_second();
+        let (now, minted) = minted_comment_id(&file.comments);
         let added = Comment {
             origin: None,
-            id: minted_comment_id(now, &file.comments),
+            id: minted,
             author: comment.author.clone(),
             created_at: Some(now),
             updated_at: Some(now),
@@ -1926,7 +1926,7 @@ impl TaskSource for LocalMdSource {
             None => {
                 let taken = file.comments.iter().any(|held| held.id == copy.origin.id);
                 let id = if taken || copy.origin.id.as_str().is_empty() {
-                    minted_comment_id(now, &file.comments)
+                    minted_comment_id(&file.comments).1
                 } else {
                     copy.origin.id.clone()
                 };
@@ -2052,7 +2052,9 @@ fn answered_body(content: &str, block: &str, section: &str) -> String {
 /// - A body containing a line that is exactly [`COMMENT_CLOSE`] is refused rather than
 ///   escaped, because escaping it would store a body other than the one written.
 /// - A comment id is minted as `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, with `n` the
-///   smallest positive integer not already an id in that file, and is never renumbered.
+///   microsecond within that second it was minted at, plus one, or a later instant's when the
+///   file already holds that id. It is never renumbered and never minted again for another
+///   comment, a deleted one's included.
 /// - The section is not the task's content: every read reports content as the body above it,
 ///   so a content search never matches a comment. A copy written into the file keeps its
 ///   existing section byte for byte, and content that would itself read as a section is
@@ -2763,14 +2765,29 @@ fn rendered_block(comment: &Comment) -> String {
     format!("{marker}\n### {who} — {created}\n\n{body}\n\n{COMMENT_CLOSE}\n")
 }
 
-/// `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, for the smallest positive `n` not already an
-/// id among `comments`.
-fn minted_comment_id(at: DateTime<Utc>, comments: &[Comment]) -> NativeId {
-    let stamp = at.format("%Y%m%dT%H%M%SZ");
-    (1_u64..)
-        .map(|n| NativeId(format!("{stamp}-{n}")))
-        .find(|candidate| !comments.iter().any(|held| &held.id == candidate))
-        .expect("an unbounded counter eventually clears a finite set of ids")
+/// A new comment id and the second it is written at: `<that second in UTC as
+/// YYYYMMDDTHHMMSSZ>-<n>`, `n` the microsecond within it the id is minted at, plus one.
+///
+/// An id names the instant it was minted at, so no later mint can spell an id this file held
+/// before: a comment deleted and another added in the same second get different ids, and a
+/// `--comments` copy reading the folder sees one comment gone and another new rather than one
+/// edited. The smallest free number would hand the deleted comment's id straight to the next
+/// one. An instant whose id the file already holds — a copied comment keeping its origin's id,
+/// or one written by hand — is passed over for the next.
+fn minted_comment_id(comments: &[Comment]) -> (DateTime<Utc>, NativeId) {
+    loop {
+        let now = Utc::now();
+        let second = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
+        let candidate = NativeId(format!(
+            "{}-{}",
+            second.format("%Y%m%dT%H%M%SZ"),
+            now.timestamp_subsec_micros() + 1
+        ));
+        if !comments.iter().any(|held| held.id == candidate) {
+            return (second, candidate);
+        }
+        std::thread::yield_now();
+    }
 }
 
 /// Now, to the second — the precision the section writes a time down in, so a comment reads

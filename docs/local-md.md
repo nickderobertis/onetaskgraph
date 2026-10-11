@@ -327,9 +327,12 @@ hand. The rules, all of which the plugin enforces:
   body with a line that is exactly the closing line is refused on `add` and `edit`, saying
   why, rather than escaped — an escaped body would not be the one you wrote.
 - **A comment id** is minted as the comment's creation time in UTC as `YYYYMMDDTHHMMSSZ`,
-  a dash, and the smallest positive integer not already an id in that file:
-  `20260913T151107Z-1`, then `20260913T151107Z-2` for a second comment in the same second.
-  Ids are never renumbered.
+  a dash, and the microsecond within that second it was minted at, plus one:
+  `20260913T151107Z-482311`. An id the file already holds — a copied comment's, or one written
+  by hand, such as `20260913T151107Z-1` — is passed over for a later instant's. Ids are never
+  renumbered, and none is minted twice: a comment deleted and another added in the same second
+  get different ids, so a `--comments` copy reading the folder sees one comment gone and one
+  new rather than one edited.
 - **The section is not the task's content.** `task show` and every query report the content
   as the body above the section, so `search --in content` never matches a comment's text.
 - **A copy without `--comments` never touches it.** Copying a task into this folder over an

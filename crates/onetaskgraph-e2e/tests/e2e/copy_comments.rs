@@ -548,13 +548,14 @@ fn changed_after_one_copy(stores: &Stores) -> (String, String, Vec<Said>) {
         .and_then(|comment| comment["id"].as_str())
         .expect("the board holds a copy of the edited comment")
         .to_owned();
-    // Added before the deletion: a folder numbers a comment by the second it was written in
-    // and the comments it holds from that second, so one added after a deletion in the same
-    // second can take the deleted one's id.
-    stores.comment("notes:A", "a new word");
-    stores.comment("notes:A", "a second new word");
+    // Deleted before the additions, and usually in the same second: a folder once minted the
+    // smallest number free in that second, which handed the first addition the deleted
+    // comment's id, and this copy then edited the deleted comment's copy instead of deleting
+    // it and adding one. Kept in this order as the regression.
     stores.edit("notes:A", &edited, "changed in the folder");
     stores.delete("notes:A", &removed);
+    stores.comment("notes:A", "a new word");
+    stores.comment("notes:A", "a second new word");
     (issue, edited_copy, said(&held))
 }
 
@@ -908,4 +909,3 @@ fn the_human_report_counts_each_tasks_comments_and_says_which_were_skipped() {
         "a task decided from its change tokens alone says it was skipped: {again}"
     );
 }
-
