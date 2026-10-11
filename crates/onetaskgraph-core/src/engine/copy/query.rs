@@ -20,8 +20,8 @@ use crate::{Failure, GlobalId};
 
 use super::super::{Engine, EngineError, Qualified, TaskRequest};
 use super::{
-    CopyAction, CopyOutcome, CopyRequest, Item, Level, Linking, Running, Target, skipped_counts,
-    skips,
+    CopyAction, CopyOutcome, CopyRequest, Item, Level, Linking, Running, Target, origin_of,
+    skipped_counts, skips,
 };
 
 /// One item of a copy, in the order the copy reports it: one already decided, or one still to
@@ -160,7 +160,13 @@ impl Engine {
                 held: listed.item.metadata.get(MetadataKey::COPIES_KEY).cloned(),
             });
         }
-        let counts = request.comments.then(|| skipped_counts(held.as_ref()));
+        let counts = request.comments.then(|| {
+            skipped_counts(
+                held.as_ref(),
+                &listed.id,
+                origin_of(&listed.item.metadata).as_ref(),
+            )
+        });
         Ok(Some(CopyOutcome {
             source: listed.id.clone(),
             action: CopyAction::Unchanged {

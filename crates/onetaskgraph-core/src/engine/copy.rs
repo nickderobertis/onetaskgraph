@@ -4202,9 +4202,13 @@ impl Engine {
         // Every link is settled once the whole copy has landed, by `Engine::link`, so none
         // is known here.
         let comments = if item.skipped {
-            item.carried
-                .is_some()
-                .then(|| skipped_counts(item.held.as_ref()))
+            item.carried.is_some().then(|| {
+                skipped_counts(
+                    item.held.as_ref(),
+                    &item.source,
+                    origin_of(described(&item.item).1).as_ref(),
+                )
+            })
         } else {
             item.comment_plan.as_ref().map(|plan| plan.counts)
         };
@@ -6038,14 +6042,31 @@ fn skips(task: &Task, held: &Prior, with_comments: bool, destination: &SourceNam
     )
 }
 
-/// What a `--comments` copy reports for the comments of a task it skipped: every copy the
-/// destination holds of a comment, each already reading as its origin.
-fn skipped_counts(held: Option<&Prior>) -> CommentCounts {
+/// What a `--comments` copy reports for the comments of `source`, a task it skipped: every
+/// copy the destination holds of one of that task's comments, each already reading as its
+/// origin.
+///
+/// A copy is that task's when its origin names the task, or `recorded` — the item the task was
+/// itself copied from, whose comments it carried on. A copy another task's copy left there is
+/// none of this task's, and is not counted, exactly as a copy that is not skipped counts it.
+fn skipped_counts(
+    held: Option<&Prior>,
+    source: &GlobalId,
+    recorded: Option<&GlobalId>,
+) -> CommentCounts {
+    let vouched = |task: &str| {
+        task == source.to_string() || recorded.is_some_and(|recorded| task == recorded.to_string())
+    };
     let copies = held
         .and_then(|held| held.comments.as_ref())
         .map_or(0, |held| {
             held.iter()
-                .filter(|comment| comment.origin.is_some())
+                .filter(|comment| {
+                    comment
+                        .origin
+                        .as_ref()
+                        .is_some_and(|origin| vouched(&origin.task))
+                })
                 .count()
         });
     CommentCounts {

@@ -422,6 +422,131 @@ fn a_copied_comment_edited_by_a_person_on_a_board_or_in_linear_stays_a_copy() {
 }
 
 #[test]
+fn a_skipped_task_counts_only_its_own_copies_as_unchanged() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    // In the board's own wording, so the folder's task reads unchanged on the board.
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Written in the folder\nstatus: Todo\n---\nWritten here.\n",
+    )
+    .expect("a task file");
+    stores.comment("notes:A", "mine");
+    let copy = [
+        "task",
+        "copy",
+        "notes:A",
+        "--to",
+        "board",
+        "--comments",
+        "--no-link",
+    ];
+    let first = stores.json(&copy)["items"][0].clone();
+    assert_eq!(counts(&first), [1, 0, 0, 0], "{first:#}");
+    let issue = destination(&first);
+    let elsewhere = json!({"task": "linear:L-9", "id": "C-77", "author": null,
+                           "created_at": null, "updated_at": null, "url": null});
+    stores.board.add_comment(
+        native(&issue),
+        &format!("carried from elsewhere\n\n<!-- onetaskgraph.comment_origin `{elsewhere}` -->"),
+    );
+    // The destination changed, so this one reads and compares; the next one skips.
+    let compared = stores.json(&copy)["items"][0].clone();
+    assert_eq!(compared["skipped"], false, "{compared:#}");
+    assert_eq!(counts(&compared), [0, 0, 0, 1], "{compared:#}");
+    let skipped = stores.json(&copy)["items"][0].clone();
+    assert_eq!(skipped["skipped"], true, "{skipped:#}");
+    assert_eq!(
+        counts(&skipped),
+        [0, 0, 0, 1],
+        "another task's copy is none of this task's, skipped or not: {skipped:#}"
+    );
+}
+
+#[test]
+fn two_source_comments_copied_from_one_origin_land_as_one_copy() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    // The board holds the same comment twice, each a copy of one comment elsewhere — a copy
+    // made twice by hand, say. Its copy elsewhere is still one comment.
+    let elsewhere = json!({"task": "linear:L-9", "id": "C-77", "author": null,
+                           "created_at": null, "updated_at": null, "url": null});
+    for said in ["the first time", "the second time"] {
+        stores.board.add_comment(
+            "T-3",
+            &format!("{said}\n\n<!-- onetaskgraph.comment_origin `{elsewhere}` -->"),
+        );
+    }
+    let landed = stores.copy("board:T-3", "notes");
+    assert_eq!(counts(&landed), [1, 0, 0, 0], "{landed:#}");
+    assert_eq!(
+        said(&stores.comments(&destination(&landed))),
+        said(&[json!({"body": "the first time",
+                      "origin": {"task": "linear:L-9", "id": "C-77"}})]),
+        "the first the source holds is the one copied"
+    );
+}
+
+#[test]
+fn a_comments_copy_from_a_source_whose_tasks_hold_none_carries_none_and_touches_none() {
+    for boundary in SOURCE_BOUNDARIES {
+        let who = format!("{boundary:?}");
+        let sandbox = Sandbox::new();
+        let notes = sandbox.subdirectory("notes");
+        std::fs::create_dir_all(notes.join("tasks")).expect("the task folder");
+        sandbox.project_document(&document(&json!({
+            "memory": {"plugin": "in-memory", "config": {"tasks": [{
+                "id": "T-1", "title": "Alpha", "content": "the body",
+                "status": {"category": "todo", "name": "todo"}, "labels": []}]}},
+            "notes": boundary.source("local-md", json!({"root": notes})),
+        })));
+        let copy = |expected: [u64; 4]| {
+            let output = sandbox
+                .command()
+                .args([
+                    "task",
+                    "copy",
+                    "memory:T-1",
+                    "--to",
+                    "notes",
+                    "--comments",
+                    "--json",
+                ])
+                .write_stdin("")
+                .assert()
+                .get_output()
+                .clone();
+            assert_eq!(output.status.code(), Some(0), "{who}: {}", stderr(&output));
+            let report: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+            let outcome = report["items"][0].clone();
+            assert_eq!(counts(&outcome), expected, "{who}: {outcome:#}");
+            destination(&outcome)
+        };
+        let note = copy([0, 0, 0, 0]);
+        let output = sandbox
+            .command()
+            .args(["task", "comment", "add", &note])
+            .write_stdin("written in the folder")
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(0), "{who}: {}", stderr(&output));
+        assert_eq!(copy([0, 0, 0, 0]), note, "{who}: the same task again");
+        let listed = sandbox
+            .command()
+            .args(["task", "comment", "list", &note, "--json"])
+            .write_stdin("")
+            .assert()
+            .get_output()
+            .clone();
+        let held: Value = serde_json::from_str(&stdout(&listed)).expect("JSON");
+        assert_eq!(
+            said(held["comments"].as_array().expect("comments")),
+            said(&[json!({"body": "written in the folder"})]),
+            "{who}: the folder's own comment is left as it was"
+        );
+    }
+}
+
+#[test]
 fn linear_and_markdown_carry_each_others_comments_both_ways() {
     let stores = Stores::new(SourceBoundary::Direct);
     let first = stores.comment("linear:T-3", "said in Linear");
