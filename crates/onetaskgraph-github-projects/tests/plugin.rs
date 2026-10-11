@@ -17962,6 +17962,63 @@ async fn a_batch_answer_missing_an_item_or_naming_another_is_refused_as_malforme
     );
 }
 
+/// A copy's batched read is held to the same three answers as every other batch: an id naming
+/// no node sends the batch back one item at a time, any other refusal is every id's answer, and
+/// an alias left out is refused as malformed rather than read as missing.
+#[tokio::test]
+async fn a_copys_batch_read_is_read_again_alone_refused_whole_or_refused_for_a_missing_item() {
+    let unresolvable = json!({"errors":[{
+        "message":"Could not resolve to a node with the global id of 'garbage'"}]});
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let endpoint = sequence_server(vec![
+        unresolvable.clone(),
+        issue_with_comments("I_1", no_comments.clone()),
+        unresolvable,
+    ]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("garbage")], &page(50))
+        .await;
+    assert_eq!(read.len(), 2);
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id == native("I_1")
+            && matches!(&detail.comments, Some(Ok(Some(comments))) if comments.items.is_empty())),
+        "I_1 is read on its own: {:?}",
+        read[0]
+    );
+    assert!(matches!(read[1], Ok(None)), "{:?}", read[1]);
+
+    let endpoint = sequence_server(vec![json!({"errors":[{
+        "message":"Something went wrong while executing your query"}]})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("I_2")], &page(50))
+        .await;
+    assert_eq!(read.len(), 2);
+    for answered in &read {
+        assert!(
+            matches!(answered, Err(SourceError::Refused { message })
+                if message.contains("Something went wrong")),
+            "{answered:?}"
+        );
+    }
+
+    let first = issue_with_comments("I_1", no_comments)["data"]["node"].clone();
+    let endpoint = sequence_server(vec![json!({"data":{"i0": first}})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("I_3")], &page(50))
+        .await;
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id == native("I_1")),
+        "{:?}",
+        read[0]
+    );
+    assert!(
+        matches!(&read[1], Err(SourceError::Malformed { message })
+            if message.contains("no item for I_3")),
+        "{:?}",
+        read[1]
+    );
+}
+
 /// The origin field is the one piece of an existing item's metadata written before its body,
 /// so a write refused after it moved puts it back: the item's metadata is as it stood.
 #[tokio::test]
