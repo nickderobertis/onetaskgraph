@@ -1015,12 +1015,18 @@ def example_lines(heading):
     for block in re.findall(r"```json\n(.*?)\n```", section(heading), re.DOTALL):
         for line in block.splitlines():
             try:
-                messages.append(json.loads(line))
+                message = json.loads(line)
             except ValueError as error:
+                message, problem = None, f"is not JSON ({error})"
+            else:
+                problem = "is not a JSON object"
+            if isinstance(message, dict):
+                messages.append(message)
+            else:
                 failures.append(
-                    f'"{heading}" has a JSON example line that is not one JSON message '
-                    f"({error}):\n{line}\nWrite each message of an exchange on a line of its "
-                    f"own, as it crosses the wire."
+                    f'"{heading}" has a JSON example line that {problem}:\n{line}\nWrite '
+                    f"each message of an exchange as one object on a line of its own, as it "
+                    f"crosses the wire."
                 )
     return messages
 
