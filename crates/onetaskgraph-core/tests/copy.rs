@@ -4483,3 +4483,39 @@ async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a
         assert!(listed(&engine, "into").await.is_empty(), "nothing written");
     }
 }
+
+#[tokio::test]
+async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with() {
+    // The source's token is the source's: the destination derives its own on a read, and an
+    // in-memory source derives none, so what a copy lands there carries none — on the create
+    // and on the update over it.
+    let mut held = task("T-1", "Alpha engine");
+    held["version"] = json!("from-v1");
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [held]}},
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+    for _ in 0..2 {
+        engine.copy(&one("from:T-1")).await.expect("the copy lands");
+        let landed = engine
+            .tasks(&TaskRequest {
+                sources: vec![name("into")],
+                filters: onetaskgraph_core::Filters::default(),
+                project: onetaskgraph_core::ProjectSelector::Any,
+                priorities: Vec::new(),
+                commented_since: None,
+                metadata: Vec::new(),
+                origin: None,
+                include_members: false,
+                paging: Paging {
+                    limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                    token: None,
+                },
+            })
+            .await
+            .expect("the list verb answers")
+            .items;
+        assert_eq!(landed.len(), 1);
+        assert_eq!(landed[0].item.version, None, "{:?}", landed[0].item);
+    }
+}

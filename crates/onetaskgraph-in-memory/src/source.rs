@@ -549,9 +549,12 @@ impl TaskSource for InMemorySource {
             Some(target) => {
                 let position = position_of(held.tasks.iter().map(|task| &task.id), target)
                     .ok_or_else(|| missing(target, "task"))?;
+                // A token the written task arrives with is its source's, and this source gives
+                // none of its own: it is never stored.
                 held.tasks[position] = Task {
                     id: target.clone(),
                     key: None,
+                    version: None,
                     ..write.item.clone()
                 };
                 target.clone()
@@ -561,6 +564,7 @@ impl TaskSource for InMemorySource {
                 held.tasks.push(Task {
                     id: id.clone(),
                     key: None,
+                    version: None,
                     ..write.item.clone()
                 });
                 id
