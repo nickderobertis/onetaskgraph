@@ -7218,6 +7218,13 @@ impl GitHubProjectsSource {
                 .await?;
         }
 
+        // The `blockedBy` this item was read with is what the write just changed, so it is no
+        // answer any more: a later write in this command would reconcile against it — re-adding
+        // what it kept and never removing what it dropped — and a forward-edge read would
+        // answer with it. Left unknown, each asks GitHub instead.
+        if blocked_by_moved {
+            item.blocked_by = None;
+        }
         if let Some(title) = &update.title {
             item.title.clone_from(title);
         }

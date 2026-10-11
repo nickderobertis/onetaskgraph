@@ -14341,6 +14341,59 @@ async fn named_edges_send_only_the_blocked_by_difference() {
     assert_eq!(fixture.seen().len(), 2);
 }
 
+/// Two edge updates of one task through one source, as the live change-kind leg makes them:
+/// the second is reconciled against what the first wrote, not against what the task held
+/// before it — so a dependency the second drops is removed, and a forward-edge read after
+/// either answers what the board now holds.
+#[tokio::test]
+async fn a_second_edge_update_in_one_process_reconciles_against_the_first() {
+    let fixture = update_board(settled_task());
+    let edge = |far: &str| DependencyEdge {
+        from: DependencyEndpoint::from_native(id("I_1"), ItemKind::Task),
+        to: DependencyEndpoint::from_native(id(far), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let depends = |on: &[&str]| TaskUpdate {
+        depends_on: Some(on.iter().map(|far| edge(far)).collect()),
+        ..TaskUpdate::default()
+    };
+    let writer = source(&fixture);
+    writer
+        .update_task(&id("I_1"), &depends(&["I_2", "I_3"]))
+        .await
+        .expect("the first update lands")
+        .expect("a task of this board");
+    let removed = writer
+        .update_task(&id("I_1"), &depends(&["I_2"]))
+        .await
+        .expect("the second update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["addBlockedBy", {"issueId":"I_1","blockingIssueId":"I_2"}]),
+            json!(["addBlockedBy", {"issueId":"I_1","blockingIssueId":"I_3"}]),
+            json!(["removeBlockedBy", {"issueId":"I_1","blockingIssueId":"I_3"}]),
+        ],
+        "the second update removes the dependency it drops, and re-adds nothing"
+    );
+    assert_eq!(removed.written, BTreeSet::from([UpdatedField::DependsOn]));
+    let forward = writer
+        .task_dependencies(&id("I_1"), Direction::DependsOn, &page(10))
+        .await
+        .expect("a dependency read");
+    let ends: Vec<_> = forward
+        .items
+        .iter()
+        .map(|edge| edge.to.id().to_owned())
+        .collect();
+    assert_eq!(
+        ends,
+        ["I_2"],
+        "the read after the writes answers what they left"
+    );
+}
+
 #[tokio::test]
 async fn a_contradictory_update_or_an_absent_task_writes_nothing() {
     let fixture = update_board(settled_task());
