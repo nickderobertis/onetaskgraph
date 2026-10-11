@@ -153,10 +153,16 @@ impl Comment {
     /// or its body ends in no such marker.
     ///
     /// A marker that does not parse is left in the body as text: it is not one this product
-    /// wrote, and reading it as an origin would put words in a person's comment.
+    /// wrote, and reading it as an origin would put words in a person's comment. An origin a
+    /// source reports natively — a stdio peer's, say — is held to the same test: one naming no
+    /// qualified task is dropped, so the comment reads as one written where it is, which a copy
+    /// never edits or deletes.
     #[must_use]
     pub fn unmarked(mut self) -> Self {
-        if self.origin.is_some() {
+        if let Some(origin) = &self.origin {
+            if !CommentOrigin::is_qualified_task(&origin.task) {
+                self.origin = None;
+            }
             return self;
         }
         let trimmed = self.body.trim_end();

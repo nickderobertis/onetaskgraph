@@ -98,6 +98,20 @@ fn a_comment_that_already_names_its_origin_is_not_read_again() {
 }
 
 #[test]
+fn a_native_origin_naming_no_qualified_task_is_dropped_rather_than_trusted() {
+    for task in ["", "I_kw1", "board:", ":I_kw1", "not a source:I_kw1"] {
+        let mut comment = held("said here".to_owned());
+        comment.origin = Some(CommentOrigin {
+            task: task.to_owned(),
+            ..origin()
+        });
+        let read = comment.unmarked();
+        assert_eq!(read.origin, None, "{task:?}: no origin is taken on trust");
+        assert_eq!(read.body, "said here", "{task:?}");
+    }
+}
+
+#[test]
 fn origin_is_left_off_the_wire_when_absent_and_round_trips_when_present() {
     let plain = serde_json::to_value(held("x".to_owned())).unwrap();
     assert!(plain.get("origin").is_none(), "{plain}");
