@@ -314,3 +314,26 @@ async fn the_default_comment_copy_writes_the_marker_and_answers_without_it() {
         .unwrap();
     assert_eq!(missing, None);
 }
+
+#[tokio::test]
+async fn the_default_comment_copy_refuses_an_origin_naming_no_task_and_writes_nothing() {
+    let source = Keeping::default();
+    for task in ["", "I_kw1", "board:", "not a source:I_kw1"] {
+        let copy = CommentCopy {
+            body: CommentBody::new("Copied text.").unwrap(),
+            origin: CommentOrigin {
+                task: task.to_owned(),
+                ..origin()
+            },
+        };
+        let refused = source
+            .write_comment_copy(&NativeId("T-1".to_owned()), None, &copy)
+            .await
+            .expect_err("an origin read back as none is never written");
+        assert!(
+            matches!(&refused, SourceError::Malformed { message } if message.contains("qualified task id")),
+            "{task:?}: {refused:?}"
+        );
+    }
+    assert!(source.comments.lock().unwrap().is_empty());
+}

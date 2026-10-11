@@ -740,7 +740,7 @@ pub trait TaskSource: Send + Sync {
         existing: Option<&NativeId>,
         copy: &CommentCopy,
     ) -> Result<Option<Comment>, SourceError> {
-        let body = CommentBody::new(copy.origin.mark(copy.body.as_str()))?;
+        let body = CommentBody::new(copy.origin.qualified()?.mark(copy.body.as_str()))?;
         let written = match existing {
             Some(comment) => self.edit_comment(task, comment, &body).await?,
             None => {

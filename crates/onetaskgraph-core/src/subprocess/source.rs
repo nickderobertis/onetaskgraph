@@ -1296,6 +1296,7 @@ impl TaskSource for SubprocessSource {
         // Never sent to a plugin that did not declare it (§3.12): one written before the
         // method existed is handed the comment through the two verbs it already answers, with
         // the origin as the marker the engine reads back out of every comment.
+        copy.origin.qualified()?;
         if !self.comment_copies {
             let body = CommentBody::new(copy.origin.mark(copy.body.as_str()))?;
             let written = match existing {

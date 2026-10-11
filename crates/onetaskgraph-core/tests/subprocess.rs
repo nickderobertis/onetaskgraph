@@ -996,6 +996,40 @@ async fn a_task_detail_about_another_task_than_the_one_asked_for_is_a_protocol_v
 }
 
 #[tokio::test]
+async fn a_comment_copy_naming_no_task_is_refused_before_an_older_peer_is_sent_anything() {
+    // A peer whose handshake predates `comment_copies` is handed a copy as a marked comment
+    // through `add_comment`; an origin the engine would read back as none is refused first, so
+    // the peer — which answers the handshake and nothing else — is never asked.
+    let mut declared = capabilities();
+    declared["comments"] = json!("native");
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": declared, "writes": "supported"}})
+        .to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let copy = onetaskgraph_plugin_api::CommentCopy {
+        body: onetaskgraph_plugin_api::CommentBody::new("Copied text.").unwrap(),
+        origin: onetaskgraph_plugin_api::CommentOrigin {
+            task: "I_kw1".to_owned(),
+            id: NativeId("IC_7".to_owned()),
+            author: None,
+            created_at: None,
+            updated_at: None,
+            url: None,
+        },
+    };
+    let refused = source
+        .write_comment_copy(&NativeId("T-1".to_owned()), None, &copy)
+        .await
+        .expect_err("an origin naming no task is never written");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message } if message.contains("qualified task id")),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason() {
     // Both halves of §4.11 and §4.12, driven against each other over a real pipe. The
     // engine's side forwards these four the way it forwards every other method, and the

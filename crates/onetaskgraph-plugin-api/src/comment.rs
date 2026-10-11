@@ -92,6 +92,27 @@ impl CommentOrigin {
         })
     }
 
+    /// This origin, refused as [`SourceError::Malformed`] when its task is not a qualified task
+    /// id — what every writer of a copied comment holds an origin to before it writes one, since
+    /// such an origin would be stored and then read back as none.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Malformed`], naming the task it was given.
+    pub fn qualified(&self) -> Result<&Self, SourceError> {
+        if Self::is_qualified_task(&self.task) {
+            Ok(self)
+        } else {
+            Err(SourceError::Malformed {
+                message: format!(
+                    "a copied comment's origin names its task as {:?}, which is not a \
+                     qualified task id `<source>:<native task id>`",
+                    self.task
+                ),
+            })
+        }
+    }
+
     /// `body` with this origin appended as a hidden marker, for a source that cannot store a
     /// comment's origin, author or times natively.
     ///
