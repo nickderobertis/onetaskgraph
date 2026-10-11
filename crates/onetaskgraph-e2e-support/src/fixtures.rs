@@ -1024,6 +1024,9 @@ struct GitHubBoard {
     /// Changes a journey has this board make once it has answered a request matching each,
     /// before it reads the next — a person editing an item while a command is reading it.
     hooks: Vec<BoardHook>,
+    /// The most rows one page of an issue search answers with, fewer than it was asked for —
+    /// as GitHub may — or `None` to answer as many as asked.
+    search_page_rows: Option<usize>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1492,6 +1495,12 @@ impl GitHubBoardFields {
             .filter(|held| held["issue"] == json!(issue))
             .map(|held| json!({"id": held["id"], "body": held["body"]}))
             .collect()
+    }
+
+    /// Answer every page of an issue search with at most `rows` rows, fewer than it was asked
+    /// for when it asked for more, as GitHub's search may.
+    pub fn answer_search_pages_of(&self, rows: usize) {
+        self.board.lock().unwrap().search_page_rows = Some(rows);
     }
 
     /// Have this board make `change` once it has answered the `skip + 1`th request that
@@ -2159,6 +2168,17 @@ fn github_projects_board_at(
     );
     let mut items = github_dataset(recorded.as_ref());
     items.extend(extra);
+    // Every issue the board starts with was last changed at its epoch, as far as either of its
+    // times says, so each carries a change token from the first read.
+    for item in &mut items {
+        if !GitHubBoard::is_draft(item) {
+            for time in ["updatedAt", "itemUpdatedAt"] {
+                if item.get(time).is_none_or(Value::is_null) {
+                    item[time] = json!(GITHUB_BOARD_EPOCH);
+                }
+            }
+        }
+    }
     let board = Arc::new(Mutex::new(GitHubBoard {
         items,
         comments: Vec::new(),
@@ -2223,6 +2243,7 @@ fn github_projects_board_at(
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
         hooks: Vec::new(),
+        search_page_rows: None,
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -2875,6 +2896,26 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         return Value::Object(answered);
     }
+    // A copy's batch: each item with the first page of its comments and its `blockedBy`.
+    if query == onetaskgraph_github_projects::graphql::ISSUE_COPY_DETAILS {
+        let mut answered = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+            let id = variables[format!("id{slot}")].clone();
+            assert!(
+                id.is_string(),
+                "every slot of a batch names an id: {variables}"
+            );
+            let mut node = board.detail_node(&id, &Value::Null, &variables["first"], true);
+            if node.get("__typename") == Some(&json!("Issue")) {
+                node["blockedBy"] = json!({
+                    "nodes": board.related(id.as_str().expect("an id"), false),
+                    "pageInfo": {"hasNextPage": false, "endCursor": null},
+                });
+            }
+            answered.insert(format!("i{slot}"), node);
+        }
+        return Value::Object(answered);
+    }
     // One item by its own id with a page of its comments, in one request.
     if query == onetaskgraph_github_projects::graphql::ISSUE_DETAIL {
         let id = variables["id"].clone();
@@ -3112,6 +3153,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         )
         .expect("GraphQL first fits usize");
         assert!(first > 0, "GraphQL first must be positive");
+        let first = board.search_page_rows.map_or(first, |rows| first.min(rows));
         // GitHub's issue search is an index and is behind what the board really holds, the
         // same way its board read is; `lagging_reads` is how far.
         let visible = board.items.len().saturating_sub(board.lagging_reads);

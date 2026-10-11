@@ -3769,7 +3769,7 @@ impl Engine {
             }
             let answers = source
                 .source()
-                .get_task_details(&natives, Some(&snapshot::comment_page(source)))
+                .get_task_details_for_copy(&natives, &snapshot::comment_page(source))
                 .await;
             for (native, answer) in natives.into_iter().zip(answers) {
                 running

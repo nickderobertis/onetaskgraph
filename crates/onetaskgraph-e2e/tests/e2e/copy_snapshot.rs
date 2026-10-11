@@ -150,7 +150,9 @@ fn first_page_of(document: &str, variables: &Value, id: &str) -> bool {
             .as_object()
             .is_some_and(|members| members.values().any(|value| value == id))
     };
-    (document == graphql::ISSUE_DETAILS && variables["comments"] == true && naming(variables))
+    ((document == graphql::ISSUE_DETAILS && variables["comments"] == true)
+        || document == graphql::ISSUE_COPY_DETAILS)
+        && naming(variables)
         || (document == graphql::ISSUE_DETAIL
             && variables["id"] == id
             && variables["after"].is_null())
@@ -178,7 +180,9 @@ fn a_board_task_changed_after_its_listing_lands_at_the_revision_its_read_found()
 #[test]
 fn a_board_task_changed_between_its_pages_is_read_again_once_and_lands_whole() {
     type Change = Box<dyn FnOnce(&GitHubBoardFields) + Send>;
-    let cases: Vec<(&str, Box<dyn Fn(&str) -> Change>)> = vec![
+    // The change, given the first comment's id.
+    type Making = Box<dyn Fn(&str) -> Change>;
+    let cases: Vec<(&str, Making)> = vec![
         (
             "a comment edited",
             Box::new(|first: &str| {

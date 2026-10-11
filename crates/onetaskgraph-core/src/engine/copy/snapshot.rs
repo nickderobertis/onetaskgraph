@@ -60,7 +60,7 @@ pub(super) async fn first(
 ) -> Result<Option<TaskDetailRead>, SourceError> {
     source
         .source()
-        .get_task_details(std::slice::from_ref(id), Some(&comment_page(source)))
+        .get_task_details_for_copy(std::slice::from_ref(id), &comment_page(source))
         .await
         .pop()
         .unwrap_or(Ok(None))

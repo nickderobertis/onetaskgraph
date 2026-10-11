@@ -653,6 +653,15 @@ pub const SEARCH_PAGE_SIZE: u32 = 20;
 /// twenty-five come to 150, which rounds to two. `tests/point_cost.rs` prices the document at
 /// one point and fails if one item more would still be priced at one.
 pub const DETAIL_BATCH: usize = 24;
+/// How many items one [`graphql::ISSUE_COPY_DETAILS`] request reads: each with the first page
+/// of its comments and its `blockedBy`, the largest batch the node-count model prices at one
+/// point.
+///
+/// The six requests' worth an item of [`DETAIL_BATCH`] costs, and its `blockedBy` connection
+/// besides: seven. Twenty-one items come to 147, which rounds to one point; twenty-two come to
+/// 154, which rounds to two. `tests/point_cost.rs` prices the document at one point and fails
+/// if one item more would still be priced at one.
+pub const COPY_DETAIL_BATCH: usize = 21;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -1287,6 +1296,57 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// One alias of [`ISSUE_COPY_DETAILS`]: the item a batch's `$id<n>` names, with the first
+    /// page of its comments and the issues it is blocked by.
+    macro_rules! issue_copy_details_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      i",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                "){__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{",
+                issue_comment!(),
+                "}pageInfo{hasNextPage endCursor}} blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}}}"
+            )
+        };
+    }
+
+    /// [`ISSUE_DETAILS`] as a copy reads the tasks it carries: each item with the first page of
+    /// its comments and its `blockedBy` — the edges a copy reads of every task next, which
+    /// [`ISSUE`] carries and [`ISSUE_DETAILS`] does not — [`COPY_DETAIL_BATCH`](super::COPY_DETAIL_BATCH)
+    /// at a time, so a copy of a changed task costs this read and nothing else.
+    ///
+    /// A document of its own rather than a widening of [`ISSUE_DETAILS`], whose batch size is
+    /// what `task show-many` is priced by and which reads no edge.
+    pub const ISSUE_COPY_DETAILS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){"#,
+        issue_copy_details_alias!(0),
+        issue_copy_details_alias!(1),
+        issue_copy_details_alias!(2),
+        issue_copy_details_alias!(3),
+        issue_copy_details_alias!(4),
+        issue_copy_details_alias!(5),
+        issue_copy_details_alias!(6),
+        issue_copy_details_alias!(7),
+        issue_copy_details_alias!(8),
+        issue_copy_details_alias!(9),
+        issue_copy_details_alias!(10),
+        issue_copy_details_alias!(11),
+        issue_copy_details_alias!(12),
+        issue_copy_details_alias!(13),
+        issue_copy_details_alias!(14),
+        issue_copy_details_alias!(15),
+        issue_copy_details_alias!(16),
+        issue_copy_details_alias!(17),
+        issue_copy_details_alias!(18),
+        issue_copy_details_alias!(19),
+        issue_copy_details_alias!(20),
+        "\n    }",
+        board_issue!(),
+        related_issue!()
+    );
+
     /// Which issue one comment is on, read before that comment is edited or removed.
     ///
     /// GitHub's comment mutations take the comment's id and nothing else, so without this a
@@ -1317,7 +1377,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 34] = [
+    pub const DOCUMENTS: [(&str, &str); 35] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1368,6 +1428,10 @@ pub mod graphql {
         (
             ISSUE_DETAILS,
             "reading a batch of issues with their comments",
+        ),
+        (
+            ISSUE_COPY_DETAILS,
+            "reading a batch of issues with their comments and dependencies for a copy",
         ),
         (COMMENT_ISSUE, "reading which issue a comment is on"),
         (ADD_COMMENT, "adding a comment"),
@@ -7718,6 +7782,11 @@ impl GitHubProjectsSource {
         } else {
             self.resolve_issue(node).await?
         };
+        // A read that carried the whole of what the issue is blocked by — a copy's — is kept
+        // for this command, so the dependency read the copy makes next is answered from it.
+        if let Some(read) = item.as_ref().filter(|item| item.blocked_by.is_some()) {
+            self.resolved_cache()?.insert(read.id.clone(), read.clone());
+        }
         let Some(item) = item.filter(|item| item.kind == BoardKind::Work(ItemKind::Task)) else {
             return Ok(None);
         };
@@ -8225,6 +8294,21 @@ fn noting(error: SourceError, note: &str) -> SourceError {
 ///
 /// The document is fixed-size, so a slot `batch` has no id for is bound to its last id, which
 /// is read again at no added price.
+/// The variables of one [`graphql::ISSUE_COPY_DETAILS`] request, as [`detail_batch`] binds its
+/// own: a slot `batch` has no id for is bound to its last id, read again at no added price.
+fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest) -> Value {
+    let mut variables = serde_json::Map::new();
+    for slot in 0..COPY_DETAIL_BATCH {
+        let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
+        variables.insert(format!("id{slot}"), json!(id));
+    }
+    variables.insert("first".to_owned(), json!(comments.limit.min(MAX_PAGE_SIZE)));
+    variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+    variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+    variables.insert("duplicates".to_owned(), json!(true));
+    Value::Object(variables)
+}
+
 fn detail_batch(batch: &[NativeId], comments: Option<&PageRequest>) -> Value {
     let mut variables = serde_json::Map::new();
     for slot in 0..DETAIL_BATCH {
@@ -9693,6 +9777,56 @@ impl TaskSource for GitHubProjectsSource {
             ([id], None) => vec![self.task_read(id).await],
             _ => self.issue_details(ids, comments).await,
         }
+    }
+
+    /// Every id's task with the first page of its comments and its `blockedBy`, as a copy reads
+    /// the tasks it carries: [`COPY_DETAIL_BATCH`] items per [`graphql::ISSUE_COPY_DETAILS`]
+    /// request, so the dependency read a copy makes of each next is answered from this one.
+    async fn get_task_details_for_copy(
+        &self,
+        ids: &[NativeId],
+        comments: &PageRequest,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        // A page past the first is a page of one task's comments, which the detail read of it
+        // alone answers.
+        if comments.cursor.is_some() {
+            return self.get_task_details(ids, Some(comments)).await;
+        }
+        if let Err(error) = validate_page(comments) {
+            return ids.iter().map(|_| Err(error.clone())).collect();
+        }
+        let mut read = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(COPY_DETAIL_BATCH) {
+            match self
+                .graphql(
+                    graphql::ISSUE_COPY_DETAILS,
+                    copy_detail_batch(batch, comments),
+                )
+                .await
+            {
+                Ok(data) => {
+                    for (slot, id) in batch.iter().enumerate() {
+                        let read_one = match data.get(format!("i{slot}")) {
+                            Some(node) => self.detail_of(id, node, true, None).await,
+                            None => Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered a batch read with no item for {}",
+                                    id.0
+                                ),
+                            }),
+                        };
+                        read.push(read_one);
+                    }
+                }
+                Err(error) if unresolvable_node(&error) => {
+                    for id in batch {
+                        read.push(self.issue_detail(id, comments).await);
+                    }
+                }
+                Err(error) => read.extend(batch.iter().map(|_| Err(error.clone()))),
+            }
+        }
+        read
     }
 
     /// Add one comment to the task's issue, as the account the token belongs to.

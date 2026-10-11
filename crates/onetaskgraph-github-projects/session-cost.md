@@ -1022,3 +1022,22 @@ the reconciliation step sends its `rateLimit(dryRun: true)` probe for every read
 other, at 0 worst-case nodes. Nothing the journey writes or reads besides that probe moved.
 What the reads cost a private board's copy is the `visibility-write-requests` budget's, in
 `crates/onetaskgraph-github-projects-e2e/budgets.yaml`.
+
+## A copy's batched read carries what each task is blocked by, and what that moved
+
+A `--comments` copy reads every task it carries with the first page of its comments and then
+reads that task's forward edges. `graphql::ISSUE_DETAILS` carries no `blockedBy`, so that second
+read was one `ISSUE_DEPENDENCIES` per task: a copy of five changed tasks cost one batched read
+and five more. `graphql::ISSUE_COPY_DETAILS` is the batched read a copy makes instead — the same
+aliases with each item's `blockedBy` beside its comments, `COPY_DETAIL_BATCH` (21) to a request
+at one point — and the read of it is kept for the command, so each task's dependency read is
+answered from it. It is a document of its own rather than a widening of `ISSUE_DETAILS`, whose
+batch of 24 is what `task show-many` is priced by and which reads no edge.
+`a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed` in
+`crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_recopy.rs` holds a copy of five changed
+tasks to that one request.
+
+**`session-cost.txt`** moves only by the reconciliation step's line for the new entry of
+`graphql::DOCUMENTS`: its request total 122 → 123, and its node count by the document's
+worst case, 7,413 nodes, 249,562 → 256,975. Nothing the journey writes or reads besides that
+probe moved, because the journey makes no copy with `--comments`.

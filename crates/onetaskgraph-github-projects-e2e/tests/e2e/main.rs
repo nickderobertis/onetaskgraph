@@ -13,6 +13,7 @@ use onetaskgraph_e2e_support::{common, fixtures};
 
 mod boundary;
 mod copy_cost;
+mod copy_recopy;
 mod fields;
 mod github_status_by_kind;
 mod graph;

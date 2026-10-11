@@ -623,6 +623,23 @@ pub trait TaskSource: Send + Sync {
         Err(commentless(self.kind()))
     }
 
+    /// [`get_task_details`](Self::get_task_details) as a copy reads the tasks it carries: each
+    /// with the first page of its comments `comments` names — and, where the same request can
+    /// carry them, what this source needs to answer [`task_dependencies`](Self::task_dependencies)
+    /// for it without another, since a copy reads every task's edges next.
+    ///
+    /// Defaulted to `get_task_details(ids, Some(comments))`, which is exactly what it answers.
+    /// A source whose detail read is priced by what it selects overrides it with a read that
+    /// also carries the edges, so a copy of a changed task costs its detail read and nothing
+    /// more; one whose reads are free has no reason to.
+    async fn get_task_details_for_copy(
+        &self,
+        ids: &[NativeId],
+        comments: &PageRequest,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        self.get_task_details(ids, Some(comments)).await
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///
