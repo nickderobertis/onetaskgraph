@@ -1,13 +1,15 @@
 //! A task's change token, as every read of the binary reports it.
 //!
 //! The token is the source's promise that nothing in a task changed: its title, body, status,
-//! priority, labels, board fields, metadata, edges and comments. So each journey here changes
-//! one task of a loopback board by exactly one of those kinds — the way a person changes it on
-//! GitHub, through the board's own state — and holds the token to moving to a later one, by
-//! the store's own ordering, while every task the change did not touch keeps the token it had —
-//! a dependency touching both of the tasks it relates, as GitHub records it on both. `docs/plugin-protocol.md` §4.13d states what each plugin's token keys
-//! on; the loopback board models exactly those five parts, and moves neither time for a
-//! dependency or a project membership, as GitHub moves neither for a dependency.
+//! priority, labels, board fields, metadata, project, repository, edges and comments. So each
+//! journey here changes one task of a loopback board by exactly one of those kinds — the way a
+//! person changes it on GitHub, through the board's own state — and holds the token to moving:
+//! to a later one, by the store's own ordering, or for a repository transfer to one the store
+//! does not order at all, while every task the change did not touch keeps the token it had — a
+//! dependency touching both of the tasks it relates, as GitHub records it on both.
+//! `docs/plugin-protocol.md` §4.13d states what each plugin's token keys on; the loopback board
+//! models exactly those five parts, and moves neither time for a dependency or a project
+//! membership, as GitHub moves neither for a dependency.
 
 use std::collections::BTreeMap;
 
@@ -98,7 +100,7 @@ fn ordered(engine: &Engine, item: &str, a: &str, b: &str) -> VersionOrder {
 type Change = Box<dyn Fn(&GitHubBoardFields)>;
 
 #[test]
-fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other() {
+fn every_change_kind_moves_the_changed_tasks_token_and_no_other() {
     let (sandbox, board, engine) = board();
     // Two comments to edit and to delete, made before anything is read.
     let first = board.add_comment("T-3", "the first word");

@@ -923,6 +923,21 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
     .collect()
 }
 
+/// Whether a relationship between two issues was made or taken away.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Which of a relationship's two timeline events the loopback board records, so it is part of `TimelineEvent`'s vocabulary and lives beside it, for the reason recorded on `GitHubBoard` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelationshipChange {
+    Added,
+    Removed,
+}
+
+impl RelationshipChange {
+    /// The change a mutation makes: `added` names the mutation that makes the relationship.
+    const fn made_by(added: bool) -> Self {
+        if added { Self::Added } else { Self::Removed }
+    }
+}
+
 /// One relationship event GitHub records on an issue's timeline: every type this board models,
 /// each spelled as `IssueTimelineItemsItemType` spells it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback board's vocabulary of GitHub timeline events, which only `GitHubBoard` records and counts; the board lives in this shared harness for the reason recorded on `GitHubBoard` itself.
@@ -950,23 +965,21 @@ impl TimelineEvent {
         Self::SubIssueRemoved,
     ];
 
-    /// The event a dependency added or removed records on the blocked issue, and the one it
-    /// records on the blocking issue.
-    const fn dependency(adding: bool) -> (Self, Self) {
-        if adding {
-            (Self::BlockedByAdded, Self::BlockingAdded)
-        } else {
-            (Self::BlockedByRemoved, Self::BlockingRemoved)
+    /// The event a dependency `change` records on the blocked issue, and the one it records on
+    /// the blocking issue.
+    const fn dependency(change: RelationshipChange) -> (Self, Self) {
+        match change {
+            RelationshipChange::Added => (Self::BlockedByAdded, Self::BlockingAdded),
+            RelationshipChange::Removed => (Self::BlockedByRemoved, Self::BlockingRemoved),
         }
     }
 
-    /// The event a project membership added or removed records on the sub-issue, and the one
-    /// it records on its parent.
-    const fn membership(adding: bool) -> (Self, Self) {
-        if adding {
-            (Self::ParentIssueAdded, Self::SubIssueAdded)
-        } else {
-            (Self::ParentIssueRemoved, Self::SubIssueRemoved)
+    /// The event a project membership `change` records on the sub-issue, and the one it
+    /// records on its parent.
+    const fn membership(change: RelationshipChange) -> (Self, Self) {
+        match change {
+            RelationshipChange::Added => (Self::ParentIssueAdded, Self::SubIssueAdded),
+            RelationshipChange::Removed => (Self::ParentIssueRemoved, Self::SubIssueRemoved),
         }
     }
 
@@ -1315,7 +1328,10 @@ impl GitHubBoardFields {
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
         for blocker in blockers {
-            board.record_relationship_event((id, blocker), TimelineEvent::dependency(true));
+            board.record_relationship_event(
+                (id, blocker),
+                TimelineEvent::dependency(RelationshipChange::Added),
+            );
         }
     }
 
@@ -1327,10 +1343,16 @@ impl GitHubBoardFields {
         let mut board = self.board.lock().unwrap();
         let old = board.find(&json!(id))["parent"].as_str().map(str::to_owned);
         if let Some(old) = &old {
-            board.record_relationship_event((id, old), TimelineEvent::membership(false));
+            board.record_relationship_event(
+                (id, old),
+                TimelineEvent::membership(RelationshipChange::Removed),
+            );
         }
         if let Some(parent) = parent {
-            board.record_relationship_event((id, parent), TimelineEvent::membership(true));
+            board.record_relationship_event(
+                (id, parent),
+                TimelineEvent::membership(RelationshipChange::Added),
+            );
         }
         board.find(&json!(id))["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
     }
@@ -1350,7 +1372,10 @@ impl GitHubBoardFields {
         if let Some((_, held)) = board.blocked_by.iter_mut().find(|(near, _)| near == id) {
             held.retain(|held| held != blocker);
         }
-        board.record_relationship_event((id, blocker), TimelineEvent::dependency(false));
+        board.record_relationship_event(
+            (id, blocker),
+            TimelineEvent::dependency(RelationshipChange::Removed),
+        );
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -3393,7 +3418,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 child.as_str().expect("a sub-issue id"),
                 parent.as_str().expect("a parent id"),
             ),
-            TimelineEvent::membership(adding),
+            TimelineEvent::membership(RelationshipChange::made_by(adding)),
         );
         let root = if adding {
             "addSubIssue"
@@ -3438,7 +3463,10 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         // The relationship is the dependent issue's own: GitHub lists it on that issue, and
         // records it on both ends' timelines without moving either's time.
-        board.record_relationship_event((&issue, &blocker), TimelineEvent::dependency(adding));
+        board.record_relationship_event(
+            (&issue, &blocker),
+            TimelineEvent::dependency(RelationshipChange::made_by(adding)),
+        );
         let root = if adding {
             "addBlockedBy"
         } else {
