@@ -662,7 +662,15 @@ impl TaskSource for SubprocessSource {
                         }),
                     )
                     .await
-                    .and_then(TaskDetailResult::into_read),
+                    .and_then(TaskDetailResult::into_read)
+                    .map(|read| {
+                        read.map(|mut read| {
+                            read.comments = read
+                                .comments
+                                .map(|comments| comments.map(|page| page.map(unmarked)));
+                            read
+                        })
+                    }),
                 _ => match self.get_task(id).await {
                     Ok(Some(task)) => {
                         let comments = match comments {
@@ -1211,7 +1219,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.page)
+        Ok(result.page.map(unmarked))
     }
 
     async fn add_comment(
@@ -1228,7 +1236,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.comment)
+        Ok(result.comment.map(Comment::unmarked))
     }
 
     async fn edit_comment(
@@ -1247,7 +1255,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.comment)
+        Ok(result.comment.map(Comment::unmarked))
     }
 
     async fn delete_comment(
@@ -1319,6 +1327,18 @@ impl TaskSource for SubprocessSource {
         }
         let _: IgnoredResult = self.ask("end_command", json!({})).await?;
         Ok(())
+    }
+}
+
+/// A page of comments with each one's origin read back out of the marker its body ends in.
+///
+/// A plugin that keeps an origin natively answers it as `origin` and is left as it answered;
+/// one handed copies through `add_comment` and `edit_comment` (§3.12) stores the marker as body
+/// text, and every comment read from it has the marker taken out again (§4.15).
+fn unmarked(page: Page<Comment>) -> Page<Comment> {
+    Page {
+        items: page.items.into_iter().map(Comment::unmarked).collect(),
+        next: page.next,
     }
 }
 

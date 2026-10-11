@@ -580,6 +580,7 @@ pub(crate) struct TaskDetailParams {
 
 /// The `get_task_detail` result (§4.4a): the task and that page of its comments, read as one
 /// revision of it — both `null` when there is no such task.
+// llmlint: ignore-block[invalid_states_unrepresentable] This is the §4.4a answer as it crosses the wire, where each member is optional so a plugin can omit what it does not hold; the contradictory shapes the decoder admits never leave this module, because `TaskDetailResult::into_read` refuses each of them as malformed before the engine sees a read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TaskDetailResult {
     /// The task, or `null`.
@@ -594,6 +595,7 @@ pub(crate) struct TaskDetailResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) comments_error: Option<SourceError>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 impl TaskDetailResult {
     /// The read the answer states, refused as malformed when its members contradict each other:

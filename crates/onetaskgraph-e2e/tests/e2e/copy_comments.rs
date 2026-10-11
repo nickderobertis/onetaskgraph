@@ -14,6 +14,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
+use crate::document_store::interpreter;
 use crate::fixtures::{
     GITHUB_COMMENTER, GitHubBoardFields, dataset, document, github_projects_with_board,
     linear_workspace,
@@ -525,4 +526,336 @@ fn a_project_copy_with_comments_carries_each_of_its_tasks_comments() {
             "{who}: {flagless:#}"
         );
     }
+}
+
+/// A folder task `notes:A` with three comments, copied once onto the board, then changed in
+/// the folder so the next copy deletes one copy, edits one and adds two: every kind of step.
+/// Answers with the issue it landed as, the board's copy of the edited comment, and what the
+/// board's comments said after the first copy.
+fn changed_after_one_copy(
+    stores: &Stores,
+) -> (String, String, Vec<(String, Option<(String, String)>)>) {
+    stores.note("A", "Written in the folder");
+    stores.comment("notes:A", "kept as written");
+    let edited = stores.comment("notes:A", "about to change");
+    let removed = stores.comment("notes:A", "about to go");
+    let issue = destination(&stores.copy("notes:A", "board"));
+    let held = stores.comments(&issue);
+    let edited_copy = held
+        .iter()
+        .find(|comment| comment["origin"]["id"] == edited.as_str())
+        .and_then(|comment| comment["id"].as_str())
+        .expect("the board holds a copy of the edited comment")
+        .to_owned();
+    // Added before the deletion: a folder numbers a comment by the second it was written in
+    // and the comments it holds from that second, so one added after a deletion in the same
+    // second can take the deleted one's id.
+    stores.comment("notes:A", "a new word");
+    stores.comment("notes:A", "a second new word");
+    stores.edit("notes:A", &edited, "changed in the folder");
+    stores.delete("notes:A", &removed);
+    (issue, edited_copy, said(&held))
+}
+
+#[test]
+fn a_comments_copy_that_fails_part_way_takes_back_every_comment_write_or_names_what_is_left() {
+    for undo_refused in [false, true] {
+        let who = if undo_refused {
+            "undo refused"
+        } else {
+            "undone"
+        };
+        let stores = Stores::new(SourceBoundary::Direct);
+        let (issue, _, before) = changed_after_one_copy(&stores);
+        // The deletion, the edit and the first addition land; the second addition is refused.
+        stores.board.refuse_after("addComment(", 1);
+        if undo_refused {
+            // And taking the edit back is refused too: the forward edit is answered first.
+            stores.board.refuse_after("updateIssueComment(", 1);
+        }
+        let output = stores.run(
+            &["task", "copy", "notes:A", "--to", "board", "--comments"],
+            None,
+        );
+        assert_ne!(output.status.code(), Some(0), "{who}: the copy failed");
+        let refusal = stderr(&output);
+        assert!(refusal.contains("addComment"), "{who}: {refusal}");
+        let after = said(&stores.comments(&issue));
+        if undo_refused {
+            assert!(
+                refusal.contains("could not be undone") && refusal.contains(&issue),
+                "{who}: the refusal names the task still holding what the copy wrote: {refusal}"
+            );
+            assert!(
+                after
+                    .iter()
+                    .any(|(body, origin)| body == "changed in the folder" && origin.is_some()),
+                "{who}: the edit the destination would not take back is still there: {after:#?}"
+            );
+            assert!(
+                !after.iter().any(|(body, _)| body == "a new word"),
+                "{who}: every other write was still taken back: {after:#?}"
+            );
+        } else {
+            assert!(!refusal.contains("could not be undone"), "{who}: {refusal}");
+            assert_eq!(
+                after, before,
+                "{who}: the deleted copy is back, the edit reverted and the addition removed"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_comments_copy_whose_destination_copy_vanishes_before_its_edit_writes_it_afresh() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    let (issue, edited_copy, _) = changed_after_one_copy(&stores);
+    // A person deletes the copy about to be edited, between the copy's plan and its edit:
+    // deletions are written first, so once the board has answered the first one.
+    stores.board.after_request(
+        |document, _| document.contains("deleteIssueComment("),
+        0,
+        move |board| board.delete_comment(&edited_copy),
+    );
+    let followed = stores.copy("notes:A", "board");
+    assert_eq!(counts(&followed), [2, 1, 1, 1], "{followed:#}");
+    let local = stores.comments("notes:A");
+    let origin_of = |body: &str| {
+        let held = local
+            .iter()
+            .find(|comment| comment["body"] == body)
+            .unwrap_or_else(|| panic!("the folder holds {body:?}"));
+        json!({"task": "notes:A", "id": held["id"]})
+    };
+    assert_eq!(
+        said(&stores.comments(&issue)),
+        said(&[
+            json!({"body": "kept as written", "origin": origin_of("kept as written")}),
+            json!({"body": "changed in the folder", "origin": origin_of("changed in the folder")}),
+            json!({"body": "a new word", "origin": origin_of("a new word")}),
+            json!({"body": "a second new word", "origin": origin_of("a second new word")}),
+        ]),
+        "the vanished copy is written again, once, saying what its origin says now"
+    );
+}
+
+#[test]
+fn a_comments_dry_run_reports_what_it_would_write_and_changes_neither_end() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    let (issue, _, _) = changed_after_one_copy(&stores);
+    let folder = stores.file("A");
+    let on_board = stores.comments(&issue);
+    let sent = stores.board.served().len();
+
+    let report = stores.json(&[
+        "task",
+        "copy",
+        "notes:A",
+        "--to",
+        "board",
+        "--comments",
+        "--dry-run",
+    ]);
+    let planned = &report["items"][0];
+    assert_eq!(counts(planned), [2, 1, 1, 1], "{report:#}");
+    assert!(
+        !stores.board.served()[sent..]
+            .iter()
+            .any(|(document, _)| document.trim_start().starts_with("mutation")),
+        "a dry run sends the board no write"
+    );
+    assert_eq!(
+        stores.comments(&issue),
+        on_board,
+        "the board's comments are as they were"
+    );
+    assert_eq!(
+        stores.file("A"),
+        folder,
+        "the folder's file is byte for byte as it was"
+    );
+
+    let copied = stores.copy("notes:A", "board");
+    assert_eq!(
+        counts(&copied),
+        counts(planned),
+        "the copy writes exactly what its dry run reported"
+    );
+}
+
+#[test]
+fn a_comments_copy_into_a_source_holding_no_comments_is_refused_before_anything_is_read() {
+    let sandbox = Sandbox::new();
+    let (board_config, board) = github_projects_with_board(&sandbox);
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let notes = sandbox.subdirectory("notes");
+    std::fs::create_dir_all(notes.join("tasks")).expect("the task folder");
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin": "github-projects", "config": board_config},
+        "memory": {"plugin": "in-memory", "config": {}},
+        // A folder whose tasks hold comments, routing some tasks to a source whose hold none.
+        "notes": {
+            "plugin": "local-md",
+            "config": {"root": notes},
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": "memory"}],
+        },
+    })));
+    for (verb, item, to) in [
+        ("task", "board:T-3", "memory"),
+        ("task", "board:T-3", "notes"),
+        ("project", "board:P-1", "notes"),
+    ] {
+        let who = format!("{verb} copy into {to}");
+        let sent = board.served().len();
+        let mut command = sandbox.command();
+        command.args([verb, "copy", item, "--to", to, "--comments"]);
+        let output = command.assert().get_output().clone();
+        assert_ne!(output.status.code(), Some(0), "{who}");
+        let refusal = stderr(&output);
+        assert!(
+            refusal.contains("--comments cannot carry comments into memory")
+                && refusal.contains("in-memory")
+                && refusal.contains("next:"),
+            "{who}: names the source that holds none, its plugin and what to do: {refusal}"
+        );
+        assert_eq!(
+            board.served().len(),
+            sent,
+            "{who}: refused before the board was asked anything"
+        );
+        assert_eq!(
+            std::fs::read_dir(notes.join("tasks"))
+                .expect("the folder")
+                .count(),
+            0,
+            "{who}: nothing was written"
+        );
+    }
+}
+
+/// A folder of Markdown configured as `old` behind the relay, which strips `task_details` and
+/// `comment_copies` from the host's handshake so it reads as a plugin written before either
+/// existed, and logs every method the engine sends it — beside the board, as `board`.
+fn older_peer() -> (Stores, PathBuf) {
+    let sandbox = Sandbox::new();
+    let (board_config, board) = github_projects_with_board(&sandbox);
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    let old = sandbox.subdirectory("old");
+    std::fs::create_dir_all(old.join("tasks")).expect("the task folder");
+    let log = sandbox.project().join("methods.log");
+    let relay =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/rewriting_relay.py");
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin": "github-projects", "config": board_config},
+        "old": {"plugin": "subprocess", "config": {
+            "command": interpreter().to_string_lossy(),
+            "args": [relay.to_string_lossy()],
+            "settings": {
+                "host": onetaskgraph_e2e_support::source_binary(),
+                "forget": ["task_details", "comment_copies"],
+                "log": log,
+                "kind": "local-md",
+                "config": {"root": old, "status_mapping": {
+                    "todo": "todo", "Todo": "todo", "Doing": "in-progress",
+                    "Shipped": "done", "Done": "done"}},
+            },
+        }},
+    })));
+    (
+        Stores {
+            sandbox,
+            board,
+            notes: old,
+        },
+        log,
+    )
+}
+
+/// The methods the engine sent the older peer since the log was last taken, and empty it.
+fn taken(log: &PathBuf) -> Vec<String> {
+    let sent = std::fs::read_to_string(log).unwrap_or_default();
+    std::fs::write(log, "").expect("the log");
+    sent.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn an_older_peer_is_sent_comment_copies_as_marked_comments_and_read_in_two_calls() {
+    let (stores, log) = older_peer();
+    let first = stores.board.add_comment("T-3", "the first word");
+    let second = stores.board.add_comment("T-3", "the second word");
+
+    // Into the older peer: each copy goes as an ordinary comment carrying the marker.
+    let landed = stores.copy("board:T-3", "old");
+    assert_eq!(counts(&landed), [2, 0, 0, 0], "{landed:#}");
+    let task = destination(&landed);
+    let sent = taken(&log);
+    for never in ["write_comment_copy", "get_task_detail"] {
+        assert!(
+            !sent.iter().any(|method| method == never),
+            "a peer that did not declare it is never sent {never}: {sent:?}"
+        );
+    }
+    assert!(
+        sent.iter().any(|method| method == "add_comment"),
+        "{sent:?}"
+    );
+    assert!(
+        stores
+            .file(native(&task))
+            .contains("onetaskgraph.comment_origin"),
+        "the origin travels as the marker in the body the peer stores"
+    );
+    assert_eq!(
+        said(&stores.comments(&task)),
+        said(&[
+            json!({"body": "the first word", "origin": {"task": "board:T-3", "id": first}}),
+            json!({"body": "the second word", "origin": {"task": "board:T-3", "id": second}}),
+        ]),
+        "and is read back out of it as the origin, the body as the board wrote it"
+    );
+
+    // An edit at the board edits the copy through the peer's own edit, marker kept.
+    stores.board.edit_comment(&first, "the first word, edited");
+    taken(&log);
+    let followed = stores.copy("board:T-3", "old");
+    assert_eq!(counts(&followed), [0, 1, 0, 1], "{followed:#}");
+    let sent = taken(&log);
+    assert!(
+        sent.iter().any(|method| method == "edit_comment"),
+        "{sent:?}"
+    );
+    assert!(
+        !sent.iter().any(|method| method == "write_comment_copy"),
+        "{sent:?}"
+    );
+    assert_eq!(
+        said(&stores.comments(&task)),
+        said(&[
+            json!({"body": "the first word, edited",
+                   "origin": {"task": "board:T-3", "id": first}}),
+            json!({"body": "the second word", "origin": {"task": "board:T-3", "id": second}}),
+        ])
+    );
+
+    // Out of the older peer: its task and its comments are read in two calls, and only the
+    // comment written there goes back — none of the board's own is echoed.
+    let local = stores.comment(&task, "written behind the older peer");
+    taken(&log);
+    let back = stores.copy(&task, "board");
+    assert_eq!(back["destination"], "board:T-3", "{back:#}");
+    assert_eq!(counts(&back)[..3], [1, 0, 0], "{back:#}");
+    let sent = taken(&log);
+    assert!(
+        sent.iter().any(|method| method == "get_task")
+            && sent.iter().any(|method| method == "task_comments")
+            && !sent.iter().any(|method| method == "get_task_detail"),
+        "the task and its comments are read through the two methods the peer answers: {sent:?}"
+    );
+    assert!(
+        said(&stores.comments("board:T-3")).contains(&(
+            "written behind the older peer".to_owned(),
+            Some((task.clone(), local))
+        )),
+        "the peer's own comment lands on the board with its origin"
+    );
 }

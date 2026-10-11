@@ -1032,6 +1032,13 @@ them do; this is the inventory of what is owed, not a status board.
 97. A repeat copy by query of twenty of eighty board tasks sends four listing pages and nothing
     else, and after five changed, those pages and one batched read carrying their comments and
     their edges; both are written to the GitHub Projects suite's telemetry.
+98. A `--comments` copy refused part way takes back every comment write it made — a deleted copy
+    written again, an edit reverted, an addition removed — or names the task still holding one
+    the destination would not take back; one into a source whose tasks hold no comments, named
+    or routed to, is refused before anything is read; a copy deleted at the destination before
+    its edit is written afresh; a dry run counts what the copy then writes and sends no write;
+    and a stdio peer predating `comment_copies` and `task_details` is sent each copy as a marked
+    comment, never the methods it did not declare, and reads back every origin.
 
 ## The public boundary
 
