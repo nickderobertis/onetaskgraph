@@ -2871,8 +2871,9 @@ fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
 
 /// Refuse an author the section cannot hold on one heading line.
 /// Refuse an origin the origin line cannot record so that it reads back as given: one naming
-/// no qualified task, which reads back as no origin at all, and an id or an address holding a
-/// line break or another control character, which would end the line part way through it.
+/// no qualified task, which reads back as no origin at all, and a task, an id or an address
+/// holding a line break or another control character, which would end the line part way
+/// through it.
 fn representable_origin(origin: &CommentOrigin) -> Result<(), SourceError> {
     if !CommentOrigin::is_qualified_task(&origin.task) {
         return Err(SourceError::Refused {
@@ -2885,6 +2886,7 @@ fn representable_origin(origin: &CommentOrigin) -> Result<(), SourceError> {
         });
     }
     for (what, value) in [
+        ("task", Some(origin.task.as_str())),
         ("id", Some(origin.id.as_str())),
         ("address", origin.url.as_deref()),
     ] {

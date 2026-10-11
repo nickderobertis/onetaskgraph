@@ -684,6 +684,13 @@ async fn an_origin_the_origin_line_cannot_record_is_refused_and_nothing_is_writt
         ),
         (
             onetaskgraph_plugin_api::CommentOrigin {
+                task: "board:I_\nkw1".to_owned(),
+                ..board_origin("2026-09-01T00:00:02Z")
+            },
+            "origin task",
+        ),
+        (
+            onetaskgraph_plugin_api::CommentOrigin {
                 id: id("IC\n7"),
                 ..board_origin("2026-09-01T00:00:02Z")
             },
