@@ -54,6 +54,10 @@ enum Mode {
     Oversized,
     /// Every page past the first naming, as the page after it, the very cursor it was read at.
     RepeatingCursor,
+    /// Every page past the first answered about another task.
+    AnotherTask,
+    /// Every read answered with one detail more than it asked for.
+    OneTooMany,
 }
 
 /// An in-memory source whose detail reads answer as [`Mode`] says, and which counts them.
@@ -185,7 +189,8 @@ impl TaskSource for Unsteady {
         let mode = *self.mode.lock().expect("the mode");
         let later_page = comments.is_some_and(|page| page.cursor.is_some());
         let asked = comments.and_then(|page| page.cursor.clone());
-        self.inner
+        let mut answered = self
+            .inner
             .get_task_details(ids, comments)
             .await
             .into_iter()
@@ -207,6 +212,10 @@ impl TaskSource for Unsteady {
                         }
                         Some(detail)
                     }
+                    (Mode::AnotherTask, Some(mut detail)) if later_page => {
+                        detail.task.id = NativeId("T-ELSEWHERE".to_owned());
+                        Some(detail)
+                    }
                     (Mode::RepeatingCursor, Some(mut detail)) if later_page => {
                         if let Some(Ok(Some(page))) = &mut detail.comments {
                             page.next = asked.clone();
@@ -216,7 +225,11 @@ impl TaskSource for Unsteady {
                     (_, detail) => detail,
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if mode == Mode::OneTooMany {
+            answered.push(Ok(None));
+        }
+        answered
     }
 }
 
@@ -373,6 +386,14 @@ async fn a_source_paging_its_comments_past_what_was_asked_or_in_a_circle_is_refu
     for (misreads, refusal) in [
         (Mode::Oversized, "never more"),
         (Mode::RepeatingCursor, "the walk would never end"),
+        (
+            Mode::AnotherTask,
+            "answered a read of task T-1 with task T-ELSEWHERE",
+        ),
+        (
+            Mode::OneTooMany,
+            "answered 2 details for one read of task T-1",
+        ),
     ] {
         let (from, mode, detail_reads) = unsteady("from", &commented());
         let (into, _, _) = unsteady("into", &empty());

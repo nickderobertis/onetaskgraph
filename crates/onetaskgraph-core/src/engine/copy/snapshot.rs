@@ -57,12 +57,44 @@ pub(super) async fn first(
     source: &ResolvedSource,
     id: &NativeId,
 ) -> Result<Option<TaskDetailRead>, SourceError> {
-    source
+    let answers = source
         .source()
         .get_task_details_for_copy(std::slice::from_ref(id), &comment_page(source))
-        .await
-        .pop()
-        .unwrap_or(Ok(None))
+        .await;
+    single(id, answers)
+}
+
+/// The one answer a detail read of `id` alone owes: refused as malformed when the source gave
+/// any other number of them, or answered about another task — either would put some other
+/// read's content under `id`.
+fn single(
+    id: &NativeId,
+    mut answers: Vec<Result<Option<TaskDetailRead>, SourceError>>,
+) -> Result<Option<TaskDetailRead>, SourceError> {
+    if answers.len() != 1 {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "the source answered {} details for one read of task {id}",
+                answers.len()
+            ),
+        });
+    }
+    let answer = answers.pop().expect("exactly one answer")?;
+    about(id, answer.as_ref())?;
+    Ok(answer)
+}
+
+/// Refuse a detail answered about another task than `id`.
+fn about(id: &NativeId, read: Option<&TaskDetailRead>) -> Result<(), SourceError> {
+    match read {
+        Some(read) if read.task.id != *id => Err(SourceError::Malformed {
+            message: format!(
+                "the source answered a read of task {id} with task {}",
+                read.task.id
+            ),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Finish reading `id` from the detail read `read` answered with: every further page of its
@@ -79,6 +111,8 @@ pub(super) async fn take(
     id: &NativeId,
     read: TaskDetailRead,
 ) -> Result<Taken, SourceError> {
+    // A batched read answered ahead of this one is held to its id here, as `first` holds its own.
+    about(id, Some(&read))?;
     let TaskDetailRead { task, comments } = read;
     let page = match comments {
         None => return Err(commentless(id)),
@@ -97,12 +131,13 @@ pub(super) async fn take(
             cursor: Some(cursor.clone()),
             limit,
         };
-        let answer = source
-            .source()
-            .get_task_details(std::slice::from_ref(id), Some(&request))
-            .await
-            .pop()
-            .unwrap_or(Ok(None))?;
+        let answer = single(
+            id,
+            source
+                .source()
+                .get_task_details(std::slice::from_ref(id), Some(&request))
+                .await,
+        )?;
         let Some(later) = answer else {
             return Ok(Taken::Gone);
         };
