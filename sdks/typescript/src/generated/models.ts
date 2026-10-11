@@ -577,6 +577,12 @@ export namespace GeneratedCopyAction {
 export type CopyAction = ({
 action: "created"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * The id it was created under, or `null` for a dry run that would have created
  * one — there is no id, because nothing was.
  */
@@ -595,6 +601,12 @@ via?: "created"
 } | {
 action: "updated"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
@@ -612,6 +624,12 @@ via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
+/**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy found unchanged, a skipped one's included, and absent for a
+ * copy without it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
 /**
  * One item, qualified by the source it came from.
  *
@@ -668,6 +686,35 @@ export type CopyLink = ("recorded" | "unchanged" | "unrecorded" | "skipped")
 export type SourceName = string
 
 /**
+ * What a `--comments` copy did to one task's comments at the destination.
+ *
+ * Every figure counts comments of the *source*: one added is a source comment the
+ * destination held no copy of, one edited is a copy brought back in step with its origin
+ * comment, one deleted is a copy whose origin comment the source no longer holds, and one
+ * unchanged is a copy that already read as its origin. A comment native to the destination
+ * is never counted, because a copy never touches it, and neither is a source comment that is
+ * a copy of one of the destination's own, because it is never sent back.
+ */
+export interface CommentCounts {
+/**
+ * Copies the copy created.
+ */
+added: number
+/**
+ * Copies the copy deleted.
+ */
+deleted: number
+/**
+ * Copies the copy edited.
+ */
+edited: number
+/**
+ * Copies that already read as their origin comments.
+ */
+unchanged: number
+[k: string]: any
+}
+/**
  * Why, in the failure document every verb reports a failure in.
  */
 export interface Failure {
@@ -719,12 +766,6 @@ export namespace GeneratedCopyOutcome {
  */
 export type CopyOutcome = ({
 /**
- * What the copy did to the task's comments at the destination — present for every task
- * a `--comments` copy landed or found unchanged, a dry run's included, and absent for a
- * copy without it, for a project and a document, and for an orphan or a failed item.
- */
-comments?: (CommentCounts | null)
-/**
  * Which source a routed copy placed it in, and the index of the route entry that
  * matched — `null` there when none did.
  *
@@ -745,6 +786,12 @@ source: string
 } & ({
 action: "created"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * The id it was created under, or `null` for a dry run that would have created
  * one — there is no id, because nothing was.
  */
@@ -763,6 +810,12 @@ via?: "created"
 } | {
 action: "updated"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
@@ -780,6 +833,12 @@ via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
+/**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy found unchanged, a skipped one's included, and absent for a
+ * copy without it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
 /**
  * One item, qualified by the source it came from.
  *
@@ -836,6 +895,24 @@ export type CopyLink = ("recorded" | "unchanged" | "unrecorded" | "skipped")
 export type SourceName = string
 
 /**
+ * Where one item written to a source lands, and which of its routes put it there.
+ *
+ * `route` is always written, `null` included: a reader of a routed copy's report is told
+ * that no entry matched rather than left to infer it from an absent key.
+ */
+export interface Placement {
+/**
+ * The name a configuration document gives one configured source.
+ */
+destination: string
+/**
+ * The index of the route entry that matched, or `None` when none did and the item
+ * stays in the source itself.
+ */
+route?: (number | null)
+[k: string]: any
+}
+/**
  * What a `--comments` copy did to one task's comments at the destination.
  *
  * Every figure counts comments of the *source*: one added is a source comment the
@@ -862,24 +939,6 @@ edited: number
  * Copies that already read as their origin comments.
  */
 unchanged: number
-[k: string]: any
-}
-/**
- * Where one item written to a source lands, and which of its routes put it there.
- *
- * `route` is always written, `null` included: a reader of a routed copy's report is told
- * that no entry matched rather than left to infer it from an absent key.
- */
-export interface Placement {
-/**
- * The name a configuration document gives one configured source.
- */
-destination: string
-/**
- * The index of the route entry that matched, or `None` when none did and the item
- * stays in the source itself.
- */
-route?: (number | null)
 [k: string]: any
 }
 /**
@@ -999,12 +1058,6 @@ export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-prog
  */
 export type CopyOutcome = ({
 /**
- * What the copy did to the task's comments at the destination — present for every task
- * a `--comments` copy landed or found unchanged, a dry run's included, and absent for a
- * copy without it, for a project and a document, and for an orphan or a failed item.
- */
-comments?: (CommentCounts | null)
-/**
  * Which source a routed copy placed it in, and the index of the route entry that
  * matched — `null` there when none did.
  *
@@ -1026,6 +1079,12 @@ source: string
 export type CopyOutcome1 = ({
 action: "created"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * The id it was created under, or `null` for a dry run that would have created
  * one — there is no id, because nothing was.
  */
@@ -1044,6 +1103,12 @@ via?: "created"
 } | {
 action: "updated"
 /**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy landed, a dry run's included, and absent for a copy without
+ * it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
+/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
@@ -1061,6 +1126,12 @@ via: ("link" | "origin" | "scan" | "match")
 [k: string]: any
 } | {
 action: "unchanged"
+/**
+ * What the copy did to the task's comments at the destination — present for every
+ * task a `--comments` copy found unchanged, a skipped one's included, and absent for a
+ * copy without it and for a project and a document.
+ */
+comments?: (CommentCounts | null)
 /**
  * One item, qualified by the source it came from.
  *
@@ -1206,6 +1277,24 @@ source: (SourceName | null)
 [k: string]: any
 }
 /**
+ * Where one item written to a source lands, and which of its routes put it there.
+ *
+ * `route` is always written, `null` included: a reader of a routed copy's report is told
+ * that no entry matched rather than left to infer it from an absent key.
+ */
+export interface Placement {
+/**
+ * The name a configuration document gives one configured source.
+ */
+destination: string
+/**
+ * The index of the route entry that matched, or `None` when none did and the item
+ * stays in the source itself.
+ */
+route?: (number | null)
+[k: string]: any
+}
+/**
  * What a `--comments` copy did to one task's comments at the destination.
  *
  * Every figure counts comments of the *source*: one added is a source comment the
@@ -1232,24 +1321,6 @@ edited: number
  * Copies that already read as their origin comments.
  */
 unchanged: number
-[k: string]: any
-}
-/**
- * Where one item written to a source lands, and which of its routes put it there.
- *
- * `route` is always written, `null` included: a reader of a routed copy's report is told
- * that no entry matched rather than left to infer it from an absent key.
- */
-export interface Placement {
-/**
- * The name a configuration document gives one configured source.
- */
-destination: string
-/**
- * The index of the route entry that matched, or `None` when none did and the item
- * stays in the source itself.
- */
-route?: (number | null)
 [k: string]: any
 }
 /**

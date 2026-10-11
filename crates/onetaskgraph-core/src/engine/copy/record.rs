@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{DependencyEdge, MetadataKey, SourceName, Task};
 use serde_json::Value;
 
-use crate::template::answers_digest;
+use crate::template::{Sha256Digest, answers_digest};
 
 use super::super::delivery::targets;
 
@@ -41,7 +41,7 @@ pub(super) struct Record {
     /// Whether the copy carried the task's comments.
     pub(super) with_comments: bool,
     /// The destination task's digest as the copy left it.
-    pub(super) digest: String,
+    pub(super) digest: Sha256Digest,
 }
 
 impl Record {
@@ -64,7 +64,7 @@ impl Record {
         }
         metadata.insert(
             MetadataKey::COPIED_DESTINATION_VERSION_KEY.to_owned(),
-            Value::String(self.digest.clone()),
+            Value::String(self.digest.to_string()),
         );
     }
 
@@ -102,7 +102,7 @@ pub(super) fn digest(
     edges: &[DependencyEdge],
     comments: Option<Vec<Value>>,
     destination: &SourceName,
-) -> String {
+) -> Sha256Digest {
     let as_json =
         |value: serde_json::Result<Value>| value.expect("a contract type renders as JSON");
     let mut ends: Vec<Value> = edges
@@ -167,7 +167,7 @@ pub(super) fn digest(
             Value::Array(super::comments::ordered(comments)),
         );
     }
-    answers_digest(&fields)
+    Sha256Digest::parse(answers_digest(&fields)).expect("a canonical digest spells sha256")
 }
 
 /// Whether a copy may skip a task whose source gives `version` and whose destination
@@ -177,7 +177,7 @@ pub(super) fn skips(
     version: Option<&str>,
     with_comments: bool,
     metadata: &BTreeMap<String, Value>,
-    now: &str,
+    now: &Sha256Digest,
 ) -> bool {
     let Some(version) = version else {
         return false;
@@ -190,5 +190,5 @@ pub(super) fn skips(
         && metadata
             .get(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
             .and_then(Value::as_str)
-            == Some(now)
+            == Some(now.as_str())
 }

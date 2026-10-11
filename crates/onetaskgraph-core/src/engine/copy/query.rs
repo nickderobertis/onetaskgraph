@@ -41,7 +41,6 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
             error: Failure::from(error),
         },
         placed: None,
-        comments: None,
     }
 }
 
@@ -169,9 +168,9 @@ impl Engine {
                 via: found.via(),
                 link: None,
                 skipped: true,
+                comments: counts,
             },
             placed: None,
-            comments: counts,
         }))
     }
 }

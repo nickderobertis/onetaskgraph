@@ -210,12 +210,6 @@ class Placement(BaseModel):
 
 
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
-    comments: Annotated[
-        CommentCounts | None,
-        Field(
-            description="What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-        ),
-    ] = None
     placed: Annotated[
         Placement | None,
         Field(
@@ -224,6 +218,12 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["created"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[
         GlobalId | None,
         Field(
@@ -245,12 +245,6 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
 
 
 class CopyOutcomeUpdated(BaseModel):
-    comments: Annotated[
-        CommentCounts | None,
-        Field(
-            description="What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-        ),
-    ] = None
     placed: Annotated[
         Placement | None,
         Field(
@@ -259,6 +253,12 @@ class CopyOutcomeUpdated(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["updated"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
     link: Annotated[
         CopyLink | None,
@@ -268,12 +268,6 @@ class CopyOutcomeUpdated(BaseModel):
 
 
 class CopyOutcomeUnchanged(BaseModel):
-    comments: Annotated[
-        CommentCounts | None,
-        Field(
-            description="What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-        ),
-    ] = None
     placed: Annotated[
         Placement | None,
         Field(
@@ -282,6 +276,12 @@ class CopyOutcomeUnchanged(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["unchanged"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
     link: Annotated[
         CopyLink | None,
@@ -297,12 +297,6 @@ class CopyOutcomeUnchanged(BaseModel):
 
 
 class CopyOutcomeOrphaned(BaseModel):
-    comments: Annotated[
-        CommentCounts | None,
-        Field(
-            description="What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-        ),
-    ] = None
     placed: Annotated[
         Placement | None,
         Field(
@@ -315,12 +309,6 @@ class CopyOutcomeOrphaned(BaseModel):
 
 
 class CopyOutcomeFailed(BaseModel):
-    comments: Annotated[
-        CommentCounts | None,
-        Field(
-            description="What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-        ),
-    ] = None
     placed: Annotated[
         Placement | None,
         Field(

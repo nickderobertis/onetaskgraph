@@ -619,6 +619,7 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
             destination: None,
             via: onetaskgraph_core::NoCounterpart::Created,
             link: None,
+            comments: None,
         }
     );
     assert!(listed(&engine, "into").await.is_empty());

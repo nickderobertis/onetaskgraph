@@ -427,11 +427,6 @@ pub struct CopyOutcome {
     /// not placed at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Placement>,
-    /// What the copy did to the task's comments at the destination — present for every task
-    /// a `--comments` copy landed or found unchanged, a dry run's included, and absent for a
-    /// copy without it, for a project and a document, and for an orphan or a failed item.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comments: Option<CommentCounts>,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -514,6 +509,12 @@ impl CopyOutcome {
     pub fn destination(&self) -> Option<&GlobalId> {
         self.action.destination()
     }
+
+    /// What the copy did to the task's comments at the destination, when it carried them.
+    #[must_use]
+    pub fn comments(&self) -> Option<&CommentCounts> {
+        self.action.comments()
+    }
 }
 
 /// The four things a copy can do to one item, and the id each of them is about.
@@ -543,6 +544,11 @@ pub enum CopyAction {
         // for none of a dry run's, which `a_dry_run_says_which_rule_would_answer_and_records_no_link`
         // and every `link` assertion in tests/copy_link.rs drive.
         link: Option<CopyLink>,
+        /// What the copy did to the task's comments at the destination — present for every
+        /// task a `--comments` copy landed, a dry run's included, and absent for a copy without
+        /// it and for a project and a document.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comments: Option<CommentCounts>,
     },
     /// The destination held a counterpart and it now reads as the source does.
     Updated {
@@ -554,6 +560,11 @@ pub enum CopyAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         // llmlint: ignore[invalid_states_unrepresentable] As `link` on `Created` above.
         link: Option<CopyLink>,
+        /// What the copy did to the task's comments at the destination — present for every
+        /// task a `--comments` copy landed, a dry run's included, and absent for a copy without
+        /// it and for a project and a document.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comments: Option<CommentCounts>,
     },
     /// The destination held a counterpart that already read that way; nothing of the item
     /// was written.
@@ -576,6 +587,11 @@ pub enum CopyAction {
         /// the copy left it. `false` for an item read and compared.
         #[serde(default)]
         skipped: bool,
+        /// What the copy did to the task's comments at the destination — present for every
+        /// task a `--comments` copy found unchanged, a skipped one's included, and absent for a
+        /// copy without it and for a project and a document.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comments: Option<CommentCounts>,
     },
     /// The destination holds a counterpart the source no longer does. A copy never
     /// deletes, so it was left exactly as it is — and no rule was asked where it goes, and
@@ -626,6 +642,18 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
+            Self::Orphaned { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    /// What a `--comments` copy did to the task's comments, or `None` for a copy without it, a
+    /// project, a document, an orphan and a failed item.
+    #[must_use]
+    pub fn comments(&self) -> Option<&CommentCounts> {
+        match self {
+            Self::Created { comments, .. }
+            | Self::Updated { comments, .. }
+            | Self::Unchanged { comments, .. } => comments.as_ref(),
             Self::Orphaned { .. } | Self::Failed { .. } => None,
         }
     }
@@ -1789,7 +1817,17 @@ impl Engine {
         // back, so the first refusal carries the first id and neither half can be
         // recorded without the other.
         let mut unrestored: Option<(LeftBehind, SourceError)> = None;
-        // The comments next to last, in reverse: each was written after the item it is on.
+        // The links first, because they were written last: once the whole copy had landed.
+        for entry in journal.links.iter().rev() {
+            if let Err(problem) = self.unlink(entry).await {
+                match &mut unrestored {
+                    Some((left_behind, _)) => left_behind.push(entry.item.clone()),
+                    None => unrestored = Some((LeftBehind::new(entry.item.clone()), problem)),
+                }
+            }
+        }
+        // The comments next, in reverse: each was written after the item it is on, and before
+        // the links.
         for entry in journal.comments.iter().rev() {
             let outcome = match self.writable(&entry.at) {
                 Err(failed) => Err(SourceError::Refused {
@@ -1818,15 +1856,6 @@ impl Engine {
                 match &mut unrestored {
                     Some((left_behind, _)) => left_behind.push(id),
                     None => unrestored = Some((LeftBehind::new(id), problem)),
-                }
-            }
-        }
-        // The links first, because they were written last: once the whole copy had landed.
-        for entry in journal.links.iter().rev() {
-            if let Err(problem) = self.unlink(entry).await {
-                match &mut unrestored {
-                    Some((left_behind, _)) => left_behind.push(entry.item.clone()),
-                    None => unrestored = Some((LeftBehind::new(entry.item.clone()), problem)),
                 }
             }
         }
@@ -2374,12 +2403,14 @@ impl Engine {
                     via,
                     link,
                     skipped: false,
+                    comments: None,
                 }
             } else {
                 CopyAction::Updated {
                     destination: landed,
                     via,
                     link,
+                    comments: None,
                 }
             };
         }
@@ -2974,7 +3005,6 @@ impl Engine {
                         destination: GlobalId::new(destination.name().clone(), task.id.clone()),
                     },
                     placed: None,
-                    comments: None,
                 });
             }
             unrepeated(
@@ -4159,34 +4189,37 @@ impl Engine {
         };
         // Every link is settled once the whole copy has landed, by `Engine::link`, so none
         // is known here.
+        let comments = if item.skipped {
+            item.with_comments
+                .then(|| skipped_counts(item.held.as_ref()))
+        } else {
+            item.comment_plan.as_ref().map(|plan| plan.counts)
+        };
         let reached = |destination: Option<GlobalId>, changed: bool| match (found, destination) {
             (Some(via), Some(destination)) if changed => CopyAction::Updated {
                 destination,
                 via: via.via(),
                 link: None,
+                comments,
             },
             (Some(via), Some(destination)) => CopyAction::Unchanged {
                 destination,
                 via: via.via(),
                 link: None,
                 skipped: item.skipped,
+                comments,
             },
             (_, destination) => CopyAction::Created {
                 destination,
                 via: NoCounterpart::Created,
                 link: None,
+                comments,
             },
         };
         let outcome = |action: CopyAction| CopyOutcome {
             source: item.source.clone(),
             action,
             placed: item.placed.clone(),
-            comments: if item.skipped {
-                item.with_comments
-                    .then(|| skipped_counts(item.held.as_ref()))
-            } else {
-                item.comment_plan.as_ref().map(|plan| plan.counts)
-            },
         };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to

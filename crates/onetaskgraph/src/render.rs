@@ -508,7 +508,7 @@ pub fn copied(report: &CopyReport) -> String {
                     });
                 }
                 // Only a `--comments` copy touches comments, so only its rows count them.
-                if let Some(comments) = &outcome.comments {
+                if let Some(comments) = outcome.comments() {
                     row.push(format!(
                         "comments: {} added, {} edited, {} deleted, {} unchanged",
                         comments.added, comments.edited, comments.deleted, comments.unchanged

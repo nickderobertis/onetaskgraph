@@ -736,6 +736,42 @@ export const runtimeSchemas = {
   },
   "CopyAction": {
     "$defs": {
+      "CommentCounts": {
+        "description": "What a `--comments` copy did to one task's comments at the destination.\n\nEvery figure counts comments of the *source*: one added is a source comment the\ndestination held no copy of, one edited is a copy brought back in step with its origin\ncomment, one deleted is a copy whose origin comment the source no longer holds, and one\nunchanged is a copy that already read as its origin. A comment native to the destination\nis never counted, because a copy never touches it, and neither is a source comment that is\na copy of one of the destination's own, because it is never sent back.",
+        "properties": {
+          "added": {
+            "description": "Copies the copy created.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deleted": {
+            "description": "Copies the copy deleted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edited": {
+            "description": "Copies the copy edited.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unchanged": {
+            "description": "Copies that already read as their origin comments.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "edited",
+          "deleted",
+          "unchanged"
+        ],
+        "type": "object"
+      },
       "CopyLink": {
         "description": "What a copy did to the `onetaskgraph.copies` entry the copied item holds for the\ndestination.",
         "oneOf": [
@@ -876,6 +912,17 @@ export const runtimeSchemas = {
             "const": "created",
             "type": "string"
           },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+          },
           "destination": {
             "anyOf": [
               {
@@ -916,6 +963,17 @@ export const runtimeSchemas = {
             "const": "updated",
             "type": "string"
           },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+          },
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that was updated."
@@ -949,6 +1007,17 @@ export const runtimeSchemas = {
           "action": {
             "const": "unchanged",
             "type": "string"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
           },
           "destination": {
             "$ref": "#/$defs/GlobalId",
@@ -1248,6 +1317,17 @@ export const runtimeSchemas = {
             "const": "created",
             "type": "string"
           },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+          },
           "destination": {
             "anyOf": [
               {
@@ -1288,6 +1368,17 @@ export const runtimeSchemas = {
             "const": "updated",
             "type": "string"
           },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+          },
           "destination": {
             "$ref": "#/$defs/GlobalId",
             "description": "The item that was updated."
@@ -1321,6 +1412,17 @@ export const runtimeSchemas = {
           "action": {
             "const": "unchanged",
             "type": "string"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
           },
           "destination": {
             "$ref": "#/$defs/GlobalId",
@@ -1392,17 +1494,6 @@ export const runtimeSchemas = {
       }
     ],
     "properties": {
-      "comments": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/CommentCounts"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "description": "What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-      },
       "placed": {
         "anyOf": [
           {
@@ -1528,6 +1619,17 @@ export const runtimeSchemas = {
                 "const": "created",
                 "type": "string"
               },
+              "comments": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CommentCounts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+              },
               "destination": {
                 "anyOf": [
                   {
@@ -1568,6 +1670,17 @@ export const runtimeSchemas = {
                 "const": "updated",
                 "type": "string"
               },
+              "comments": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CommentCounts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+              },
               "destination": {
                 "$ref": "#/$defs/GlobalId",
                 "description": "The item that was updated."
@@ -1601,6 +1714,17 @@ export const runtimeSchemas = {
               "action": {
                 "const": "unchanged",
                 "type": "string"
+              },
+              "comments": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CommentCounts"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
               },
               "destination": {
                 "$ref": "#/$defs/GlobalId",
@@ -1672,17 +1796,6 @@ export const runtimeSchemas = {
           }
         ],
         "properties": {
-          "comments": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/CommentCounts"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "What the copy did to the task's comments at the destination — present for every task\na `--comments` copy landed or found unchanged, a dry run's included, and absent for a\ncopy without it, for a project and a document, and for an orphan or a failed item."
-          },
           "placed": {
             "anyOf": [
               {
