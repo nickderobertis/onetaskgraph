@@ -18,19 +18,46 @@ because the engine spawns it with a cleared environment (§3.1) through whicheve
 `python` the host has.
 """
 
+# llmlint: ignore-file[async_typed_clients_at_boundaries] The protocol is one request and then
+# its answer (§2), so this relay holds exactly one line in flight at a time: it writes a request
+# to the host, reads that request's answer, and only then reads the engine's next line. There is
+# nothing to overlap, and an event loop would add a dependency on the host's `asyncio` behaviour
+# to a script the engine spawns with a cleared environment (§3.1) for no request it could serve
+# sooner.
+
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 
-RELAY_KEYS = ("host", "after", "skip", "file", "text")
+
+@dataclass(frozen=True)
+class Rewrite:
+    """The relay's own settings, taken out of the `initialize` request before it is forwarded."""
+
+    host: str
+    after: str
+    skip: int
+    file: str
+    text: str
+
+    @classmethod
+    def taken_from(cls, settings):
+        """Remove the relay's members from `settings`, leaving what the host is initialized with."""
+        return cls(
+            host=str(settings.pop("host")),
+            after=str(settings.pop("after")),
+            skip=int(settings.pop("skip")),
+            file=str(settings.pop("file")),
+            text=str(settings.pop("text")),
+        )
 
 
 def main():
     first = json.loads(sys.stdin.readline())
-    settings = first["params"]["config"]
-    relay = {key: settings.pop(key) for key in RELAY_KEYS}
+    rewrite = Rewrite.taken_from(first["params"]["config"])
     host = subprocess.Popen(
-        [relay["host"]],
+        [rewrite.host],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         universal_newlines=True,
@@ -42,18 +69,17 @@ def main():
     def relayed(line):
         host.stdin.write(line)
         host.stdin.flush()
-        answer = host.stdout.readline()
-        return answer
+        return host.stdout.readline()
 
     sys.stdout.write(relayed(json.dumps(first) + "\n"))
     sys.stdout.flush()
     for line in sys.stdin:
         method = json.loads(line).get("method")
         answer = relayed(line)
-        if method == relay["after"] and not written:
-            if answered == relay["skip"]:
-                with open(relay["file"], "w", encoding="utf-8", newline="\n") as rewritten:
-                    rewritten.write(relay["text"])
+        if method == rewrite.after and not written:
+            if answered == rewrite.skip:
+                with open(rewrite.file, "w", encoding="utf-8", newline="\n") as rewritten:
+                    rewritten.write(rewrite.text)
                 written = True
             answered += 1
         sys.stdout.write(answer)
