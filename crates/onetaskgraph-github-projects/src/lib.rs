@@ -1759,14 +1759,6 @@ fn seconds(duration: Duration) -> String {
     format!("{:.1}s", duration.as_secs_f64())
 }
 
-/// A header GitHub spells as a whole number of seconds, or `None` when this one is not.
-///
-/// A value that is present and unreadable is deliberately *not* an error. `retry-after` is
-/// allowed by HTTP to be a date rather than a count, an intermediary can rewrite either
-/// header, and neither is what makes a response a refusal — so the whole cost of one this
-/// cannot read is that the refusal carries no hint and the backing-off schedule answers it
-/// instead. Refusing the response over the header would turn a readable refusal into an
-/// unreadable one, and refusing to *wait* would be the one wrong direction to fail in.
 /// The member [`stamp_served`] writes onto every node of a response that says when it last
 /// changed: the `Date` that response was served at. No GitHub type has a field of this name.
 const SERVED_AT: &str = "onetaskgraphServedAt";
@@ -1793,6 +1785,14 @@ fn stamp_served(data: &mut Value, served: &str) {
     }
 }
 
+/// A header GitHub spells as a whole number of seconds, or `None` when this one is not.
+///
+/// A value that is present and unreadable is deliberately *not* an error. `retry-after` is
+/// allowed by HTTP to be a date rather than a count, an intermediary can rewrite either
+/// header, and neither is what makes a response a refusal — so the whole cost of one this
+/// cannot read is that the refusal carries no hint and the backing-off schedule answers it
+/// instead. Refusing the response over the header would turn a readable refusal into an
+/// unreadable one, and refusing to *wait* would be the one wrong direction to fail in.
 fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
     value
         .and_then(|value| value.to_str().ok())

@@ -2869,7 +2869,6 @@ fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
     Ok(())
 }
 
-/// Refuse an author the section cannot hold on one heading line.
 /// Refuse an origin the origin line cannot record so that it reads back as given: one naming
 /// no qualified task, which reads back as no origin at all, and a task, an id or an address
 /// holding a line break or another control character, which would end the line part way
@@ -2903,6 +2902,7 @@ fn representable_origin(origin: &CommentOrigin) -> Result<(), SourceError> {
     Ok(())
 }
 
+/// Refuse an author the section cannot hold on one heading line.
 fn representable_author(author: &str) -> Result<(), SourceError> {
     if author.trim().is_empty() || author.chars().any(char::is_control) {
         return Err(SourceError::Refused {

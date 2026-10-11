@@ -56,8 +56,10 @@ enum Mode {
     RepeatingCursor,
     /// Every page past the first answered about another task.
     AnotherTask,
-    /// Every read answered with one detail more than it asked for.
+    /// Every page past the first answered with one detail more than it asked for.
     OneTooMany,
+    /// Every read of more than one task answered with one detail fewer than it asked for.
+    ShortBatch,
 }
 
 /// An in-memory source whose detail reads answer as [`Mode`] says, and which counts them.
@@ -226,8 +228,11 @@ impl TaskSource for Unsteady {
                 })
             })
             .collect::<Vec<_>>();
-        if mode == Mode::OneTooMany {
+        if mode == Mode::OneTooMany && later_page {
             answered.push(Ok(None));
+        }
+        if mode == Mode::ShortBatch && ids.len() > 1 {
+            answered.pop();
         }
         answered
     }
@@ -442,4 +447,34 @@ async fn a_destination_misreading_its_copy_is_refused_and_every_copied_comment_s
             "{misreads:?}: no copied comment was taken for gone"
         );
     }
+}
+
+#[tokio::test]
+async fn a_batched_read_answering_the_wrong_number_of_tasks_is_refused_for_every_one() {
+    let mut config = commented();
+    config["tasks"].as_array_mut().expect("tasks").push(
+        json!({"id": "T-2", "title": "Beta", "content": "another body",
+                     "status": {"category": "todo", "name": "Todo"}, "labels": []}),
+    );
+    let (from, mode, _) = unsteady("from", &config);
+    let (into, _, _) = unsteady("into", &empty());
+    let engine = Engine::new(vec![from, into], vec![name("from"), name("into")]);
+    *mode.lock().unwrap() = Mode::ShortBatch;
+
+    let Err(refused) = engine
+        .copy(&CopyRequest {
+            items: CopyItems::new(vec![id("from:T-1"), id("from:T-2")]).expect("two items"),
+            ..copy()
+        })
+        .await
+    else {
+        panic!("a batch that cannot say which answer is whose copies nothing");
+    };
+    assert!(
+        refused
+            .to_string()
+            .contains("answered 1 task details for the 2 tasks a copy read"),
+        "{refused}"
+    );
+    assert!(held(&engine, "into").await.is_empty());
 }

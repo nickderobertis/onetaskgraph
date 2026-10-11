@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    Document, Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskSource, TaskUpdateOutcome,
+    Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName, Status,
+    StatusCategory, Task, TaskDetailRead, TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -425,11 +425,12 @@ async fn dispatch(
         }
         "get_task_detail" => {
             let params: TaskDetailParams = decode(method, params)?;
-            let read = source
-                .get_task_details(std::slice::from_ref(&params.id), Some(&params.comments))
-                .await
-                .pop()
-                .unwrap_or(Ok(None))?;
+            let read = one_detail(
+                &params.id,
+                source
+                    .get_task_details(std::slice::from_ref(&params.id), Some(&params.comments))
+                    .await,
+            )?;
             let Some(read) = read else {
                 return encode(json!({ "task": null, "page": null }));
             };
@@ -640,6 +641,35 @@ async fn dispatch(
     }
 }
 
+/// The one answer a hosted source owes a detail read of `id` alone: refused as malformed when
+/// it gave any other number, or answered about another task, rather than sent on as the
+/// answer about `id`.
+fn one_detail(
+    id: &NativeId,
+    mut answers: Vec<Result<Option<TaskDetailRead>, SourceError>>,
+) -> Result<Option<TaskDetailRead>, SourceError> {
+    if answers.len() != 1 {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "the hosted source answered {} details for one read of task {id}",
+                answers.len()
+            ),
+        });
+    }
+    let read = answers.pop().expect("exactly one answer")?;
+    if let Some(read) = &read
+        && read.task.id != *id
+    {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "the hosted source answered a read of task {id} with task {}",
+                read.task.id
+            ),
+        });
+    }
+    Ok(read)
+}
+
 /// One method's parameters, or the reason they could not be read.
 fn decode<T: for<'de> Deserialize<'de>>(method: &str, params: Value) -> Result<T, SourceError> {
     serde_json::from_value(params).map_err(|error| SourceError::Malformed {
@@ -652,4 +682,39 @@ fn encode<T: serde::Serialize>(value: T) -> Result<Value, SourceError> {
     serde_json::to_value(value).map_err(|error| SourceError::Malformed {
         message: format!("this source returned data that will not serialize: {error}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str) -> TaskDetailRead {
+        TaskDetailRead {
+            task: serde_json::from_value(json!({"id": id, "title": "Alpha",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []}))
+            .expect("a task"),
+            comments: None,
+        }
+    }
+
+    #[test]
+    fn a_detail_read_of_one_task_is_held_to_one_answer_about_that_task() {
+        let id = NativeId("T-1".to_owned());
+        assert!(
+            matches!(one_detail(&id, vec![Ok(Some(task("T-1")))]), Ok(Some(read))
+            if read.task.id == id)
+        );
+        assert!(matches!(one_detail(&id, vec![Ok(None)]), Ok(None)));
+        for (answers, named) in [
+            (Vec::new(), "answered 0 details"),
+            (vec![Ok(None), Ok(Some(task("T-1")))], "answered 2 details"),
+            (vec![Ok(Some(task("T-2")))], "with task T-2"),
+        ] {
+            assert!(
+                matches!(one_detail(&id, answers), Err(SourceError::Malformed { message })
+                    if message.contains(named)),
+                "{named}"
+            );
+        }
+    }
 }

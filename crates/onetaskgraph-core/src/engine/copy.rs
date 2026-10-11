@@ -3806,10 +3806,22 @@ impl Engine {
             if !source.source().capabilities().comments.is_native() {
                 continue;
             }
-            let answers = source
+            let mut answers = source
                 .source()
                 .get_task_details_for_copy(&natives, &snapshot::comment_page(source))
                 .await;
+            // One answer per id, in order, or none of them is anybody's: a short or a long batch
+            // cannot say which of its answers is about which task.
+            if answers.len() != natives.len() {
+                let miscounted = SourceError::Malformed {
+                    message: format!(
+                        "the source answered {} task details for the {} tasks a copy read",
+                        answers.len(),
+                        natives.len()
+                    ),
+                };
+                answers = natives.iter().map(|_| Err(miscounted.clone())).collect();
+            }
             for (native, answer) in natives.into_iter().zip(answers) {
                 running
                     .prefetched
