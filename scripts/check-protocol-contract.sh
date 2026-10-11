@@ -947,6 +947,144 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
                 f"{WIRE_TYPES[inner].__name__}. Make the example and the declaration agree."
             )
 
+# The payloads a section shows as JSON, both ways against the structs that read and write
+# them. The scans above see a method's parameters and a contract struct's fields one way only —
+# a field the section never names — so a member an example still sends after the struct
+# dropped it, or a member the struct gained that the example and its prose never mention,
+# reached a plugin author as a payload this engine does not speak. Each entry names the
+# section, the method its example line is the request of, the path to the object inside that
+# request or its answer, and the struct that object is: every key of the example object has
+# to be a field of the struct, and every field of the struct has to be named in the section,
+# where an optional member the example leaves out is still specified in prose.
+comment_rs = api("comment.rs")
+
+
+def struct_fields(struct, text, visibility):
+    """The fields of `struct` as declared in `text`, refusing a struct that cannot be read."""
+    declaration = re.search(
+        r"pub(?:\(crate\))? struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct), text, re.DOTALL
+    )
+    if declaration is None:
+        refuse(
+            f"could not read the `{struct}` struct whose payload docs/plugin-protocol.md shows.",
+            "restore it, or teach PAYLOAD_EXAMPLES in this script where it lives now.",
+        )
+    fields = set(re.findall(r"^    %s (\w+):" % visibility, declaration.group(1), re.MULTILINE))
+    if not fields:
+        refuse(
+            f"read no fields from `{struct}`.",
+            "restore its fields, or teach this script the shape they have now.",
+        )
+    return fields
+
+
+PAYLOAD_EXAMPLES = (
+    # (section, method, "params" or "result", path inside it, struct, where it is declared)
+    ("### 4.4a `get_task_detail`", "get_task_detail", "params", (), "TaskDetailParams", "wire"),
+    ("### 4.4a `get_task_detail`", "get_task_detail", "result", (), "TaskDetailResult", "wire"),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        (),
+        "CommentCopyParams",
+        "wire",
+    ),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        ("copy",),
+        "CommentCopy",
+        "api",
+    ),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        ("copy", "origin"),
+        "CommentOrigin",
+        "api",
+    ),
+)
+
+
+def example_lines(heading):
+    """Every line of the section's JSON blocks, each read as the one message it is."""
+    messages = []
+    for block in re.findall(r"```json\n(.*?)\n```", section(heading), re.DOTALL):
+        for line in block.splitlines():
+            try:
+                messages.append(json.loads(line))
+            except ValueError as error:
+                failures.append(
+                    f'"{heading}" has a JSON example line that is not one JSON message '
+                    f"({error}):\n{line}\nWrite each message of an exchange on a line of its "
+                    f"own, as it crosses the wire."
+                )
+    return messages
+
+
+for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
+    if declared_in == "wire":
+        fields = struct_fields(struct, wire, r"pub\(crate\)")
+    else:
+        fields = struct_fields(struct, comment_rs, "pub")
+    messages = example_lines(heading)
+    request = next((m for m in messages if m.get("method") == method), None)
+    if request is None:
+        refuse(
+            f'"{heading}" has no JSON example of a `{method}` request.',
+            "restore it — it is the payload this check holds to the struct that reads it.",
+        )
+    if half == "params":
+        shown = request.get("params")
+    else:
+        shown = next(
+            (m.get("result") for m in messages if m.get("id") == request.get("id") and "result" in m),
+            None,
+        )
+    for step in path:
+        shown = shown.get(step) if isinstance(shown, dict) else None
+    where = ".".join((half,) + path)
+    if not isinstance(shown, dict):
+        failures.append(
+            f'"{heading}" shows no `{where}` object in its `{method}` example, which is the '
+            f"payload `{struct}` reads. Show it as a peer sends it."
+        )
+        continue
+    for key in sorted(set(shown) - fields):
+        failures.append(
+            f'"{heading}" shows `{where}.{key}`, but `{struct}` has no such field, so the '
+            f"engine never reads or writes it. Remove it from the example, or declare it."
+        )
+    specified = re.sub(r"<!--.*?-->", "", section(heading), flags=re.DOTALL)
+    for field in sorted(fields):
+        if not spelled(field, specified):
+            failures.append(
+                f'`{struct}` carries the field "{field}" but "{heading}", which shows its '
+                f"payload, never names it. Specify it there — in the example, or in prose "
+                f"for a member the example leaves out."
+            )
+
+# A comment's members, both ways against the table §4.15 gives of them, and the origin's
+# against the section that describes it: a reader written from that section alone parses
+# every comment it is ever sent.
+COMMENTS_SECTION = "### 4.15 `task_comments`"
+compare(
+    "comment member",
+    struct_fields("Comment", comment_rs, "pub"),
+    first_column("| Member | Type | Meaning |", after=(COMMENTS_SECTION,)),
+    {},
+    "`Comment`",
+)
+for field in sorted(struct_fields("CommentOrigin", comment_rs, "pub")):
+    if not spelled(field, section(COMMENTS_SECTION)):
+        failures.append(
+            f'`CommentOrigin` carries the field "{field}" but "{COMMENTS_SECTION}", which '
+            f"specifies a comment's `origin`, never names it. Specify it there."
+        )
+
 # The framing limit is a number rather than a name, so neither of the two scans above
 # would ever notice it drifting. It is normative — a plugin author reads it and sizes their
 # writes by it — and it is also a constant this engine enforces, so the two have to be one

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Watch scripts/check-protocol-contract.sh refuse a drifted list of the methods the protocol
-# does not carry, and a wire member of a struct whose fields are private that the document
-# stops naming.
+# does not carry, a wire member of a struct whose fields are private that the document
+# stops naming, and a payload example or comment member table drifted from its struct.
 #
 # That guard exempts the template operations from §4's method table, and holds the exemption
 # to the list docs/plugin-protocol.md gives of them, both ways. An exemption is exactly the
@@ -115,3 +115,29 @@ run_case "a private wire member the document stops naming" \
 names "a private wire member the document stops naming" \
   '`MetadataMatch` carries the field "path"' \
   "make $GUARD name the struct and the member the section no longer specifies"
+
+# The payloads §4.4a and §4.16a show as JSON are held to the structs that read them both ways,
+# and a comment's members to §4.15's table; were either reading to stop, a member an example
+# still sends after the struct dropped it, or one the struct gained, would pass in silence.
+run_case "an example member no struct reads" \
+  's/"params": { "id": "ENG-1", "comments": {/"params": { "id": "ENG-1", "stale": 1, "comments": {/' \
+  refuse \
+  "restore the reconciliation of PAYLOAD_EXAMPLES against the example's keys in $GUARD"
+names "an example member no struct reads" \
+  'shows `params.stale`, but `TaskDetailParams` has no such field'
+
+run_case "a payload member the section stops naming" \
+  's/"author": "someone", "created_at"/"created_at"/' \
+  refuse \
+  "restore the reconciliation of PAYLOAD_EXAMPLES against the struct's fields in $GUARD"
+names "a payload member the section stops naming" \
+  '`CommentOrigin` carries the field "author" but "### 4.16a `write_comment_copy`"'
+
+run_case "a comment member gone from its table" \
+  's/^| `origin` | object, optional | Present only on a comment a copy wrote/| `source` | object, optional | Present only on a comment a copy wrote/' \
+  refuse \
+  "restore the reconciliation of \`Comment\` against §4.15's member table in $GUARD"
+names "a comment member gone from its table" \
+  'comment member `origin` is declared in `Comment`'
+names "a comment member gone from its table" \
+  'comment member `source` is specified by docs/plugin-protocol.md'
