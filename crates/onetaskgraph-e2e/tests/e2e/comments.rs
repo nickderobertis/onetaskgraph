@@ -1018,6 +1018,8 @@ fn a_copy_touched_no_comment(who: &str, boards: &Boards, source_task: &str, argu
     }
 }
 
+// The four journeys below hold the copy without `--comments`: it reads, writes and costs exactly
+// what it did before comments could be carried. `copy_comments.rs` holds the copy with it.
 #[test]
 fn a_task_copy_neither_reads_nor_writes_a_comment_at_either_end() {
     let who = "task copy between two GitHub boards";
@@ -1067,7 +1069,7 @@ fn a_document_copy_neither_reads_nor_writes_a_comment_at_either_end() {
 
 #[test]
 fn a_copy_into_a_markdown_task_keeps_its_comments_section_byte_for_byte() {
-    // The folder already holds the copied task, recorded as coming from `work:T-1`, with a
+    // Without `--comments`. The folder already holds the copied task, recorded as coming from `work:T-1`, with a
     // comment section a person left on it. The copy updates that file from a board whose own
     // `T-1` has a comment too — and neither the folder's comment nor the board's may move.
     let who = "task copy from a GitHub board into a folder of Markdown";

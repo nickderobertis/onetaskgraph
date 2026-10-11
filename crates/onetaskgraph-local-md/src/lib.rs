@@ -2068,6 +2068,16 @@ pub const COMMENT_CLOSE: &str = "<!-- /onetaskgraph:comment -->";
 /// The end of the marker line that opens one comment block.
 const MARKER_END: &str = " -->";
 
+/// The start of the line a copied comment's body opens with, recording where it was copied
+/// from: `<!-- onetaskgraph:comment-origin task="…" id="…" url="…" -->`, `id` and `url` only
+/// when they say something the comment's own marker does not.
+///
+/// A line of the body rather than attributes of the marker, so a release of this plugin from
+/// before comments had origins — which refuses a marker carrying an attribute it does not know,
+/// and would then read the whole section as task content — still reads every comment, the line
+/// merely part of that comment's text.
+pub const ORIGIN_OPEN: &str = "<!-- onetaskgraph:comment-origin ";
+
 /// One task file, read for its comments: where its content ends and what its section holds.
 struct TaskFile {
     path: PathBuf,
@@ -2564,23 +2574,26 @@ fn block(text: &str) -> Option<(Comment, &str)> {
     let mut author = None;
     let mut created_at = None;
     let mut updated_at = None;
-    let mut origin_task = None;
-    let mut origin_id = None;
-    let mut origin_url = None;
     for (name, value) in attributes {
         let slot = match name {
             "id" => &mut id,
             "author" => &mut author,
             "created_at" => &mut created_at,
             "updated_at" => &mut updated_at,
-            "origin_task" => &mut origin_task,
-            "origin_id" => &mut origin_id,
-            "origin_url" => &mut origin_url,
             _ => return None,
         };
         if slot.replace(value).is_some() {
             return None;
         }
+    }
+    // A copied comment's body opens with the line recording its origin.
+    let (origin, body) = match origin_line(body) {
+        Some((origin, rest)) => (origin, rest),
+        None => ((None, None, None), body),
+    };
+    let (origin_task, origin_id, origin_url) = origin;
+    if body.is_empty() {
+        return None;
     }
     let timestamp = |value: String| {
         DateTime::parse_from_rfc3339(&value)
@@ -2601,7 +2614,6 @@ fn block(text: &str) -> Option<(Comment, &str)> {
             updated_at: Some(updated_at),
             url: origin_url,
         }),
-        None if origin_id.is_some() || origin_url.is_some() => return None,
         None => None,
     };
     Some((
@@ -2691,6 +2703,29 @@ fn rendered_section(comments: &[Comment]) -> String {
     section
 }
 
+/// The origin line a copied comment's body opens with — its task, and its id and address when
+/// it has them — and the body after it; `None` for a body that opens with no such line.
+type OriginLine = (Option<String>, Option<String>, Option<String>);
+
+fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
+    let (line, rest) = body.split_once('\n')?;
+    let attributes = attributes(line.strip_prefix(ORIGIN_OPEN)?.strip_suffix(MARKER_END)?)?;
+    let (mut task, mut id, mut url) = (None, None, None);
+    for (name, value) in attributes {
+        let slot = match name {
+            "task" => &mut task,
+            "id" => &mut id,
+            "url" => &mut url,
+            _ => return None,
+        };
+        if slot.replace(value).is_some() {
+            return None;
+        }
+    }
+    task.as_ref()?;
+    Some(((task, id, url), rest))
+}
+
 /// One comment block, marker first and closing line last.
 fn rendered_block(comment: &Comment) -> String {
     let mut marker = format!("{COMMENT_OPEN}id=\"{}\"", escaped(comment.id.as_str()));
@@ -2704,21 +2739,22 @@ fn rendered_block(comment: &Comment) -> String {
         escaped(&created),
         escaped(&updated)
     ));
+    marker.push_str(MARKER_END);
+    let mut body = String::new();
     if let Some(origin) = &comment.origin {
-        marker.push_str(&format!(" origin_task=\"{}\"", escaped(&origin.task)));
+        body.push_str(&format!("{ORIGIN_OPEN}task=\"{}\"", escaped(&origin.task)));
         if origin.id != comment.id {
-            marker.push_str(&format!(" origin_id=\"{}\"", escaped(origin.id.as_str())));
+            body.push_str(&format!(" id=\"{}\"", escaped(origin.id.as_str())));
         }
         if let Some(url) = &origin.url {
-            marker.push_str(&format!(" origin_url=\"{}\"", escaped(url)));
+            body.push_str(&format!(" url=\"{}\"", escaped(url)));
         }
+        body.push_str(MARKER_END);
+        body.push('\n');
     }
-    marker.push_str(MARKER_END);
+    body.push_str(&comment.body);
     let who = comment.author.as_deref().unwrap_or("comment");
-    format!(
-        "{marker}\n### {who} — {created}\n\n{}\n\n{COMMENT_CLOSE}\n",
-        comment.body
-    )
+    format!("{marker}\n### {who} — {created}\n\n{body}\n\n{COMMENT_CLOSE}\n")
 }
 
 /// `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, for the smallest positive `n` not already an
@@ -2740,6 +2776,15 @@ fn this_second() -> DateTime<Utc> {
 
 /// Refuse a body the section cannot hold byte for byte.
 fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
+    if body.as_str().starts_with(ORIGIN_OPEN) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot represent this comment body: its first line opens with {ORIGIN_OPEN}, \
+                 which in a task file records where a copied comment came from rather than \
+                 what it says; next: change that line"
+            ),
+        });
+    }
     if body.as_str().split('\n').any(|line| line == COMMENT_CLOSE) {
         return Err(SourceError::Refused {
             message: format!(

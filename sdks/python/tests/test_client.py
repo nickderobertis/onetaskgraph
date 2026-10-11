@@ -34,7 +34,11 @@ from onetaskgraph_sdk import (
     UpdatedField,
     __version__,
 )
-from onetaskgraph_sdk._generated.copy_report import CopyOutcome, CopyOutcomeFailed
+from onetaskgraph_sdk._generated.copy_report import (
+    CopyOutcome,
+    CopyOutcomeFailed,
+    CopyOutcomeUnchanged,
+)
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 from onetaskgraph_sdk._generated.query_response_of_search_hit import SearchHitTask
 from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
@@ -1551,3 +1555,31 @@ def test_a_dependency_endpoint_carries_its_kind_and_may_leave_the_source(
     # The far source is not configured, so reporting the edge cannot have resolved it.
     with pytest.raises(OnetaskgraphError, match="elsewhere"):
         run(client.project_show(id="elsewhere:P-9"))
+
+
+def test_copy_with_comments_carries_them_and_a_repeat_by_query_skips(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A `--comments` copy through the real binary, then the same tasks again by query."""
+    client = Client(binary, cwd=folders(tmp_path))
+    said = run(client.task_comment_add(id="from:T-1", body="said at the source\n", author="ada"))
+
+    copied = run(client.task_copy(ids=["from:T-1"], to="into", comments=True))
+    outcome = copied.items[0].root
+    assert outcome.action == "created"
+    assert outcome.comments is not None
+    assert (outcome.comments.added, outcome.comments.unchanged) == (1, 0)
+    carried = run(client.task_comment_list(id="into:T-1")).comments
+    assert [comment.body for comment in carried] == ["said at the source\n"]
+    origin = carried[0].origin
+    assert origin is not None
+    assert (origin.task, origin.id.root, origin.author) == ("from:T-1", said.id.root, "ada")
+    shown = run(client.task_show(id="from:T-1")).items[0].item
+    assert shown.version is not None, "a folder of Markdown gives every task a token"
+
+    # The same task named by `task list`'s narrowing, unchanged at both ends: skipped.
+    again = run(client.task_copy(ids=[], to="into", source=["from"], comments=True, no_link=True))
+    skipped = again.items[0].root
+    assert isinstance(skipped, CopyOutcomeUnchanged)
+    assert skipped.skipped is True
+    assert skipped.link == "skipped"

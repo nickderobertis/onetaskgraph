@@ -1527,3 +1527,63 @@ test("sources route answers from configuration, and a home reads with its member
     rmSync(routeRoot, { recursive: true, force: true });
   }
 });
+
+test("a copy with comments carries them, and a repeat by query skips the unchanged task", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-comments-copy-"));
+  mkdirSync(resolve(root, "from/tasks"), { recursive: true });
+  mkdirSync(resolve(root, "into"), { recursive: true });
+  writeFileSync(
+    resolve(root, "from/tasks/T-1.md"),
+    "---\ntitle: Alpha engine\nstatus: todo\n---\nthe engine core\n",
+  );
+  const folder = (at: string) => ({
+    plugin: "local-md",
+    config: { root: resolve(root, at), status_mapping: { todo: "todo" } },
+  });
+  writeFileSync(
+    resolve(root, "onetaskgraph.yaml"),
+    JSON.stringify({ sources: { from: folder("from"), into: folder("into") } }),
+  );
+  try {
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const said = await client.taskCommentAdd("from:T-1", {
+      body: "said at the source\n",
+      author: "ada",
+    });
+
+    // `noLink`, so the source file is left as it was and its token with it.
+    const copied = await client.taskCopy(["from:T-1"], "into", { comments: true, noLink: true });
+    expect(copied.items[0]?.action).toBe("created");
+    expect(copied.items[0]?.comments).toEqual({ added: 1, edited: 0, deleted: 0, unchanged: 0 });
+    const carried = (await client.taskCommentList("into:T-1")).comments;
+    expect(carried.map((comment) => comment.body)).toEqual(["said at the source\n"]);
+    expect(carried[0]?.origin?.task).toBe("from:T-1");
+    expect(carried[0]?.origin?.id).toBe(said.id);
+    expect(carried[0]?.origin?.author).toBe("ada");
+    expect((await client.taskShow("from:T-1")).items[0]?.item.version).toMatch(/^md1\|/);
+
+    // The same task named by `task list`'s narrowing, unchanged at both ends: skipped, and
+    // nothing written to the source.
+    const again = await client.taskCopy([], "into", {
+      sources: ["from"],
+      comments: true,
+      noLink: true,
+    });
+    expect(again.items).toEqual([
+      expect.objectContaining({
+        source: "from:T-1",
+        action: "unchanged",
+        skipped: true,
+        link: "skipped",
+      }),
+    ]);
+    // Refused on the client before the binary is asked, as every option of the wrong type is.
+    expect(() =>
+      client.taskCopy(["from:T-1"], "into", { comments: "yes" } as unknown as {
+        comments: boolean;
+      }),
+    ).toThrow(TypeError);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

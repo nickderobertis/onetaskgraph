@@ -206,6 +206,8 @@ the source can do natively, and what configuration it is being built with.
 | `content_updates` | boolean | Whether this plugin answers the narrow content write. Optional; see §3.9. |
 | `targeted_updates` | boolean | Whether this plugin answers the targeted update of one task. Optional; see §3.10. |
 | `ends_commands` | boolean | Whether this plugin answers `end_command`. Optional; see §3.11. |
+| `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
+| `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -374,6 +376,29 @@ requests that §4.22 forbids it to keep must answer `true`.** One that reads its
 for every request has nothing to drop and may leave the member out, which is what every plugin
 written before the method did.
 
+### 3.12 `comment_copies`
+
+A boolean: `true` when this plugin answers `write_comment_copy` (§4.16a), and `false` when it
+does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method: a comment a `--comments` copy carries to it is written through `add_comment` and
+`edit_comment` (§4.16) instead, with its origin appended to the body as the hidden marker
+§4.15 describes, and every comment read back from it has the marker taken out again. A plugin
+written before the method therefore keeps working unchanged, and it was added without a
+protocol version bump.
+
+### 3.13 `task_details`
+
+A boolean: `true` when this plugin answers `get_task_detail` (§4.4a), and `false` when it does
+not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method: the engine reads a task and a page of its comments from it as two requests, `get_task`
+and then `task_comments`, which is the trait's own default. A plugin that can read the two in
+one — and so promise they are one revision of the task — answers `true`. Added without a
+protocol version bump.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -385,6 +410,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `initialize` | `SourcePlugin::build` + `TaskSource::kind` + `TaskSource::capabilities` |
 | `health` | `TaskSource::health` |
 | `get_task` | `TaskSource::get_task` |
+| `get_task_detail` | `TaskSource::get_task_details`, one task and a page of its comments |
 | `get_project` | `TaskSource::get_project` |
 | `query_tasks` | `TaskSource::query_tasks` |
 | `query_projects` | `TaskSource::query_projects` |
@@ -404,6 +430,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `add_comment` | `TaskSource::add_comment` |
 | `edit_comment` | `TaskSource::edit_comment` |
 | `delete_comment` | `TaskSource::delete_comment` |
+| `write_comment_copy` | `TaskSource::write_comment_copy` |
 | `set_task_status` | `TaskSource::set_task_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
 | `set_task_priority` | `TaskSource::set_task_priority` |
@@ -586,11 +613,35 @@ the same `params` and returns `result.project`, a `Project` or `null`.
 `{"kind": "refused"}` for an id that simply does not exist makes an ordinary lookup
 look like a failure of the source.
 
-`TaskSource::get_task_details` — several tasks, each with the first page of its comments — is
-not a message of this protocol. For a hosted source the engine answers it the way the trait's
-default does, with one `get_task` per id and, for a source whose tasks have comments, one
-`task_comments` for the first page of each task found, so a plugin written against this
-document implements nothing more for `task show-many` to reach it.
+`TaskSource::get_task_details` — several tasks, each with a page of its comments — crosses as
+one `get_task_detail` per task (§4.4a) to a plugin that declared `task_details` (§3.13). To one
+that did not, the engine answers it the way the trait's default does, with one `get_task` per id
+and, for a source whose tasks have comments, one `task_comments` for that page of each task
+found, so a plugin written against this document implements nothing more for `task show-many`
+to reach it.
+
+### 4.4a `get_task_detail`
+
+Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
+ever sent this.
+
+```json
+{ "id": "2", "method": "get_task_detail", "params": { "id": "ENG-1", "comments": { "cursor": null, "limit": 100 } } }
+{ "id": "2", "result": { "task": { }, "page": { "items": [], "next": null } } }
+```
+
+`id` is the task and `comments` a `PageRequest` (§4.1) for its comments. `result.task` is the
+`Task` §4.4 answers and `result.page` the `Page<Comment>` §4.15 answers for that page, **both
+read as one revision of the task**: a plugin answering this owes that no change landed between
+what it read of the two. Both are `null` when there is no such task. A task that exists and
+whose comments could not be read — not refused as a whole — is answered with `task` and
+`comments_error`, the `SourceError` its comments were refused with, in place of `page`.
+
+A copy reads a task whose comments run past one page a page at a time through this method, and
+compares the task each answer carries with the first: when they differ, the task changed while
+it was being read, and the copy reads it again (§4.13d).
+
+### 4.5 `query_tasks`
 
 ### 4.5 `query_tasks`
 
@@ -1086,6 +1137,38 @@ decide: it writes one only to a source declared `visibility: private` whose own 
 answers `unknown` there (see the paragraph after the method table), so a private record is never
 written to one.
 
+### 4.13d A task's `version`
+
+A `Task` carries one more optional member, `version`: a string, the task's **change token**.
+Two equal versions of one task from one source mean nothing in it has changed — its title,
+body, status, priority, labels, board fields, metadata, edges and comments, a comment added,
+edited or deleted included. A plugin that cannot promise all of that for a task leaves the
+member out, which the engine reads as *always read it*, and a plugin written before the member
+existed is read exactly that way: it is optional under §2.1, and was added without a protocol
+version bump.
+
+It is **opaque** to every caller. The one reader that looks inside is the engine's own ordering
+of two versions of one task (`onetaskgraph_core::version`), which dispatches on the prefix each
+plugin of this build writes and answers `equal`, `later`, `earlier` or `incomparable` — the
+last for versions of different tasks, of different sources, a value it cannot parse, and two
+different versions a plugin's token says differ without saying which came first. A plugin of
+another build may give any token; the engine compares those for equality alone.
+
+A plugin derives its token on a read and never stores one it is handed: a `Task` arriving on a
+write may still hold its source's token, and a destination ignores it.
+
+What each plugin of this build keys its token on, and the change kinds it covers, is stated
+here once, as what the credentialed journeys named below re-take against the real service:
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: `every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs` changes one loopback board task by every kind in this table and holds its token to moving to a later one; `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey` re-takes each against GitHub; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; and `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence. -->
+| Plugin | Keys its token on | Change kinds covered |
+| --- | --- | --- |
+| `github-projects` | `gh1\|<issue updatedAt>\|<board item updatedAt>\|<comment count>`, from what every list, search and detail read already selects | every kind: a comment added, edited or deleted; a body or title edit; a label change; a status, priority or other board field change; a metadata change, which lives in the body; a dependency added or removed. Two changes inside one second that leave the comment count where it was read as one version, because GitHub reports both times to the second |
+| `local-md` | `md1\|<SHA-256 of the task file's bytes>` | every kind: everything a task is lives in its one file. Two different digests say the file changed and never which came first |
+| `linear` | none | none yet: Linear's `Issue.updatedAt` has not been proven to move for every kind above, so a Linear task carries no token and is always read |
+| `in-memory` | none | none |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
@@ -1151,8 +1234,18 @@ A `Comment` is an object with exactly these members:
 | `updated_at` | RFC 3339 string or `null` | When it last changed. |
 | `body` | string | What it says, byte for byte — a trailing newline included. |
 | `url` | string or `null` | Where a person can open it. |
+| `origin` | object, optional | Present only on a comment a copy wrote: the comment it is a copy of, as `{"task": "<source>:<native task id>", "id": "<comment id there>", "author", "created_at", "updated_at", "url"}`. |
 
 `null` says this source did not give that member. `id` and `body` are always present.
+
+**A comment's `origin`** names the comment where it was written, however many copies it has
+been through: a chained copy carries it on. A plugin that can keep it natively reports it as
+the member (§4.16a). One that cannot — a hosted service that records every comment's author
+and times itself — is handed the comment with its origin appended to the body as one hidden
+line, `<!-- onetaskgraph.comment_origin `{…}` -->` after a blank line, the origin as compact
+JSON whose `<`, `>` and `` ` `` are escaped; the engine takes that line back out of every
+comment it reads and reports it as `origin`. A plugin keeping the marker should carry it over
+when a person edits the comment's body, so the comment is still the copy it was.
 
 **A plugin whose tasks have no comments refuses rather than answering an empty page**, for
 the reason §4.11 gives about documents: it declared `comments` `"unsupported"`, so the engine
@@ -1163,7 +1256,10 @@ never sends it one, and a plugin should still implement the case defensively wit
 
 Only a plugin that declared `comments` `"native"` in §4.2 **and** answered `"supported"` to
 §3.3 is ever sent any of these. Unlike §4.10, all three are verbs of the product: a person
-adds, edits and removes a comment through them, and nothing a copy does sends one.
+adds, edits and removes a comment through them. A copy without `--comments` sends none of them;
+a `--comments` copy sends `delete_comment` for a copy whose origin comment is gone, and writes
+the rest through §4.16a — or, to a plugin that did not declare §3.12, through `add_comment` and
+`edit_comment` with the origin's marker in the body.
 
 ```json
 { "id": "13", "method": "add_comment", "params": { "task": "ENG-1", "comment": { "body": "Seen again on main.\n", "author": null } } }
@@ -1193,6 +1289,23 @@ under a name other than the one given. A plugin that cannot represent a body ref
 same way, naming why, rather than escaping it into something else. A comment id that names a
 comment on a *different* task of this source is a comment this task does not have, and is
 answered `null`.
+
+### 4.16a `write_comment_copy`
+
+Only a plugin that declared `comments` `"native"`, answered `"supported"` to §3.3 **and**
+declared `comment_copies: true` (§3.12) is ever sent this.
+
+```json
+{ "id": "16", "method": "write_comment_copy", "params": { "task": "ENG-1", "existing": null, "copy": { "body": "Seen on main.\n", "origin": { "task": "board:I_1", "id": "IC_9", "author": "someone", "created_at": "2026-09-01T00:00:05Z", "updated_at": "2026-09-01T00:00:05Z", "url": null } } } }
+{ "id": "16", "result": { "comment": { } } }
+```
+
+One comment a `--comments` copy carries onto `task`: a new one when `existing` is `null`, and
+otherwise the comment `existing` — one a copy wrote before — made to say `copy.body` with
+`copy.origin`. `result.comment` is the `Comment` this source now holds, reporting `origin` as
+`copy.origin` however it keeps it, or `null` when this source holds no such task or no such
+comment. A plugin that keeps a comment's author and times as it is told may take the origin's
+for the copy; a folder of Markdown does, and its copy reads back with the origin's own id.
 
 ### 4.17 `set_task_status` and `set_delivered_by`
 
@@ -1780,6 +1893,7 @@ plugin's crate documentation to the same figures.
 | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
 | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time |
+| copy --comments, n changed tasks | ceil(n / COPY_DETAIL_BATCH) | ISSUE_COPY_DETAILS: each task with its first page of comments and its `blockedBy`, COPY_DETAIL_BATCH (21) at a time; a task whose comments run past that page adds one ISSUE_DETAIL per further page, and a task skipped from its listing costs nothing beyond it |
 | update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body and state) last |
 
 `DETAIL_BATCH` is 24, the largest batch of `ISSUE_DETAILS` the node-count model prices at one

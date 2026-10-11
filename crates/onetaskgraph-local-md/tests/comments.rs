@@ -587,14 +587,18 @@ async fn a_copied_comment_takes_its_origins_id_author_and_times_and_records_the_
     assert_eq!(stamped(written.updated_at.unwrap()), "2026-09-01T00:00:02Z");
     assert_eq!(written.origin, Some(copy.origin.clone()));
     let text = read(root.path(), "tasks/release.md");
+    // The marker line carries only the four attributes every release of this plugin reads, so
+    // one from before comments had origins still reads the comment; the origin is the first
+    // line of the body, which that release reads as part of the comment's text.
     assert!(
         text.contains(
             "<!-- onetaskgraph:comment id=\"IC_7\" author=\"ada\" \
-             created_at=\"2026-09-01T00:00:01Z\" updated_at=\"2026-09-01T00:00:02Z\" \
-             origin_task=\"board:I_kw1\" origin_url=\"https://example.invalid/I_kw1#IC_7\" -->\n\
-             ### ada — 2026-09-01T00:00:01Z\n\nFrom the board.\n\n"
+             created_at=\"2026-09-01T00:00:01Z\" updated_at=\"2026-09-01T00:00:02Z\" -->\n\
+             ### ada — 2026-09-01T00:00:01Z\n\n\
+             <!-- onetaskgraph:comment-origin task=\"board:I_kw1\" \
+             url=\"https://example.invalid/I_kw1#IC_7\" -->\nFrom the board.\n\n"
         ),
-        "the origin is stored on the marker line:\n{text}"
+        "the origin is stored on its own line at the start of the body:\n{text}"
     );
     let read_back = listed(source.as_ref(), "release").await;
     assert_eq!(read_back.len(), 2);
@@ -652,8 +656,30 @@ async fn a_copied_comment_whose_origin_id_is_taken_mints_one_and_records_the_ori
         written.origin.as_ref().map(|origin| &origin.id),
         Some(&id("IC_7"))
     );
-    assert!(read(root.path(), "tasks/release.md").contains(" origin_id=\"IC_7\""));
+    assert!(
+        read(root.path(), "tasks/release.md")
+            .contains("<!-- onetaskgraph:comment-origin task=\"board:I_kw1\" id=\"IC_7\" ")
+    );
     let read_back = listed(source.as_ref(), "release").await;
     assert_eq!(read_back[0].origin, None);
     assert_eq!(read_back[1], written);
+}
+
+#[tokio::test]
+async fn a_body_opening_with_the_origin_line_is_refused_rather_than_read_as_an_origin() {
+    let (_, source) = folder(&[("tasks/release.md", TASK)]);
+    let refused = source
+        .add_comment(
+            &id("release"),
+            &onetaskgraph_plugin_api::NewComment {
+                body: body("<!-- onetaskgraph:comment-origin task=\"x:y\" -->\nNot a copy."),
+                author: None,
+            },
+        )
+        .await
+        .expect_err("a body that would read as a copy's origin");
+    assert!(
+        refused.to_string().contains("onetaskgraph:comment-origin"),
+        "{refused}"
+    );
 }

@@ -332,10 +332,35 @@ hand. The rules, all of which the plugin enforces:
   Ids are never renumbered.
 - **The section is not the task's content.** `task show` and every query report the content
   as the body above the section, so `search --in content` never matches a comment's text.
-- **A copy never touches it.** Copying a task into this folder over an existing file keeps
-  that file's section byte for byte, and no comment of the task being copied is written into
-  it. Content that would itself read back as a section is refused rather than turned into
-  comments nobody wrote.
+- **A copy without `--comments` never touches it.** Copying a task into this folder over an
+  existing file keeps that file's section byte for byte, and no comment of the task being
+  copied is written into it. Content that would itself read back as a section is refused
+  rather than turned into comments nobody wrote.
+- **A copy with `--comments` keeps its copies of the source's comments in step** — adding,
+  editing and deleting only comments that record an origin, never one written here.
+- **A copied comment records where it came from natively.** It takes its origin's own id,
+  author and times — so the copy of a board comment is addressed here by the board's own
+  comment id — and its body opens with one more line recording the rest:
+
+  ```markdown
+  <!-- onetaskgraph:comment id="IC_kwDOA" author="ada" created_at="2026-09-01T00:00:05Z" updated_at="2026-09-01T00:00:05Z" -->
+  ### ada — 2026-09-01T00:00:05Z
+
+  <!-- onetaskgraph:comment-origin task="board:I_kwDOB" url="https://github.com/acme/sync/issues/7#issuecomment-1" -->
+  Seen on main.
+
+  <!-- /onetaskgraph:comment -->
+  ```
+
+  `task` is the qualified id of the task the comment was written on; `id` is added only when
+  the comment's own id here had to differ from the origin's, because this task already held
+  one by that id; `url` is the origin's address when it has one. `task show` reports the line
+  as the comment's `origin` and never as part of its body. It is a line of the body rather than
+  attributes of the marker line on purpose: a release of this plugin from before comments had
+  origins refuses a marker carrying an attribute it does not know — and would then read the
+  whole section as task content — while it reads this line as part of the comment's text and
+  every comment as a comment. A body a person writes whose first line opens with
+  `<!-- onetaskgraph:comment-origin` is refused, rather than read as a copy's origin.
 
 `--author` is recorded here as given — this folder has no signed-in account to record
 instead — and must be one line with no control characters.

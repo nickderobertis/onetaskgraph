@@ -296,6 +296,7 @@
 //! | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request (see below) |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 //! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
+//! | copy --comments, n changed tasks | ceil(n / COPY_DETAIL_BATCH) | ISSUE_COPY_DETAILS: each task with its first page of comments and its `blockedBy`, COPY_DETAIL_BATCH (21) at a time; a task whose comments run past that page adds one ISSUE_DETAIL per further page, and a task skipped from its listing costs nothing beyond it |
 //! | recount | 1 | ISSUE_DETAIL |
 //! | status | 2 | ISSUE, UPDATE_FIELD; a terminal status additionally updates issue state |
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |

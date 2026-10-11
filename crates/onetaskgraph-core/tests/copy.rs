@@ -20,8 +20,8 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page,
-    PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId,
+    Page, PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
     SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
     documentless,
 };
@@ -415,6 +415,11 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
     destination.insert(GlobalId::ORIGIN_KEY.to_owned(), json!("from:T-1"));
     for (key, owner) in &owners {
         match owner.as_str() {
+            // The copy's record of itself is held at both ends, and neither end's is kept.
+            "the copy" if key.starts_with("onetaskgraph.copied_") => {
+                source.insert(key.clone(), reserved_value(key, "source"));
+                destination.insert(key.clone(), reserved_value(key, "destination"));
+            }
             "the destination" | "neither" => {
                 source.insert(key.clone(), reserved_value(key, "source"));
                 destination.insert(key.clone(), reserved_value(key, "destination"));
@@ -448,6 +453,18 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
         .clone();
     for (key, owner) in &owners {
         let expected = match owner.as_str() {
+            // The record this copy wrote: no token, because an in-memory source gives none, and
+            // no `copied_with_comments`, because this copy carried none — but a digest of what
+            // it left.
+            "the copy" if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY => {
+                let held = metadata
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                assert!(held.starts_with("sha256:"), "{key}: {held:?}");
+                Some(json!(held))
+            }
+            "the copy" if key.starts_with("onetaskgraph.copied_") => None,
             "the copy" => Some(json!("from:T-1")),
             "the destination" => Some(reserved_value(key, "destination")),
             _ => None,

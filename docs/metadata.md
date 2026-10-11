@@ -19,14 +19,17 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly ten keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly thirteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
   `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
   (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`),
   `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.members`
-  (`MetadataKey::MEMBERS_KEY`) and `onetaskgraph.member_of` (`MetadataKey::MEMBER_OF_KEY`)
+  (`MetadataKey::MEMBERS_KEY`), `onetaskgraph.member_of` (`MetadataKey::MEMBER_OF_KEY`),
+  `onetaskgraph.copied_version` (`MetadataKey::COPIED_VERSION_KEY`),
+  `onetaskgraph.copied_with_comments` (`MetadataKey::COPIED_WITH_COMMENTS_KEY`) and
+  `onetaskgraph.copied_destination_version` (`MetadataKey::COPIED_DESTINATION_VERSION_KEY`)
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
@@ -405,7 +408,35 @@ The reserved keys keep the owners they had:
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |
 | `onetaskgraph.template`, `onetaskgraph.item_kind` | the source: where the source holds none, the destination's is dropped, so provenance that no longer describes the content does not survive it |
+| `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task it writes and keeps neither end's (below) |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### The copy's record of itself
+
+Every task a copy writes carries three keys recording that copy, on the **destination** task,
+so the next copy can tell whether anything changed at either end without reading the task:
+
+- `onetaskgraph.copied_version` — the source task's change token (`Task.version`) as the copy
+  read it; absent when the source gave none.
+- `onetaskgraph.copied_with_comments` — `true` when the copy carried the task's comments
+  (`--comments`), and absent after one that did not.
+- `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination task
+  as the copy left it: every member a copy writes and compares, its forward edges, and — after
+  a `--comments` copy — its comments, each copy by its origin's identity and body and each
+  comment native to the destination by its id and body. The three keys themselves, the task's
+  `delivered_by` (which the store keeps in step after the copy) and the destination's own id,
+  url, location and times are left out.
+
+A `--comments` copy and a copy by query report a task `unchanged` with `skipped: true` — and
+read nothing more of it — when the source's token is still `copied_version`, the destination
+digests to `copied_destination_version` over the reads the copy makes to find it anyway, a
+`--comments` copy finds `copied_with_comments`, and the edges and `delivers` the copy would
+write are the ones the destination holds. So an edit at either end since, a copied comment
+edited or deleted at the destination included, is read and copied again rather than skipped.
+A copy by id without `--comments` reads and compares every task as it always did; it still
+records itself on every task it writes, and brings a stale record up to date only to take
+away a `copied_with_comments` an earlier copy left. The keys are refused to a caller as every
+key of the namespace is, and a copy never carries one from its source.
 
 ### `onetaskgraph.copies`: where a copied item landed
 
