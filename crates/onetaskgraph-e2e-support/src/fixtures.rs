@@ -935,6 +935,14 @@ struct GitHubBoard {
     /// How many comment timestamps this board has handed out, which makes each one later than
     /// the last and gives every comment an id no other comment has had.
     comment_ticks: u64,
+    /// The second every change is stamped with while a journey holds this board's clock — so
+    /// two changes share one, as two made inside one second on GitHub do — and `None` while
+    /// each change takes the second after the last.
+    held_second: Option<u64>,
+    /// How long after its latest change this board is read: the `Date` every answer carries is
+    /// that many seconds past it. An hour unless a journey reads it in the very second of a
+    /// change — and `None` for an answer carrying no `Date` at all.
+    read_lag: Option<u64>,
     /// Issues `createIssue` made which `addProjectV2ItemById` has not filed yet.
     pending: Vec<Value>,
     /// An alias of one batched field write this board fails, once, after performing every
@@ -1431,6 +1439,29 @@ impl GitHubBoardFields {
         board.touch_item(&item);
     }
 
+    /// Stamp every change from here on with one second, until [`Self::release_clock`]: two
+    /// changes a person makes inside one second on GitHub, which GitHub stamps alike.
+    pub fn hold_clock(&self) {
+        let mut board = self.board.lock().unwrap();
+        board.held_second = Some(board.comment_ticks + 1);
+    }
+
+    /// Let each change take the second after the last again.
+    pub fn release_clock(&self) {
+        self.board.lock().unwrap().held_second = None;
+    }
+
+    /// Answer every read with a `Date` in the very second of the board's latest change — a
+    /// board read while a person is still editing it — or, with `false`, an hour after it.
+    pub fn read_as_it_changes(&self, at_once: bool) {
+        self.board.lock().unwrap().read_lag = Some(if at_once { 0 } else { 3600 });
+    }
+
+    /// Answer every read without a `Date` header, or, with `false`, with one again.
+    pub fn serve_without_date(&self, without: bool) {
+        self.board.lock().unwrap().read_lag = (!without).then_some(3600);
+    }
+
     /// Rewrite one issue's body, as a person editing it on GitHub would.
     pub fn edit_body(&self, id: &str, body: &str) {
         let mut board = self.board.lock().unwrap();
@@ -1783,16 +1814,33 @@ impl GitHubBoard {
     }
 
     /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
-    /// board item's — a second after the one before, so no two changes share one.
+    /// board item's — a second after the one before, so no two changes share one, unless a
+    /// journey holds the clock.
     fn tick(&mut self) -> String {
         self.comment_ticks += 1;
-        let ticks = self.comment_ticks;
+        let ticks = self.held_second.unwrap_or(self.comment_ticks);
         assert!(ticks < 86_400, "this board's clock runs one day");
         format!(
             "2026-09-01T{:02}:{:02}:{:02}Z",
             ticks / 3600,
             (ticks / 60) % 60,
             ticks % 60
+        )
+    }
+
+    /// The server's clock on an answer, as GitHub's `Date` header spells it: `read_lag`
+    /// seconds past this board's latest change, or `None` when it answers without one.
+    fn served_at(&self) -> Option<String> {
+        let lag = self.read_lag?;
+        // While the clock is held every change carries the held second, however many it made.
+        let latest = self.held_second.unwrap_or(self.comment_ticks);
+        let epoch: chrono::DateTime<chrono::Utc> =
+            GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
+        let seconds = i64::try_from(latest + lag).expect("a day's seconds");
+        Some(
+            (epoch + chrono::TimeDelta::seconds(seconds))
+                .format("%a, %d %b %Y %H:%M:%S GMT")
+                .to_string(),
         )
     }
 
@@ -2241,6 +2289,8 @@ fn github_projects_board_at(
         items,
         comments: Vec::new(),
         comment_ticks: 0,
+        held_second: None,
+        read_lag: Some(3600),
         pending: Vec::new(),
         failing_alias: None,
         owed_errors: Vec::new(),
@@ -2440,8 +2490,14 @@ fn github_projects_board_at(
             for hook in due {
                 (hook.change)(&hooked);
             }
+            let date = board
+                .lock()
+                .unwrap()
+                .served_at()
+                .map(|at| format!("Date: {at}\r\n"))
+                .unwrap_or_default();
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             stream

@@ -1297,6 +1297,17 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             } else {
                 FIXTURE_BUDGET_LIMIT.saturating_sub(used)
             };
+            // The board is read an hour after its last change, as a board nobody is editing at
+            // that moment is: every item has settled, so every issue gives its change token.
+            let served_at = {
+                let since = served.lock().unwrap().comment_ticks + 3600;
+                format!(
+                    "Tue, 01 Sep 2026 {:02}:{:02}:{:02} GMT",
+                    since / 3600,
+                    (since / 60) % 60,
+                    since % 60
+                )
+            };
             let (status, headers, body) = match limited {
                 Some(refusal) => (refusal.status, refusal.headers, refusal.body),
                 None => (
@@ -1305,7 +1316,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         "x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\n\
                          x-ratelimit-used: {used}\r\n\
                          x-ratelimit-remaining: {remaining}\r\n\
-                         x-ratelimit-resource: graphql\r\n"
+                         x-ratelimit-resource: graphql\r\n\
+                         date: {served_at}\r\n"
                     ),
                     match unbound_refusal(&served, query, variables)
                         .or_else(|| refused(&served, query, variables))
@@ -13048,6 +13060,7 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         // changes no count, so paying for it here would only make the measurement slower.
         source: Some(json!({"endpoint":fixture.endpoint,
             "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}})),
+        settle: std::time::Duration::ZERO,
     });
     journey::run(journey::Nomination {
         token: "test-token".to_owned(),

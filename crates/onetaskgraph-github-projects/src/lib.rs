@@ -1767,6 +1767,32 @@ fn seconds(duration: Duration) -> String {
 /// cannot read is that the refusal carries no hint and the backing-off schedule answers it
 /// instead. Refusing the response over the header would turn a readable refusal into an
 /// unreadable one, and refusing to *wait* would be the one wrong direction to fail in.
+/// The member [`stamp_served`] writes onto every node of a response that says when it last
+/// changed: the `Date` that response was served at. No GitHub type has a field of this name.
+const SERVED_AT: &str = "onetaskgraphServedAt";
+
+/// Write `served` onto every object of `data` carrying an `updatedAt`, so whatever reads a
+/// node's time later knows the server's clock on the response that read it — which is what
+/// decides whether that node's change token is given (see [`change_token::SETTLED`]).
+fn stamp_served(data: &mut Value, served: &str) {
+    match data {
+        Value::Object(members) => {
+            if members.contains_key("updatedAt") {
+                members.insert(SERVED_AT.to_owned(), Value::String(served.to_owned()));
+            }
+            for member in members.values_mut() {
+                stamp_served(member, served);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                stamp_served(item, served);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
     value
         .and_then(|value| value.to_str().ok())
@@ -4296,6 +4322,12 @@ impl GitHubProjectsSource {
             })?;
         let status = response.status();
         let header = |name: &str| whole_seconds(response.headers().get(name));
+        let served = response
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| DateTime::parse_from_rfc2822(value).ok())
+            .map(|at| at.with_timezone(&Utc));
         *limits = accounting::RateLimit::read(|name| {
             response
                 .headers()
@@ -4355,7 +4387,11 @@ impl GitHubProjectsSource {
             .as_ref()
             .and_then(|body| body.pointer("/data/rateLimit/cost"))
             .and_then(Value::as_u64);
-        self.answer(&body).map_err(Attempt::Failed)
+        let mut data = self.answer(&body).map_err(Attempt::Failed)?;
+        if let Some(served) = served {
+            stamp_served(&mut data, &served.to_rfc3339());
+        }
+        Ok(data)
     }
 
     /// What one successful HTTP response says, once its GraphQL errors are read.
@@ -6051,6 +6087,12 @@ impl GitHubProjectsSource {
             comment_count: content
                 .pointer("/commentCount/totalCount")
                 .and_then(Value::as_u64),
+            // The issue node is stamped wherever it was read; a board item a read of the issue
+            // put together from its memberships is not.
+            served_at: match optional_time(content, SERVED_AT)? {
+                Some(served) => Some(served),
+                None => optional_time(item, SERVED_AT)?,
+            },
             own_repository,
             repositories,
             classification,
@@ -8126,6 +8168,7 @@ impl GitHubProjectsSource {
             // it is read again.
             item_updated_at: None,
             comment_count: None,
+            served_at: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
             classification: incoming.classification,
@@ -9339,6 +9382,9 @@ struct Resolved {
     item_updated_at: Option<DateTime<Utc>>,
     /// How many comments the issue holds, when the read that reached it said.
     comment_count: Option<u64>,
+    /// The server's clock on the response that read it — its `Date` header — when the
+    /// response carried one.
+    served_at: Option<DateTime<Utc>>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     classification: Classification,
@@ -9444,14 +9490,16 @@ impl Resolved {
     }
 
     /// This item's change token — see [`change_token`] — or `None` when the read that
-    /// reached it did not carry all three of its parts, which a draft never does.
+    /// reached it did not carry all three of its parts, which a draft never does, did not say
+    /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
         match self.content_kind {
-            ContentKind::Issue => Some(change_token::spell(
-                self.updated_at?,
-                self.item_updated_at?,
-                self.comment_count?,
-            )),
+            ContentKind::Issue => {
+                let (issue, item) = (self.updated_at?, self.item_updated_at?);
+                let comments = self.comment_count?;
+                change_token::settled(issue, item, self.served_at?)
+                    .then(|| change_token::spell(issue, item, comments))
+            }
             ContentKind::DraftIssue => None,
         }
     }

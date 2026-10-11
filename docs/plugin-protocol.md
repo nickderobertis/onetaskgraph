@@ -1162,14 +1162,27 @@ write may still hold its source's token, and a destination ignores it.
 What each plugin of this build keys its token on, and the change kinds it covers, is stated
 here once, as what the credentialed journeys named below re-take against the real service:
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: `every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs` changes one loopback board task by every kind in this table and holds its token to moving to a later one; `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey` re-takes each against GitHub; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; and `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: `every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs` changes one loopback board task by every kind in this table and holds its token to moving to a later one; `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey` re-takes each against GitHub; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence; and `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` hold the GitHub row's settling rule. -->
 | Plugin | Keys its token on | Change kinds covered |
 | --- | --- | --- |
-| `github-projects` | `gh1\|<issue updatedAt>\|<board item updatedAt>\|<comment count>`, from what every list, search and detail read already selects | every kind: a comment added, edited or deleted; a body or title edit; a label change; a status, priority or other board field change; a metadata change, which lives in the body; a dependency added or removed. Two changes inside one second that leave the comment count where it was read as one version, because GitHub reports both times to the second |
+| `github-projects` | `gh1\|<issue updatedAt>\|<board item updatedAt>\|<comment count>`, from what every list, search and detail read already selects | every kind: a comment added, edited or deleted; a body or title edit; a label change; a status, priority or other board field change; a metadata change, which lives in the body; a dependency added or removed. Given only once the task has settled: when its later time is more than 60 seconds before the `Date` of the response that read it, and never from a response with no `Date` (below) |
 | `local-md` | `md1\|<SHA-256 of the task file's bytes>` | every kind: everything a task is lives in its one file. Two different digests say the file changed and never which came first |
 | `linear` | none | none yet: Linear's `Issue.updatedAt` has not been proven to move for every kind above, so a Linear task carries no token and is always read |
 | `in-memory` | none | none |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+**Why a GitHub token waits for its task to settle.** GitHub reports both of the token's times
+to the whole second. A change made in the same second as the state a read saw would move
+neither time, and, with the comment count unmoved, the token would read the same — so a copy
+that recorded it would skip the task and keep content that had changed. The plugin therefore
+gives a token only when the task's later time is more than `change_token::SETTLED`, 60 seconds,
+before the server's own clock on the response that read it, its `Date` header. GitHub aborts a
+GraphQL query that runs past ten seconds, so the state a response reports was read at most
+about ten seconds before that `Date`; a change after the read then always falls in a later
+second than the token records, and moves it. A task changed within the minute before a read,
+and every task read from a response carrying no `Date`, has no token and is read in full; once
+it settles, the next read gives it one. Every reader that keys on this token inherits the
+rule — a copy's skip, and the board cache built on the same token.
 
 ### 4.14 `metering`
 

@@ -18,13 +18,37 @@
 //! `docs/plugin-protocol.md` §4.13d states the change kinds covered, and the credentialed
 //! journey in `tests/journey` re-takes each one against GitHub itself.
 //!
-//! **One bound, stated rather than discovered.** GitHub reports both times to the second, so
-//! two changes inside one second that leave the comment count where it was read as one
-//! version, and stay one version until a later change moves one of the three parts.
+//! **A token is given only once the item has settled.** GitHub reports both times to the
+//! second, so a change made in the same second as the one a read saw would leave both times
+//! where they were and, with the comment count unmoved, read as the same version — and a copy
+//! that recorded that version would skip the item and keep content that changed. So an item is
+//! given a token only when its later time is more than [`SETTLED`] before the server's own
+//! clock on the response that read it, its `Date` header: any change after that read then
+//! falls in a later second than the one the token records, and moves it. An item changed more
+//! recently, and every item of a response carrying no `Date`, gives no token and is read in
+//! full. `docs/plugin-protocol.md` §4.13d says the same, and so does every reader that keys on
+//! this token — the board cache included.
 
 use std::cmp::Ordering;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+
+/// How long before the response that read it an item must last have changed for its token to
+/// be given.
+///
+/// GitHub aborts a GraphQL query that runs past ten seconds, so the state a response reports
+/// was read at most about ten seconds before the `Date` it is stamped with. Sixty seconds is
+/// that bound with a wide margin: an item whose later time is further back than this was last
+/// changed in an earlier second than the read, so no change after the read can share its
+/// second.
+pub const SETTLED: TimeDelta = TimeDelta::seconds(60);
+
+/// Whether an issue last changed at `issue`, whose board item last changed at `item`, had
+/// settled by `served` — the `Date` of the response that read it — so its token may be given.
+#[must_use]
+pub fn settled(issue: DateTime<Utc>, item: DateTime<Utc>, served: DateTime<Utc>) -> bool {
+    served - issue.max(item) > SETTLED
+}
 
 /// What every token this plugin gives starts with, so a reader can tell it from another
 /// plugin's.
@@ -106,6 +130,25 @@ mod tests {
             assert_eq!(order(&before, &after), Some(Ordering::Less), "{after}");
         }
         assert_eq!(order(&before, &before), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn a_token_is_given_only_once_the_later_time_is_more_than_the_margin_behind_the_read() {
+        let served = at(0) + SETTLED + TimeDelta::seconds(1);
+        assert!(settled(at(0), at(0), served));
+        assert!(
+            !settled(at(0), at(1), served),
+            "the board item's later time counts"
+        );
+        assert!(!settled(at(1), at(0), served), "and so does the issue's");
+        assert!(
+            !settled(at(0), at(0), at(0) + SETTLED),
+            "exactly the margin is not past it"
+        );
+        assert!(
+            !settled(at(5), at(5), at(5)),
+            "read in the second of the change"
+        );
     }
 
     #[test]

@@ -1068,6 +1068,13 @@ tasks in turn, a second apart, and holds the token a fresh read gives to moving 
 by the plugin's own ordering after each. It renames the task to another of the run's own titles,
 so the artifact cleanup still finds it, and closes it last.
 
+Because the plugin gives a token only once its task has settled — its later time more than
+`change_token::SETTLED`, 60 seconds, before the response's `Date` (§4.13d) — the leg waits that
+margin and two seconds more before each read of the token, the first included. That costs the
+credentialed lane about twelve minutes of waiting and no request: each read is the one it always
+made, made later. The stand-in this record is replayed against answers with a `Date` an hour past
+its last change, so it waits for nothing.
+
 **`session-cost.txt`** moves by that leg alone: 124 → 150 requests, every one of them a read or
 a write of the run's own second task — a comment added, edited and deleted with the read of
 which issue the comment is on before each edit, a content, a title, a metadata and two

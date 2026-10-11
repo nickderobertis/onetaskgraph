@@ -76,6 +76,10 @@ pub struct Endpoints {
     pub rest_host: String,
     /// What the built source is configured to reach, when that is not GitHub.
     pub source: Option<Value>,
+    /// How long after a change the change-kind leg waits before it reads a task's token: the
+    /// plugin gives none until the change is more than `change_token::SETTLED` behind the
+    /// server's `Date`. Nothing for a stand-in whose `Date` is already well past every change.
+    pub settle: std::time::Duration,
 }
 
 impl Endpoints {
@@ -85,6 +89,10 @@ impl Endpoints {
             graphql: "https://api.github.com/graphql".to_owned(),
             rest_host: "https://api.github.com".to_owned(),
             source: None,
+            settle: onetaskgraph_github_projects::change_token::SETTLED
+                .to_std()
+                .expect("a positive margin")
+                + std::time::Duration::from_secs(2),
         }
     }
 }
@@ -2814,6 +2822,7 @@ async fn moved(
     kind: &str,
     before: &str,
 ) -> Result<String, String> {
+    tokio::time::sleep(endpoints().settle).await;
     let mut after = before.to_owned();
     for read in 0..10 {
         if read > 0 {
@@ -2843,10 +2852,11 @@ async fn moved(
 /// Every change kind `docs/plugin-protocol.md` §4.13d says a GitHub task's change token covers,
 /// made to one live task in turn, and the token held to moving to a later one after each.
 ///
-/// GitHub reports both of the token's times to the whole second, so each change waits a second
-/// past the one before: two changes inside one second that leave the comment count where it was
-/// read as one version, which is the bound that section states rather than a change this leg
-/// is about.
+/// GitHub reports both of the token's times to the whole second, and the plugin gives a token
+/// only once its item's last change is more than `change_token::SETTLED` behind the server's
+/// clock, so every read of a token here — the first included, of a task this run just wrote —
+/// waits [`Endpoints::settle`] past the change before it. Each change also waits a second past
+/// the one before, so no two of them share a second.
 async fn every_change_kind_moves_a_tasks_token(
     writer: &dyn TaskSource,
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
@@ -2858,6 +2868,7 @@ async fn every_change_kind_moves_a_tasks_token(
         CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
+    tokio::time::sleep(endpoints().settle).await;
     let mut before = token_now(rebuilt, task, "before any change").await?;
 
     pause().await;

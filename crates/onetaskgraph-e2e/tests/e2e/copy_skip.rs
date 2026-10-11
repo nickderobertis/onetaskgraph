@@ -897,3 +897,108 @@ fn the_recorded_destination_digest_is_the_documented_digest_of_the_destination_a
         );
     }
 }
+
+#[test]
+fn two_edits_inside_one_second_are_never_served_from_a_skip() {
+    let stores = Stores::new();
+    let said = stores.board.add_comment("T-3", "said once");
+    let query = [
+        "--to",
+        "notes",
+        "--source",
+        "board",
+        "--comments",
+        "--no-link",
+    ];
+    // A person editing T-3 while the copy reads it: every change in one second, and the board
+    // read in that same second — so a change after the read moves neither of GitHub's times,
+    // and the comment count stays where it was.
+    stores.board.hold_clock();
+    stores.board.read_as_it_changes(true);
+    stores.board.edit_body("T-3", "the first word");
+    let (first, _, _) = stores.copy(&query);
+    let landed = |outcomes: &[(String, Value)]| {
+        outcomes
+            .iter()
+            .find(|(source, _)| source == "board:T-3")
+            .map(|(_, outcome)| outcome.clone())
+            .expect("T-3 is copied")
+    };
+    let copy = landed(&first)["destination"]
+        .as_str()
+        .expect("T-3 landed")
+        .to_owned();
+    stores.board.edit_body("T-3", "the second word");
+    stores.board.edit_comment(&said, "said twice");
+
+    let (again, _, _) = stores.copy(&query);
+    let outcome = landed(&again);
+    assert!(
+        !skipped(&outcome),
+        "a task changed in the second it was read is read again: {outcome:#}"
+    );
+    let shown = stores.json(&["task", "show", &copy, "--no-comments"]);
+    assert_eq!(
+        shown["items"][0]["item"]["content"], "the second word",
+        "the destination holds the latest body"
+    );
+    assert_eq!(
+        stores
+            .comments(&copy)
+            .iter()
+            .map(|comment| comment["body"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("said twice")],
+        "and the latest comment"
+    );
+
+    // Once the board has settled the token is given again, and a copy after the one that
+    // records it skips as before.
+    stores.board.release_clock();
+    stores.board.read_as_it_changes(false);
+    let (recorded, _, _) = stores.copy(&query);
+    assert!(!skipped(&landed(&recorded)), "{recorded:#?}");
+    let (settled, served, _) = stores.copy(&query);
+    assert!(skipped(&landed(&settled)), "{settled:#?}");
+    assert!(
+        served.naming("T-3").is_empty(),
+        "a settled, unchanged task costs nothing beyond the listing: {:?}",
+        served.names()
+    );
+}
+
+#[test]
+fn a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped() {
+    let stores = Stores::new();
+    let versions = |stores: &Stores| -> Vec<Value> {
+        stores.json(&["task", "list", "--source", "board"])["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|task| task["item"]["version"].clone())
+            .collect()
+    };
+    assert!(
+        versions(&stores).iter().all(Value::is_string),
+        "a settled board read with its Date gives every issue a token"
+    );
+    stores.board.serve_without_date(true);
+    assert!(
+        versions(&stores).iter().all(Value::is_null),
+        "without the server's clock nothing says the read came after the last change"
+    );
+    let query = [
+        "--to",
+        "notes",
+        "--source",
+        "board",
+        "--comments",
+        "--no-link",
+    ];
+    stores.copy(&query);
+    let (again, _, _) = stores.copy(&query);
+    assert!(
+        again.iter().all(|(_, outcome)| !skipped(outcome)),
+        "a task with no token is read and compared: {again:#?}"
+    );
+}

@@ -107,6 +107,7 @@ fn serving(pricing: Pricing, asked: &Arc<Mutex<Vec<String>>>) -> journey::Endpoi
         graphql: format!("{host}/graphql"),
         rest_host: host,
         source: None,
+        settle: std::time::Duration::ZERO,
     }
 }
 
