@@ -666,6 +666,24 @@ async fn a_copied_comment_whose_origin_id_is_taken_mints_one_and_records_the_ori
 }
 
 #[tokio::test]
+async fn an_origin_line_naming_no_qualified_task_is_read_as_the_text_it_is() {
+    let at = "2026-09-13T15:11:07Z";
+    for task in ["", "bare", ":I_kw1", "board:", "not a source:I_kw1"] {
+        let text = format!("<!-- onetaskgraph:comment-origin task=\"{task}\" -->\nHand-written.");
+        let (_root, source) = folder(&[(
+            "tasks/release.md",
+            &format!("{TASK}\n{COMMENTS_HEADING}\n\n{}", block("c1", at, &text)),
+        )]);
+        let read_back = listed(source.as_ref(), "release").await;
+        assert_eq!(read_back[0].origin, None, "{task:?}: no origin");
+        assert_eq!(
+            read_back[0].body, text,
+            "{task:?}: the line stays in the body"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_body_opening_with_the_origin_line_is_refused_rather_than_read_as_an_origin() {
     let (_, source) = folder(&[("tasks/release.md", TASK)]);
     let refused = source

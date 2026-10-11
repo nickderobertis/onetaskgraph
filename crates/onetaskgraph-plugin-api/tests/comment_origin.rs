@@ -66,6 +66,20 @@ fn a_body_with_no_marker_or_one_this_product_did_not_write_is_left_as_text() {
     assert_eq!(read.body, forged, "a marker that does not parse stays text");
     assert_eq!(read.origin, None);
 
+    for task in ["", "bare", ":T-1", "notes:", "not a source:T-1"] {
+        let unqualified = CommentOrigin {
+            task: task.to_owned(),
+            ..origin()
+        }
+        .mark("first");
+        let read = held(unqualified.clone()).unmarked();
+        assert_eq!(
+            read.body, unqualified,
+            "{task:?}: a marker naming no qualified task stays text"
+        );
+        assert_eq!(read.origin, None);
+    }
+
     let mid = format!("{}\n\nand then more prose", origin().mark("first"));
     let read = held(mid.clone()).unmarked();
     assert_eq!(read.body, mid, "only a marker that ends the body is one");

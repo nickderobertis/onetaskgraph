@@ -79,6 +79,19 @@ const MARKER_CLOSE: &str = "` -->";
 const MARKER_SEPARATOR: &str = "\n\n";
 
 impl CommentOrigin {
+    /// Whether `task` is a qualified task id — `<source>:<native task id>`, the source a valid
+    /// source name and the native id not empty — and so can be an origin's [`task`](Self::task).
+    ///
+    /// What a reader holds to before it takes a stored origin as one: the origin's task decides
+    /// which copies a sync owns, edits and deletes, and which comments it never sends back, so
+    /// one naming no task is no origin at all and is read as the text it was stored as.
+    #[must_use]
+    pub fn is_qualified_task(task: &str) -> bool {
+        task.split_once(':').is_some_and(|(source, native)| {
+            !native.is_empty() && crate::SourceName::new(source).is_ok()
+        })
+    }
+
     /// `body` with this origin appended as a hidden marker, for a source that cannot store a
     /// comment's origin, author or times natively.
     ///
@@ -156,6 +169,9 @@ impl Comment {
         let Ok(origin) = serde_json::from_str::<CommentOrigin>(encoded) else {
             return self;
         };
+        if !CommentOrigin::is_qualified_task(&origin.task) {
+            return self;
+        }
         let before = &self.body[..open];
         let body = before.strip_suffix(MARKER_SEPARATOR).unwrap_or(before);
         self.body = body.to_owned();

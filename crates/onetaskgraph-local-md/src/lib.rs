@@ -2722,7 +2722,13 @@ fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
             return None;
         }
     }
-    task.as_ref()?;
+    // A line naming no qualified task is no origin, and the body keeps it as written.
+    if !task
+        .as_deref()
+        .is_some_and(onetaskgraph_plugin_api::CommentOrigin::is_qualified_task)
+    {
+        return None;
+    }
     Some(((task, id, url), rest))
 }
 
