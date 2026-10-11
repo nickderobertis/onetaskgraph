@@ -860,3 +860,45 @@ fn an_older_peer_is_sent_comment_copies_as_marked_comments_and_read_in_two_calls
         "the peer's own comment lands on the board with its origin"
     );
 }
+
+#[test]
+fn the_human_report_counts_each_tasks_comments_and_says_which_were_skipped() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    stores.note("A", "Written in the folder");
+    for said in ["one", "two", "three"] {
+        stores.comment("notes:A", said);
+    }
+    let copy = || {
+        let output = stores.run(
+            // No link written back, so the folder's file — and its token — stay as they were.
+            &[
+                "task",
+                "copy",
+                "notes:A",
+                "--to",
+                "board",
+                "--comments",
+                "--no-link",
+            ],
+            None,
+        );
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let said = stdout(&output);
+        said.lines()
+            .find(|line| line.starts_with("notes:A"))
+            .unwrap_or_else(|| panic!("notes:A has a row:\n{said}"))
+            .to_owned()
+    };
+    let first = copy();
+    assert!(
+        first.contains("created")
+            && first.contains("comments: 3 added, 0 edited, 0 deleted, 0 unchanged"),
+        "{first}"
+    );
+    let again = copy();
+    assert!(
+        again.contains("unchanged (skipped)")
+            && again.contains("comments: 0 added, 0 edited, 0 deleted, 3 unchanged"),
+        "a task decided from its change tokens alone says it was skipped: {again}"
+    );
+}

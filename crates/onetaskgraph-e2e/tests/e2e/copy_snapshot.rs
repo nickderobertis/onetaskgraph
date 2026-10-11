@@ -242,8 +242,10 @@ fn a_board_task_changed_between_its_pages_is_read_again_once_and_lands_whole() {
     }
 }
 
-#[test]
-fn a_board_task_that_changes_again_while_it_is_read_again_is_written_nowhere() {
+/// A board whose `T-3` holds more than a page of comments and is edited by a person after
+/// each of the next two reads of its first page — while a copy reads it, and again while the
+/// copy reads it again.
+fn changing_twice() -> (Sandbox, GitHubBoardFields) {
     let (sandbox, board) = board();
     for n in 0..BEYOND_A_PAGE {
         board.add_comment("T-3", &format!("comment {n}"));
@@ -258,6 +260,12 @@ fn a_board_task_that_changes_again_while_it_is_read_again_is_written_nowhere() {
         1,
         |board| board.edit_body("T-3", "the second change"),
     );
+    (sandbox, board)
+}
+
+#[test]
+fn a_board_task_that_changes_again_while_it_is_read_again_is_written_nowhere() {
+    let (sandbox, board) = changing_twice();
     let mark = board.served().len();
     let report = snapshot(&sandbox, "board", 4);
     let failed = outcome(&report, "board:T-3");
@@ -288,6 +296,53 @@ fn a_board_task_that_changes_again_while_it_is_read_again_is_written_nowhere() {
         held["items"].as_array().expect("items").len(),
         3,
         "nothing was written for the item that would not hold still: {held:#}"
+    );
+}
+
+#[test]
+fn the_human_report_and_standard_error_name_the_task_a_copy_could_not_hold_still() {
+    let (sandbox, _) = changing_twice();
+    let output = run(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "--to",
+            "notes",
+            "--source",
+            "board",
+            "--comments",
+            "--no-link",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let said = stdout(&output);
+    let row = |source: &str| {
+        said.lines()
+            .find(|line| line.starts_with(source))
+            .unwrap_or_else(|| panic!("{source} has a row:\n{said}"))
+            .to_owned()
+    };
+    let failed = row("board:T-3");
+    assert!(
+        failed.contains("failed") && failed.contains("changed while it was being copied, twice"),
+        "the row says it failed and why, in the message's first line: {failed}"
+    );
+    assert!(
+        !failed.contains("comments:"),
+        "nothing was written for it, so it counts no comments: {failed}"
+    );
+    let landed = row("board:T-1");
+    assert!(
+        landed.contains("created")
+            && landed.contains("comments: 0 added, 0 edited, 0 deleted, 0 unchanged"),
+        "a landed row counts its comments: {landed}"
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("onetaskgraph: board:T-3 was not copied: ")
+            && diagnostic.contains("changed while it was being copied, twice"),
+        "standard error names the task and the whole reason: {diagnostic}"
     );
 }
 
