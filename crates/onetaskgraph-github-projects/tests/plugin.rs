@@ -10340,11 +10340,8 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
 /// token's settling margin.
 ///
 /// `journey::settled_token` is the real one — the code the credentialed lane reads every
-/// token through — and the credentialed lane failed "GitHub gave the task no change token
-/// after a comment edited" when it took the first withheld answer as final: GitHub stamps a
-/// change by its own clock, so a read this machine makes past the margin can still be
-/// answered inside it. A token withheld for a few answers is asked for again; one withheld
-/// past the leg's bound fails naming the moment.
+/// token through. A token withheld for a few answers is asked for again; one withheld past
+/// the leg's bound fails naming the moment.
 #[tokio::test]
 async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
     let fixture = board(vec![
