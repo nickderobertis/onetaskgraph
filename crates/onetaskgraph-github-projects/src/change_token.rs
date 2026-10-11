@@ -15,12 +15,12 @@
 //!
 //! An item missing any of the three — a draft, which has no comments, or an item this process
 //! wrote and has not read back — gives no token, which a reader takes as *always read it*.
-//! `docs/plugin-protocol.md` §4.13c states the change kinds covered, and the credentialed
+//! `docs/plugin-protocol.md` §4.13d states the change kinds covered, and the credentialed
 //! journey in `tests/journey` re-takes each one against GitHub itself.
 //!
 //! **One bound, stated rather than discovered.** GitHub reports both times to the second, so
 //! two changes inside one second that leave the comment count where it was read as one
-//! version. A reader asking again a second later sees the later one.
+//! version, and stay one version until a later change moves one of the three parts.
 
 use std::cmp::Ordering;
 
