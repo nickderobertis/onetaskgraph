@@ -4,9 +4,11 @@
 //! priority, labels, board fields, metadata, edges and comments. So each journey here changes
 //! one task of a loopback board by exactly one of those kinds — the way a person changes it on
 //! GitHub, through the board's own state — and holds the token to moving to a later one, by
-//! the store's own ordering, while every task the change did not touch keeps the token it had.
+//! the store's own ordering, while every task the change did not touch keeps the token it had —
+//! a dependency touching both of the tasks it relates, as GitHub records it on both.
 //! `docs/plugin-protocol.md` §4.13d states what each plugin's token keys on; the loopback
-//! board models exactly those three parts.
+//! board models exactly those four parts, and moves neither time for a dependency, as GitHub
+//! moves neither.
 
 use std::collections::BTreeMap;
 
@@ -153,31 +155,54 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
             "a dependency removed",
             Box::new(|board| board.unblock("T-3", "T-2")),
         ),
+        (
+            "a dependency replaced",
+            Box::new(|board| {
+                board.unblock("T-3", "T-4");
+                board.block("T-3", &["T-1".to_owned()]);
+            }),
+        ),
     ];
     for (kind, change) in changes {
         let before = listed(&sandbox, &["--source", "board"]);
         change(&board);
         let after = listed(&sandbox, &["--source", "board"]);
-        let old = before["board:T-3"]
-            .clone()
-            .unwrap_or_else(|| panic!("{kind}: a board task carries a token before: {before:?}"));
-        let new = after["board:T-3"]
-            .clone()
-            .unwrap_or_else(|| panic!("{kind}: a board task carries a token after: {after:?}"));
-        assert_ne!(old, new, "{kind}: two equal tokens across a change");
-        assert_eq!(
-            ordered(&engine, "board:T-3", &new, &old),
-            VersionOrder::Later,
-            "{kind}: the store orders the token after the change as the later"
-        );
+        let mut touched = vec!["board:T-3"];
+        touched.extend(far_ends(kind));
+        for id in &touched {
+            let old = before[*id].clone().unwrap_or_else(|| {
+                panic!("{kind}: a board task carries a token before: {before:?}")
+            });
+            let new = after[*id]
+                .clone()
+                .unwrap_or_else(|| panic!("{kind}: a board task carries a token after: {after:?}"));
+            assert_ne!(old, new, "{kind}: two equal tokens of {id} across a change");
+            assert_eq!(
+                ordered(&engine, id, &new, &old),
+                VersionOrder::Later,
+                "{kind}: the store orders {id}'s token after the change as the later"
+            );
+        }
         for (id, token) in &before {
-            if id != "board:T-3" {
+            if !touched.contains(&id.as_str()) {
                 assert_eq!(
                     &after[id], token,
                     "{kind}: {id} was not touched, so its token is the one it had"
                 );
             }
         }
+    }
+}
+
+/// The tasks besides T-3 a change of `kind` reaches: a dependency is a relationship of two
+/// issues, and GitHub records it on both ends' timelines, so the far end's token moves too —
+/// and a copy reads it again. `copy_skip` reads the same set.
+pub(crate) fn far_ends(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "a dependency added" => &["board:T-4"],
+        "a dependency removed" => &["board:T-2"],
+        "a dependency replaced" => &["board:T-4", "board:T-1"],
+        _ => &[],
     }
 }
 

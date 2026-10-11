@@ -2989,6 +2989,17 @@ async fn every_change_kind_moves_a_tasks_token(
         .ok_or_else(|| "the task to unhook was not there".to_owned())?;
     before = moved(rebuilt, task, "a dependency removed", &before).await?;
 
+    // Replaced: one dependency removed and another added in one write, which leaves the count
+    // of what the task depends on where it was. GitHub moves neither of the token's times for a
+    // dependency, so this is the case only the dependency-event count can tell apart.
+    pause().await;
+    writer
+        .update_task(task, &depends(&[orphan]))
+        .await
+        .map_err(|error| format!("live dependency replacement failed: {error}"))?
+        .ok_or_else(|| "the task to rewire was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency replaced", &before).await?;
+
     if writer.capabilities().priority.is_native() {
         pause().await;
         writer

@@ -1225,7 +1225,9 @@ impl GitHubBoardFields {
             Some((_, held)) => held.extend(blockers.iter().cloned()),
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
-        board.touch_issue(&json!(id));
+        for blocker in blockers {
+            board.record_edge_event(id, blocker);
+        }
     }
 
     /// Take `blocker` off what blocks the issue `id`, as a person removing the relationship on
@@ -1235,7 +1237,7 @@ impl GitHubBoardFields {
         if let Some((_, held)) = board.blocked_by.iter_mut().find(|(near, _)| near == id) {
             held.retain(|held| held != blocker);
         }
-        board.touch_issue(&json!(id));
+        board.record_edge_event(id, blocker);
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -1845,7 +1847,8 @@ impl GitHubBoard {
     }
 
     /// Move the issue `id`'s own `updatedAt`, as GitHub does for an edit of its title, body,
-    /// labels, state or relationships, and for a comment added or edited on it.
+    /// labels, state or sub-issue relationship, and for a comment added or edited on it — never
+    /// for a dependency, which is [`GitHubBoard::record_edge_event`].
     fn touch_issue(&mut self, id: &Value) {
         let at = self.tick();
         if let Some(item) = self
@@ -1864,6 +1867,23 @@ impl GitHubBoard {
         let at = self.tick();
         if let Some(held) = self.items.iter_mut().find(|held| held["item"] == *item) {
             held["itemUpdatedAt"] = json!(at);
+        }
+    }
+
+    /// Record a dependency added to or removed from the issue `id` and `other`, as GitHub does:
+    /// one event on each end's timeline, which a `timelineItems` count of the dependency event
+    /// types answers — and **neither issue's `updatedAt` nor either board item's**, because
+    /// the credentialed lane added a dependency to a real issue and saw all three stay put.
+    fn record_edge_event(&mut self, id: &str, other: &str) {
+        for end in [id, other] {
+            if let Some(item) = self
+                .items
+                .iter_mut()
+                .chain(self.pending.iter_mut())
+                .find(|item| item["id"] == end)
+            {
+                item["edgeEvents"] = json!(item["edgeEvents"].as_u64().unwrap_or(0) + 1);
+            }
         }
     }
 
@@ -1952,6 +1972,7 @@ impl GitHubBoard {
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
                "createdAt":null,"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
+               "edgeEvents":{"totalCount":item["edgeEvents"].as_u64().unwrap_or(0)},
                "state":item["state"],
                "stateReason":item["reason"],
                "repository":item["repo"].as_str().map(|repo| json!({"nameWithOwner":repo})),
@@ -3261,8 +3282,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         } else {
             entry.retain(|held| held != &blocker);
         }
-        // The relationship is the dependent issue's own: GitHub lists it on that issue.
-        board.touch_issue(&json!(issue));
+        // The relationship is the dependent issue's own: GitHub lists it on that issue, and
+        // records it on both ends' timelines without moving either's time.
+        board.record_edge_event(&issue, &blocker);
         let root = if adding {
             "addBlockedBy"
         } else {

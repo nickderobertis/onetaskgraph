@@ -1167,13 +1167,38 @@ write may still hold its source's token, and a destination ignores it.
 What each plugin of this build keys its token on, and the change kinds it covers, is stated
 here once, as what the credentialed journeys named below re-take against the real service:
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: `every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs` changes one loopback board task by every kind in this table and holds its token to moving to a later one; `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey` re-takes each against GitHub; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence; and `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` hold the GitHub row's settling rule. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: `every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs` changes one loopback board task by every kind in this table and holds its token to moving to a later one; `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey` re-takes each against GitHub; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence; `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` hold the GitHub row's settling rule; and the list of what each GitHub part keeps fresh is held by the same change-kind journey, which also holds both ends of a dependency to moving, by `a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_the_listing` in that `copy_skip.rs`, which re-reads exactly the tasks a dependency added, removed or replaced reaches and holds the copy's edges to the board's, by `change_token.rs`'s own unit tests in the plugin for the ordering and the refused `gh1` spelling, and by the plugin's `tests/point_cost.rs` for the unchanged prices. -->
 | Plugin | Keys its token on | Change kinds covered |
 | --- | --- | --- |
-| `github-projects` | `gh1\|<issue updatedAt>\|<board item updatedAt>\|<comment count>`, from what every list, search and detail read already selects | every kind: a comment added, edited or deleted; a body or title edit; a label change; a status, priority or other board field change; a metadata change, which lives in the body; a dependency added or removed. Given only once the task has settled: when its later time is more than 60 seconds before the `Date` of the response that read it, and never from a response with no `Date` (below) |
+| `github-projects` | `gh2\|<issue updatedAt>\|<board item updatedAt>\|<comment count>\|<dependency events>`, from what every list, search and detail read already selects | every kind: a comment added, edited or deleted; a body or title edit; a label change; a status, priority or other board field change; a metadata change, which lives in the body; a dependency added, removed or replaced, on both of the tasks it relates. Given only once the task has settled: when its later time is more than 60 seconds before the `Date` of the response that read it, and never from a response with no `Date` (below) |
 | `local-md` | `md1\|<SHA-256 of the task file's bytes>` | every kind: everything a task is lives in its one file. Two different digests say the file changed and never which came first |
 | `linear` | none | none yet: Linear's `Issue.updatedAt` has not been proven to move for every kind above, so a Linear task carries no token and is always read |
 | `in-memory` | none | none |
+
+**What each part of a GitHub token keeps fresh.** No member of a task is left uncovered, and
+each is kept fresh by the part GitHub moves for it:
+
+- the issue's `updatedAt` — its title, its body and so its metadata, which lives in the body's
+  slot, its labels, its state, and a comment added or edited;
+- the board item's `updatedAt` (`ProjectV2Item.updatedAt`) — its `Status`, its `Priority` and
+  every other board field, which move the item's time and not the issue's;
+- its comment count (`comments { totalCount }`) — a comment deleted, which moves neither time;
+- its dependency events (`timelineItems(itemTypes: [BLOCKED_BY_ADDED_EVENT,
+  BLOCKED_BY_REMOVED_EVENT, BLOCKING_ADDED_EVENT, BLOCKING_REMOVED_EVENT]) { totalCount }`) —
+  its edges. **GitHub moves neither time nor the comment count for a dependency**: the
+  credentialed lane added one to a real issue and read all three where they were, so a token of
+  those three alone read an edge change as no change and a copy skipped it with its edges
+  stale. Every dependency added or removed is one more event on each of the two issues it
+  relates, a replacement two, and an event is never taken back, so the count only grows. Both
+  directions are counted, so a dependency a person adds from the blocking issue's side still
+  moves the blocked one's token — and the blocking issue's token moves with it, which reads that
+  task again once and never serves either stale.
+
+The count is a connection selected for its `totalCount` alone, with no page size, exactly as
+the comment count beside it is, and the offline model `tests/point_cost.rs` prices documents by
+adds nothing for it: every document's recorded price is what it was before the count was
+selected, and the credentialed lane reconciles each against GitHub's own `cost`. A token spelled `gh1`, without the count, is one
+this plugin no longer orders, so a copy recorded under it reads its task once more.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **Why a GitHub token waits for its task to settle.** GitHub reports both of the token's times

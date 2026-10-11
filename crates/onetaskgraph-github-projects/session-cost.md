@@ -1081,3 +1081,18 @@ which issue the comment is on before each edit, a content, a title, a metadata a
 dependency writes, a label attachment, the status write that closes it, and a fresh read of the
 task after each change — and its node count 256,975 → 269,919 with those reads. Nothing the
 journey did before the leg moved.
+
+## A replaced dependency, which GitHub moves no time for
+
+The credentialed lane added a dependency to a real issue and read the issue's `updatedAt`, its
+board item's and its comment count all where they were, so a token of those three alone read
+an edge change as no change. The token now counts the issue's dependency events as its fourth
+part (§4.13d), and the change-kind leg adds the one case only that count can tell apart: one
+dependency removed and another added in a single write, which leaves the number of edges where
+it was.
+
+**`session-cost.txt`** moves by that write alone: 150 → 155 requests — the dependency read and
+the one `addBlockedBy` and one `removeBlockedBy` the write sends, and two reads of one issue,
+the write's own and the fresh read of the token after it — and its node count 269,919 →
+271,031 with those reads. The dependency-event count is selected for its `totalCount` alone, so
+no document's node count or price moved for it.

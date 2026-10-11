@@ -10,9 +10,10 @@
 
 use std::process::Output;
 
-use onetaskgraph_github_projects::graphql;
+use onetaskgraph_github_projects::{change_token, graphql};
 use serde_json::{Value, json};
 
+use crate::change_tokens::far_ends;
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 
@@ -103,6 +104,16 @@ impl Stores {
             .as_array()
             .expect("comments")
             .clone()
+    }
+
+    /// The qualified ids the task `id` depends on, in the order its source lists them.
+    fn depends_on(&self, id: &str) -> Vec<String> {
+        self.json(&["task", "deps", id, "--direction", "depends-on"])["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|edge| edge["to"]["id"].as_str().expect("a far end").to_owned())
+            .collect()
     }
 
     fn metadata(&self, id: &str) -> Value {
@@ -212,11 +223,20 @@ fn a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_t
         .find(|(source, _)| source == "board:T-3")
         .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
         .expect("T-3 landed");
+    let origin_of: std::collections::BTreeMap<&str, &str> = landed
+        .iter()
+        .map(|(source, outcome)| {
+            (
+                outcome["destination"].as_str().expect("an id"),
+                source.as_str(),
+            )
+        })
+        .collect();
     let record = stores.metadata(&note);
     assert!(
         record["onetaskgraph.copied_version"]
             .as_str()
-            .is_some_and(|token| token.starts_with("gh1|")),
+            .is_some_and(|token| token.starts_with(change_token::PREFIX)),
         "the copy records the source's token on the destination: {record:#}"
     );
     assert_eq!(record["onetaskgraph.copied_with_comments"], json!(true));
@@ -285,18 +305,32 @@ fn a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_t
             "a dependency removed",
             Box::new(|board| board.unblock("T-3", "T-2")),
         ),
+        (
+            "a dependency replaced",
+            Box::new(|board| {
+                board.unblock("T-3", "T-4");
+                board.block("T-3", &["T-1".to_owned()]);
+            }),
+        ),
     ];
     for (kind, change) in changes {
         change(&stores.board);
         let (after, served, _) = stores.copy(&query);
+        // A dependency is recorded on both of the issues it relates, so its far end is read
+        // again too.
+        let mut touched = vec!["board:T-3"];
+        touched.extend(far_ends(kind));
         for (source, outcome) in &after {
             assert_eq!(
                 skipped(outcome),
-                source != "board:T-3",
-                "{kind}: {source} is read again exactly when it is the one changed: {outcome:#}"
+                !touched.contains(&source.as_str()),
+                "{kind}: {source} is read again exactly when the change reached it: {outcome:#}"
             );
         }
-        for untouched in ["T-1", "T-2", "T-4"] {
+        for untouched in ["T-1", "T-2", "T-4"]
+            .into_iter()
+            .filter(|task| !touched.contains(&format!("board:{task}").as_str()))
+        {
             let reads: Vec<&str> = served
                 .naming(untouched)
                 .into_iter()
@@ -316,6 +350,24 @@ fn a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_t
         assert!(
             settled.iter().all(|(_, outcome)| skipped(outcome)),
             "{kind}: once copied, the change is skipped again: {settled:#?}"
+        );
+        // A skip never serves a stale edge: the copy's edges are the board's, a far end the
+        // folder names by its own counterpart read as the board task it was copied from.
+        let mut copied: Vec<String> = stores
+            .depends_on(&note)
+            .into_iter()
+            .map(|far| {
+                origin_of
+                    .get(far.as_str())
+                    .map_or(far.clone(), |id| (*id).to_owned())
+            })
+            .collect();
+        let mut expected = stores.depends_on("board:T-3");
+        copied.sort();
+        expected.sort();
+        assert_eq!(
+            copied, expected,
+            "{kind}: the folder's copy holds the board's edges"
         );
     }
     // What the folder holds is what the board holds now.
