@@ -132,6 +132,11 @@ def message(line, sender):
 
 
 def main():
+    # The engine speaks UTF-8 with `\n` line ends, and a text-mode stdio with no encoding
+    # takes the platform's: the ANSI code page on Windows, which read an em-dash in the
+    # rewritten text as `â€”` and wrote that into the file.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     first = message(sys.stdin.readline(), "the engine")
     params = first.get("params")
     config = params.get("config") if isinstance(params, dict) else None
