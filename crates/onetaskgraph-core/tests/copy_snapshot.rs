@@ -50,6 +50,10 @@ enum Mode {
     Shifting,
     /// Every page past the first answering that the task is gone.
     VanishingLater,
+    /// Every first page carrying one comment more than it was asked for.
+    Oversized,
+    /// Every page past the first naming, as the page after it, the very cursor it was read at.
+    RepeatingCursor,
 }
 
 /// An in-memory source whose detail reads answer as [`Mode`] says, and which counts them.
@@ -180,6 +184,7 @@ impl TaskSource for Unsteady {
         let read = self.detail_reads.fetch_add(1, Ordering::SeqCst) + 1;
         let mode = *self.mode.lock().expect("the mode");
         let later_page = comments.is_some_and(|page| page.cursor.is_some());
+        let asked = comments.and_then(|page| page.cursor.clone());
         self.inner
             .get_task_details(ids, comments)
             .await
@@ -193,6 +198,19 @@ impl TaskSource for Unsteady {
                     }),
                     (Mode::Shifting, Some(mut detail)) => {
                         detail.task.version = Some(format!("v{read}"));
+                        Some(detail)
+                    }
+                    (Mode::Oversized, Some(mut detail)) if !later_page => {
+                        if let Some(Ok(Some(page))) = &mut detail.comments {
+                            let extra = page.items[0].clone();
+                            page.items.push(extra);
+                        }
+                        Some(detail)
+                    }
+                    (Mode::RepeatingCursor, Some(mut detail)) if later_page => {
+                        if let Some(Ok(Some(page))) = &mut detail.comments {
+                            page.next = asked.clone();
+                        }
                         Some(detail)
                     }
                     (_, detail) => detail,
@@ -348,6 +366,32 @@ async fn a_source_task_gone_part_way_through_its_comment_pages_is_no_such_task()
         "{refused:?}"
     );
     assert!(held(&engine, "into").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_source_paging_its_comments_past_what_was_asked_or_in_a_circle_is_refused() {
+    for (misreads, refusal) in [
+        (Mode::Oversized, "never more"),
+        (Mode::RepeatingCursor, "the walk would never end"),
+    ] {
+        let (from, mode, detail_reads) = unsteady("from", &commented());
+        let (into, _, _) = unsteady("into", &empty());
+        let engine = Engine::new(vec![from, into], vec![name("from"), name("into")]);
+        *mode.lock().unwrap() = misreads;
+
+        let Err(refused) = engine.copy(&copy()).await else {
+            panic!("{misreads:?}: a walk that cannot be trusted copies nothing");
+        };
+        assert!(
+            refused.to_string().contains(refusal),
+            "{misreads:?}: {refused}"
+        );
+        assert!(
+            detail_reads.load(Ordering::SeqCst) <= 3,
+            "{misreads:?}: the walk is bounded"
+        );
+        assert!(held(&engine, "into").await.is_empty(), "{misreads:?}");
+    }
 }
 
 #[tokio::test]
