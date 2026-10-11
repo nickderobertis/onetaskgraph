@@ -1,50 +1,13 @@
 //! A task's change token on a GitHub board: what [`Task::version`](onetaskgraph_plugin_api::Task::version)
 //! holds here, and the one ordering of two of them.
 //!
-//! The token is built from five values every read of an issue on this board already selects,
-//! so it costs no request of its own:
-//!
-//! - the issue's own `updatedAt`, which GitHub moves for a title or body edit — and so for a
-//!   metadata change, which this source keeps in the body's slot, and for everything else that
-//!   slot holds — a label change, a comment added or edited, and a state change;
-//! - the board item's own `updatedAt` (`ProjectV2Item.updatedAt`), which a board field change
-//!   moves — the `Status` and `Priority` options, the origin field and every other text field —
-//!   where the issue's does not move;
-//! - the issue's comment count (`comments { totalCount }`), which a deleted comment moves even
-//!   where neither time does;
-//! - how many relationship events the issue's timeline holds (`timelineItems(itemTypes:
-//!   [BLOCKED_BY_ADDED_EVENT, BLOCKED_BY_REMOVED_EVENT, BLOCKING_ADDED_EVENT,
-//!   BLOCKING_REMOVED_EVENT, PARENT_ISSUE_ADDED_EVENT, PARENT_ISSUE_REMOVED_EVENT])
-//!   { totalCount }`), which every dependency and every project membership added or removed
-//!   moves — a replaced one by two. **Neither time
-//!   moves for a dependency**: the credentialed lane added one to a real issue and saw the
-//!   issue's `updatedAt`, the board item's and the comment count all stay where they were, so a
-//!   token of those three alone read an edge change as no change, and a copy that skipped on it
-//!   kept edges that had moved. A project membership is the same kind of relationship — a
-//!   parent issue — so it is counted the same way rather than trusted to a time. A timeline
-//!   event is never removed, so this count only grows, and a later version always holds at
-//!   least as many as an earlier one;
-//! - the repository the issue is in (`repository { nameWithOwner }`), which an issue
-//!   transferred to another repository changes. It is compared and never ordered: a token
-//!   naming another repository is no version of this one read in order, so a transfer can never
-//!   leave two tokens equal, whatever GitHub's times do.
-//!
-//! An item missing any of the five — a draft, which has no comments, or an item this process
-//! wrote and has not read back — gives no token, which a reader takes as *always read it*.
-//! `docs/plugin-protocol.md` §4.13d states the change kinds covered, and the credentialed
-//! journey in `tests/journey` re-takes each one against GitHub itself.
-//!
-//! **A token is given only once the item has settled.** GitHub reports both times to the
-//! second, so a change made in the same second as the one a read saw would leave both times
-//! where they were and, with the comment count unmoved, read as the same version — and a copy
-//! that recorded that version would skip the item and keep content that changed. So an item is
-//! given a token only when its later time is more than [`SETTLED`] before the server's own
-//! clock on the response that read it, its `Date` header: any change after that read then
-//! falls in a later second than the one the token records, and moves it. The relationship
-//! count and the repository need no such margin, because they move on every change whatever
-//! second it falls in. An item changed more recently, and every item of a response carrying no
-//! `Date`, gives no token and is read in full. `docs/plugin-protocol.md` §4.13d says the same,
-//! and so does every reader that keys on this token — the board cache included.
+//! `docs/plugin-protocol.md` §4.13d is the specification: the five parts the token is built
+//! from, the change kinds each covers member by member, and why a token waits for its task to
+//! settle. What is here is how this module holds to it. Each part is selected by every list,
+//! search and detail read already, so the token costs no request; an item missing any part — a
+//! draft, or an item this process wrote and has not read back — gives none. [`order`] says how
+//! two tokens of one issue stand to each other, and an item whose later time is within
+//! [`SETTLED`] of the response's `Date`, or read from a response without one, gives no token.
 
 use std::cmp::Ordering;
 
