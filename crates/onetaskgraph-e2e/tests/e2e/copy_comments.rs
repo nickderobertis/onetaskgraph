@@ -864,7 +864,13 @@ fn an_older_peer_is_sent_comment_copies_as_marked_comments_and_read_in_two_calls
 #[test]
 fn the_human_report_counts_each_tasks_comments_and_says_which_were_skipped() {
     let stores = Stores::new(SourceBoundary::Direct);
-    stores.note("A", "Written in the folder");
+    // In the board's own wording, `Todo`: a status compares by its name as well as its
+    // category, so a folder's `todo` would read as changed on every copy and never skip.
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Written in the folder\nstatus: Todo\n---\nWritten here.\n",
+    )
+    .expect("a task file");
     for said in ["one", "two", "three"] {
         stores.comment("notes:A", said);
     }
@@ -902,3 +908,4 @@ fn the_human_report_counts_each_tasks_comments_and_says_which_were_skipped() {
         "a task decided from its change tokens alone says it was skipped: {again}"
     );
 }
+
