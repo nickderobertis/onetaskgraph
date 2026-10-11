@@ -328,6 +328,30 @@ fn a_markdown_tasks_comments_land_on_a_board_with_their_origin_and_follow_every_
 }
 
 #[test]
+fn an_empty_source_comment_is_never_copied_and_one_emptied_takes_its_copy_with_it() {
+    let stores = Stores::new(SourceBoundary::Direct);
+    let kept = stores.board.add_comment("T-3", "said and kept");
+    let cleared = stores.board.add_comment("T-3", "about to be cleared");
+    // A comment with nothing in it — an attachment, or a body a person cleared on the
+    // service's own page — is one no destination this product writes would take.
+    stores.board.add_comment("T-3", "");
+
+    let landed = stores.copy("board:T-3", "notes");
+    assert_eq!(counts(&landed), [2, 0, 0, 0], "{landed:#}");
+    let note = destination(&landed);
+
+    stores.board.edit_comment(&cleared, "");
+    let followed = stores.copy("board:T-3", "notes");
+    assert_eq!(counts(&followed), [0, 0, 1, 1], "{followed:#}");
+    assert_eq!(
+        said(&stores.comments(&note)),
+        said(&[json!({"body": "said and kept",
+                      "origin": {"task": "board:T-3", "id": kept}})]),
+        "the copy of a comment its source emptied is gone, and nothing empty was written"
+    );
+}
+
+#[test]
 fn a_copy_never_touches_a_copy_another_task_carried_onto_its_destination() {
     for boundary in SOURCE_BOUNDARIES {
         let who = format!("{boundary:?}");
