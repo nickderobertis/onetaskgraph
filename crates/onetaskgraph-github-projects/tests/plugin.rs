@@ -341,6 +341,14 @@ impl Item {
         self.updated_at = Some(at.to_owned());
         self
     }
+    /// Give this issue every part of a change token, its issue and board item last changed at
+    /// `at` and holding `comments` comments, as an issue this board created carries them.
+    fn tokened(mut self, at: &str, comments: u64) -> Self {
+        self.updated_at = Some(at.to_owned());
+        self.item_updated_at = Some(at.to_owned());
+        self.comment_count = Some(comments);
+        self
+    }
     fn number(mut self, number: u64) -> Self {
         self.number = number;
         self
@@ -605,6 +613,10 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many of this board's next answers carry a `Date` in the very second of its last
+    /// change, as GitHub's do when a read lands just after a write by GitHub's own clock —
+    /// inside the change token's settling margin, so the plugin withholds every token.
+    unsettled_answers: usize,
     /// Whether this board's issue search orders one answer differently at every page size,
     /// as GitHub's does: the credentialed lane watched a search answer three issues in one
     /// order at a page of twenty and in another when asked a row at a time.
@@ -1100,6 +1112,10 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Answer this board's next `count` requests inside the change token's settling margin.
+    fn answer_unsettled(&self, count: usize) {
+        self.state.lock().unwrap().unsettled_answers = count;
+    }
     /// Order this board's issue search by the page size it is asked at, the way GitHub's
     /// relevance ordering breaks its ties differently per page size; see
     /// [`State::search_order_varies_with_first`].
@@ -1244,6 +1260,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        unsettled_answers: 0,
         search_order_varies_with_first: false,
         items_connection_behind_from: None,
         stuck_membership_cursor: None,
@@ -1300,7 +1317,13 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             // The board is read an hour after its last change, as a board nobody is editing at
             // that moment is: every item has settled, so every issue gives its change token.
             let served_at = {
-                let since = served.lock().unwrap().comment_ticks + 3600;
+                let mut state = served.lock().unwrap();
+                let since = if state.unsettled_answers > 0 {
+                    state.unsettled_answers -= 1;
+                    state.comment_ticks
+                } else {
+                    state.comment_ticks + 3600
+                };
                 format!(
                     "Tue, 01 Sep 2026 {:02}:{:02}:{:02} GMT",
                     since / 3600,
@@ -10311,6 +10334,44 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
         "and it did that without reading the board again"
     );
     assert_eq!(fixture.requests("issue"), 1);
+}
+
+/// The change-kind leg's token read, driven against a board whose answers land inside the
+/// token's settling margin.
+///
+/// `journey::settled_token` is the real one — the code the credentialed lane reads every
+/// token through — and the credentialed lane failed "GitHub gave the task no change token
+/// after a comment edited" when it took the first withheld answer as final: GitHub stamps a
+/// change by its own clock, so a read this machine makes past the margin can still be
+/// answered inside it. A token withheld for a few answers is asked for again; one withheld
+/// past the leg's bound fails naming the moment.
+#[tokio::test]
+async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
+    let fixture = board(vec![
+        Item::issue("I_kinds", "every change kind").tokened("2026-09-01T00:00:00Z", 0),
+    ]);
+    let task = NativeId("I_kinds".to_owned());
+    let rebuild = || source(&fixture);
+
+    fixture.answer_unsettled(3);
+    let token = journey::settled_token(&rebuild, &task, "after a comment edited")
+        .await
+        .expect("a token withheld for three answers is given on the fourth");
+    assert!(token.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
+    assert_eq!(
+        fixture.state.lock().unwrap().unsettled_answers,
+        0,
+        "the leg took a token before the board had answered past the margin"
+    );
+
+    fixture.answer_unsettled(usize::MAX);
+    let withheld = journey::settled_token(&rebuild, &task, "after a comment edited")
+        .await
+        .expect_err("a token withheld past the leg's bound is a failure");
+    assert!(
+        withheld.contains("no change token after a comment edited"),
+        "{withheld}"
+    );
 }
 
 /// The wait a live run reads its own fixture through, driven against a board that is behind.

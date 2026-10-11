@@ -2797,25 +2797,54 @@ async fn drive_every_declared_capability(
     .await
 }
 
+/// How many times, a second apart, the change-kind leg asks for a task's token before it holds
+/// the answer it has: GitHub stamps a change's `updatedAt` by its own clock, which neither this
+/// machine's clock nor the moment the write returned bound to the second, so a read made just
+/// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
+const TOKEN_READS: u32 = 30;
+
 /// A task's change token, as a source that has read nothing of the board yet reads it — so a
-/// record this run's own writer kept is not what answers.
+/// record this run's own writer kept is not what answers. `None` is the plugin withholding it,
+/// which it does while the task's last change is within `change_token::SETTLED` of the read.
 async fn token_now(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
     when: &str,
-) -> Result<String, String> {
-    rebuilt()
+) -> Result<Option<String>, String> {
+    Ok(rebuilt()
         .get_task(task)
         .await
         .map_err(|error| format!("live read of the task {when} failed: {error}"))?
         .ok_or_else(|| format!("the task was not there {when}"))?
-        .version
-        .ok_or_else(|| format!("GitHub gave the task no change token {when}"))
+        .version)
+}
+
+/// The task's token once the plugin gives one, asked again a second apart while it withholds
+/// it — failing, naming `when`, only when it is still withheld [`TOKEN_READS`] reads later.
+pub async fn settled_token(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    for read in 0..TOKEN_READS {
+        if read > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        if let Some(token) = token_now(rebuilt, task, when).await? {
+            return Ok(token);
+        }
+    }
+    Err(format!(
+        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} \
+         seconds past the plugin's settling margin; the plugin withholds a token only while \
+         the task's last change is within change_token::SETTLED of the read"
+    ))
 }
 
 /// Wait for the token to move off `before` after `kind`, and hold it to being the later one
 /// by the plugin's own ordering — asked again for a bounded while, because a read made the
-/// moment a write returns can be answered from before it.
+/// moment a write returns can be answered from before it, and a token is withheld until the
+/// change has settled.
 async fn moved(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
@@ -2823,15 +2852,14 @@ async fn moved(
     before: &str,
 ) -> Result<String, String> {
     tokio::time::sleep(endpoints().settle).await;
-    let mut after = before.to_owned();
-    for read in 0..10 {
-        if read > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-        after = token_now(rebuilt, task, &format!("after {kind}")).await?;
+    let when = format!("after {kind}");
+    let mut after = settled_token(rebuilt, task, &when).await?;
+    for _ in 1..10 {
         if after != before {
             break;
         }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        after = settled_token(rebuilt, task, &when).await?;
     }
     ensure!(
         after != before,
@@ -2869,7 +2897,7 @@ async fn every_change_kind_moves_a_tasks_token(
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
-    let mut before = token_now(rebuilt, task, "before any change").await?;
+    let mut before = settled_token(rebuilt, task, "before any change").await?;
 
     pause().await;
     let comment = writer
