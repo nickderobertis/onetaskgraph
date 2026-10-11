@@ -7843,10 +7843,7 @@ impl GitHubProjectsSource {
         if required_str(on, "id")? != issue.0 {
             return Ok(None);
         }
-        // Selected, and so answered: an answer without one carries no marker to keep.
-        Ok(Some(
-            optional_str(node, "body")?.unwrap_or_default().to_owned(),
-        ))
+        Ok(Some(required_str(node, "body")?.to_owned()))
     }
 
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
@@ -8289,12 +8286,6 @@ fn noting(error: SourceError, note: &str) -> SourceError {
     }
 }
 
-/// The variables of one [`graphql::ISSUE_DETAILS`] request over `batch` — at most
-/// [`DETAIL_BATCH`] ids — each item with the first page of its comments when `comments` asks
-/// for them.
-///
-/// The document is fixed-size, so a slot `batch` has no id for is bound to its last id, which
-/// is read again at no added price.
 /// The variables of one [`graphql::ISSUE_COPY_DETAILS`] request, as [`detail_batch`] binds its
 /// own: a slot `batch` has no id for is bound to its last id, read again at no added price.
 fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest) -> Value {
@@ -8310,6 +8301,12 @@ fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest) -> Value {
     Value::Object(variables)
 }
 
+/// The variables of one [`graphql::ISSUE_DETAILS`] request over `batch` — at most
+/// [`DETAIL_BATCH`] ids — each item with the first page of its comments when `comments` asks
+/// for them.
+///
+/// The document is fixed-size, so a slot `batch` has no id for is bound to its last id, which
+/// is read again at no added price.
 fn detail_batch(batch: &[NativeId], comments: Option<&PageRequest>) -> Value {
     let mut variables = serde_json::Map::new();
     for slot in 0..DETAIL_BATCH {

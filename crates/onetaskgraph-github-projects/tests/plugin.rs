@@ -13577,7 +13577,9 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
                "updatedAt":"2026-09-01T00:00:01Z","body":"said","url":null})
     };
     let owned = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
-                                       "issue":{"id":"I_1"}}}});
+                                       "body":"held","issue":{"id":"I_1"}}}});
+    let bodiless = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
+                                          "issue":{"id":"I_1"}}}});
     let cases: Vec<(Vec<Value>, CommentCall, &str)> = vec![
         // A listing is one read of the issue with its comments, so each of these is the issue
         // answered with a comment connection this source cannot read.
@@ -13654,6 +13656,13 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
             ],
             CommentCall::Edit,
             "comment update returned the wrong comment",
+        ),
+        // The body is selected so a copied comment's marker survives the edit; an answer
+        // without it cannot be edited without guessing what the marker was.
+        (
+            vec![issue_read("I_1"), bodiless],
+            CommentCall::Edit,
+            "missing string field body",
         ),
         (
             vec![

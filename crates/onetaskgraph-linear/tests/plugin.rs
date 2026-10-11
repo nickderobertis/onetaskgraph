@@ -644,7 +644,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                               "pageInfo":{"hasPreviousPage":false,"startCursor":null}}},
         // On the issue above, so an edit and a removal get past placing the comment and reach
         // the two mutations: an operation this never provokes is an operation this never checks.
-        "comment": {"id":"C","archivedAt":null,"issue":{"id":"I"}},
+        "comment": {"id":"C","body":"comment","archivedAt":null,"issue":{"id":"I"}},
         "commentCreate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
                           "createdAt":null,"updatedAt":null,"user":{"displayName":"ada"}}},
         "commentUpdate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
@@ -4427,7 +4427,7 @@ async fn a_comment_is_added_edited_and_removed_over_real_http() {
     let revised = "Seen again on main, twice.\n";
     let (endpoint, wire) = response_server(vec![
         held_issue("i1-backend"),
-        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"comment":{"id":"c7","body":"held","archivedAt":null,"issue":{"id":"i1-backend"}}}),
         serde_json::json!({"commentUpdate":{"success":true,
             "comment":comment_node("c7", revised, "2026-08-05T08:00:00Z")}}),
     ]);
@@ -4467,7 +4467,7 @@ async fn a_comment_is_added_edited_and_removed_over_real_http() {
 
     let (endpoint, wire) = response_server(vec![
         held_issue("i1-backend"),
-        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"comment":{"id":"c7","body":"held","archivedAt":null,"issue":{"id":"i1-backend"}}}),
         serde_json::json!({"commentDelete":{"success":true}}),
     ]);
     let removed = writable_source(&endpoint)
@@ -4541,11 +4541,11 @@ async fn a_comment_this_task_does_not_have_answers_none_and_nothing_is_written()
         ("no such comment", serde_json::Value::Null),
         (
             "a comment on another issue",
-            serde_json::json!({"id":"c9","archivedAt":null,"issue":{"id":"i2"}}),
+            serde_json::json!({"id":"c9","body":"held","archivedAt":null,"issue":{"id":"i2"}}),
         ),
         (
             "a comment on no issue at all",
-            serde_json::json!({"id":"c9","archivedAt":null,"issue":null}),
+            serde_json::json!({"id":"c9","body":"held","archivedAt":null,"issue":null}),
         ),
         (
             "a trashed comment",
@@ -4669,7 +4669,7 @@ async fn comment_failures_cross_the_http_boundary() {
     );
     let (endpoint, _) = response_server(vec![
         held_issue("i1"),
-        serde_json::json!({"comment":{"id":"c1","archivedAt":null,"issue":{"id":"i1"}}}),
+        serde_json::json!({"comment":{"id":"c1","body":"held","archivedAt":null,"issue":{"id":"i1"}}}),
         serde_json::json!({"commentDelete":{"success":false}}),
     ]);
     let failure = writable_source(&endpoint)
@@ -4796,7 +4796,7 @@ async fn malformed_comment_shapes_are_rejected_rather_than_read_past() {
         ),
         (
             "an issue with an empty id",
-            serde_json::json!({"id":"c1","archivedAt":null,"issue":{"id":""}}),
+            serde_json::json!({"id":"c1","body":"held","archivedAt":null,"issue":{"id":""}}),
         ),
     ] {
         let (endpoint, _) = response_server(vec![

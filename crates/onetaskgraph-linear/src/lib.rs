@@ -3880,14 +3880,7 @@ impl LinearSource {
         };
         let data = self.send(graphql::COMMENT, json!({"id":comment.0})).await?;
         let held = optional(&data, "comment", |v| {
-            // Selected, and so answered: an answer without one carries no marker to keep.
-            Ok((
-                comment_issue(v)?,
-                v.get("body")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            ))
+            Ok((comment_issue(v)?, str_at(v, "body")?.to_owned()))
         })?;
         Ok(held
             .filter(|(on, _)| on.as_ref() == Some(&issue))
