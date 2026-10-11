@@ -21,6 +21,7 @@ import {
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
   projectGraphDirections,
+  taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
 } from "../src/index.ts";
@@ -804,6 +805,43 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
   );
   expect([...sent].sort()).toEqual(own);
   for (const flag of Object.values(taskUpdateOptionFlags)) expect(own).toContain(flag);
+});
+
+test("taskCopy sends exactly the flags the binary's task copy reports, no more and no fewer", () => {
+  // `CopyOptions`, `CopyQueryOptions` and `create` are a second statement of `task copy`'s
+  // command line, reconciled against the binary's own help both ways as taskUpdate's are.
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  // `--to` is the destination, which `taskCopy` takes as an argument of its own.
+  const own = [...flags(["task", "copy"])]
+    .filter((flag) => !global.has(flag) && flag !== "--to")
+    .sort();
+  const sent = new Set(
+    [
+      ...taskCopyFlags({
+        matchBy: "title",
+        recreate: true,
+        dryRun: true,
+        noLink: true,
+        comments: true,
+        create: true,
+        sources: ["work"],
+        commentedSince: "2026-09-01T00:00:00Z",
+        metadata: ["myapp.a=1"],
+        termScope: ["github.com/example-org/widget"],
+      }),
+      ...taskCopyFlags({ termScope: [] }),
+    ].filter((argument) => argument.startsWith("--")),
+  );
+  expect([...sent].sort()).toEqual(own);
 });
 
 test("taskUpdate refuses options it could not send as the caller wrote them", () => {

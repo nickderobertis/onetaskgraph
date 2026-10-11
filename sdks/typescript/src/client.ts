@@ -782,6 +782,15 @@ function termScopeFlags(method: string, options: { termScope?: unknown }): strin
   return scope.flatMap((repository) => ["--term-scope", repository]);
 }
 
+// The flags `taskCopy` sends for `options`, beside the ids and `--to`: exported so the tests can
+// reconcile them against the binary's own `task copy --help`.
+export function taskCopyFlags(options: TaskCopyOptions): string[] {
+  if (options.create !== undefined && typeof options.create !== "boolean") {
+    throw new TypeError("taskCopy: create must be a boolean");
+  }
+  return [...copyFlags("taskCopy", options), ...(options.create ? ["--create"] : [])];
+}
+
 function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
   const args: string[] = [...termScopeFlags(method, options)];
   for (const flag of ["noLink", "comments"] as const) {
@@ -989,16 +998,7 @@ export class OnetaskgraphClient {
     return this.run("task deps", args);
   }
   taskCopy(ids: string[], to: string, options: TaskCopyOptions = {}): Promise<CopyReport> {
-    if (options.create !== undefined && typeof options.create !== "boolean") {
-      throw new TypeError("taskCopy: create must be a boolean");
-    }
-    return this.run("task copy", [
-      ...ids,
-      "--to",
-      to,
-      ...copyFlags("taskCopy", options),
-      ...(options.create ? ["--create"] : []),
-    ]);
+    return this.run("task copy", [...ids, "--to", to, ...taskCopyFlags(options)]);
   }
   projectList(options: FilterOptions = {}): Promise<QueryResponseOfQualifiedProject> {
     const args: string[] = [];

@@ -1602,7 +1602,7 @@ impl Engine {
                     Level::Task
                 };
                 let slots = match request.items.query() {
-                    Some(query) => self.matching(request, query, &mut running).await?,
+                    Some(query) => self.candidates(request, query, &mut running).await?,
                     None => request
                         .items
                         .as_slice()

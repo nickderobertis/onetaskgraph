@@ -45,8 +45,9 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
 }
 
 impl Engine {
-    /// Every task `query` matches, each either skipped from its listing or left to be read.
-    pub(super) async fn matching(
+    /// Every task `query` lists — its comment-activity instant still to be confirmed, by the
+    /// read of each task's comments — each either skipped from its listing or left to be read.
+    pub(super) async fn candidates(
         &self,
         request: &CopyRequest,
         query: &TaskRequest,

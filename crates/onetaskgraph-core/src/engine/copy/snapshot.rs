@@ -9,6 +9,11 @@
 //! request carried the same task: the same change token where the source gives one, and
 //! otherwise the same task in every member it reports.
 //!
+//! **One bound, stated rather than discovered.** Where the source gives no token — Linear, and
+//! a GitHub task changed within the minute before the read — the task's own members are all
+//! two reads can be compared by, and a comment edited alone between two pages moves none of
+//! them. Such a task's comments are then one revision only as far as each page shows.
+//!
 //! When they disagree the task is read again from its first page, once. A second
 //! disagreement is not chased further: the task is left unwritten and the copy reports it as
 //! failed, because a read that keeps losing a race with a person editing the item would
@@ -141,7 +146,7 @@ pub(super) async fn take(
         let Some(later) = answer else {
             return Ok(Taken::Gone);
         };
-        if !one_revision(&task, &later.task) {
+        if !reads_alike(&task, &later.task) {
             return Ok(Taken::Changed);
         }
         let page = match later.comments {
@@ -172,9 +177,10 @@ fn commentless(id: &NativeId) -> SourceError {
     }
 }
 
-/// Whether two reads of one task carried the same revision of it: the same change token when
-/// both gave one, and otherwise the same task in every member but the token.
-fn one_revision(first: &Task, later: &Task) -> bool {
+/// Whether two reads of one task agree on it: the same change token when both gave one — which
+/// covers its comments — and otherwise the same task in every member but the token, which says
+/// nothing of a change to a comment alone.
+fn reads_alike(first: &Task, later: &Task) -> bool {
     if let (Some(first), Some(later)) = (&first.version, &later.version) {
         return first == later;
     }
