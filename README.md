@@ -696,8 +696,12 @@ them, so no task's comments are read twice in one copy.
 **A copy is one revision of each item, or none of it.** A task whose comments fit one page is
 read whole in one request; one whose comments run longer is read a page at a time, each page
 beside the task, and when two of those reads disagree — a comment edited, added, or the body
-changed in between — the task is read again from its first page, once. Read differently again,
-it is written nowhere and reported `failed`, with the failure document every verb reports in,
+changed in between — the task is read again from its first page, once. A task whose source
+gives it no change token — every Linear task, and a GitHub task changed within the minute
+before the read — has nothing on a page read that moves when a comment alone is edited, so when
+its comments run past one page it is read again in full until two passes in a row agree on
+every comment's id, body and time, at most three passes. Read differently again, or never
+settling, it is written nowhere and reported `failed`, with the failure document every verb reports in,
 while every other item lands and the command exits `4`. So a copy by query into a fresh folder
 of Markdown, with `--comments --no-link`, is a snapshot of the board: nothing writes to that
 folder afterwards but another copy into it, and the board is left exactly as it was.

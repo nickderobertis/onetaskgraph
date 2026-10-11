@@ -639,7 +639,10 @@ whose comments could not be read — not refused as a whole — is answered with
 
 A copy reads a task whose comments run past one page a page at a time through this method, and
 compares the task each answer carries with the first: when they differ, the task changed while
-it was being read, and the copy reads it again (§4.13d).
+it was being read, and the copy reads it again (§4.13d). For a task carrying no `version`, which
+says nothing of a comment edited alone, the copy also reads every page again from the first,
+until two full passes in a row agree on every comment's id, body and `updated_at`, at most three
+passes; a task that never settles is written nowhere and reported failed.
 
 ### 4.5 `query_tasks`
 

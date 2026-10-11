@@ -41,7 +41,7 @@ const NARROWING: [&str; 6] = [
 ];
 
 /// What one request was, for the breakdown: listing, detail or a further comment page.
-fn part(document: &str, variables: &Value) -> &'static str {
+pub(crate) fn part(document: &str, variables: &Value) -> &'static str {
     if document == graphql::SEARCH_ISSUES || document == graphql::BOARD {
         "listing"
     } else if document == graphql::ISSUE_DETAILS
@@ -57,7 +57,7 @@ fn part(document: &str, variables: &Value) -> &'static str {
 }
 
 /// The requests and points one command spent, in total and by part.
-fn spent(served: &[(String, Value)]) -> Value {
+pub(crate) fn spent(served: &[(String, Value)]) -> Value {
     let mut breakdown = serde_json::Map::new();
     let (mut requests, mut points) = (0u64, 0u64);
     for (document, variables) in served {
@@ -75,7 +75,7 @@ fn spent(served: &[(String, Value)]) -> Value {
 }
 
 /// Write one measurement where this crate's telemetry lives.
-fn record(name: &str, workload: &str, measured: &Value) {
+pub(crate) fn record(name: &str, workload: &str, measured: &Value) {
     let directory = directory();
     std::fs::create_dir_all(&directory).expect("the telemetry directory");
     let mut written = measured.clone();

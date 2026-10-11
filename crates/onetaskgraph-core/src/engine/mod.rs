@@ -1073,7 +1073,9 @@ pub enum EngineError {
     CommentsNotDocuments,
 
     /// A copy read a task whose source moved to another revision of it between two of the
-    /// requests that read it, and again when the copy read it a second time.
+    /// requests that read it, and again when the copy read it a second time — or, for a task
+    /// giving no change token whose comments run past one page, whose full passes over its
+    /// comments never agreed two in a row.
     ///
     /// Reported against that task alone, as a failed outcome of the copy, rather than failing
     /// the copy: nothing was written for it, and every other item landed.

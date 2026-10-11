@@ -3772,6 +3772,10 @@ impl Engine {
                 snapshot::Taken::Gone => {
                     return Err(EngineError::NoSuchItem { id: id.to_string() });
                 }
+                // Already read in full more than once, so not read yet again.
+                snapshot::Taken::Unsettled => {
+                    return Err(EngineError::ChangedWhileCopied { item: id.clone() });
+                }
                 snapshot::Taken::Changed => {}
             }
         }
@@ -4763,6 +4767,7 @@ impl Engine {
                             break;
                         }
                         snapshot::Taken::Gone => return Ok(None),
+                        snapshot::Taken::Unsettled => break,
                         snapshot::Taken::Changed => {}
                     }
                 }

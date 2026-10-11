@@ -20,7 +20,7 @@
 //! otherwise spend an allowance every session on the host shares, without bound.
 
 use onetaskgraph_plugin_api::{
-    Comment, Cursor, NativeId, PageRequest, SourceError, Task, TaskDetailRead,
+    Comment, Cursor, NativeId, Page, PageRequest, SourceError, Task, TaskDetailRead,
 };
 
 use crate::resolve::ResolvedSource;
@@ -43,6 +43,9 @@ pub(super) enum Taken {
     Gone,
     /// A later request carried another revision of the task than the first.
     Changed,
+    /// A task with no token whose comments run past one page, read in [`FULL_PASSES`] full
+    /// passes no two consecutive of which agreed.
+    Unsettled,
 }
 
 /// The page size a copy reads comments in: the most the source declares it answers.
@@ -102,8 +105,20 @@ fn about(id: &NativeId, read: Option<&TaskDetailRead>) -> Result<(), SourceError
     }
 }
 
+/// How many full passes over a token-less task's comments a copy makes, at most, looking for
+/// two consecutive ones that agree.
+///
+/// A source that gives no token for a task leaves nothing a page read carries that moves when a
+/// comment alone is edited, so a task whose comments run past one page is read again in full
+/// until two passes in a row agree on every comment. Three is two passes and one more for a
+/// person who was mid-edit during the first: a task still changing after that is left unwritten
+/// and reported failed rather than chased.
+pub(super) const FULL_PASSES: usize = 3;
+
 /// Finish reading `id` from the detail read `read` answered with: every further page of its
-/// comments, each held to the revision the first request carried.
+/// comments, each held to the task the first request carried — and, for a task with no change
+/// token whose comments run past one page, further full passes until two consecutive ones agree
+/// (see [`FULL_PASSES`]).
 ///
 /// # Errors
 ///
@@ -119,12 +134,95 @@ pub(super) async fn take(
     // A batched read answered ahead of this one is held to its id here, as `first` holds its own.
     about(id, Some(&read))?;
     let TaskDetailRead { task, comments } = read;
-    let page = match comments {
-        None => return Err(commentless(id)),
-        Some(Err(error)) => return Err(error),
-        Some(Ok(None)) => return Ok(Taken::Gone),
-        Some(Ok(Some(page))) => page,
+    let page = match first_page(id, comments)? {
+        Some(page) => page,
+        None => return Ok(Taken::Gone),
     };
+    let paged = page.next.is_some();
+    let mut held = match walk(source, id, &task, page).await? {
+        Walked::All(comments) => comments,
+        Walked::Gone => return Ok(Taken::Gone),
+        Walked::Changed => return Ok(Taken::Changed),
+    };
+    if task.version.is_none() && paged {
+        let mut settled = false;
+        for _ in 1..FULL_PASSES {
+            let start = PageRequest {
+                cursor: None,
+                limit: comment_page(source).limit,
+            };
+            let again = single(
+                id,
+                source
+                    .source()
+                    .get_task_details(std::slice::from_ref(id), Some(&start))
+                    .await,
+            )?;
+            let Some(again) = again else {
+                return Ok(Taken::Gone);
+            };
+            if !reads_alike(&task, &again.task) {
+                return Ok(Taken::Changed);
+            }
+            let Some(page) = first_page(id, again.comments)? else {
+                return Ok(Taken::Gone);
+            };
+            let pass = match walk(source, id, &task, page).await? {
+                Walked::All(comments) => comments,
+                Walked::Gone => return Ok(Taken::Gone),
+                Walked::Changed => return Ok(Taken::Changed),
+            };
+            let agrees = same_comments(&held, &pass);
+            held = pass;
+            if agrees {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            return Ok(Taken::Unsettled);
+        }
+    }
+    // Oldest first, whichever way the source walks its pages: Linear's run from the newest
+    // back, each page oldest first within itself. A stable sort leaves a source that walks
+    // forward, and comments sharing an instant, in the order the source gave them.
+    held.sort_by_key(|comment| comment.created_at);
+    Ok(Taken::Whole(Box::new(Snapshot {
+        task,
+        comments: held,
+    })))
+}
+
+/// What one walk over a task's comment pages came to.
+enum Walked {
+    /// Every page, each request carrying the task as the first did.
+    All(Vec<Comment>),
+    /// The source no longer holds the task.
+    Gone,
+    /// A later request carried another revision of the task than the first.
+    Changed,
+}
+
+/// The first page a detail read of `id` answered with, or `None` when the task is gone.
+fn first_page(
+    id: &NativeId,
+    comments: Option<Result<Option<Page<Comment>>, SourceError>>,
+) -> Result<Option<Page<Comment>>, SourceError> {
+    match comments {
+        None => Err(commentless(id)),
+        Some(Err(error)) => Err(error),
+        Some(Ok(page)) => Ok(page),
+    }
+}
+
+/// Every comment of `id`, from `page` — its first — through every further page, each request
+/// held to `task`.
+async fn walk(
+    source: &ResolvedSource,
+    id: &NativeId,
+    task: &Task,
+    page: Page<Comment>,
+) -> Result<Walked, SourceError> {
     let limit = comment_page(source).limit;
     fits(page.items.len(), limit)?;
     let mut held = page.items;
@@ -144,30 +242,29 @@ pub(super) async fn take(
                 .await,
         )?;
         let Some(later) = answer else {
-            return Ok(Taken::Gone);
+            return Ok(Walked::Gone);
         };
-        if !reads_alike(&task, &later.task) {
-            return Ok(Taken::Changed);
+        if !reads_alike(task, &later.task) {
+            return Ok(Walked::Changed);
         }
-        let page = match later.comments {
-            Some(Ok(Some(page))) => page,
-            Some(Ok(None)) => return Ok(Taken::Gone),
-            Some(Err(error)) => return Err(error),
-            None => return Err(commentless(id)),
+        let Some(page) = first_page(id, later.comments)? else {
+            return Ok(Walked::Gone);
         };
         fits(page.items.len(), limit)?;
         held.extend(page.items);
         asked = Some(cursor);
         next = page.next;
     }
-    // Oldest first, whichever way the source walks its pages: Linear's run from the newest
-    // back, each page oldest first within itself. A stable sort leaves a source that walks
-    // forward, and comments sharing an instant, in the order the source gave them.
-    held.sort_by_key(|comment| comment.created_at);
-    Ok(Taken::Whole(Box::new(Snapshot {
-        task,
-        comments: held,
-    })))
+    Ok(Walked::All(held))
+}
+
+/// Whether two full passes over one task's comments read every comment alike: the same ids,
+/// in the same order, each with the same body and the same last-changed time.
+fn same_comments(first: &[Comment], later: &[Comment]) -> bool {
+    first.len() == later.len()
+        && first.iter().zip(later).all(|(first, later)| {
+            first.id == later.id && first.body == later.body && first.updated_at == later.updated_at
+        })
 }
 
 /// What a detail read answered without the comments it was asked for is refused as.
