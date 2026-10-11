@@ -1603,6 +1603,8 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
     expect(listed.items.map((task) => task.id)).toEqual(["from:T-1"]);
     const narrowed = await client.taskCopy([], "elsewhere", { ...narrowing, noLink: true });
     expect(narrowed.items.map((item) => item.source)).toEqual(["from:T-1"]);
+    // Cast past the type on purpose: a JavaScript caller can pass a number, and the client is
+    // what refuses it, before the binary is asked.
     expect(() =>
       client.taskCopy([], "elsewhere", { commentedSince: 7 } as unknown as {
         commentedSince: string;
