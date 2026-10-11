@@ -317,8 +317,9 @@ pub enum TaskCommand {
     Copy(TaskCopyArgs),
     /// Add, list, edit and delete one task's comments.
     ///
-    /// A copy without --comments never reads or writes a comment, at either end; with it, it
-    /// keeps the destination's copies of the source's comments in step.
+    /// A copy without --comments writes no comment at either end, and reads one only to confirm
+    /// the matches of a --commented-since query; with it, it keeps the destination's copies of
+    /// the source's comments in step.
     Comment {
         #[command(subcommand)]
         command: CommentCommand,
@@ -1563,7 +1564,8 @@ pub struct TaskCopyArgs {
     /// origin comment changed and deletes one whose origin comment is gone. A comment written
     /// at the destination is never edited or deleted, and a comment that is itself a copy of
     /// one of the destination's own is never sent back. Each copied comment records where it
-    /// came from as its `origin`. Without this flag a copy reads and writes no comment.
+    /// came from as its `origin`. Without this flag a copy writes no comment, and reads one only
+    /// to confirm the matches of a --commented-since query.
     #[arg(long)]
     pub comments: bool,
 

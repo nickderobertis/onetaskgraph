@@ -106,8 +106,9 @@ pub struct CopyRequest {
     /// Whether the copy keeps the destination's copies of each task's comments in step with
     /// the source's — `--comments`.
     ///
-    /// Without it a copy reads, writes and costs exactly what it did before comments could be
-    /// carried: no comment is read or written at either end. With it, the copy adds the
+    /// Without it a copy writes no comment at either end, and reads, writes and costs exactly
+    /// what it did before comments could be carried — but for a copy by query narrowed by
+    /// comment activity, which reads each matched task's comments once to confirm it. With it, the copy adds the
     /// source's comments the destination holds no copy of, edits a copy whose origin comment
     /// changed, and deletes a copy whose origin comment is gone; a comment native to the
     /// destination is never edited or deleted, and a source comment that is itself a copy of
@@ -3723,8 +3724,9 @@ impl Engine {
     /// A task a `--comments` copy carries is read with every page of its comments as one
     /// revision of it — see [`snapshot`] — starting from the detail read made for many tasks of
     /// its source at once, when there was one, and read again from its first page once when its
-    /// requests disagreed. Every other item is read as [`Engine::read`] reads it, so a copy
-    /// without `--comments` costs exactly what it did before comments could be carried.
+    /// requests disagreed, and so is a task a copy by query narrowed by comment activity reads
+    /// to confirm its match. Every other item is read as [`Engine::read`] reads it, so a copy
+    /// with neither costs exactly what it did before comments could be carried.
     ///
     /// # Errors
     ///
@@ -3776,11 +3778,13 @@ impl Engine {
         Err(EngineError::ChangedWhileCopied { item: id.clone() })
     }
 
-    /// Read the first detail page of every task in `ids` a `--comments` copy carries, as few
-    /// requests as each source's own batched detail read takes, for [`Engine::read_for_copy`]
-    /// to start from — each task with the first page of its comments beside it.
+    /// Read the first detail page of every task in `ids` whose comments the copy reads — to
+    /// carry them, or to confirm a comment-activity query's match — as few requests as each
+    /// source's own batched detail read takes, for [`Engine::read_for_copy`] to start from: each
+    /// task with the first page of its comments beside it.
     ///
-    /// Nothing for a copy without `--comments`, which reads each task by itself as it always did.
+    /// Nothing for a copy that reads no comment, which reads each task by itself as it always
+    /// did.
     async fn prefetch(&self, request: &CopyRequest, ids: &[GlobalId], running: &mut Running) {
         if !reads_comments(request) {
             return;
