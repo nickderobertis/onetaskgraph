@@ -1064,6 +1064,14 @@ pub enum EngineError {
     )]
     QueryNotTasks,
 
+    /// A copy of documents was asked to carry comments: a document holds none, so only a task
+    /// or a project copy carries them.
+    #[error(
+        "a document holds no comments, so a document copy carries none\n\
+         next: copy the documents without --comments, or copy tasks or projects with it."
+    )]
+    CommentsNotDocuments,
+
     /// A copy read a task whose source moved to another revision of it between two of the
     /// requests that read it, and again when the copy read it a second time.
     ///

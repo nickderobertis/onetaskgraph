@@ -625,6 +625,58 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
 }
 
 #[tokio::test]
+async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused_first() {
+    // The command line offers neither on a document copy, so a Rust caller is the one that
+    // can ask: comments of documents, which hold none, and a query naming projects, when a
+    // query names tasks. Each is refused before anything is read or written.
+    let everything = TaskRequest {
+        sources: vec![name("from")],
+        filters: onetaskgraph_core::Filters::default(),
+        project: onetaskgraph_core::ProjectSelector::Any,
+        priorities: Vec::new(),
+        commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
+        include_members: false,
+        paging: Paging {
+            limit: NonZeroU32::new(50).expect("a non-zero limit"),
+            token: None,
+        },
+    };
+    for (request, refusal) in [
+        (
+            CopyRequest {
+                comments: true,
+                ..many(&["from:D-1"], CopyScope::Documents)
+            },
+            "a document holds no comments",
+        ),
+        (
+            CopyRequest {
+                items: CopyItems::matching(everything),
+                ..many(&["from:P-1"], CopyScope::Projects { tasks: true })
+            },
+            "only when it copies tasks",
+        ),
+    ] {
+        let engine = pair();
+        let Err(refused) = engine.copy(&request).await else {
+            panic!("expected a refusal naming {refusal:?}");
+        };
+        assert!(
+            matches!(
+                refused,
+                EngineError::CommentsNotDocuments | EngineError::QueryNotTasks
+            ),
+            "{refused:?}"
+        );
+        assert!(refused.to_string().contains(refusal), "{refused}");
+        assert!(refused.to_string().contains("next:"), "{refused}");
+        assert!(listed(&engine, "into").await.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn an_id_that_names_nothing_and_a_destination_nothing_configures_are_both_refused() {
     let engine = pair();
 

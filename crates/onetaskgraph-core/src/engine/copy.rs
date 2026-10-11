@@ -113,7 +113,12 @@ pub struct CopyRequest {
     /// destination is never edited or deleted, and a source comment that is itself a copy of
     /// one of the destination's own is never sent back. Each item's outcome then reports
     /// [`CopyOutcome::comments`].
+    ///
+    /// A document holds no comments, so beside [`CopyScope::Documents`] it is refused, as
+    /// `EngineError::CommentsNotDocuments`, before anything is read.
+    // llmlint: ignore-block[invalid_states_unrepresentable] Making `comments` beside `CopyScope::Documents` unrepresentable would move it into the scope enum's task and project variants, which every Rust caller of this request matches and sets by name, and which `CopyScope` is shared with the command line and the report — rewriting what each existing caller writes for one flag. The one combination it allows that means nothing is refused by `Engine::copy` before anything is read, as `create` beside `match_by` is.
     pub comments: bool,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Whether the copy writes nothing at all to the source — `--no-link`.
     ///
     /// No `onetaskgraph.copies` link is recorded on any item copied, and each outcome reports
@@ -1467,6 +1472,9 @@ impl Engine {
         if request.items.query().is_some() && request.scope != CopyScope::Tasks {
             return Err(EngineError::QueryNotTasks);
         }
+        if request.comments && request.scope == CopyScope::Documents {
+            return Err(EngineError::CommentsNotDocuments);
+        }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
@@ -1475,7 +1483,7 @@ impl Engine {
         }
         // And for the same reason, a `--comments` copy into a destination whose tasks hold no
         // comments — the copy's own, or any a route can send a task to.
-        if request.comments && request.scope != CopyScope::Documents {
+        if request.comments {
             for name in std::iter::once(request.destination.clone())
                 .chain(self.routes.reachable(&request.destination))
             {

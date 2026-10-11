@@ -219,6 +219,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::ChangedWhileCopied { .. } => ("changed-while-copied".to_owned(), None, None),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
+        EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
         EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }
         | EngineError::StatusNotWritable { name, .. }
