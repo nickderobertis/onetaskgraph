@@ -1308,6 +1308,9 @@ otherwise the comment `existing` — one a copy wrote before — made to say `co
 `copy.origin` however it keeps it, or `null` when this source holds no such task or no such
 comment. A plugin that keeps a comment's author and times as it is told may take the origin's
 for the copy; a folder of Markdown does, and its copy reads back with the origin's own id.
+`copy.origin.task` is always a qualified task id, `<source>:<native task id>`: the shipped host
+refuses one that is not with `{"kind": "malformed"}` before it writes anything, and an engine
+reading back a comment whose `origin` names no qualified task reads it as having none.
 
 ### 4.17 `set_task_status` and `set_delivered_by`
 

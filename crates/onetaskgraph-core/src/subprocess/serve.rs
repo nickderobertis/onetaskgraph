@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    Document, Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskSource, TaskUpdateOutcome,
+    CommentOrigin, Document, Page, Project, SecretResolver, SourceError, SourceName, Status,
+    StatusCategory, Task, TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -610,6 +610,18 @@ async fn dispatch(
         }
         "write_comment_copy" => {
             let params: CommentCopyParams = decode(method, params)?;
+            // The origin's task decides which copies a later copy owns, edits and deletes, so
+            // one naming no task is refused before anything is written rather than stored and
+            // only found out when it is read back.
+            if !CommentOrigin::is_qualified_task(&params.copy.origin.task) {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "write_comment_copy names its origin's task as {:?}, which is not a \
+                         qualified task id `<source>:<native task id>`",
+                        params.copy.origin.task
+                    ),
+                });
+            }
             encode(json!({
                 "comment": source
                     .write_comment_copy(&params.task, params.existing.as_ref(), &params.copy)

@@ -492,3 +492,65 @@ fn a_removal_the_hosted_source_refuses_crosses_the_wire_as_its_own_reason() {
     );
     assert_eq!(answered[1]["result"]["task"]["id"], "T-1", "{answered:?}");
 }
+
+#[test]
+fn the_shipped_host_refuses_a_comment_copy_whose_origin_names_no_task_and_writes_nothing() {
+    let commented = json!({
+        "id": "0",
+        "method": "initialize",
+        "params": {
+            "protocol_version": 2,
+            "engine": {"name": "onetaskgraph", "version": "0.1.0"},
+            "source_name": "work",
+            "config": {
+                "tasks": [{"id": "T-1", "title": "Alpha",
+                           "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+                "capabilities": {"comments": "native"}
+            },
+            "secrets": {}
+        }
+    });
+    let copy = |task: &str| {
+        json!({"id": "1", "method": "write_comment_copy", "params": {
+            "task": "T-1",
+            "copy": {"body": "said at the origin", "origin": {
+                "task": task, "id": "C-7", "author": "ada",
+                "created_at": null, "updated_at": null, "url": null}}}})
+    };
+    let read = json!({"id": "2", "method": "task_comments",
+                      "params": {"task": "T-1", "page": {"cursor": null, "limit": 50}}});
+    for unqualified in ["", "T-9", "board:", "not a source:T-9"] {
+        let answered = answers(
+            source_host(),
+            &commented,
+            &[copy(unqualified), read.clone()],
+        );
+        assert_eq!(
+            answered[0]["error"]["kind"], "malformed",
+            "{unqualified:?}: {answered:?}"
+        );
+        assert!(
+            answered[0]["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("qualified task id")),
+            "{unqualified:?}: {answered:?}"
+        );
+        assert_eq!(
+            answered[1]["result"]["page"]["items"],
+            json!([]),
+            "{unqualified:?}: nothing was written"
+        );
+    }
+    let answered = answers(source_host(), &commented, &[copy("board:T-9"), read]);
+    assert_eq!(
+        answered[0]["result"]["comment"]["origin"]["task"], "board:T-9",
+        "{answered:?}"
+    );
+    assert_eq!(
+        answered[1]["result"]["page"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{answered:?}"
+    );
+}
