@@ -2603,19 +2603,16 @@ fn block(text: &str) -> Option<(Comment, &str)> {
     let id = id.filter(|id| !id.is_empty())?;
     let created_at = timestamp(created_at?)?;
     let updated_at = timestamp(updated_at?)?;
-    // A copied comment: its own id, author and times are its origin's, and the marker line
+    // A copied comment: its own id, author and times are its origin's, and the origin line
     // records the rest.
-    let origin = match origin_task {
-        Some(task) => Some(CommentOrigin {
-            task,
-            id: NativeId(origin_id.unwrap_or_else(|| id.clone())),
-            author: author.clone(),
-            created_at: Some(created_at),
-            updated_at: Some(updated_at),
-            url: origin_url,
-        }),
-        None => None,
-    };
+    let origin = origin_task.map(|task| CommentOrigin {
+        task,
+        id: NativeId(origin_id.unwrap_or_else(|| id.clone())),
+        author: author.clone(),
+        created_at: Some(created_at),
+        updated_at: Some(updated_at),
+        url: origin_url,
+    });
     Some((
         Comment {
             origin,

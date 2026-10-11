@@ -1041,3 +1041,21 @@ tasks to that one request.
 `graphql::DOCUMENTS`: its request total 122 → 123, and its node count by the document's
 worst case, 7,413 nodes, 249,562 → 256,975. Nothing the journey writes or reads besides that
 probe moved, because the journey makes no copy with `--comments`.
+
+## Every change kind moves a task's change token, re-taken on every run
+
+`docs/plugin-protocol.md` §4.13d states that a GitHub task's change token moves for every kind
+of change a copy has to see — a comment added, edited or deleted; a body, title, label,
+metadata or dependency change; a priority or status change — because a copy skips a task whose
+token has not moved. That is GitHub's behaviour as much as this plugin's, so the live journey
+re-takes it: `every_change_kind_moves_a_tasks_token` makes each change to one of the run's own
+tasks in turn, a second apart, and holds the token a fresh read gives to moving to a later one
+by the plugin's own ordering after each. It renames the task to another of the run's own titles,
+so the artifact cleanup still finds it, and closes it last.
+
+**`session-cost.txt`** moves by that leg alone: 123 → 149 requests, every one of them a read or
+a write of the run's own second task — a comment added, edited and deleted with the read of
+which issue the comment is on before each edit, a content, a title, a metadata and two
+dependency writes, a label attachment, the status write that closes it, and a fresh read of the
+task after each change — and its node count 256,975 → 269,919 with those reads. Nothing the
+journey did before the leg moved.

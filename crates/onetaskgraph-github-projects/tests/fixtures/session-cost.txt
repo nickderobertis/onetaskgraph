@@ -1,5 +1,5 @@
-requests 123
-node count 256975
+requests 149
+node count 269919
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -8,17 +8,18 @@ requests per call
     1       0  POST /repos/{owner}/{repo}/labels
     1       0  account allowance after the reconciliation
     1       0  account allowance before the reconciliation
-    2       0  adding a comment
+    3       0  adding a comment
     6       0  adding an issue to the board
     2     100  board page size probe
     9       0  contract schema introspection
     6       0  creating an issue
+    1       0  deleting a comment
     6       0  deleting an issue
-    1       0  editing a comment
+    2       0  editing a comment
     3       0  filing an issue under its project
     6       0  live artifact cleanup
     3     300  live artifact lookup
-    1       0  live label attachment
+    2       0  live label attachment
     1       0  live origin field cleanup
     1       0  live origin field creation
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
@@ -40,16 +41,18 @@ requests per call
     1   20400  node-count and point-cost reconciliation while searching this board's issues
     1    5150  node-count and point-cost reconciliation while snapshotting board Status options and assignments
     1       0  nominated board lookup
+    1    7272  reading a batch of issues with their comments
     2   50800  reading a project's tasks
-    5     500  reading a task's comments
-    4     400  reading an issue's dependencies
-    7    3192  reading one issue
+    3     300  reading a task's comments
+    6     800  reading an issue's dependencies
+   19    8664  reading one issue
     3   20451  reading the board
     2     100  reading the board's fields and the destination repository
-    1       0  reading which issue a comment is on
-    2       0  recording a dependency
+    3       0  reading which issue a comment is on
+    3       0  recording a dependency
+    1       0  removing a dependency
    11   77520  searching this board's issues
     2   20200  terminal status read-back
-    2       0  updating an issue
+    6       0  updating an issue
     3     300  writable field discovery
-    6       0  writing a board field
+    7       0  writing a board field

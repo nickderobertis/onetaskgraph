@@ -34,9 +34,9 @@ use onetaskgraph_github_projects::{
 use onetaskgraph_plugin_api::{
     Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
-    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceError,
-    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery,
+    MetadataKey, NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    TaskUpdate, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -2739,7 +2739,199 @@ async fn drive_every_declared_capability(
         (&second_id, &second),
         &by_prefix,
     )
+    .await?;
+    // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
+    every_change_kind_moves_a_tasks_token(
+        writer,
+        rebuilt,
+        &run.token,
+        (&second_id, &first_id, &orphan_id),
+        (&label_id, &run.title(LAST_TITLE_OFFSET)),
+    )
     .await
+}
+
+/// A task's change token, as a source that has read nothing of the board yet reads it — so a
+/// record this run's own writer kept is not what answers.
+async fn token_now(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    rebuilt()
+        .get_task(task)
+        .await
+        .map_err(|error| format!("live read of the task {when} failed: {error}"))?
+        .ok_or_else(|| format!("the task was not there {when}"))?
+        .version
+        .ok_or_else(|| format!("GitHub gave the task no change token {when}"))
+}
+
+/// Wait for the token to move off `before` after `kind`, and hold it to being the later one
+/// by the plugin's own ordering — asked again for a bounded while, because a read made the
+/// moment a write returns can be answered from before it.
+async fn moved(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    kind: &str,
+    before: &str,
+) -> Result<String, String> {
+    let mut after = before.to_owned();
+    for read in 0..10 {
+        if read > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        after = token_now(rebuilt, task, &format!("after {kind}")).await?;
+        if after != before {
+            break;
+        }
+    }
+    ensure!(
+        after != before,
+        "{kind} left the task's change token at {before}, ten seconds after it; the token is \
+         what a copy skips by, so the plugin's statement of what it covers \
+         (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
+         github-projects plugin that GitHub's behaviour changed, rather than re-running"
+    );
+    ensure!(
+        onetaskgraph_github_projects::change_token::order(&after, before)
+            == Some(std::cmp::Ordering::Greater),
+        "{kind} moved the task's change token from {before} to {after}, which the plugin's own \
+         ordering does not put after it"
+    );
+    Ok(after)
+}
+
+/// Every change kind `docs/plugin-protocol.md` §4.13d says a GitHub task's change token covers,
+/// made to one live task in turn, and the token held to moving to a later one after each.
+///
+/// GitHub reports both of the token's times to the whole second, so each change waits a second
+/// past the one before: two changes inside one second that leave the comment count where it was
+/// read as one version, which is the bound that section states rather than a change this leg
+/// is about.
+async fn every_change_kind_moves_a_tasks_token(
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    token: &str,
+    (task, first, orphan): (&NativeId, &NativeId, &NativeId),
+    (label_id, renamed): (&str, &str),
+) -> Result<(), String> {
+    let body = |text: &str| {
+        CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
+    };
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
+    let mut before = token_now(rebuilt, task, "before any change").await?;
+
+    pause().await;
+    let comment = writer
+        .add_comment(
+            task,
+            &NewComment {
+                body: body("temporary credentialed comment; the live lane removes it")?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment write failed: {error}"))?
+        .ok_or_else(|| "the task to comment on was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment added", &before).await?;
+
+    pause().await;
+    writer
+        .edit_comment(
+            task,
+            &comment.id,
+            &body("temporary credentialed comment, edited")?,
+        )
+        .await
+        .map_err(|error| format!("live comment edit failed: {error}"))?
+        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment edited", &before).await?;
+
+    pause().await;
+    writer
+        .delete_comment(task, &comment.id)
+        .await
+        .map_err(|error| format!("live comment deletion failed: {error}"))?
+        .ok_or_else(|| "the comment to delete was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment deleted", &before).await?;
+
+    pause().await;
+    writer
+        .set_task_content(task, "temporary credentialed write, its body edited")
+        .await
+        .map_err(|error| format!("live content write failed: {error}"))?
+        .ok_or_else(|| "the task to edit was not there".to_owned())?;
+    before = moved(rebuilt, task, "a body edit", &before).await?;
+
+    pause().await;
+    let renamed = TaskUpdate {
+        title: Some(renamed.to_owned()),
+        ..TaskUpdate::default()
+    };
+    writer
+        .update_task(task, &renamed)
+        .await
+        .map_err(|error| format!("live title write failed: {error}"))?
+        .ok_or_else(|| "the task to rename was not there".to_owned())?;
+    before = moved(rebuilt, task, "a title edit", &before).await?;
+
+    pause().await;
+    attach_artifact_label(token, &task.0, label_id).await?;
+    before = moved(rebuilt, task, "a label change", &before).await?;
+
+    pause().await;
+    writer
+        .set_task_metadata(
+            task,
+            &MetadataKey::new("live.change_kind").map_err(|error| format!("a key: {error}"))?,
+            &json!("metadata"),
+        )
+        .await
+        .map_err(|error| format!("live metadata write failed: {error}"))?
+        .ok_or_else(|| "the task to annotate was not there".to_owned())?;
+    before = moved(rebuilt, task, "a metadata change", &before).await?;
+
+    pause().await;
+    let depends = |on: &[&NativeId]| TaskUpdate {
+        depends_on: Some(on.iter().map(|far| blocks(far, ItemKind::Task)).collect()),
+        ..TaskUpdate::default()
+    };
+    writer
+        .update_task(task, &depends(&[first, orphan]))
+        .await
+        .map_err(|error| format!("live dependency write failed: {error}"))?
+        .ok_or_else(|| "the task to make depend was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency added", &before).await?;
+
+    pause().await;
+    writer
+        .update_task(task, &depends(&[first]))
+        .await
+        .map_err(|error| format!("live dependency removal failed: {error}"))?
+        .ok_or_else(|| "the task to unhook was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency removed", &before).await?;
+
+    if writer.capabilities().priority.is_native() {
+        pause().await;
+        writer
+            .set_task_priority(task, Priority::Low)
+            .await
+            .map_err(|error| format!("live priority write failed: {error}"))?
+            .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
+        before = moved(rebuilt, task, "a priority change", &before).await?;
+    }
+
+    // Last, because it closes the issue: the status is a board field, and done is the state
+    // the board moves a task to without an option this board may not have.
+    pause().await;
+    writer
+        .set_task_status(task, StatusCategory::Done)
+        .await
+        .map_err(|error| format!("live status write failed: {error}"))?
+        .ok_or_else(|| "the task to finish was not there".to_owned())?;
+    moved(rebuilt, task, "a status change", &before).await?;
+    Ok(())
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -2894,7 +3086,7 @@ pub struct Nomination {
 
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 5;
+const LAST_TITLE_OFFSET: u64 = 6;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///

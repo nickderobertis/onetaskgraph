@@ -239,6 +239,12 @@ struct Item {
     /// GitHub moves it when a comment on the issue is added **or edited**, which is what its
     /// issue search's `updated:` qualifier is read against; see [`Item::updated`].
     updated_at: Option<String>,
+    /// When GitHub last saw this item's board fields change, as `ProjectV2Item.updatedAt`
+    /// carries it, and how many comments the issue holds, as `comments { totalCount }` does —
+    /// the two other parts of a change token. Kept for an issue this board created and
+    /// `None` for every seeded one, which is answered as it always was.
+    item_updated_at: Option<String>,
+    comment_count: Option<u64>,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -290,6 +296,8 @@ impl Item {
             listed: true,
             origin_value: true,
             updated_at: None,
+            item_updated_at: None,
+            comment_count: None,
             path_labels: BTreeMap::new(),
         }
     }
@@ -440,10 +448,9 @@ impl Item {
             })
             .collect::<Vec<_>>();
         if self.on_this_board {
-            nodes.push(
-                json!({"id":self.item_id,"project":{"id":self.board_entry_id,"number":7},
-                       "fieldValues":self.field_values(options)}),
-            );
+            nodes.push(json!({"id":self.item_id,"updatedAt":self.item_updated_at,
+                       "project":{"id":self.board_entry_id,"number":7},
+                       "fieldValues":self.field_values(options)}));
         }
         nodes
     }
@@ -474,6 +481,7 @@ impl Item {
                 "repository":self.repository.as_ref().map(|r| json!({"nameWithOwner":r})),
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
                 "subIssuesSummary":{"total":self.sub_issues},
+                "commentCount":self.comment_count.map(|total| json!({"totalCount":total})),
                 "labels":self.label_nodes(asked.path)}),
         }
     }
@@ -793,6 +801,27 @@ impl State {
         };
         self.comments.push(held.clone());
         held
+    }
+    /// Move what GitHub moves for an edit of the issue `content_id` itself — its title, body,
+    /// state, labels or relationships — on an issue this board created.
+    fn touch_issue(&mut self, content_id: &Value) {
+        let at = self.tick();
+        let item = self.find(content_id);
+        if item.comment_count.is_some() {
+            item.updated_at = Some(at);
+        }
+    }
+    /// Move what GitHub moves for a change to one of the board item `item_id`'s field values,
+    /// on an issue this board created.
+    fn touch_item(&mut self, item_id: &str) {
+        let at = self.tick();
+        if let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| item.item_id == item_id && item.comment_count.is_some())
+        {
+            item.item_updated_at = Some(at);
+        }
     }
     fn find(&mut self, content_id: &Value) -> &mut Item {
         let wanted = content_id.as_str().expect("a content id");
@@ -1501,7 +1530,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // nowhere to say anything else.
         let added = state.comment(&subject, Some(COMMENTER), &body);
         // GitHub moves the issue's `updatedAt` with every comment written on it.
-        state.find(&json!(subject)).updated_at = Some(added.updated_at.clone());
+        let issue = state.find(&json!(subject));
+        issue.updated_at = Some(added.updated_at.clone());
+        if let Some(count) = &mut issue.comment_count {
+            *count += 1;
+        }
         return json!({"addComment":{"subject":{"id":subject},
                                     "commentEdge":{"node":added.as_node()}}});
     }
@@ -1526,7 +1559,18 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             state.comments.iter().any(|held| held.id == id),
             "deleteIssueComment names {id}, which this board does not hold"
         );
+        let issue = state
+            .comments
+            .iter()
+            .find(|held| held.id == id)
+            .map(|held| held.issue.clone());
         state.comments.retain(|held| held.id != id);
+        // A deleted comment moves the issue's count and neither of its times.
+        if let Some(issue) = issue
+            && let Some(count) = &mut state.find(&json!(issue)).comment_count
+        {
+            *count -= 1;
+        }
         return json!({"deleteIssueComment":{"clientMutationId":null}});
     }
     if query.contains("on IssueComment{id body issue{id}}") {
@@ -1628,6 +1672,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
+        // An issue this board creates carries every part of its change token.
+        created.updated_at = Some(state.tick());
+        created.comment_count = Some(0);
         // Its own band, so an assertion about a created issue's number cannot pass against
         // a number a seeded board item happened to be wearing.
         created.number = 2000 + state.next as u64;
@@ -1678,8 +1725,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .iter()
             .position(|item| item.content_id == content)
             .expect("the issue was created first");
-        let item = state.pending.remove(position);
+        let mut item = state.pending.remove(position);
         let item_id = item.item_id.clone();
+        item.item_updated_at = Some(state.tick());
         state.items.push(item);
         return json!({"addProjectV2ItemById":{"item":{"id":item_id}}});
     }
@@ -1699,6 +1747,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             };
             item.state_reason = state_input["stateReason"].as_str().map(str::to_owned);
         }
+        state.touch_issue(&input["id"]);
         return json!({"updateIssue":{"issue":{"id":input["id"]}}});
     }
     if query.contains("updateProjectV2DraftIssue(input:$input)") {
@@ -1736,6 +1785,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         if let Some(text) = text {
             item.origin = Some(text);
         }
+        state.touch_item(&item_id);
         return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
     }
     if query.contains("addSubIssue(input:$input)") || query.contains("removeSubIssue(input:$input)")
@@ -1775,6 +1825,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         } else {
             edges.retain(|held| held != &blocker);
         }
+        // The relationship is the dependent issue's own.
+        state.touch_issue(&json!(issue));
         let root = if adding {
             "addBlockedBy"
         } else {
@@ -2208,6 +2260,7 @@ fn answer_a_session_call(
                 .expect("an issue this board holds");
             item.labels.push((id, name));
         }
+        state.touch_issue(&json!(labelable));
         return Some(json!({"addLabelsToLabelable":{"labelable":{"id":labelable}}}));
     }
     None
