@@ -247,20 +247,26 @@ fn a_board_task_changed_between_its_pages_is_read_again_once_and_lands_whole() {
 /// copy reads it again.
 fn changing_twice() -> (Sandbox, GitHubBoardFields) {
     let (sandbox, board) = board();
+    change_twice(&board, "T-3");
+    (sandbox, board)
+}
+
+/// Give the board's `task` more than a page of comments, and have a person edit it after each
+/// of the next two reads of its first page.
+fn change_twice(board: &GitHubBoardFields, task: &'static str) {
     for n in 0..BEYOND_A_PAGE {
-        board.add_comment("T-3", &format!("comment {n}"));
+        board.add_comment(task, &format!("comment {n}"));
     }
     board.after_request(
-        |document, variables| first_page_of(document, variables, "T-3"),
+        move |document, variables| first_page_of(document, variables, task),
         0,
-        |board| board.edit_body("T-3", "the first change"),
+        move |board| board.edit_body(task, "the first change"),
     );
     board.after_request(
-        |document, variables| first_page_of(document, variables, "T-3"),
+        move |document, variables| first_page_of(document, variables, task),
         1,
-        |board| board.edit_body("T-3", "the second change"),
+        move |board| board.edit_body(task, "the second change"),
     );
-    (sandbox, board)
 }
 
 #[test]
@@ -344,6 +350,83 @@ fn the_human_report_and_standard_error_name_the_task_a_copy_could_not_hold_still
             && diagnostic.contains("changed while it was being copied, twice"),
         "standard error names the task and the whole reason: {diagnostic}"
     );
+}
+
+#[test]
+fn a_project_member_that_will_not_hold_still_fails_alone_and_its_counterpart_is_kept() {
+    // Into a plain folder, and into one declaring routes — whose entry matches none of these
+    // tasks, but which plans a project copy by where each task would go.
+    for routed in [false, true] {
+        let sandbox = Sandbox::new();
+        let (config, board) = github_projects_with_board(&sandbox);
+        let notes = sandbox.subdirectory("notes");
+        let elsewhere = sandbox.subdirectory("elsewhere");
+        for folder in [&notes, &elsewhere] {
+            std::fs::create_dir_all(folder.join("tasks")).expect("the folder");
+        }
+        let mapping = json!({"Todo": "todo", "Doing": "in-progress", "Shipped": "done",
+                             "Done": "done"});
+        let mut folder = json!({"plugin": "local-md",
+                                "config": {"root": notes, "status_mapping": mapping}});
+        if routed {
+            folder["routes"] = json!([{"repositories": ["github.com/nobody/*"],
+                                       "to": "elsewhere"}]);
+        }
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin": "github-projects", "config": config},
+            "notes": folder,
+            "elsewhere": {"plugin": "local-md",
+                          "config": {"root": elsewhere, "status_mapping": mapping}},
+        })));
+        for task in ["T-1", "T-2"] {
+            board.set_labels(task, &[]);
+        }
+        let copy = [
+            "project",
+            "copy",
+            "board:P-1",
+            "--to",
+            "notes",
+            "--comments",
+            "--no-link",
+            "--json",
+        ];
+        let first = answered(&sandbox, &copy, 0);
+        let held = landed(&first, "board:T-1");
+        let before = std::fs::read_to_string(notes.join(format!(
+            "tasks/{}.md",
+            held.split_once(':').expect("qualified").1
+        )))
+        .expect("the copy's file");
+
+        change_twice(&board, "T-1");
+        let report = answered(&sandbox, &copy, 4);
+        let failed = outcome(&report, "board:T-1");
+        assert_eq!(failed["action"], "failed", "routed {routed}: {report:#}");
+        assert_eq!(failed["error"]["kind"], "changed-while-copied");
+        assert!(
+            outcome(&report, "board:T-2")["destination"].is_string(),
+            "routed {routed}: the other member lands: {report:#}"
+        );
+        assert!(
+            !report["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .any(|item| item["action"] == "orphaned"),
+            "routed {routed}: the member's counterpart is still a member, not an orphan: \
+             {report:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(notes.join(format!(
+                "tasks/{}.md",
+                held.split_once(':').expect("qualified").1
+            )))
+            .expect("the copy's file"),
+            before,
+            "routed {routed}: the counterpart is exactly as the last copy left it"
+        );
+    }
 }
 
 #[test]
