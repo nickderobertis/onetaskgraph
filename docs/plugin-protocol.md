@@ -1147,12 +1147,14 @@ member out, which the engine reads as *always read it*, and a plugin written bef
 existed is read exactly that way: it is optional under §2.1, and was added without a protocol
 version bump.
 
-It is **opaque** to every caller. The one reader that looks inside is the engine's own ordering
-of two versions of one task (`onetaskgraph_core::version`), which dispatches on the prefix each
-plugin of this build writes and answers `equal`, `later`, `earlier` or `incomparable` — the
-last for versions of different tasks, of different sources, a value it cannot parse, and two
-different versions a plugin's token says differ without saying which came first. A plugin of
-another build may give any token; the engine compares those for equality alone.
+It is **opaque** to every caller. The one reader that looks inside is the source that spelled
+it: the engine orders two versions of one task (`Engine::compare_versions`) by asking that
+source's `TaskSource::order_versions`, and answers `equal`, `later`, `earlier` or
+`incomparable` — the last for versions of different tasks, a source it does not hold, a value
+the source cannot parse, and two different versions a token says differ without saying which
+came first. The protocol carries no ordering method, so a plugin hosted over it has its tokens
+compared for equality alone: one token is one version, and two different ones are unordered,
+which a copy reads as changed and never as unchanged.
 
 A plugin derives its token on a read and never stores one it is handed: a `Task` arriving on a
 write may still hold its source's token, and a destination ignores it.

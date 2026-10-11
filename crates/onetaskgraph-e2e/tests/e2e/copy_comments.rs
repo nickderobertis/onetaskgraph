@@ -135,6 +135,9 @@ impl Stores {
     }
 }
 
+/// What a comment says and the `(task, comment id)` of its origin, if it is a copy.
+type Said = (String, Option<(String, String)>);
+
 /// What one outcome reports about the comments, as `[added, edited, deleted, unchanged]`.
 fn counts(outcome: &Value) -> [u64; 4] {
     let counts = &outcome["comments"];
@@ -147,8 +150,8 @@ fn counts(outcome: &Value) -> [u64; 4] {
 
 /// The body and the origin `(task, comment id)` of each comment, in no order a test depends
 /// on — copies land after the comments already there.
-fn said(comments: &[Value]) -> Vec<(String, Option<(String, String)>)> {
-    let mut said: Vec<(String, Option<(String, String)>)> = comments
+fn said(comments: &[Value]) -> Vec<Said> {
+    let mut said: Vec<Said> = comments
         .iter()
         .map(|comment| {
             (
@@ -532,9 +535,7 @@ fn a_project_copy_with_comments_carries_each_of_its_tasks_comments() {
 /// the folder so the next copy deletes one copy, edits one and adds two: every kind of step.
 /// Answers with the issue it landed as, the board's copy of the edited comment, and what the
 /// board's comments said after the first copy.
-fn changed_after_one_copy(
-    stores: &Stores,
-) -> (String, String, Vec<(String, Option<(String, String)>)>) {
+fn changed_after_one_copy(stores: &Stores) -> (String, String, Vec<Said>) {
     stores.note("A", "Written in the folder");
     stores.comment("notes:A", "kept as written");
     let edited = stores.comment("notes:A", "about to change");

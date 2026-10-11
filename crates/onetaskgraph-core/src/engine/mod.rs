@@ -1374,6 +1374,16 @@ impl Engine {
         })
     }
 
+    /// The source called `name`, when it built.
+    pub(crate) fn ready_source(
+        &self,
+        name: &SourceName,
+    ) -> Option<&dyn onetaskgraph_plugin_api::TaskSource> {
+        self.ready()
+            .find(|source| source.name() == name)
+            .map(ResolvedSource::source)
+    }
+
     /// Every source that did not, in the same order.
     fn unavailable(&self) -> impl Iterator<Item = &UnavailableSource> {
         self.sources.iter().filter_map(|source| match source {

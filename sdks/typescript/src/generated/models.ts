@@ -3422,11 +3422,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -4430,11 +4430,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -5895,11 +5895,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -7495,11 +7495,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -7989,11 +7989,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -8538,11 +8538,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -9320,11 +9320,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task
@@ -9727,11 +9727,11 @@ url?: (string | null)
  * comments added, edited and deleted included. A source that cannot promise all of that
  * for a task leaves this absent, which means *always read it*. What each plugin keys its
  * token on, and which change kinds it covers, is stated per plugin in
- * `docs/plugin-protocol.md` §4.13c.
+ * `docs/plugin-protocol.md` §4.13d.
  *
- * Opaque to every caller: nothing compares one but for equality, and the engine's own
- * ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
- * inside. Absent by default and left out of the wire when absent, so a source written
+ * Opaque to every caller: nothing compares one but for equality, and the one reader that
+ * looks inside is the source that gave it, through
+ * [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
  * before it existed is read as giving none.
  *
  * **Read-only.** A source derives it on a read and never stores one it is handed: a task

@@ -10,11 +10,11 @@
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_core::GlobalId;
-use onetaskgraph_core::version::{VersionOrder, Versioned, compare};
+use onetaskgraph_core::version::{VersionOrder, Versioned};
+use onetaskgraph_core::{Config, Engine, Environment, GlobalId, Secrets};
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, ROWS, SOURCE, document, github_projects_with_board};
 
 /// The JSON a run printed, having exited zero.
@@ -52,14 +52,45 @@ fn listed(sandbox: &Sandbox, extra: &[&str]) -> BTreeMap<String, Option<String>>
         .collect()
 }
 
-/// A board configured as the source `board`, with its handle.
-fn board() -> (Sandbox, GitHubBoardFields) {
+/// A board configured as the source `board`, with its handle and an engine over the same
+/// board — as `board` in process, and as `hosted` over the stdio plugin protocol — for the
+/// store's own ordering of two of its tokens.
+fn board() -> (Sandbox, GitHubBoardFields, Engine) {
     let sandbox = Sandbox::new();
     let (config, board) = github_projects_with_board(&sandbox);
     sandbox.project_document(&document(&json!({
         "board": {"plugin": "github-projects", "config": config}
     })));
-    (sandbox, board)
+    let credential = "GITHUB_PROJECTS_FIXTURE_TOKEN";
+    let engine = Engine::build(
+        &Config::from_document(json!({"sources": {
+            "board": {"plugin": "github-projects", "config": config},
+            "hosted": SourceBoundary::Subprocess.source_with_secrets(
+                "github-projects",
+                config.clone(),
+                &[credential],
+            ),
+        }}))
+        .expect("a valid configuration"),
+        &Secrets::load(Environment::from_pairs([(credential, "test-token")]))
+            .expect("the loopback's credential"),
+    );
+    (sandbox, board, engine)
+}
+
+/// How the token `a` of `item` stands to its token `b`, by the store's own ordering.
+fn ordered(engine: &Engine, item: &str, a: &str, b: &str) -> VersionOrder {
+    let item = GlobalId::from_str_checked(item);
+    engine.compare_versions(
+        Versioned {
+            item: &item,
+            version: a,
+        },
+        Versioned {
+            item: &item,
+            version: b,
+        },
+    )
 }
 
 /// One change a person makes to one task on the board.
@@ -67,7 +98,7 @@ type Change = Box<dyn Fn(&GitHubBoardFields)>;
 
 #[test]
 fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other() {
-    let (sandbox, board) = board();
+    let (sandbox, board, engine) = board();
     // Two comments to edit and to delete, made before anything is read.
     let first = board.add_comment("T-3", "the first word");
     let second = board.add_comment("T-3", "the second word");
@@ -123,7 +154,6 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
             Box::new(|board| board.unblock("T-3", "T-2")),
         ),
     ];
-    let changed = GlobalId::from_str_checked("board:T-3");
     for (kind, change) in changes {
         let before = listed(&sandbox, &["--source", "board"]);
         change(&board);
@@ -136,16 +166,7 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
             .unwrap_or_else(|| panic!("{kind}: a board task carries a token after: {after:?}"));
         assert_ne!(old, new, "{kind}: two equal tokens across a change");
         assert_eq!(
-            compare(
-                Versioned {
-                    item: &changed,
-                    version: &new
-                },
-                Versioned {
-                    item: &changed,
-                    version: &old
-                }
-            ),
+            ordered(&engine, "board:T-3", &new, &old),
             VersionOrder::Later,
             "{kind}: the store orders the token after the change as the later"
         );
@@ -216,7 +237,7 @@ fn every_read_carries_the_token_its_source_gives_and_linear_gives_none() {
 fn a_task_kept_for_its_comment_activity_carries_its_token() {
     // A board, whose search names the issues updated since the instant, and a folder of
     // Markdown, which reads each task's own comments.
-    let (sandbox, board) = board();
+    let (sandbox, board, _) = board();
     board.add_comment("T-1", "recent activity");
     let since = "2026-09-01T00:00:00Z";
     let kept = listed(&sandbox, &["--source", "board", "--commented-since", since]);
@@ -244,5 +265,35 @@ fn a_task_kept_for_its_comment_activity_carries_its_token() {
             .as_deref()
             .is_some_and(|token| token.starts_with("md1|")),
         "{kept:?}"
+    );
+}
+
+#[test]
+fn a_board_hosted_over_the_stdio_protocol_has_its_tokens_ordered_by_equality_alone() {
+    // A source hosted over the protocol is asked for no ordering (§4.13d), so the store keeps
+    // to the trait's default: one token is one version, and two different ones are unordered —
+    // which a copy reads as changed, never as unchanged. The same two tokens from the board in
+    // process are ordered by the plugin's own reading of them.
+    let (sandbox, board, engine) = board();
+    let before = listed(&sandbox, &["--source", "board"])["board:T-3"]
+        .clone()
+        .expect("a board task carries a token");
+    board.add_comment("T-3", "a later word");
+    let after = listed(&sandbox, &["--source", "board"])["board:T-3"]
+        .clone()
+        .expect("a board task carries a token");
+    assert_eq!(
+        ordered(&engine, "board:T-3", &after, &before),
+        VersionOrder::Later
+    );
+    assert_eq!(
+        ordered(&engine, "hosted:T-3", &after, &before),
+        VersionOrder::Incomparable,
+        "two tokens of a hosted source are never put in order"
+    );
+    assert_eq!(
+        ordered(&engine, "hosted:T-3", &before, &before),
+        VersionOrder::Equal,
+        "one token of a hosted source is one version"
     );
 }

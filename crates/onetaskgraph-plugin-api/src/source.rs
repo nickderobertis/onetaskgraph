@@ -1,5 +1,6 @@
 //! The two traits a plugin implements, and the secret lookup it is handed.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use schemars::{JsonSchema, Schema};
@@ -75,6 +76,22 @@ pub trait TaskSource: Send + Sync {
 
     /// What this source applies itself. Read once per query by the engine.
     fn capabilities(&self) -> Capabilities;
+
+    /// How `a`, a [`Task::version`] this source gave one of its tasks, stands to `b`, another
+    /// it gave the same task: `Greater` when `a` is the later, `Less` when it is the earlier,
+    /// `Equal` when nothing the token covers changed between them, and `None` when the two
+    /// cannot be put in order — a value this source cannot read, or two versions its token
+    /// says differ without saying which came first.
+    ///
+    /// A token's format and its order are the one source's that spells it, so the engine asks
+    /// the source that gave both rather than reading inside either.
+    ///
+    /// Defaulted to equality alone: two identical tokens are one version, and any two others
+    /// are unordered, which a reader takes as *changed, read it again* and never as
+    /// unchanged. A source whose token says which of two versions is the later overrides it.
+    fn order_versions(&self, a: &str, b: &str) -> Option<Ordering> {
+        (a == b).then_some(Ordering::Equal)
+    }
 
     /// Whether the source is answering right now.
     ///

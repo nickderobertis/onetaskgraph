@@ -109,17 +109,17 @@ pub struct Task {
     /// comments added, edited and deleted included. A source that cannot promise all of that
     /// for a task leaves this absent, which means *always read it*. What each plugin keys its
     /// token on, and which change kinds it covers, is stated per plugin in
-    /// `docs/plugin-protocol.md` §4.13c.
+    /// `docs/plugin-protocol.md` §4.13d.
     ///
-    /// Opaque to every caller: nothing compares one but for equality, and the engine's own
-    /// ordering of two of them (`onetaskgraph_core::version`) is the one reader that looks
-    /// inside. Absent by default and left out of the wire when absent, so a source written
+    /// Opaque to every caller: nothing compares one but for equality, and the one reader that
+    /// looks inside is the source that gave it, through
+    /// [`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written
     /// before it existed is read as giving none.
     ///
     /// **Read-only.** A source derives it on a read and never stores one it is handed: a task
     /// arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a
     /// destination ignores it.
-    // llmlint: ignore[invalid_states_unrepresentable] The contract this lands states the token as an opaque string so the next node's cache and both SDKs carry it unread; a typed token would make every plugin's format part of this crate, which AGENTS.md asks to keep still. The one reader that parses it, the engine's ordering, answers `incomparable` for any value it cannot parse.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract this lands states the token as an opaque string so the next node's cache and both SDKs carry it unread; a typed token would make every plugin's format part of this crate, which AGENTS.md asks to keep still. The one reader that parses it, its own source's `TaskSource::order_versions`, answers `None` for any value it cannot parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Who may read this task, as it was declared (see [`Classification`]).

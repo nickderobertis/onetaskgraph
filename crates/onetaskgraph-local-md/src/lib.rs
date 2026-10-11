@@ -1107,6 +1107,9 @@ impl TaskSource for LocalMdSource {
     fn kind(&self) -> &'static str {
         KIND
     }
+    fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        change_token::order(a, b)
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,
