@@ -1246,11 +1246,10 @@ struct Planned {
     /// the origin naming its source, any link naming a private source — is left behind
     /// rather than written where it would name somewhere private.
     withheld: bool,
-    /// Its comments at the source, every page of one revision of them, for a task a
-    /// `--comments` copy carries; `None` otherwise.
-    comments: Option<Vec<Comment>>,
-    /// Whether the copy carries its comments.
-    with_comments: bool,
+    /// Its comments at the source, every page of one revision of them, exactly when the copy
+    /// carries them — a task of a `--comments` copy — and `None` otherwise, a copy that read a
+    /// task's comments only to confirm its comment activity included.
+    carried: Option<Vec<Comment>>,
     /// What the copy does to its comments at the destination, decided before it lands.
     comment_plan: Option<comments::CommentPlan>,
     /// Whether the copy found it unchanged at both ends by its change tokens alone, so nothing
@@ -3105,13 +3104,14 @@ impl Engine {
             let as_written = same_edges(&held.edges, &resolved(&edges))
                 && targets(&held_task.delivers, &item.to)
                     == targets(&resolved_entries(&delivers), &item.to);
-            item.skipped = as_written && skips(task, held, item.with_comments, &item.to);
+            item.skipped = as_written && skips(task, held, item.carried.is_some(), &item.to);
         }
         // What each task's comments come to at the destination, decided from the two reads
         // already in hand before anything is written: the record a task lands with is a digest
         // of the comments it will hold.
         for item in &mut planned {
-            if let (Item::Task(task), true, false) = (&item.item, item.with_comments, item.skipped)
+            if let (Item::Task(task), Some(carried), false) =
+                (&item.item, &item.carried, item.skipped)
             {
                 let landing = match &item.target {
                     Target::Update { id, .. } => Some(GlobalId::new(item.to.clone(), id.clone())),
@@ -3125,7 +3125,7 @@ impl Engine {
                 item.comment_plan = Some(comments::plan(
                     &item.source,
                     origin_of(&task.metadata).as_ref(),
-                    item.comments.as_deref().unwrap_or_default(),
+                    carried,
                     landing.as_ref(),
                     &held,
                 ));
@@ -3861,7 +3861,20 @@ impl Engine {
         if let Some(first) = assets.first() {
             assets::stores(destination, &id.to_string(), &first.name)?;
         }
-        let with_comments = request.comments && item.level() == Level::Task;
+        // `read_for_copy` reads every page of a task's comments whenever the copy carries them,
+        // so a carried task without them is a read that went wrong, never a task with none.
+        let carried = match (request.comments && item.level() == Level::Task, comments) {
+            (false, _) => None,
+            (true, Some(comments)) => Some(comments),
+            (true, None) => {
+                return Err(refused(
+                    source,
+                    SourceError::Malformed {
+                        message: format!("the read of task {id} carried no comments"),
+                    },
+                ));
+            }
+        };
         let edges = forward_edges(source, &id.native, item.level()).await?;
         // A task copied by query was already aimed from its listing, when the copy asked
         // whether it could skip it.
@@ -3883,8 +3896,7 @@ impl Engine {
             assets,
             classification,
             withheld,
-            comments,
-            with_comments,
+            carried,
             comment_plan: None,
             skipped: false,
         })
@@ -4190,7 +4202,8 @@ impl Engine {
         // Every link is settled once the whole copy has landed, by `Engine::link`, so none
         // is known here.
         let comments = if item.skipped {
-            item.with_comments
+            item.carried
+                .is_some()
                 .then(|| skipped_counts(item.held.as_ref()))
         } else {
             item.comment_plan.as_ref().map(|plan| plan.counts)
@@ -5847,10 +5860,9 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
     // The comments a `--comments` copy carries land beside the item, so they are held to the
     // boundary with it — every one of them, before any is written.
     .and(
-        item.comments
+        item.carried
             .iter()
             .flatten()
-            .filter(|_| item.with_comments)
             .fold(Exposure::metadata(Vec::new()), |exposure, comment| {
                 exposure
                     .and(Exposure::text(comment.body.clone()))
@@ -6055,7 +6067,7 @@ fn record_of(
         Item::Task(source) => source.version.clone(),
         Item::Project(_) | Item::Document(_) => None,
     };
-    let comments = item.with_comments.then(|| match &item.comment_plan {
+    let comments = item.carried.is_some().then(|| match &item.comment_plan {
         Some(plan) => plan.after.clone(),
         None => comments::digest_entries(
             item.held
@@ -6066,7 +6078,7 @@ fn record_of(
     });
     record::Record {
         version,
-        with_comments: item.with_comments,
+        with_comments: item.carried.is_some(),
         digest: record::digest(task, edges, comments, destination),
     }
 }
@@ -6101,7 +6113,7 @@ fn stale_record(
     };
     let record = record_of(item, task, edges, destination);
     !record.held_by(&held_task.metadata)
-        && (item.with_comments || record::carried_comments(&held_task.metadata))
+        && (item.carried.is_some() || record::carried_comments(&held_task.metadata))
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.
