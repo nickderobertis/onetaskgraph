@@ -3734,7 +3734,7 @@ impl Engine {
                     return Ok(Read {
                         source: id.clone(),
                         item: Item::Task(Box::new(whole.task)),
-                        comments: Some(whole.comments.unwrap_or_default()),
+                        comments: Some(whole.comments),
                     });
                 }
                 snapshot::Taken::Gone => {
@@ -4711,7 +4711,7 @@ impl Engine {
                         },
                     )
                 })?;
-                held_comments = Some(whole.comments.unwrap_or_default());
+                held_comments = Some(whole.comments);
                 Some(Item::Task(Box::new(whole.task)))
             }
             Level::Task => destination

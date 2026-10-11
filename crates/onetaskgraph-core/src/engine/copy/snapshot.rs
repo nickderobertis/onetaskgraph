@@ -22,13 +22,12 @@ use crate::resolve::ResolvedSource;
 
 use super::super::fetch::{fits, unrepeated};
 
-/// One task as a copy reads it: the task, and every one of its comments when they were asked
-/// for — `None` when they were not.
+/// One task as a copy reads it: the task, and every one of its comments.
 pub(super) struct Snapshot {
     /// The task, as the first request of the read reported it.
     pub(super) task: Task,
     /// Its comments, oldest first, every page of them.
-    pub(super) comments: Option<Vec<Comment>>,
+    pub(super) comments: Vec<Comment>,
 }
 
 /// What one attempt at reading a task whole came to.
@@ -71,8 +70,10 @@ pub(super) async fn first(
 ///
 /// # Errors
 ///
-/// Whatever the source answered a page with, and the refusals every pagination loop of this
-/// engine owes.
+/// Whatever the source answered a page with, the refusals every pagination loop of this engine
+/// owes, and [`SourceError::Malformed`] for an answer without the comments it was asked for —
+/// on the first page as on any later one. Read as none, it would have a copy delete every
+/// copy the destination holds of them.
 pub(super) async fn take(
     source: &ResolvedSource,
     id: &NativeId,
@@ -80,12 +81,7 @@ pub(super) async fn take(
 ) -> Result<Taken, SourceError> {
     let TaskDetailRead { task, comments } = read;
     let page = match comments {
-        None => {
-            return Ok(Taken::Whole(Box::new(Snapshot {
-                task,
-                comments: None,
-            })));
-        }
+        None => return Err(commentless(id)),
         Some(Err(error)) => return Err(error),
         Some(Ok(None)) => return Ok(Taken::Gone),
         Some(Ok(Some(page))) => page,
@@ -117,13 +113,7 @@ pub(super) async fn take(
             Some(Ok(Some(page))) => page,
             Some(Ok(None)) => return Ok(Taken::Gone),
             Some(Err(error)) => return Err(error),
-            None => {
-                return Err(SourceError::Malformed {
-                    message: format!(
-                        "the source answered a read of task {id}'s comments without them"
-                    ),
-                });
-            }
+            None => return Err(commentless(id)),
         };
         fits(page.items.len(), limit)?;
         held.extend(page.items);
@@ -136,8 +126,15 @@ pub(super) async fn take(
     held.sort_by_key(|comment| comment.created_at);
     Ok(Taken::Whole(Box::new(Snapshot {
         task,
-        comments: Some(held),
+        comments: held,
     })))
+}
+
+/// What a detail read answered without the comments it was asked for is refused as.
+fn commentless(id: &NativeId) -> SourceError {
+    SourceError::Malformed {
+        message: format!("the source answered a read of task {id}'s comments without them"),
+    }
 }
 
 /// Whether two reads of one task carried the same revision of it: the same change token when
