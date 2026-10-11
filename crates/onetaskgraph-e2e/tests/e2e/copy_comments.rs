@@ -387,6 +387,41 @@ fn a_copy_never_touches_a_copy_another_task_carried_onto_its_destination() {
 }
 
 #[test]
+fn a_copied_comment_edited_by_a_person_on_a_board_or_in_linear_stays_a_copy() {
+    // GitHub and Linear keep a copy's origin as a marker in the body, and a person editing the
+    // copy through this product sends a new body: the marker is carried over, so the comment
+    // is still the copy, and the next copy puts back what its origin says rather than writing
+    // a second copy beside it.
+    for (to, name) in [("board", "B"), ("linear", "L")] {
+        let stores = Stores::new(SourceBoundary::Direct);
+        stores.note(name, "Written in the folder");
+        let mine = stores.comment(&format!("notes:{name}"), "said in the folder");
+        let issue = destination(&stores.copy(&format!("notes:{name}"), to));
+        let held = stores.comments(&issue);
+        let copy = held[0]["id"].as_str().expect("a comment id").to_owned();
+
+        stores.edit(&issue, &copy, "edited where it landed");
+        let after = stores.comments(&issue);
+        assert_eq!(
+            said(&after),
+            said(&[json!({"body": "edited where it landed",
+                          "origin": {"task": format!("notes:{name}"), "id": mine}})]),
+            "{to}: the edit changed what it says and kept where it came from"
+        );
+        assert_eq!(after[0]["origin"], held[0]["origin"], "{to}");
+
+        let restored = stores.copy(&format!("notes:{name}"), to);
+        assert_eq!(counts(&restored), [0, 1, 0, 0], "{to}: {restored:#}");
+        assert_eq!(
+            said(&stores.comments(&issue)),
+            said(&[json!({"body": "said in the folder",
+                          "origin": {"task": format!("notes:{name}"), "id": mine}})]),
+            "{to}: put back, and no second copy beside it"
+        );
+    }
+}
+
+#[test]
 fn linear_and_markdown_carry_each_others_comments_both_ways() {
     let stores = Stores::new(SourceBoundary::Direct);
     let first = stores.comment("linear:T-3", "said in Linear");

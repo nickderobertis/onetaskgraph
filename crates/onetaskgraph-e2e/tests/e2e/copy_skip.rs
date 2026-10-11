@@ -137,10 +137,12 @@ impl Served {
     }
 }
 
-/// The plugin's name for one document it sends.
+/// The plugin's name for one read it sends, or `"a mutation"` for a write and `"another
+/// read"` for any read this list does not name.
 fn name(document: &str) -> &'static str {
     [
         ("BOARD", graphql::BOARD),
+        ("ISSUE_COPY_DETAILS", graphql::ISSUE_COPY_DETAILS),
         ("SEARCH_ISSUES", graphql::SEARCH_ISSUES),
         ("ISSUE", graphql::ISSUE),
         ("ISSUE_DETAIL", graphql::ISSUE_DETAIL),
@@ -155,7 +157,16 @@ fn name(document: &str) -> &'static str {
     ]
     .into_iter()
     .find(|(_, held)| *held == document)
-    .map_or("a write", |(name, _)| name)
+    .map_or_else(
+        || {
+            if document.trim_start().starts_with("mutation") {
+                "a mutation"
+            } else {
+                "another read"
+            }
+        },
+        |(name, _)| name,
+    )
 }
 
 /// Whether a request's variables name the issue `id`, at any depth.
