@@ -1539,13 +1539,28 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     ("ProjectV2Field", false, &["id", "name", "dataType"]),
 ];
 
-/// Every enum a write reads a member of, with the members it reads.
+/// Every enum a read or a write names a member of, with the members it names.
 ///
 /// `ProjectV2FieldType.TEXT` is what tells a board text field a projected metadata value can be
 /// written to, so GitHub is held to that member as the input and payload types above are held
-/// to theirs. Asked in the first introspection document beside its types, so it costs no
-/// request of its own.
-pub const CONTRACT_ENUMS: [(&str, &[&str]); 1] = [("ProjectV2FieldType", &["TEXT"])];
+/// to theirs. `IssueTimelineItemsItemType`'s members are the relationship events every read
+/// counts for a task's change token, so GitHub is held to every one: a member it renamed or
+/// dropped would leave a count that never moves. Both are asked in the first introspection
+/// document beside its types, so they cost no request of their own.
+pub const CONTRACT_ENUMS: [(&str, &[&str]); 2] = [
+    ("ProjectV2FieldType", &["TEXT"]),
+    (
+        "IssueTimelineItemsItemType",
+        &[
+            "BLOCKED_BY_ADDED_EVENT",
+            "BLOCKED_BY_REMOVED_EVENT",
+            "BLOCKING_ADDED_EVENT",
+            "BLOCKING_REMOVED_EVENT",
+            "PARENT_ISSUE_ADDED_EVENT",
+            "PARENT_ISSUE_REMOVED_EVENT",
+        ],
+    ),
+];
 
 /// How many times one document may select a given introspection field.
 ///

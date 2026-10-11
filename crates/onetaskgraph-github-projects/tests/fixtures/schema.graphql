@@ -27,11 +27,11 @@
 #
 # `Issue.timelineItems(since, skip, itemTypes: [IssueTimelineItemsItemType!], after, before, first,
 # last): IssueTimelineItemsConnection!`, that connection's `totalCount: Int!` ("Identifies the
-# total count of items in the connection") and the eight `IssueTimelineItemsItemType` members
+# total count of items in the connection") and the six `IssueTimelineItemsItemType` members
 # `BLOCKED_BY_ADDED_EVENT`, `BLOCKED_BY_REMOVED_EVENT`, `BLOCKING_ADDED_EVENT`,
-# `BLOCKING_REMOVED_EVENT`, `PARENT_ISSUE_ADDED_EVENT`, `PARENT_ISSUE_REMOVED_EVENT`,
-# `SUB_ISSUE_ADDED_EVENT` and `SUB_ISSUE_REMOVED_EVENT` were read by introspecting GitHub.com's
-# GraphQL API on 2026-10-11, the enum reduced to those eight, and an `itemTypes`-filtered
+# `BLOCKING_REMOVED_EVENT`, `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT` were read
+# by introspecting GitHub.com's GraphQL API on 2026-10-11, the enum reduced to those six — the
+# credentialed lane's `CONTRACT_ENUMS` re-reads them from GitHub every run — and an `itemTypes`-filtered
 # `totalCount` observed counting only the named types. They are the fourth part of a task's
 # change token, the relationship-event count: the credentialed lane saw a dependency added to a
 # real issue move neither time nor the comment count.
@@ -399,8 +399,6 @@ enum IssueTimelineItemsItemType {
   BLOCKING_REMOVED_EVENT
   PARENT_ISSUE_ADDED_EVENT
   PARENT_ISSUE_REMOVED_EVENT
-  SUB_ISSUE_ADDED_EVENT
-  SUB_ISSUE_REMOVED_EVENT
 }
 type IssueTimelineItemsConnection {
   totalCount: Int!

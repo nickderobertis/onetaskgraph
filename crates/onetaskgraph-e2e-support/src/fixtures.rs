@@ -923,15 +923,89 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
     .collect()
 }
 
-/// The timeline event types `query` counts: the default list of the
-/// `[IssueTimelineItemsItemType!]` variable it declares, or none.
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board reads which timeline event types a GitHub document counts. It is the board's own request parsing, so it lives beside `GitHubBoard`, which the agreed e2e layout puts in this shared harness once because the journey-matrix table and the engine's suite drive both hosted plugins through it.
-fn counted_timeline_types(query: &str) -> Vec<String> {
-    query
-        .split_once("[IssueTimelineItemsItemType!]=[")
-        .and_then(|(_, rest)| rest.split_once(']'))
-        .map(|(list, _)| list.split(',').map(|kind| kind.trim().to_owned()).collect())
-        .unwrap_or_default()
+/// One relationship event GitHub records on an issue's timeline: every type this board models,
+/// each spelled as `IssueTimelineItemsItemType` spells it.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback board's vocabulary of GitHub timeline events, which only `GitHubBoard` records and counts; the board lives in this shared harness for the reason recorded on `GitHubBoard` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineEvent {
+    BlockedByAdded,
+    BlockedByRemoved,
+    BlockingAdded,
+    BlockingRemoved,
+    ParentIssueAdded,
+    ParentIssueRemoved,
+    SubIssueAdded,
+    SubIssueRemoved,
+}
+
+impl TimelineEvent {
+    const ALL: [Self; 8] = [
+        Self::BlockedByAdded,
+        Self::BlockedByRemoved,
+        Self::BlockingAdded,
+        Self::BlockingRemoved,
+        Self::ParentIssueAdded,
+        Self::ParentIssueRemoved,
+        Self::SubIssueAdded,
+        Self::SubIssueRemoved,
+    ];
+
+    /// The event a dependency added or removed records on the blocked issue, and the one it
+    /// records on the blocking issue.
+    const fn dependency(adding: bool) -> (Self, Self) {
+        if adding {
+            (Self::BlockedByAdded, Self::BlockingAdded)
+        } else {
+            (Self::BlockedByRemoved, Self::BlockingRemoved)
+        }
+    }
+
+    /// The event a project membership added or removed records on the sub-issue, and the one
+    /// it records on its parent.
+    const fn membership(adding: bool) -> (Self, Self) {
+        if adding {
+            (Self::ParentIssueAdded, Self::SubIssueAdded)
+        } else {
+            (Self::ParentIssueRemoved, Self::SubIssueRemoved)
+        }
+    }
+
+    /// GitHub's spelling of this type.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::BlockedByAdded => "BLOCKED_BY_ADDED_EVENT",
+            Self::BlockedByRemoved => "BLOCKED_BY_REMOVED_EVENT",
+            Self::BlockingAdded => "BLOCKING_ADDED_EVENT",
+            Self::BlockingRemoved => "BLOCKING_REMOVED_EVENT",
+            Self::ParentIssueAdded => "PARENT_ISSUE_ADDED_EVENT",
+            Self::ParentIssueRemoved => "PARENT_ISSUE_REMOVED_EVENT",
+            Self::SubIssueAdded => "SUB_ISSUE_ADDED_EVENT",
+            Self::SubIssueRemoved => "SUB_ISSUE_REMOVED_EVENT",
+        }
+    }
+
+    /// The timeline event types `query` counts: the default list of the
+    /// `[IssueTimelineItemsItemType!]` variable it declares, or none. A type this board does
+    /// not model is a document this board cannot answer truthfully, so it refuses it by name.
+    fn counted_by(query: &str) -> Vec<Self> {
+        query
+            .split_once("[IssueTimelineItemsItemType!]=[")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(list, _)| {
+                list.split(',')
+                    .map(|spelled| {
+                        let spelled = spelled.trim();
+                        Self::ALL
+                            .into_iter()
+                            .find(|kind| kind.name() == spelled)
+                            .unwrap_or_else(|| {
+                                panic!("the loopback board models no timeline event {spelled}")
+                            })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// The board this fixture keeps, and everything a request may change on it.
@@ -976,7 +1050,7 @@ struct GitHubBoard {
     /// The timeline event types the request being answered counts: the default of the
     /// `[IssueTimelineItemsItemType!]` variable its document declares, which is the only way
     /// this source names them.
-    counted_types: Vec<String>,
+    counted_types: Vec<TimelineEvent>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
     ///
@@ -1241,10 +1315,7 @@ impl GitHubBoardFields {
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
         for blocker in blockers {
-            board.record_relationship_event(
-                (id, "BLOCKED_BY_ADDED_EVENT"),
-                (blocker, "BLOCKING_ADDED_EVENT"),
-            );
+            board.record_relationship_event((id, blocker), TimelineEvent::dependency(true));
         }
     }
 
@@ -1256,16 +1327,10 @@ impl GitHubBoardFields {
         let mut board = self.board.lock().unwrap();
         let old = board.find(&json!(id))["parent"].as_str().map(str::to_owned);
         if let Some(old) = &old {
-            board.record_relationship_event(
-                (id, "PARENT_ISSUE_REMOVED_EVENT"),
-                (old, "SUB_ISSUE_REMOVED_EVENT"),
-            );
+            board.record_relationship_event((id, old), TimelineEvent::membership(false));
         }
         if let Some(parent) = parent {
-            board.record_relationship_event(
-                (id, "PARENT_ISSUE_ADDED_EVENT"),
-                (parent, "SUB_ISSUE_ADDED_EVENT"),
-            );
+            board.record_relationship_event((id, parent), TimelineEvent::membership(true));
         }
         board.find(&json!(id))["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
     }
@@ -1285,10 +1350,7 @@ impl GitHubBoardFields {
         if let Some((_, held)) = board.blocked_by.iter_mut().find(|(near, _)| near == id) {
             held.retain(|held| held != blocker);
         }
-        board.record_relationship_event(
-            (id, "BLOCKED_BY_REMOVED_EVENT"),
-            (blocker, "BLOCKING_REMOVED_EVENT"),
-        );
+        board.record_relationship_event((id, blocker), TimelineEvent::dependency(false));
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -1939,21 +2001,25 @@ impl GitHubBoard {
     /// dependency to a real issue and saw all three stay put, and a project membership is held
     /// to the same worst case.
     ///
-    /// Each end's event is kept under its own GitHub type — `BLOCKED_BY_ADDED_EVENT` on the
-    /// blocked issue and `BLOCKING_ADDED_EVENT` on the blocking one, `PARENT_ISSUE_ADDED_EVENT`
-    /// on a sub-issue and `SUB_ISSUE_ADDED_EVENT` on its parent — so a read counts only the
-    /// types its document names, as GitHub's `itemTypes` filter does.
+    /// Each end's event is kept under its own [`TimelineEvent`] — `BLOCKED_BY_ADDED_EVENT` on
+    /// the blocked issue and `BLOCKING_ADDED_EVENT` on the blocking one,
+    /// `PARENT_ISSUE_ADDED_EVENT` on a sub-issue and `SUB_ISSUE_ADDED_EVENT` on its parent — so a
+    /// read counts only the types its document names, as GitHub's `itemTypes` filter does.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback board's model of GitHub's relationship timeline, a method of `GitHubBoard` because it changes that board's private state; the board lives in this shared harness for the reason recorded on `GitHubBoard` itself.
-    fn record_relationship_event(&mut self, near: (&str, &str), far: (&str, &str)) {
-        for (end, kind) in [near, far] {
+    fn record_relationship_event(
+        &mut self,
+        (near, far): (&str, &str),
+        (near_kind, far_kind): (TimelineEvent, TimelineEvent),
+    ) {
+        for (end, kind) in [(near, near_kind), (far, far_kind)] {
             if let Some(item) = self
                 .items
                 .iter_mut()
                 .chain(self.pending.iter_mut())
                 .find(|item| item["id"] == end)
             {
-                let held = item["timeline"][kind].as_u64().unwrap_or(0);
-                item["timeline"][kind] = json!(held + 1);
+                let held = item["timeline"][kind.name()].as_u64().unwrap_or(0);
+                item["timeline"][kind.name()] = json!(held + 1);
             }
         }
     }
@@ -1964,7 +2030,7 @@ impl GitHubBoard {
     fn timeline_count(&self, item: &Value) -> u64 {
         self.counted_types
             .iter()
-            .filter_map(|kind| item["timeline"][kind.as_str()].as_u64())
+            .filter_map(|kind| item["timeline"][kind.name()].as_u64())
             .sum()
     }
 
@@ -2751,7 +2817,7 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
-    board.lock().unwrap().counted_types = counted_timeline_types(query);
+    board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
         if held.project_scope_withheld {
@@ -3322,16 +3388,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let parent = input["issueId"].clone();
         let child = input["subIssueId"].clone();
         board.find(&child)["parent"] = if adding { parent.clone() } else { Value::Null };
-        let change = if adding { "ADDED" } else { "REMOVED" };
         board.record_relationship_event(
             (
                 child.as_str().expect("a sub-issue id"),
-                &format!("PARENT_ISSUE_{change}_EVENT"),
-            ),
-            (
                 parent.as_str().expect("a parent id"),
-                &format!("SUB_ISSUE_{change}_EVENT"),
             ),
+            TimelineEvent::membership(adding),
         );
         let root = if adding {
             "addSubIssue"
@@ -3376,11 +3438,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         // The relationship is the dependent issue's own: GitHub lists it on that issue, and
         // records it on both ends' timelines without moving either's time.
-        let change = if adding { "ADDED" } else { "REMOVED" };
-        board.record_relationship_event(
-            (&issue, &format!("BLOCKED_BY_{change}_EVENT")),
-            (&blocker, &format!("BLOCKING_{change}_EVENT")),
-        );
+        board.record_relationship_event((&issue, &blocker), TimelineEvent::dependency(adding));
         let root = if adding {
             "addBlockedBy"
         } else {

@@ -861,14 +861,17 @@ pub mod graphql {
     /// change token counts, with its value as the default, so no caller binds it.
     ///
     /// A variable rather than a literal list because every argument a production document
-    /// passes is a declared variable, which `tests/schema.rs` holds them to. Its default is the
-    /// eight event types GitHub records a relationship added or removed with, on either end: a
-    /// dependency, as `blockedBy` and `blocking`, and a project membership, as a parent and a
-    /// sub-issue — so a relationship a person makes from the far end moves this end's count
-    /// too. [`super::change_token`] says why the count is in the token.
+    /// passes is a declared variable, which `tests/schema.rs` holds them to, and every member of
+    /// its default to the pinned enum. Its default is the six event types GitHub records a
+    /// relationship added or removed with: a dependency on either end, as `blockedBy` and
+    /// `blocking`, so one a person makes from the far end moves this end's count too; and a
+    /// project membership on the task, as its parent, which GitHub records there whichever
+    /// issue the move was made from. A sub-issue's events on its parent are not counted: a
+    /// project carries no task token, and a copy writes nothing of a task its own sub-issues
+    /// decide. [`super::change_token`] says why the count is in the token.
     macro_rules! relationship_events_variable {
         () => {
-            ",$relationshipEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT,PARENT_ISSUE_ADDED_EVENT,PARENT_ISSUE_REMOVED_EVENT,SUB_ISSUE_ADDED_EVENT,SUB_ISSUE_REMOVED_EVENT]"
+            ",$relationshipEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT,PARENT_ISSUE_ADDED_EVENT,PARENT_ISSUE_REMOVED_EVENT]"
         };
     }
 
@@ -9418,8 +9421,8 @@ struct Resolved {
     /// How many comments the issue holds, when the read that reached it said.
     comment_count: Option<u64>,
     /// How many relationship events the issue's timeline holds — every dependency, as
-    /// `blockedBy` or `blocking`, and every project membership, as a parent or a sub-issue,
-    /// added or removed — when the read that reached it said.
+    /// `blockedBy` or `blocking`, and every project membership, as its parent, added or
+    /// removed — when the read that reached it said.
     relationship_events: Option<u64>,
     /// The server's clock on the response that read it — its `Date` header — when the
     /// response carried one.

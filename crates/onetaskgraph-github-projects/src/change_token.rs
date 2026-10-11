@@ -14,9 +14,9 @@
 //!   where neither time does;
 //! - how many relationship events the issue's timeline holds (`timelineItems(itemTypes:
 //!   [BLOCKED_BY_ADDED_EVENT, BLOCKED_BY_REMOVED_EVENT, BLOCKING_ADDED_EVENT,
-//!   BLOCKING_REMOVED_EVENT, PARENT_ISSUE_ADDED_EVENT, PARENT_ISSUE_REMOVED_EVENT,
-//!   SUB_ISSUE_ADDED_EVENT, SUB_ISSUE_REMOVED_EVENT]) { totalCount }`), which every dependency
-//!   and every project membership added or removed moves — a replaced one by two. **Neither time
+//!   BLOCKING_REMOVED_EVENT, PARENT_ISSUE_ADDED_EVENT, PARENT_ISSUE_REMOVED_EVENT])
+//!   { totalCount }`), which every dependency and every project membership added or removed
+//!   moves — a replaced one by two. **Neither time
 //!   moves for a dependency**: the credentialed lane added one to a real issue and saw the
 //!   issue's `updatedAt`, the board item's and the comment count all stay where they were, so a
 //!   token of those three alone read an edge change as no change, and a copy that skipped on it

@@ -5,8 +5,7 @@
 //! one task of a loopback board by exactly one of those kinds — the way a person changes it on
 //! GitHub, through the board's own state — and holds the token to moving to a later one, by
 //! the store's own ordering, while every task the change did not touch keeps the token it had —
-//! a dependency or a project membership touching both of the issues it relates, as GitHub
-//! records it on both. `docs/plugin-protocol.md` §4.13d states what each plugin's token keys
+//! a dependency touching both of the tasks it relates, as GitHub records it on both. `docs/plugin-protocol.md` §4.13d states what each plugin's token keys
 //! on; the loopback board models exactly those five parts, and moves neither time for a
 //! dependency or a project membership, as GitHub moves neither for a dependency.
 
@@ -189,8 +188,7 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
         let after = listed(&sandbox, &["--source", "board"]);
         let mut touched = vec!["board:T-3"];
         touched.extend(far_ends(kind));
-        // A far end that is a project is no task, and `task list` carries no token of it.
-        for id in touched.iter().filter(|id| before.contains_key(**id)) {
+        for id in &touched {
             let old = before[*id].clone().unwrap_or_else(|| {
                 panic!("{kind}: a board task carries a token before: {before:?}")
             });
@@ -217,15 +215,13 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
 
 /// The tasks besides T-3 a change of `kind` reaches: a dependency is a relationship of two
 /// issues, and GitHub records it on both ends' timelines, so the far end's token moves too —
-/// and a copy reads it again. `copy_skip` reads the same set.
+/// and a copy reads it again. A project membership moves the task's own token alone: the
+/// project is no task and carries none. `copy_skip` reads the same set.
 pub(crate) fn far_ends(kind: &str) -> &'static [&'static str] {
     match kind {
         "a dependency added" => &["board:T-4"],
         "a dependency removed" => &["board:T-2"],
         "a dependency replaced" => &["board:T-4", "board:T-1"],
-        "filed under a project" => &["board:P-1"],
-        "moved to another project" => &["board:P-1", "board:P-2"],
-        "taken out of its project" => &["board:P-2"],
         _ => &[],
     }
 }

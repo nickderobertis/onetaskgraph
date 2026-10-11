@@ -1189,7 +1189,7 @@ alone and holds the token to moving:
 | status | the `Status` field, and the issue's state | the board item's `updatedAt`, and the issue's for a close or reopen | `a status change` |
 | priority | the `Priority` field | the board item's `updatedAt` | `a priority change` (live, on a board with a `Priority` field) |
 | projected metadata, `onetaskgraph.origin` | board text fields | the board item's `updatedAt` | `a board text field change` live; `the origin field rewritten` and `a project field change` on the loopback |
-| project | the issue's parent | the relationship events — `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT` on the task, `SUB_ISSUE_ADDED_EVENT` and `SUB_ISSUE_REMOVED_EVENT` on the project | `taken out of its project` and `filed under another project` live; `filed under a project`, `moved to another project` and `taken out of its project` on the loopback |
+| project | the issue's parent | the relationship events — `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT`, on the task. A project carries no task token, so the sub-issue events GitHub records on it are not counted | `taken out of its project` and `filed under another project` live, each sent as the project's own `removeSubIssue` or `addSubIssue`; `filed under a project`, `moved to another project` and `taken out of its project` on the loopback |
 | dependencies | the issue's `blockedBy` | the relationship events — `BLOCKED_BY_ADDED_EVENT` and `BLOCKED_BY_REMOVED_EVENT` on the dependent task, `BLOCKING_ADDED_EVENT` and `BLOCKING_REMOVED_EVENT` on the one it depends on | `a dependency added`, `a dependency removed` and `a dependency replaced` |
 | comments, under `--comments` | the issue's comments | the issue's `updatedAt` for one added or edited, the comment count for one deleted | `a comment added`, `a comment edited` and `a comment deleted` live; `a new comment`, `an edited comment` and `a deleted comment` on the loopback |
 | repository, when the slot names none | the issue's repository | the token itself: it carries the `owner/name` every read returns, so a transfer leaves no two tokens equal, and two tokens naming different repositories are never ordered | `a repository transfer`, on the loopback alone: the lane holds one scratch repository and refuses the core one, so it has nowhere to transfer to. What it proves needs no live leg, because the token holds the very value the read returned |
@@ -1197,14 +1197,17 @@ alone and holds the token to moving:
 **GitHub moves neither time nor the comment count for a relationship.** The credentialed lane
 added a dependency to a real issue and read all three where they were, so a token of those
 three alone read an edge change as no change, and a copy skipped the task with its edges stale.
-So the token counts the issue's timeline events of the eight relationship types above
+So the token counts the issue's timeline events of the six relationship types above
 (`timelineItems(itemTypes: [...]) { totalCount }`), and a project membership — a parent issue
 — is counted the same way rather than trusted to a time. Each relationship added or removed is
-one more event on each of the two issues it relates, a replacement or a move between projects
-two, and an event is never taken back, so the count only grows and the later version is the
-one holding more. Both ends' types are counted, so a relationship a person makes from the far
-end still moves this end's token — and the far end's token moves with it, which reads that
-task again once and never serves either stale.
+one more event, a replacement or a move between projects two, and an event is never taken
+back, so the count only grows and the later version is the one holding more. A dependency's
+types are counted on both its ends, so one a person makes from the far end still moves this
+end's token — and the far end's token moves with it, which reads that task again once and never
+serves either stale. A membership is counted on the task, where GitHub records it whichever of
+the two issues the move was made from: the live legs make it from the project's side. The
+types are pinned in the plugin's `tests/fixtures/schema.graphql`, which its schema test holds
+every document's default to, and the credentialed lane holds GitHub to the pin.
 
 The count is a connection selected for its `totalCount` alone, with no page size, exactly as
 the comment count beside it is, and the offline model `tests/point_cost.rs` prices documents by
