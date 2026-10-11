@@ -40,6 +40,7 @@ from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcomeFailed,
     CopyOutcomeUnchanged,
 )
+from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 from onetaskgraph_sdk._generated.query_response_of_search_hit import SearchHitTask
 from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
@@ -332,12 +333,12 @@ def without_record(metadata: Mapping[str, object]) -> dict[str, object]:
     return {key: value for key, value in metadata.items() if key not in record}
 
 
-def destination_of(outcome: CopyOutcome) -> str | None:
+def destination_of(outcome: CopyOutcome) -> LandedAt | None:
     """Where one outcome landed, or `None` for a dry run's create and an item left unwritten."""
     reported = outcome.root
-    if isinstance(reported, CopyOutcomeFailed) or reported.destination is None:
+    if isinstance(reported, CopyOutcomeFailed):
         return None
-    return reported.destination.root
+    return reported.destination
 
 
 def folders(tmp_path: Path) -> Path:

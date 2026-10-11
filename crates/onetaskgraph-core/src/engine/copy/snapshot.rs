@@ -9,10 +9,11 @@
 //! request carried the same task: the same change token where the source gives one, and
 //! otherwise the same task in every member it reports.
 //!
-//! **One bound, stated rather than discovered.** Where the source gives no token — Linear, and
-//! a GitHub task changed within the minute before the read — the task's own members are all
-//! two reads can be compared by, and a comment edited alone between two pages moves none of
-//! them. Such a task's comments are then one revision only as far as each page shows.
+//! Where the source gives no token — Linear, and a GitHub task changed within the minute before
+//! the read — the task's own members are all two page reads can be compared by, and a comment
+//! edited alone between two pages moves none of them. So such a task whose comments run past
+//! one page is read again in full until two consecutive passes agree on every comment, at most
+//! [`FULL_PASSES`] of them; one that never settles is left unwritten and reported failed.
 //!
 //! When they disagree the task is read again from its first page, once. A second
 //! disagreement is not chased further: the task is left unwritten and the copy reports it as
