@@ -759,3 +759,141 @@ fn a_copy_by_query_one_of_whose_sources_fails_is_refused_and_writes_nothing_anyw
         served.names()
     );
 }
+
+/// `value` as canonical JSON: keys sorted at every depth, no insignificant whitespace.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Object(entries) => {
+            let sorted: std::collections::BTreeMap<&String, &Value> = entries.iter().collect();
+            let inner: Vec<String> = sorted
+                .into_iter()
+                .map(|(key, entry)| format!("{}:{}", Value::String(key.clone()), canonical(entry)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        Value::Array(entries) => {
+            let inner: Vec<String> = entries.iter().map(canonical).collect();
+            format!("[{}]", inner.join(","))
+        }
+        scalar => scalar.to_string(),
+    }
+}
+
+/// The digest `docs/metadata.md` documents for `onetaskgraph.copied_destination_version`,
+/// recomputed from what the binary reads back of the destination task `id` — its comments
+/// counted when `with_comments`.
+fn documented_digest(stores: &Stores, id: &str, with_comments: bool) -> String {
+    let item = stores.json(&["task", "show", id, "--no-comments"])["items"][0]["item"].clone();
+    let mut metadata = item["metadata"].as_object().expect("metadata").clone();
+    for key in [
+        "onetaskgraph.copied_version",
+        "onetaskgraph.copied_with_comments",
+        "onetaskgraph.copied_destination_version",
+    ] {
+        metadata.remove(key);
+    }
+    // Each forward edge's far end as the destination itself reports it: its native id for an
+    // item of the destination, and its qualified id for one of another source.
+    let own = format!("{}:", id.split_once(':').expect("a qualified id").0);
+    let mut edges: Vec<Value> = stores.json(&["task", "deps", id])["items"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|edge| {
+            let far = edge["to"]["id"].as_str().expect("a far end");
+            json!([
+                far.strip_prefix(own.as_str()).unwrap_or(far),
+                edge["to"]["kind"],
+                edge["kind"]
+            ])
+        })
+        .collect();
+    edges.sort_by_key(canonical);
+    assert!(
+        item.get("delivers").is_none(),
+        "this journey's task delivers nothing, so `delivers` digests as empty: {item:#}"
+    );
+    let mut fields = json!({
+        "title": item["title"],
+        "content": item["content"],
+        "status": item["status"],
+        "priority": item["priority"],
+        "labels": item["labels"],
+        "project": item["project"],
+        "metadata": metadata,
+        "repositories": item["repositories"],
+        "classification": item.get("classification").cloned().unwrap_or(json!("public")),
+        "delivers": [],
+        "edges": edges,
+    });
+    if with_comments {
+        let mut entries: Vec<Value> = stores
+            .comments(id)
+            .iter()
+            .map(|comment| match comment.get("origin") {
+                Some(origin) => json!({"origin": [origin["task"], origin["id"]],
+                                       "body": comment["body"]}),
+                None => json!({"id": comment["id"], "body": comment["body"]}),
+            })
+            .collect();
+        entries.sort_by_key(canonical);
+        fields["comments"] = Value::Array(entries);
+    }
+    format!(
+        "sha256:{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(canonical(&fields).as_bytes())
+    )
+}
+
+#[test]
+fn the_recorded_destination_digest_is_the_documented_digest_of_the_destination_as_read() {
+    for to in ["notes", "second"] {
+        let stores = Stores::new();
+        stores.board.add_comment("T-3", "said on the board");
+        stores
+            .board
+            .set_metadata("T-3", "caller.note", json!({"nested": [1, true, null]}));
+        let narrowed = |comments: bool| {
+            let mut query = vec!["--to", to, "--source", "board", "--no-link"];
+            if comments {
+                query.push("--comments");
+            }
+            let (landed, _, _) = stores.copy(&query);
+            landed
+                .into_iter()
+                .find(|(source, _)| source == "board:T-3")
+                .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
+                .expect("T-3 landed")
+        };
+
+        // A `--comments` copy: the digest counts the comments as the destination holds them.
+        let copy = narrowed(true);
+        let recorded = stores.metadata(&copy)["onetaskgraph.copied_destination_version"].clone();
+        assert_eq!(
+            recorded,
+            json!(documented_digest(&stores, &copy, true)),
+            "{to}: the record is the documented digest of the destination as it reads"
+        );
+        // The digest is over the task as read, not over the source: a native comment at the
+        // destination moves it, which is what makes the next copy read again.
+        assert_ne!(
+            json!(documented_digest(&stores, &copy, false)),
+            recorded,
+            "{to}: the comments are inside the digest"
+        );
+
+        // A copy without `--comments` takes `copied_with_comments` away, and records a digest
+        // that leaves the comments out.
+        assert_eq!(narrowed(false), copy);
+        let metadata = stores.metadata(&copy);
+        assert!(
+            metadata.get("onetaskgraph.copied_with_comments").is_none(),
+            "{to}: {metadata:#}"
+        );
+        assert_eq!(
+            metadata["onetaskgraph.copied_destination_version"],
+            json!(documented_digest(&stores, &copy, false)),
+            "{to}: without --comments the digest has no comments in it"
+        );
+    }
+}

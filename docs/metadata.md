@@ -476,6 +476,22 @@ so the next copy can tell whether anything changed at either end without reading
   `delivered_by` (which the store keeps in step after the copy) and the destination's own id,
   url, location and times are left out.
 
+  It is not the destination's own change token (`Task.version`), and cannot be: a hosted
+  board's token is times the service assigns, which the write of this key itself moves, and
+  Linear gives none. The digest is `sha256:` and the lowercase hex SHA-256 of one JSON object
+  written canonically — keys sorted at every depth, no insignificant whitespace, UTF-8 — whose
+  members are the task's `title`, `content`, `status`, `priority`, `labels`, `project`,
+  `repositories` and `classification` (`"public"` when a read leaves it out) as the task's own
+  JSON spells them; `metadata` without the three keys; `delivers` as qualified ids naming the
+  destination source, `[]` when there are none; `edges`, each forward edge as
+  `[<far end id>, <item kind>, <dependency kind>]` — the far end's native id when it is an item
+  of the destination, and its qualified id otherwise — sorted by its canonical JSON; and, after a
+  `--comments` copy only, `comments`, each copy as `{"origin": [<task>, <id>], "body": …}` and
+  each comment native to the destination as `{"id": …, "body": …}`, sorted by its canonical
+  JSON. `copy_skip.rs`'s
+  `the_recorded_destination_digest_is_the_documented_digest_of_the_destination_as_read` holds
+  the engine to this, by recomputing it from what the binary reads back.
+
 A `--comments` copy and a copy by query report a task `unchanged` with `skipped: true` — and
 read nothing more of it — when the source's token is still `copied_version`, the destination
 digests to `copied_destination_version` over the reads the copy makes to find it anyway, a
