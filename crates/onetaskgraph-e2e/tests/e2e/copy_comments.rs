@@ -547,6 +547,36 @@ fn a_comments_copy_from_a_source_whose_tasks_hold_none_carries_none_and_touches_
 }
 
 #[test]
+fn a_skipped_second_hop_counts_the_copies_it_carried_on_from_the_first_origin() {
+    // board -> second board -> folder: the folder's copies name the first board's task, which
+    // is the second board's task's own recorded origin, so a skip of that task counts them.
+    let stores = Stores::new(SourceBoundary::Direct);
+    stores.board.set_labels("T-3", &[]);
+    stores.board.add_comment("T-3", "said on the board");
+    let middle = destination(&stores.copy("board:T-3", "second"));
+    let copy = [
+        "task",
+        "copy",
+        &middle,
+        "--to",
+        "notes",
+        "--comments",
+        "--no-link",
+    ];
+    let first = stores.json(&copy)["items"][0].clone();
+    assert_eq!(counts(&first), [1, 0, 0, 0], "{first:#}");
+    let note = destination(&first);
+    assert_eq!(stores.comments(&note)[0]["origin"]["task"], "board:T-3");
+    let skipped = stores.json(&copy)["items"][0].clone();
+    assert_eq!(skipped["skipped"], true, "{skipped:#}");
+    assert_eq!(
+        counts(&skipped),
+        [0, 0, 0, 1],
+        "the copy it carried on from the first origin is still its own: {skipped:#}"
+    );
+}
+
+#[test]
 fn linear_and_markdown_carry_each_others_comments_both_ways() {
     let stores = Stores::new(SourceBoundary::Direct);
     let first = stores.comment("linear:T-3", "said in Linear");

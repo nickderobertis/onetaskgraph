@@ -10,8 +10,9 @@
 //! listing, and one after five of the twenty changed, which may read only those five — each with
 //! its first page of comments in the same request, batched as the board's detail read batches —
 //! and no unchanged one. Both are asserted here, and each is written to this crate's telemetry
-//! directory with its listing, detail and comment-page requests and the points each spent. No
-//! budget judges these files yet; this node registers none.
+//! directory with its listing, detail and comment-page requests and the points each spent. This
+//! suite records those figures and holds none of them to a ceiling: a ceiling on them belongs to
+//! a budget in this crate's `budgets.yaml`.
 
 use onetaskgraph_github_projects::{graphql, worst_case_point_cost};
 use serde_json::{Value, json};

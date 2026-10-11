@@ -6728,3 +6728,81 @@ async fn a_project_whose_slot_is_still_in_its_description_is_read_from_its_conte
         "{query}"
     );
 }
+
+/// An issue read with its comments in one request answers "no such task" on exactly the terms
+/// `get_task` does — Linear holding none, holding it archived or trashed, or it being outside
+/// the project this source is scoped to — and an answer it cannot read is refused as malformed
+/// rather than read as an issue with no comments.
+#[tokio::test]
+async fn an_issue_read_with_its_comments_is_held_on_get_tasks_terms_over_real_http() {
+    let page = PageRequest {
+        cursor: None,
+        limit: 50,
+    };
+    let with_comments = |mut issue: serde_json::Value, comments: serde_json::Value| {
+        issue["issue"]["comments"] = comments;
+        issue
+    };
+    let no_comments = serde_json::json!({"nodes":[],
+        "pageInfo":{"hasPreviousPage":false,"startCursor":null}});
+    let held = with_comments(held_issue("i1"), no_comments.clone());
+    let mut archived = held.clone();
+    archived["issue"]["archivedAt"] = serde_json::json!("2026-09-04T18:55:13.746Z");
+    let mut nameless = held.clone();
+    nameless["issue"]
+        .as_object_mut()
+        .expect("an issue")
+        .remove("title");
+    let unpaged = with_comments(held_issue("i1"), serde_json::json!({"nodes":[]}));
+
+    let read = |endpoint: String, scope: Option<serde_json::Value>| {
+        let page = page.clone();
+        async move {
+            let source = match scope {
+                Some(scope) => configured_source(&endpoint, scope),
+                None => source(&endpoint),
+            };
+            source
+                .get_task_details(&["i1".into()], Some(&page))
+                .await
+                .pop()
+                .expect("one answer for one id")
+        }
+    };
+
+    let (endpoint, _) = response_server(vec![held.clone()]);
+    assert!(
+        matches!(read(endpoint, None).await, Ok(Some(detail))
+            if detail.task.id.as_str() == "i1"
+                && matches!(&detail.comments, Some(Ok(Some(page))) if page.items.is_empty())),
+        "a held issue is read with its comments"
+    );
+    for (why, answer, scope) in [
+        ("held by none", serde_json::json!({"issue":null}), None),
+        ("archived or trashed", archived, None),
+        (
+            "outside the source's project",
+            held,
+            Some(serde_json::json!({"project":"P-SCOPE"})),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![answer]);
+        assert!(
+            matches!(read(endpoint, scope).await, Ok(None)),
+            "an issue {why} is no task of this source"
+        );
+    }
+    for (why, answer) in [
+        ("without its title", nameless),
+        ("with an unpaged connection", unpaged),
+    ] {
+        let (endpoint, _) = response_server(vec![answer]);
+        assert!(
+            matches!(
+                read(endpoint, None).await,
+                Err(SourceError::Malformed { .. })
+            ),
+            "an issue answered {why} is refused as malformed"
+        );
+    }
+}
