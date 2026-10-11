@@ -857,17 +857,18 @@ pub mod graphql {
         };
     }
 
-    /// The variable every document reading an issue declares for the dependency events its
+    /// The variable every document reading an issue declares for the relationship events its
     /// change token counts, with its value as the default, so no caller binds it.
     ///
     /// A variable rather than a literal list because every argument a production document
-    /// passes is a declared variable, which `tests/schema.rs` holds them to; its default is the
-    /// four event types GitHub records a dependency added or removed with, on either end —
-    /// `blockedBy` and `blocking` alike, so a dependency a person adds from the far end moves
-    /// this end's count too. [`super::change_token`] says why the count is in the token.
-    macro_rules! edge_events_variable {
+    /// passes is a declared variable, which `tests/schema.rs` holds them to. Its default is the
+    /// eight event types GitHub records a relationship added or removed with, on either end: a
+    /// dependency, as `blockedBy` and `blocking`, and a project membership, as a parent and a
+    /// sub-issue — so a relationship a person makes from the far end moves this end's count
+    /// too. [`super::change_token`] says why the count is in the token.
+    macro_rules! relationship_events_variable {
         () => {
-            ",$edgeEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT]"
+            ",$relationshipEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT,PARENT_ISSUE_ADDED_EVENT,PARENT_ISSUE_REMOVED_EVENT,SUB_ISSUE_ADDED_EVENT,SUB_ISSUE_REMOVED_EVENT]"
         };
     }
 
@@ -902,7 +903,7 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} edgeEvents:timelineItems(itemTypes:$edgeEvents){totalCount}
+                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
@@ -923,7 +924,7 @@ pub mod graphql {
     /// costs nothing.
     pub const SEARCH_ISSUES: &str = concat!(
         r#"query($search:String!,$type:SearchType!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       search(query:$search,type:$type,first:$first,after:$after){
         pageInfo{hasNextPage endCursor}
@@ -958,7 +959,7 @@ pub mod graphql {
     /// they sit under one item, and this read is still one point.
     pub const ISSUE: &str = concat!(
         r#"query($id:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       node(id:$id){__typename ...BoardIssue ... on Issue{
         boards:projectItems(first:$boardItems){nodes{project{id number fields(first:$nestedFirst){nodes{
@@ -989,7 +990,7 @@ pub mod graphql {
     /// answer questions that never read an edge.
     pub const SUB_ISSUES: &str = concat!(
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       node(id:$id){__typename
         ... on Issue{subIssues(first:$first,after:$after){
@@ -1011,7 +1012,7 @@ pub mod graphql {
     macro_rules! board_item_content {
         () => {
             r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} edgeEvents:timelineItems(itemTypes:$edgeEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }"#
@@ -1021,7 +1022,7 @@ pub mod graphql {
     /// Reads the board's fields and one page of its items.
     pub const BOARD: &str = concat!(
         r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       owner:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){...Board}}
@@ -1066,7 +1067,7 @@ pub mod graphql {
     /// own whole reads counts this one among them.
     pub const ORIGIN_LOOKUP: &str = concat!(
         r#"query($owner:String!,$number:Int!,$filter:String!,$search:String!,$type:SearchType!,$originFirst:Int!,$itemsAfter:String,$searchAfter:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       originItems:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){
@@ -1271,7 +1272,7 @@ pub mod graphql {
     /// needs one.
     pub const ISSUE_DETAIL: &str = concat!(
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){
       node(id:$id){__typename ...BoardIssue ... on Issue{comments(first:$first,after:$after){nodes{"#,
         issue_comment!(),
@@ -1312,7 +1313,7 @@ pub mod graphql {
     /// one does and nothing more.
     pub const ISSUE_DETAILS: &str = concat!(
         r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!,$comments:Boolean!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){"#,
         issue_details_alias!(0),
         issue_details_alias!(1),
@@ -1367,7 +1368,7 @@ pub mod graphql {
     /// what `task show-many` is priced by and which reads no edge.
     pub const ISSUE_COPY_DETAILS: &str = concat!(
         r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        edge_events_variable!(),
+        relationship_events_variable!(),
         r#"){"#,
         issue_copy_details_alias!(0),
         issue_copy_details_alias!(1),
@@ -6117,8 +6118,8 @@ impl GitHubProjectsSource {
             comment_count: content
                 .pointer("/commentCount/totalCount")
                 .and_then(Value::as_u64),
-            edge_events: content
-                .pointer("/edgeEvents/totalCount")
+            relationship_events: content
+                .pointer("/relationshipEvents/totalCount")
                 .and_then(Value::as_u64),
             // The issue node is stamped wherever it was read; a board item a read of the issue
             // put together from its memberships is not.
@@ -8201,7 +8202,7 @@ impl GitHubProjectsSource {
             // it is read again.
             item_updated_at: None,
             comment_count: None,
-            edge_events: None,
+            relationship_events: None,
             served_at: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
@@ -9416,9 +9417,10 @@ struct Resolved {
     item_updated_at: Option<DateTime<Utc>>,
     /// How many comments the issue holds, when the read that reached it said.
     comment_count: Option<u64>,
-    /// How many dependency events the issue's timeline holds — every `blockedBy` or `blocking`
-    /// relationship added or removed — when the read that reached it said.
-    edge_events: Option<u64>,
+    /// How many relationship events the issue's timeline holds — every dependency, as
+    /// `blockedBy` or `blocking`, and every project membership, as a parent or a sub-issue,
+    /// added or removed — when the read that reached it said.
+    relationship_events: Option<u64>,
     /// The server's clock on the response that read it — its `Date` header — when the
     /// response carried one.
     served_at: Option<DateTime<Utc>>,
@@ -9527,15 +9529,21 @@ impl Resolved {
     }
 
     /// This item's change token — see [`change_token`] — or `None` when the read that
-    /// reached it did not carry all four of its parts, which a draft never does, did not say
+    /// reached it did not carry all five of its parts, which a draft never does, did not say
     /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
         match self.content_kind {
             ContentKind::Issue => {
                 let (issue, item) = (self.updated_at?, self.item_updated_at?);
-                let (comments, edges) = (self.comment_count?, self.edge_events?);
+                let parts = change_token::Parts {
+                    issue,
+                    item,
+                    comments: self.comment_count?,
+                    relationships: self.relationship_events?,
+                    repository: self.own_repository.as_ref()?.as_str(),
+                };
                 change_token::settled(issue, item, self.served_at?)
-                    .then(|| change_token::spell(issue, item, comments, edges))
+                    .then(|| change_token::spell(&parts))
             }
             ContentKind::DraftIssue => None,
         }

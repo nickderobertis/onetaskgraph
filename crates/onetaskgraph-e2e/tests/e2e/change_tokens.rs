@@ -162,6 +162,26 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
                 board.block("T-3", &["T-1".to_owned()]);
             }),
         ),
+        (
+            "filed under a project",
+            Box::new(|board| board.file_under("T-3", Some("P-1"))),
+        ),
+        (
+            "moved to another project",
+            Box::new(|board| board.file_under("T-3", Some("P-2"))),
+        ),
+        (
+            "taken out of its project",
+            Box::new(|board| board.file_under("T-3", None)),
+        ),
+        (
+            "the origin field rewritten",
+            Box::new(|board| board.set_origin_field("T-3", "elsewhere:X-1")),
+        ),
+        (
+            "a repository transfer",
+            Box::new(|board| board.transfer("T-3", TRANSFERRED_TO)),
+        ),
     ];
     for (kind, change) in changes {
         let before = listed(&sandbox, &["--source", "board"]);
@@ -169,7 +189,8 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
         let after = listed(&sandbox, &["--source", "board"]);
         let mut touched = vec!["board:T-3"];
         touched.extend(far_ends(kind));
-        for id in &touched {
+        // A far end that is a project is no task, and `task list` carries no token of it.
+        for id in touched.iter().filter(|id| before.contains_key(**id)) {
             let old = before[*id].clone().unwrap_or_else(|| {
                 panic!("{kind}: a board task carries a token before: {before:?}")
             });
@@ -179,8 +200,8 @@ fn every_change_kind_moves_the_changed_tasks_token_to_a_later_one_and_no_other()
             assert_ne!(old, new, "{kind}: two equal tokens of {id} across a change");
             assert_eq!(
                 ordered(&engine, id, &new, &old),
-                VersionOrder::Later,
-                "{kind}: the store orders {id}'s token after the change as the later"
+                ordered_after(kind),
+                "{kind}: how the store orders {id}'s token after the change"
             );
         }
         for (id, token) in &before {
@@ -202,7 +223,23 @@ pub(crate) fn far_ends(kind: &str) -> &'static [&'static str] {
         "a dependency added" => &["board:T-4"],
         "a dependency removed" => &["board:T-2"],
         "a dependency replaced" => &["board:T-4", "board:T-1"],
+        "filed under a project" => &["board:P-1"],
+        "moved to another project" => &["board:P-1", "board:P-2"],
+        "taken out of its project" => &["board:P-2"],
         _ => &[],
+    }
+}
+
+/// Where the change-kind journeys transfer T-3 to.
+pub(crate) const TRANSFERRED_TO: &str = "nickderobertis/onetaskgraph-elsewhere";
+
+/// How the store orders a task's token after a change of `kind` against the one before: later
+/// for every kind but a transfer, which a GitHub token compares and never orders.
+fn ordered_after(kind: &str) -> VersionOrder {
+    if kind == "a repository transfer" {
+        VersionOrder::Incomparable
+    } else {
+        VersionOrder::Later
     }
 }
 

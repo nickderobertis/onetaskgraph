@@ -22,18 +22,19 @@
 # `ProjectV2Item.updatedAt: DateTime!` ("Identifies the date and time when the object was last
 # updated") and `IssueCommentConnection.totalCount: Int!` ("Identifies the total count of items in
 # the connection") are pinned from https://docs.github.com/en/graphql/reference/objects
-# (2026-10-10). They are two of the four parts of a task's change token; a third,
+# (2026-10-10). They are two of the five parts of a task's change token; a third,
 # `Issue.updatedAt`, was already selected.
 #
 # `Issue.timelineItems(since, skip, itemTypes: [IssueTimelineItemsItemType!], after, before, first,
 # last): IssueTimelineItemsConnection!`, that connection's `totalCount: Int!` ("Identifies the
-# total count of items in the connection") and the four `IssueTimelineItemsItemType` members
-# `BLOCKED_BY_ADDED_EVENT`, `BLOCKED_BY_REMOVED_EVENT`, `BLOCKING_ADDED_EVENT` and
-# `BLOCKING_REMOVED_EVENT` were read by introspecting GitHub.com's GraphQL API on 2026-10-11, the
-# enum reduced to those four, and an `itemTypes`-filtered `totalCount` observed counting only
-# the named types. They are the fourth part of a task's change token, the dependency-event count:
-# the credentialed lane saw a dependency added to a real issue move neither time nor the
-# comment count.
+# total count of items in the connection") and the eight `IssueTimelineItemsItemType` members
+# `BLOCKED_BY_ADDED_EVENT`, `BLOCKED_BY_REMOVED_EVENT`, `BLOCKING_ADDED_EVENT`,
+# `BLOCKING_REMOVED_EVENT`, `PARENT_ISSUE_ADDED_EVENT`, `PARENT_ISSUE_REMOVED_EVENT`,
+# `SUB_ISSUE_ADDED_EVENT` and `SUB_ISSUE_REMOVED_EVENT` were read by introspecting GitHub.com's
+# GraphQL API on 2026-10-11, the enum reduced to those eight, and an `itemTypes`-filtered
+# `totalCount` observed counting only the named types. They are the fourth part of a task's
+# change token, the relationship-event count: the credentialed lane saw a dependency added to a
+# real issue move neither time nor the comment count.
 #
 # `ProjectV2Field.dataType: ProjectV2FieldType!` — "The field's type." — and that enum's members
 # were read from GitHub.com's own published schema artifact
@@ -396,6 +397,10 @@ enum IssueTimelineItemsItemType {
   BLOCKED_BY_REMOVED_EVENT
   BLOCKING_ADDED_EVENT
   BLOCKING_REMOVED_EVENT
+  PARENT_ISSUE_ADDED_EVENT
+  PARENT_ISSUE_REMOVED_EVENT
+  SUB_ISSUE_ADDED_EVENT
+  SUB_ISSUE_REMOVED_EVENT
 }
 type IssueTimelineItemsConnection {
   totalCount: Int!

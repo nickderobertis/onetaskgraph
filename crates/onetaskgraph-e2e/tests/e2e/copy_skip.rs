@@ -13,7 +13,7 @@ use std::process::Output;
 use onetaskgraph_github_projects::{change_token, graphql};
 use serde_json::{Value, json};
 
-use crate::change_tokens::far_ends;
+use crate::change_tokens::{TRANSFERRED_TO, far_ends};
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 
@@ -117,7 +117,11 @@ impl Stores {
     }
 
     fn metadata(&self, id: &str) -> Value {
-        self.json(&["task", "show", id, "--no-comments"])["items"][0]["item"]["metadata"].clone()
+        self.task(id)["metadata"].clone()
+    }
+
+    fn task(&self, id: &str) -> Value {
+        self.json(&["task", "show", id, "--no-comments"])["items"][0]["item"].clone()
     }
 }
 
@@ -312,6 +316,26 @@ fn a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_t
                 board.block("T-3", &["T-1".to_owned()]);
             }),
         ),
+        (
+            "filed under a project",
+            Box::new(|board| board.file_under("T-3", Some("P-1"))),
+        ),
+        (
+            "moved to another project",
+            Box::new(|board| board.file_under("T-3", Some("P-2"))),
+        ),
+        (
+            "taken out of its project",
+            Box::new(|board| board.file_under("T-3", None)),
+        ),
+        (
+            "the origin field rewritten",
+            Box::new(|board| board.set_origin_field("T-3", "elsewhere:X-1")),
+        ),
+        (
+            "a repository transfer",
+            Box::new(|board| board.transfer("T-3", TRANSFERRED_TO)),
+        ),
     ];
     for (kind, change) in changes {
         change(&stores.board);
@@ -368,6 +392,18 @@ fn a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_t
         assert_eq!(
             copied, expected,
             "{kind}: the folder's copy holds the board's edges"
+        );
+        // Nor a stale project or repository: the copy reads where the board files T-3 now.
+        let (copy, board) = (stores.task(&note), stores.task("board:T-3"));
+        assert_eq!(
+            copy["project"].is_null(),
+            board["project"].is_null(),
+            "{kind}: the folder's copy is in a project exactly when the board's task is: \
+             {copy:#} against {board:#}"
+        );
+        assert_eq!(
+            copy["repositories"], board["repositories"],
+            "{kind}: the folder's copy names the board task's repository"
         );
     }
     // What the folder holds is what the board holds now.

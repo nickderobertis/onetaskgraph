@@ -1096,6 +1096,90 @@ async fn attach_artifact_label(token: &str, issue_id: &str, label_id: &str) -> R
     Ok(())
 }
 
+/// Send one sub-issue relationship mutation — `document` is the plugin's own `ADD_SUB_ISSUE` or
+/// `REMOVE_SUB_ISSUE` — between the project `parent` and the task `child`.
+async fn refile(
+    token: &str,
+    document: &str,
+    parent: &NativeId,
+    child: &NativeId,
+) -> Result<(), String> {
+    let root = if document == graphql::ADD_SUB_ISSUE {
+        "addSubIssue"
+    } else {
+        "removeSubIssue"
+    };
+    let response = graphql_variables(
+        token,
+        document,
+        "live project membership change",
+        json!({"input":{"issueId":parent.0,"subIssueId":child.0}}),
+    )
+    .await?;
+    if response
+        .pointer(&format!("/data/{root}/subIssue/id"))
+        .and_then(Value::as_str)
+        != Some(child.0.as_str())
+    {
+        return Err(format!(
+            "GitHub did not confirm {root} of {} under {}",
+            child.0, parent.0
+        ));
+    }
+    Ok(())
+}
+
+/// Write `value` into the board's origin text field on the issue `issue_id`'s item, the way a
+/// person editing that field on the board would.
+async fn rewrite_origin_field(
+    token: &str,
+    board: &str,
+    issue_id: &str,
+    value: &str,
+) -> Result<(), String> {
+    let field_id = writable_fields(token, board)
+        .await?
+        .into_iter()
+        .find(|field| field.get("name").and_then(Value::as_str) == Some(ORIGIN_FIELD))
+        .and_then(|field| field.get("id").and_then(Value::as_str).map(str::to_owned))
+        .ok_or_else(|| "the live board holds no origin field to rewrite".to_owned())?;
+    let items = graphql_variables(
+        token,
+        "query LiveBoardItem($id:ID!){node(id:$id){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}",
+        "live board item lookup",
+        json!({"id":issue_id}),
+    )
+    .await?;
+    let item_id = items
+        .pointer("/data/node/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes
+                .iter()
+                .find(|node| node.pointer("/project/id").and_then(Value::as_str) == Some(board))
+        })
+        .and_then(|node| node.get("id").and_then(Value::as_str))
+        .ok_or_else(|| format!("issue {issue_id} has no item on the live board"))?
+        .to_owned();
+    let response = graphql_variables(
+        token,
+        "mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}",
+        "live board text field write",
+        json!({"input":{"projectId":board,"itemId":item_id,"fieldId":field_id,"value":{"text":value}}}),
+    )
+    .await?;
+    if response
+        .pointer("/data/updateProjectV2ItemFieldValue/projectV2Item/id")
+        .and_then(Value::as_str)
+        != Some(item_id.as_str())
+    {
+        return Err(format!(
+            "GitHub did not confirm writing the origin field of {issue_id}"
+        ));
+    }
+    Ok(())
+}
+
 /// Every label of the repository `matches` names, walked to exhaustion.
 async fn listed_labels(
     token: &str,
@@ -2790,8 +2874,9 @@ async fn drive_every_declared_capability(
     every_change_kind_moves_a_tasks_token(
         writer,
         rebuilt,
-        &run.token,
+        (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
+        (&beta_id, &alpha_id),
         (&label_id, &run.title(LAST_TITLE_OFFSET)),
     )
     .await
@@ -2888,8 +2973,9 @@ async fn moved(
 async fn every_change_kind_moves_a_tasks_token(
     writer: &dyn TaskSource,
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    token: &str,
+    (token, board): (&str, &str),
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
+    (filed_under, other_project): (&NativeId, &NativeId),
     (label_id, renamed): (&str, &str),
 ) -> Result<(), String> {
     let body = |text: &str| {
@@ -2969,6 +3055,12 @@ async fn every_change_kind_moves_a_tasks_token(
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
     before = moved(rebuilt, task, "a metadata change", &before).await?;
 
+    // A board text field — the origin field, the one this lane's board holds — written as a
+    // person editing it would, so nothing else of the issue moves with it.
+    pause().await;
+    rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
+    before = moved(rebuilt, task, "a board text field change", &before).await?;
+
     pause().await;
     let depends = |on: &[&NativeId]| TaskUpdate {
         depends_on: Some(on.iter().map(|far| blocks(far, ItemKind::Task)).collect()),
@@ -2999,6 +3091,17 @@ async fn every_change_kind_moves_a_tasks_token(
         .map_err(|error| format!("live dependency replacement failed: {error}"))?
         .ok_or_else(|| "the task to rewire was not there".to_owned())?;
     before = moved(rebuilt, task, "a dependency replaced", &before).await?;
+
+    // Project membership, which is a parent issue: taken out of its project, then filed under
+    // another, each by the one relationship mutation a person's move sends, so nothing else of
+    // the issue moves with it.
+    pause().await;
+    refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
+    before = moved(rebuilt, task, "taken out of its project", &before).await?;
+
+    pause().await;
+    refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
+    before = moved(rebuilt, task, "filed under another project", &before).await?;
 
     if writer.capabilities().priority.is_native() {
         pause().await;

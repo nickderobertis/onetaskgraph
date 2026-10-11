@@ -1096,3 +1096,18 @@ the one `addBlockedBy` and one `removeBlockedBy` the write sends, and two reads 
 the write's own and the fresh read of the token after it — and its node count 269,919 →
 271,031 with those reads. The dependency-event count is selected for its `totalCount` alone, so
 no document's node count or price moved for it.
+
+## Project membership and a board text field, each made alone
+
+Every member a copy writes either moves a GitHub task's token or keeps the copy from skipping
+it (§4.13d), and the change-kind leg re-takes the members it had not: a project membership —
+the task taken out of its project and filed under another, by the one `removeSubIssue` and
+one `addSubIssue` a person's move sends, which the token's relationship count moves for — and
+a board text field, the origin field rewritten by one `updateProjectV2ItemFieldValue`, which
+moves the board item's time. Each is sent alone, so no other part of the issue moves with it.
+
+**`session-cost.txt`** moves by those three legs alone: 155 → 163 requests — the two sub-issue
+mutations, the field discovery and the board item lookup the text-field write needs, that
+write, and one fresh read of the task after each leg — and its node count 271,031 → 272,519
+with those reads.
+

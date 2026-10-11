@@ -651,9 +651,9 @@ Every task a source reads carries a **change token**, `version` in the JSON of `
 source can promise that two equal tokens of one task mean nothing in it changed — its title,
 body, status, priority, labels, board fields, metadata, edges and comments, a comment added,
 edited or deleted included. A GitHub Projects board builds it from the issue's `updatedAt`,
-its board item's `updatedAt`, its comment count and the count of dependency events on its
-timeline — GitHub moves neither time for a dependency added or removed — which its reads
-already select; a folder
+its board item's `updatedAt`, its comment count, the count of dependency and project
+membership events on its timeline — GitHub moves neither time for either — and its
+repository, which its reads already select; a folder
 of Markdown gives the digest of the task file; Linear gives none until its live lane proves
 which changes its `updatedAt` covers, and a task without one is always read. The token is
 opaque: `docs/plugin-protocol.md` §4.13d states what each plugin's keys on.

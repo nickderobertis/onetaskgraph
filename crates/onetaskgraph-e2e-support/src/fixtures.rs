@@ -923,6 +923,16 @@ fn github_blockers() -> Vec<(String, Vec<String>)> {
     .collect()
 }
 
+/// The timeline event types `query` counts: the default list of the
+/// `[IssueTimelineItemsItemType!]` variable it declares, or none.
+fn counted_timeline_types(query: &str) -> Vec<String> {
+    query
+        .split_once("[IssueTimelineItemsItemType!]=[")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(list, _)| list.split(',').map(|kind| kind.trim().to_owned()).collect())
+        .unwrap_or_default()
+}
+
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
@@ -962,6 +972,10 @@ struct GitHubBoard {
     /// changed or gone.
     replacing: Vec<(String, usize, Option<Value>)>,
     blocked_by: Vec<(String, Vec<String>)>,
+    /// The timeline event types the request being answered counts: the default of the
+    /// `[IssueTimelineItemsItemType!]` variable its document declares, which is the only way
+    /// this source names them.
+    counted_types: Vec<String>,
     created: usize,
     /// How many of the most recently filed items a board read leaves out.
     ///
@@ -1226,8 +1240,39 @@ impl GitHubBoardFields {
             None => board.blocked_by.push((id.to_owned(), blockers.to_vec())),
         }
         for blocker in blockers {
-            board.record_edge_event(id, blocker);
+            board.record_relationship_event(
+                (id, "BLOCKED_BY_ADDED_EVENT"),
+                (blocker, "BLOCKING_ADDED_EVENT"),
+            );
         }
+    }
+
+    /// File the issue `id` under the project `parent`, or under none, as a person moving it
+    /// between projects on GitHub would: a sub-issue removed from its old parent and added to
+    /// the new one, each a relationship event on both of the issues it relates.
+    pub fn file_under(&self, id: &str, parent: Option<&str>) {
+        let mut board = self.board.lock().unwrap();
+        let old = board.find(&json!(id))["parent"].as_str().map(str::to_owned);
+        if let Some(old) = &old {
+            board.record_relationship_event(
+                (id, "PARENT_ISSUE_REMOVED_EVENT"),
+                (old, "SUB_ISSUE_REMOVED_EVENT"),
+            );
+        }
+        if let Some(parent) = parent {
+            board.record_relationship_event(
+                (id, "PARENT_ISSUE_ADDED_EVENT"),
+                (parent, "SUB_ISSUE_ADDED_EVENT"),
+            );
+        }
+        board.find(&json!(id))["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
+    }
+
+    /// Move the issue `id` to the repository `repository`, as a person transferring it on
+    /// GitHub would — the issue keeps its node id and its board item, and the one thing this
+    /// board says moved is its `repository`.
+    pub fn transfer(&self, id: &str, repository: &str) {
+        self.board.lock().unwrap().find(&json!(id))["repo"] = json!(repository);
     }
 
     /// Take `blocker` off what blocks the issue `id`, as a person removing the relationship on
@@ -1237,7 +1282,10 @@ impl GitHubBoardFields {
         if let Some((_, held)) = board.blocked_by.iter_mut().find(|(near, _)| near == id) {
             held.retain(|held| held != blocker);
         }
-        board.record_edge_event(id, blocker);
+        board.record_relationship_event(
+            (id, "BLOCKED_BY_REMOVED_EVENT"),
+            (blocker, "BLOCKING_REMOVED_EVENT"),
+        );
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -1528,6 +1576,16 @@ impl GitHubBoardFields {
         let mut board = self.board.lock().unwrap();
         let item = board.find(&json!(id));
         item["own_fields"][field] = json!(value);
+        let card = item["item"].clone();
+        board.touch_item(&card);
+    }
+
+    /// Write `value` into one item's `onetaskgraph.origin` text field, as a person editing that
+    /// board field would — which moves the board item's `updatedAt` and not the issue's.
+    pub fn set_origin_field(&self, id: &str, value: &str) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        item["origin"] = json!(value);
         let card = item["item"].clone();
         board.touch_item(&card);
     }
@@ -1847,8 +1905,8 @@ impl GitHubBoard {
     }
 
     /// Move the issue `id`'s own `updatedAt`, as GitHub does for an edit of its title, body,
-    /// labels, state or sub-issue relationship, and for a comment added or edited on it — never
-    /// for a dependency, which is [`GitHubBoard::record_edge_event`].
+    /// labels or state, and for a comment added or edited on it — never for a dependency or a
+    /// project membership, which is [`GitHubBoard::record_relationship_event`].
     fn touch_issue(&mut self, id: &Value) {
         let at = self.tick();
         if let Some(item) = self
@@ -1870,21 +1928,38 @@ impl GitHubBoard {
         }
     }
 
-    /// Record a dependency added to or removed from the issue `id` and `other`, as GitHub does:
-    /// one event on each end's timeline, which a `timelineItems` count of the dependency event
-    /// types answers — and **neither issue's `updatedAt` nor either board item's**, because
-    /// the credentialed lane added a dependency to a real issue and saw all three stay put.
-    fn record_edge_event(&mut self, id: &str, other: &str) {
-        for end in [id, other] {
+    /// Record a relationship — a dependency, or a project membership — added between the
+    /// issues `id` and `other` or removed, as GitHub does: one event on each end's timeline,
+    /// which a `timelineItems` count of the relationship event types answers — and **neither
+    /// issue's `updatedAt` nor either board item's**, because the credentialed lane added a
+    /// dependency to a real issue and saw all three stay put, and a project membership is held
+    /// to the same worst case.
+    ///
+    /// Each end's event is kept under its own GitHub type — `BLOCKED_BY_ADDED_EVENT` on the
+    /// blocked issue and `BLOCKING_ADDED_EVENT` on the blocking one, `PARENT_ISSUE_ADDED_EVENT`
+    /// on a sub-issue and `SUB_ISSUE_ADDED_EVENT` on its parent — so a read counts only the
+    /// types its document names, as GitHub's `itemTypes` filter does.
+    fn record_relationship_event(&mut self, near: (&str, &str), far: (&str, &str)) {
+        for (end, kind) in [near, far] {
             if let Some(item) = self
                 .items
                 .iter_mut()
                 .chain(self.pending.iter_mut())
                 .find(|item| item["id"] == end)
             {
-                item["edgeEvents"] = json!(item["edgeEvents"].as_u64().unwrap_or(0) + 1);
+                let held = item["timeline"][kind].as_u64().unwrap_or(0);
+                item["timeline"][kind] = json!(held + 1);
             }
         }
+    }
+
+    /// How many of the issue `item`'s timeline events are of a type the request being answered
+    /// counts, as `timelineItems(itemTypes:) { totalCount }` answers.
+    fn timeline_count(&self, item: &Value) -> u64 {
+        self.counted_types
+            .iter()
+            .filter_map(|kind| item["timeline"][kind.as_str()].as_u64())
+            .sum()
     }
 
     /// How many comments the issue `id` holds, as `comments { totalCount }` answers.
@@ -1972,7 +2047,7 @@ impl GitHubBoard {
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
                "createdAt":null,"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
-               "edgeEvents":{"totalCount":item["edgeEvents"].as_u64().unwrap_or(0)},
+               "relationshipEvents":{"totalCount":self.timeline_count(item)},
                "state":item["state"],
                "stateReason":item["reason"],
                "repository":item["repo"].as_str().map(|repo| json!({"nameWithOwner":repo})),
@@ -2319,6 +2394,7 @@ fn github_projects_board_at(
         refusing_after: Vec::new(),
         replacing: Vec::new(),
         blocked_by: github_blockers(),
+        counted_types: Vec::new(),
         created: 0,
         lagging_reads,
         documents: Vec::new(),
@@ -2669,6 +2745,7 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    board.lock().unwrap().counted_types = counted_timeline_types(query);
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
         if held.project_scope_withheld {
@@ -3239,8 +3316,17 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let parent = input["issueId"].clone();
         let child = input["subIssueId"].clone();
         board.find(&child)["parent"] = if adding { parent.clone() } else { Value::Null };
-        board.touch_issue(&child);
-        board.touch_issue(&parent);
+        let change = if adding { "ADDED" } else { "REMOVED" };
+        board.record_relationship_event(
+            (
+                child.as_str().expect("a sub-issue id"),
+                &format!("PARENT_ISSUE_{change}_EVENT"),
+            ),
+            (
+                parent.as_str().expect("a parent id"),
+                &format!("SUB_ISSUE_{change}_EVENT"),
+            ),
+        );
         let root = if adding {
             "addSubIssue"
         } else {
@@ -3284,7 +3370,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         // The relationship is the dependent issue's own: GitHub lists it on that issue, and
         // records it on both ends' timelines without moving either's time.
-        board.record_edge_event(&issue, &blocker);
+        let change = if adding { "ADDED" } else { "REMOVED" };
+        board.record_relationship_event(
+            (&issue, &format!("BLOCKED_BY_{change}_EVENT")),
+            (&blocker, &format!("BLOCKING_{change}_EVENT")),
+        );
         let root = if adding {
             "addBlockedBy"
         } else {

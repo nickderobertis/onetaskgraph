@@ -241,13 +241,13 @@ struct Item {
     updated_at: Option<String>,
     /// When GitHub last saw this item's board fields change, as `ProjectV2Item.updatedAt`
     /// carries it, how many comments the issue holds, as `comments { totalCount }` does, and
-    /// how many dependency events its timeline holds, as a `timelineItems` count of the four
-    /// dependency event types does — the three other parts of a change token. Kept for an
+    /// how many relationship events its timeline holds, as a `timelineItems` count of the eight
+    /// dependency and project-membership event types does — the three other parts of a change token. Kept for an
     /// issue this board created and `None` for every seeded one, which is answered as it
     /// always was.
     item_updated_at: Option<String>,
     comment_count: Option<u64>,
-    edge_events: Option<u64>,
+    relationship_events: Option<u64>,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -304,7 +304,7 @@ impl Item {
             updated_at: None,
             item_updated_at: None,
             comment_count: None,
-            edge_events: None,
+            relationship_events: None,
             path_labels: BTreeMap::new(),
             texts: BTreeMap::new(),
         }
@@ -351,7 +351,7 @@ impl Item {
         self.updated_at = Some(at.to_owned());
         self.item_updated_at = Some(at.to_owned());
         self.comment_count = Some(comments);
-        self.edge_events = Some(0);
+        self.relationship_events = Some(0);
         self
     }
     fn number(mut self, number: u64) -> Self {
@@ -513,7 +513,7 @@ impl Item {
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
                 "subIssuesSummary":{"total":self.sub_issues},
                 "commentCount":self.comment_count.map(|total| json!({"totalCount":total})),
-                "edgeEvents":self.edge_events.map(|total| json!({"totalCount":total})),
+                "relationshipEvents":self.relationship_events.map(|total| json!({"totalCount":total})),
                 "labels":self.label_nodes(asked.path)}),
         }
     }
@@ -1762,7 +1762,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // An issue this board creates carries every part of its change token.
         created.updated_at = Some(state.tick());
         created.comment_count = Some(0);
-        created.edge_events = Some(0);
+        created.relationship_events = Some(0);
         // Its own band, so an assertion about a created issue's number cannot pass against
         // a number a seeded board item happened to be wearing.
         created.number = 2000 + state.next as u64;
@@ -1897,6 +1897,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let parent = input["issueId"].as_str().unwrap().to_owned();
         let child = input["subIssueId"].clone();
         state.find(&child).parent = adding.then(|| parent.clone());
+        // A project membership is a relationship GitHub records on both ends' timelines.
+        for end in [child.as_str().expect("a sub-issue id"), parent.as_str()] {
+            if let Some(count) = state
+                .items
+                .iter_mut()
+                .find(|item| item.content_id == end)
+                .and_then(|item| item.relationship_events.as_mut())
+            {
+                *count += 1;
+            }
+        }
         let held = state
             .items
             .iter()
@@ -1936,7 +1947,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .items
                 .iter_mut()
                 .find(|item| item.content_id == *end)
-                .and_then(|item| item.edge_events.as_mut())
+                .and_then(|item| item.relationship_events.as_mut())
             {
                 *count += 1;
             }
@@ -2063,6 +2074,16 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         }
         let page = membership_page(&item.memberships(&options), offset, first, asked);
         return json!({"node":{"projectItems":page}});
+    }
+    if query.contains("query LiveBoardItem") {
+        let id = variables["id"].as_str().expect("an issue id");
+        let item = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .expect("a board item lookup names an issue this board holds");
+        return json!({"node":{"projectItems":{"nodes":[
+            {"id":item.item_id,"project":{"id":"PVT_board"}}]}}});
     }
     if query.contains("query TerminalStatus") {
         let id = variables["id"].as_str().expect("an issue id");
