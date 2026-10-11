@@ -251,10 +251,6 @@ fn a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed() {
         );
     }
     let measured = spent(&served);
-    assert_eq!(
-        measured["breakdown"]["detail"]["requests"], 1,
-        "the five changed items and their first comment pages in one batched read: {measured:#}"
-    );
     assert!(
         measured["breakdown"].get("comment_pages").is_none(),
         "no item's comments outran its first page: {measured:#}"
@@ -264,10 +260,12 @@ fn a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed() {
         "no item cost a request beyond its share of the batched read: {measured:#}"
     );
     assert!(
-        served
-            .iter()
-            .any(|(document, _)| document == graphql::ISSUE_COPY_DETAILS),
-        "the changed items were read with their comments and their edges in one request"
+        served.iter().any(|(document, variables)| {
+            document == graphql::ISSUE_COPY_DETAILS
+                && changed.iter().all(|task| names(variables, task))
+        }),
+        "the five changed items were read together, each with its first comment page and its \
+         edges, in one batched read: {measured:#}"
     );
     record(
         "github-copy-recopy-five-changed",
