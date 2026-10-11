@@ -165,6 +165,7 @@ enum Named {
     Ids(Vec<GlobalId>),
     /// The query whose matches are copied — `task copy --to` with `task list`'s narrowing in
     /// place of ids.
+    // llmlint: ignore[invalid_states_unrepresentable] Holding the query inside the task scope's variant would make `CopyScope` carry the items for one of its three variants and `CopyItems` for the other two, so every Rust caller that sets `items` and `scope` by name — and the command line, which maps both flag for flag — would be rewritten for one way of naming tasks. The one combination this allows that means nothing, a query beside a project or document scope, is refused by `Engine::copy` as `EngineError::QueryNotTasks` before anything is read, and `a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused_first` in `tests/copy.rs` holds it.
     Matching(Box<TaskRequest>),
 }
 

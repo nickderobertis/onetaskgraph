@@ -178,10 +178,14 @@ fn a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed() {
     assert!(items.iter().all(|item| item["action"] == "created"));
 
     let (unchanged, served) = plan.copy();
+    let reported = unchanged["items"].as_array().expect("items");
+    assert_eq!(
+        reported.len(),
+        MATCHING,
+        "every match is reported: {unchanged:#}"
+    );
     assert!(
-        unchanged["items"]
-            .as_array()
-            .expect("items")
+        reported
             .iter()
             .all(|item| item["action"] == "unchanged" && item["skipped"] == true),
         "{unchanged:#}"
@@ -193,11 +197,29 @@ fn a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed() {
             .all(|(document, variables)| part(document, variables) == "listing"),
         "nothing beyond the listing: {measured:#}"
     );
+    // The listing walks its pages in order: the first from the start, each later one from the
+    // cursor the one before it ended at, none twice.
+    let cursors: Vec<&Value> = served
+        .iter()
+        .filter(|(document, _)| document == graphql::SEARCH_ISSUES)
+        .map(|(_, variables)| &variables["after"])
+        .collect();
     assert!(
-        measured["breakdown"]["listing"]["requests"]
-            .as_u64()
-            .is_some_and(|pages| pages >= 4),
-        "the listing spans four pages or more: {measured:#}"
+        cursors.first().is_some_and(|first| first.is_null()),
+        "the listing starts at its first page: {cursors:?}"
+    );
+    let resumed = &cursors[1..];
+    assert!(
+        !resumed.is_empty() && resumed.iter().all(|cursor| cursor.is_string()),
+        "twenty matches at five a page are more than one page, each resumed by its cursor: \
+         {cursors:?}"
+    );
+    assert!(
+        resumed
+            .iter()
+            .enumerate()
+            .all(|(at, cursor)| !resumed[..at].contains(cursor)),
+        "no page is read twice: {cursors:?}"
     );
     record(
         "github-copy-recopy-unchanged",
