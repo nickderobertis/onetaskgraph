@@ -663,6 +663,18 @@ impl TaskSource for SubprocessSource {
                     )
                     .await
                     .and_then(TaskDetailResult::into_read)
+                    // An answer about another task than the one asked for would put that task's
+                    // body and comments under this one's id.
+                    .and_then(|read| match read {
+                        Some(read) if read.task.id != *id => Err(SourceError::Malformed {
+                            message: format!(
+                                "get_task_detail was asked for task {id} and answered with \
+                                 task {}",
+                                read.task.id
+                            ),
+                        }),
+                        read => Ok(read),
+                    })
                     .map(|read| {
                         read.map(|mut read| {
                             read.comments = read

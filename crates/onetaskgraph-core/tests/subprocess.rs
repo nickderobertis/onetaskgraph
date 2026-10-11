@@ -964,6 +964,38 @@ async fn a_task_detail_whose_members_contradict_each_other_is_a_protocol_violati
 }
 
 #[tokio::test]
+async fn a_task_detail_about_another_task_than_the_one_asked_for_is_a_protocol_violation() {
+    let task = |id: &str| {
+        json!({"id": id, "title": "Alpha", "content": "",
+               "status": {"category": "todo", "name": "Todo"}, "labels": []})
+    };
+    let comments = json!({"items": [], "next": null});
+    let source = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "task_details": true}})
+        .to_string(),
+        json!({"id": "1", "result": {"task": task("T-2"), "page": comments}}).to_string(),
+        json!({"id": "2", "result": {"task": task("T-1"), "page": comments}}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let ids = [NativeId("T-1".to_owned())];
+
+    let other = source.get_task_details(&ids, Some(&page(50))).await;
+    let Err(SourceError::Malformed { message }) = &other[0] else {
+        panic!("an answer about T-2 is not T-1's: {other:?}");
+    };
+    assert!(
+        message.contains("asked for task T-1 and answered with task T-2"),
+        "{message}"
+    );
+    let asked = source.get_task_details(&ids, Some(&page(50))).await;
+    assert!(
+        matches!(&asked[0], Ok(Some(detail)) if detail.task.id == ids[0]),
+        "{asked:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_document_refusal_crosses_the_wire_as_the_hosted_plugin_s_own_reason() {
     // Both halves of §4.11 and §4.12, driven against each other over a real pipe. The
     // engine's side forwards these four the way it forwards every other method, and the
