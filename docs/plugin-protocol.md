@@ -620,6 +620,10 @@ and, for a source whose tasks have comments, one `task_comments` for that page o
 found, so a plugin written against this document implements nothing more for `task show-many`
 to reach it.
 
+`TaskSource::get_task_details_for_copy` — the read a copy makes of the tasks it carries — is not
+a message either: for a hosted source the engine answers it exactly as `get_task_details`, so it
+crosses as the same `get_task_detail` or `get_task` and `task_comments` requests.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -643,8 +647,6 @@ it was being read, and the copy reads it again (§4.13d). For a task carrying no
 says nothing of a comment edited alone, the copy also reads every page again from the first,
 until two full passes in a row agree on every comment's id, body and `updated_at`, at most three
 passes; a task that never settles is written nowhere and reported failed.
-
-### 4.5 `query_tasks`
 
 ### 4.5 `query_tasks`
 

@@ -89,6 +89,15 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine answers it for a hosted source from `get_task` "
         "and `task_comments`, which carry everything it reads"
     ),
+    "order_versions": (
+        "not carried: §4.13d says the protocol carries no ordering method, so a hosted "
+        "plugin's tokens are compared for equality alone"
+    ),
+    "get_task_details_for_copy": (
+        "not a message: §4.4 says the engine answers it for a hosted source exactly as "
+        "`get_task_details`, which crosses as `get_task_detail` or `get_task` and "
+        "`task_comments`"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
@@ -143,6 +152,13 @@ NOT_METHODS = {
 # source and reading what it can do, which the method table's own row says.
 HANDSHAKE_METHOD = "initialize"
 
+# Protocol methods that carry a batched trait method one item at a time, each with the trait
+# method it stands for. The method table's own row names that trait method, and the trait
+# method itself is carried in NOT_METHODS with the section saying how it crosses.
+PER_ITEM_METHODS = {
+    "get_task_detail": "get_task_details",
+}
+
 # Where each thing is specified. Every one-way check below reads one of these sections
 # rather than the whole document, so an incidental mention elsewhere cannot stand in for a
 # specification. A heading that moves fails here by name.
@@ -170,6 +186,7 @@ METHOD_SECTIONS = {
     "add_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "edit_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "delete_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
+    "write_comment_copy": "### 4.16a `write_comment_copy`",
     "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_task_metadata": (
@@ -442,10 +459,24 @@ if not methods:
 compare(
     "trait method",
     methods,
-    first_column("| Method | Trait method |") - {HANDSHAKE_METHOD},
+    first_column("| Method | Trait method |") - {HANDSHAKE_METHOD} - set(PER_ITEM_METHODS),
     NOT_METHODS,
     "`TaskSource`",
 )
+
+for message, batched in sorted(PER_ITEM_METHODS.items()):
+    if batched not in methods or batched not in NOT_METHODS:
+        failures.append(
+            f"`{message}` is carried here as `TaskSource::{batched}` one item at a time, but "
+            f"that trait method is no longer declared, or no longer recorded in NOT_METHODS. "
+            f"Drop the entry, or restore the trait method and its reason."
+        )
+    if f"| `{message}` | `TaskSource::{batched}`" not in document:
+        failures.append(
+            f"docs/plugin-protocol.md's method table no longer maps `{message}` to "
+            f"`TaskSource::{batched}`. Restore that row, or drop the entry here."
+        )
+
 
 
 def signature(method):

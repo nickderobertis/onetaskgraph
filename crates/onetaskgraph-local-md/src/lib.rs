@@ -2083,7 +2083,7 @@ const MARKER_END: &str = " -->";
 /// before comments had origins — which refuses a marker carrying an attribute it does not know,
 /// and would then read the whole section as task content — still reads every comment, the line
 /// merely part of that comment's text.
-pub const ORIGIN_OPEN: &str = "<!-- onetaskgraph:comment-origin ";
+pub const COPIED_FROM_LINE_OPEN: &str = "<!-- onetaskgraph:comment-origin ";
 
 /// One task file, read for its comments: where its content ends and what its section holds.
 struct TaskFile {
@@ -2732,7 +2732,10 @@ struct OriginLine {
 /// no such line.
 fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
     let (line, rest) = body.split_once('\n')?;
-    let attributes = attributes(line.strip_prefix(ORIGIN_OPEN)?.strip_suffix(MARKER_END)?)?;
+    let attributes = attributes(
+        line.strip_prefix(COPIED_FROM_LINE_OPEN)?
+            .strip_suffix(MARKER_END)?,
+    )?;
     let mut origin = OriginLine::default();
     for (name, value) in attributes {
         let slot = match name {
@@ -2791,7 +2794,10 @@ fn rendered_block(comment: &Comment) -> String {
     marker.push_str(MARKER_END);
     let mut body = String::new();
     if let Some(origin) = &comment.origin {
-        body.push_str(&format!("{ORIGIN_OPEN}task=\"{}\"", escaped(&origin.task)));
+        body.push_str(&format!(
+            "{COPIED_FROM_LINE_OPEN}task=\"{}\"",
+            escaped(&origin.task)
+        ));
         if origin.id != comment.id {
             body.push_str(&format!(" id=\"{}\"", escaped(origin.id.as_str())));
         }
@@ -2848,10 +2854,10 @@ fn this_second() -> DateTime<Utc> {
 
 /// Refuse a body the section cannot hold byte for byte.
 fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
-    if body.as_str().starts_with(ORIGIN_OPEN) {
+    if body.as_str().starts_with(COPIED_FROM_LINE_OPEN) {
         return Err(SourceError::Refused {
             message: format!(
-                "cannot represent this comment body: its first line opens with {ORIGIN_OPEN}, \
+                "cannot represent this comment body: its first line opens with {COPIED_FROM_LINE_OPEN}, \
                  which in a task file records where a copied comment came from rather than \
                  what it says; next: change that line"
             ),
