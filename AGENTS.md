@@ -737,7 +737,8 @@ them do; this is the inventory of what is owed, not a status board.
 40. Without `--comments`, a task copy, a project copy and a document copy each neither read
     nor write a comment at either end: neither board is sent a comment request, both ends'
     comments are as they were, and nothing the copy wrote carries a comment of what it was
-    copied from.
+    copied from. The one read is a task copy by query narrowed by `--commented-since`, which
+    reads each matched task's comments once to confirm the match and still writes none.
 41. Without `--comments`, a copy into a Markdown task keeps that file's comments section byte
     for byte, and no comment of the copy's source enters it.
 42. A task's status is set on its own through the binary — on a folder of Markdown, whose

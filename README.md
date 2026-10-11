@@ -169,8 +169,9 @@ what it is given, such as a folder of Markdown; GitHub and Linear record the sig
 account themselves and refuse it rather than drop it. `task show` prints a task's comments
 after its body, and its `--json` carries them as a top-level `comments` list for a source
 whose tasks have comments — absent, rather than empty, for one whose tasks have none.
-Without `--comments`, a `task copy`, `project copy` or `document copy` never reads or writes a
-comment at either end; with it, a task or project copy keeps the destination's copies of each
+Without `--comments`, a `task copy`, `project copy` or `document copy` never writes a comment
+at either end, and reads one only for a `task copy` by query narrowed by `--commented-since`,
+which reads each matched task's comments once to confirm the match; with it, a task or project copy keeps the destination's copies of each
 task's comments in step with the source's — see
 [Carrying comments, and copying only what changed](#carrying-comments-and-copying-only-what-changed).
 
