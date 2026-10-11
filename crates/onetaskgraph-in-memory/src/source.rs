@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 use chrono::Utc;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten,
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
+    Capabilities, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
     MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
     ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
@@ -1109,10 +1109,12 @@ impl TaskSource for InMemorySource {
             if !held.tasks.iter().any(|held_task| &held_task.id == task) {
                 return Ok(None);
             }
+            // A copy wrote its origin into the body as the hidden marker, which this source
+            // keeps as it was given; it is read back out of every comment, as the trait asks.
             held.comments
                 .iter()
                 .filter(|comment| &comment.task == task)
-                .map(|comment| comment.comment.clone())
+                .map(|comment| comment.comment.clone().unmarked())
                 .collect()
         };
         // An empty list has no row for a cursor to point at, so a task with no comments is
@@ -1150,7 +1152,7 @@ impl TaskSource for InMemorySource {
             task: task.clone(),
             comment: added.clone(),
         });
-        Ok(Some(added))
+        Ok(Some(added.unmarked()))
     }
 
     async fn edit_comment(
@@ -1171,9 +1173,12 @@ impl TaskSource for InMemorySource {
         else {
             return Ok(None);
         };
-        found.comment.body = body.as_str().to_owned();
+        // A comment a copy wrote is still that copy after an edit: its marker is carried over.
+        found.comment.body = CommentOrigin::kept(&found.comment.body, body)?
+            .as_str()
+            .to_owned();
         found.comment.updated_at = Some(Utc::now());
-        Ok(Some(found.comment.clone()))
+        Ok(Some(found.comment.clone().unmarked()))
     }
 
     async fn delete_comment(

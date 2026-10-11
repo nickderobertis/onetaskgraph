@@ -7,8 +7,8 @@
 //! read one invocation's answer — see `crates/onetaskgraph-e2e/tests/e2e/comments.rs`.
 
 use onetaskgraph_core::{
-    CommentList, Config, ConfiguredSource, DeletedComment, Engine, EngineError, GlobalId,
-    ResolvedSource,
+    CommentCounts, CommentList, Config, ConfiguredSource, CopyItems, CopyReport, CopyRequest,
+    CopyScope, DeletedComment, Engine, EngineError, GlobalId, ResolvedSource,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencySupport, Direction,
@@ -155,6 +155,96 @@ async fn a_comment_added_is_listed_edited_and_deleted_by_the_same_engine() {
     assert_eq!(detail.response.items.len(), 1);
     assert!(detail.response.errors.is_empty());
     assert_eq!(detail.comments, Some(remaining.comments));
+}
+
+#[tokio::test]
+async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_through_an_edit() {
+    // `memory` keeps a copy's origin as the hidden marker the trait's default writes, so this
+    // is that default's whole round trip: written, read back, edited as a person would, and
+    // copied over again.
+    let config = Config::from_document(json!({"sources": {
+        "memory": {"plugin": "in-memory", "config": {
+            "capabilities": {"comments": "native", "max_page_size": 2},
+            "tasks": [task_value("T-1")],
+            "comments": seeded(),
+        }},
+        "into": {"plugin": "in-memory", "config": {"capabilities": {"comments": "native"}}},
+    }}))
+    .expect("a valid configuration");
+    let engine = Engine::build(&config, &NoSecrets);
+    let copy = CopyRequest {
+        items: CopyItems::new(vec![id("memory:T-1")]).expect("one item"),
+        scope: CopyScope::Tasks,
+        destination: name("into"),
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: true,
+        no_link: true,
+    };
+    let counts = |report: &CopyReport| report.items[0].comments().copied();
+    let first = engine.copy(&copy).await.expect("the copy lands");
+    assert_eq!(
+        counts(&first),
+        Some(CommentCounts {
+            added: 5,
+            ..CommentCounts::default()
+        })
+    );
+    let landed = first.items[0].destination().expect("it landed").clone();
+    let copies = engine
+        .comments(&landed)
+        .await
+        .expect("the copies read")
+        .comments;
+    assert_eq!(copies.len(), 5);
+    for (n, copy) in copies.iter().enumerate() {
+        assert_eq!(
+            copy.body,
+            format!("comment {}\n", n + 1),
+            "the marker is read out"
+        );
+        let origin = copy.origin.as_ref().expect("a copy reads back as one");
+        assert_eq!(origin.task, "memory:T-1");
+        assert_eq!(origin.id.as_str(), format!("C-{}", n + 1));
+    }
+
+    let again = engine.copy(&copy).await.expect("the copy runs again");
+    assert_eq!(
+        counts(&again),
+        Some(CommentCounts {
+            unchanged: 5,
+            ..CommentCounts::default()
+        }),
+        "every copy is found as the copy it is, so nothing is added beside it"
+    );
+
+    // A person edits a copy where it landed: it is still that copy, and the next copy puts
+    // back what its origin says.
+    let edited = engine
+        .edit_comment(&landed, &copies[0].id, &body("edited where it landed\n"))
+        .await
+        .expect("the copy is edited");
+    assert_eq!(edited.body, "edited where it landed\n");
+    assert_eq!(edited.origin, copies[0].origin);
+    let restored = engine.copy(&copy).await.expect("the copy runs again");
+    assert_eq!(
+        counts(&restored),
+        Some(CommentCounts {
+            edited: 1,
+            unchanged: 4,
+            ..CommentCounts::default()
+        })
+    );
+    let held = engine
+        .comments(&landed)
+        .await
+        .expect("the copies read")
+        .comments;
+    assert_eq!(held.len(), 5);
+    assert_eq!(held[0].body, "comment 1\n");
+    assert_eq!(held[0].origin, copies[0].origin);
 }
 
 #[tokio::test]
