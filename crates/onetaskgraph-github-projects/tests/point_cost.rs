@@ -68,6 +68,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUE_COMMENTS, 1),
     (graphql::ISSUE_DETAIL, 1),
     (graphql::ISSUE_DETAILS, 1),
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. A copy's batched read is a document of its own, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price, so it needs one; `session-cost.md` records why it was added.
     (graphql::ISSUE_COPY_DETAILS, 1),
     (graphql::COMMENT_ISSUE, 1),
     (graphql::ADD_COMMENT, 1),
@@ -180,6 +181,7 @@ fn the_check_reports_a_failure_naming_a_document_nobody_priced() {
 /// half: the same document grown by one aliased item — written the way every alias in it is —
 /// is priced at two, so a batch constant left below what one point buys fails here rather
 /// than spending a request a caller did not need to.
+// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property.
 #[test]
 fn the_batch_read_is_the_largest_one_point_buys() {
     const {
@@ -245,3 +247,4 @@ fn largest_at_one_point(document: &str, batch: usize, name: &str) {
          one point buys:\n{grown}"
     );
 }
+// llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]

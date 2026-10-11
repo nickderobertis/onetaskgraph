@@ -116,9 +116,31 @@ class Relay:
         )
 
 
+def message(line, sender):
+    """One protocol line as the JSON object every line is (§1), or a refusal naming `sender`."""
+    try:
+        decoded = json.loads(line)
+    except ValueError as error:
+        raise SystemExit(
+            f"rewriting relay: {sender} sent a line that is not JSON: {error}"
+        ) from error
+    if not isinstance(decoded, dict):
+        raise SystemExit(
+            f"rewriting relay: {sender} sent {decoded!r}, which is not a JSON object"
+        )
+    return decoded
+
+
 def main():
-    first = json.loads(sys.stdin.readline())
-    relay = Relay.taken_from(first["params"]["config"])
+    first = message(sys.stdin.readline(), "the engine")
+    params = first.get("params")
+    config = params.get("config") if isinstance(params, dict) else None
+    if first.get("method") != "initialize" or not isinstance(config, dict):
+        raise SystemExit(
+            "rewriting relay: the engine's first line must be an `initialize` request whose "
+            f"params carry a `config` object, got {first!r}"
+        )
+    relay = Relay.taken_from(config)
     host = subprocess.Popen(
         [relay.host],
         stdin=subprocess.PIPE,
@@ -140,7 +162,7 @@ def main():
                 log.write(f"{method}\n")
 
     logged(first.get("method"))
-    handshake = json.loads(relayed(json.dumps(first) + "\n"))
+    handshake = message(relayed(json.dumps(first) + "\n"), "the host")
     result = handshake.get("result")
     if isinstance(result, dict):
         for member in relay.forget:
@@ -148,7 +170,11 @@ def main():
     sys.stdout.write(json.dumps(handshake) + "\n")
     sys.stdout.flush()
     for line in sys.stdin:
-        method = json.loads(line).get("method")
+        method = message(line, "the engine").get("method")
+        if not isinstance(method, str):
+            raise SystemExit(
+                f"rewriting relay: the engine sent a request naming no method: {line!r}"
+            )
         logged(method)
         answer = relayed(line)
         rewrite = relay.rewrite
