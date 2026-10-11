@@ -390,7 +390,15 @@ type Issue implements Node {
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
   comments(first: Int, after: String, orderBy: IssueCommentOrder): IssueCommentConnection!
-  timelineItems(since: DateTime, skip: Int, itemTypes: [IssueTimelineItemsItemType!], after: String, before: String, first: Int, last: Int): IssueTimelineItemsConnection!
+  timelineItems(
+    since: DateTime
+    skip: Int
+    itemTypes: [IssueTimelineItemsItemType!]
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): IssueTimelineItemsConnection!
 }
 enum IssueTimelineItemsItemType {
   BLOCKED_BY_ADDED_EVENT
