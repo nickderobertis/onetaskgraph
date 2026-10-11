@@ -14,12 +14,12 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, MetadataKey, MetadataMatch, NativeId, NewComment, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields,
-    TextQuery, UpdatedField, WriteSupport,
+    Capabilities, Comment, CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, MetadataMatch, NativeId,
+    NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -13629,6 +13629,8 @@ enum CommentCall {
     Add,
     Edit,
     Delete,
+    /// A copy's write of one comment: a new one, or over the copy `IC_1` already is.
+    Copy(Option<&'static str>),
 }
 
 #[tokio::test]
@@ -13641,6 +13643,22 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
                                        "body":"held","issue":{"id":"I_1"}}}});
     let bodiless = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
                                           "issue":{"id":"I_1"}}}});
+    let unsaid = |id: &str| {
+        let mut node = comment(id);
+        node.as_object_mut().expect("a comment node").remove("body");
+        node
+    };
+    let copied = CommentCopy {
+        body: comment_body("said at the origin"),
+        origin: CommentOrigin {
+            task: "notes:A".to_owned(),
+            id: native("C-1"),
+            author: Some("ada".to_owned()),
+            created_at: None,
+            updated_at: None,
+            url: None,
+        },
+    };
     let cases: Vec<(Vec<Value>, CommentCall, &str)> = vec![
         // A listing is one read of the issue with its comments, so each of these is the issue
         // answered with a comment connection this source cannot read.
@@ -13725,6 +13743,45 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
             CommentCall::Edit,
             "missing string field body",
         ),
+        // And the comment a mutation answers with is what a copy reads its marker back out
+        // of: one answered without its body is refused, never read as an empty comment that
+        // carries no origin.
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_1"},
+                                             "commentEdge":{"node":unsaid("IC_1")}}}}),
+            ],
+            CommentCall::Add,
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":unsaid("IC_1")}}}),
+            ],
+            CommentCall::Edit,
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_1"},
+                                             "commentEdge":{"node":unsaid("IC_1")}}}}),
+            ],
+            CommentCall::Copy(None),
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":unsaid("IC_1")}}}),
+            ],
+            CommentCall::Copy(Some("IC_1")),
+            "missing string field body",
+        ),
         (
             vec![
                 issue_read("I_1"),
@@ -13754,6 +13811,10 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
                 .map(|_| ()),
             CommentCall::Delete => source
                 .delete_comment(&task, &native("IC_1"))
+                .await
+                .map(|_| ()),
+            CommentCall::Copy(existing) => source
+                .write_comment_copy(&task, existing.map(native).as_ref(), &copied)
                 .await
                 .map(|_| ()),
         };
