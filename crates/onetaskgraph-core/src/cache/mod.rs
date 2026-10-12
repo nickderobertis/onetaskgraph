@@ -692,29 +692,70 @@ impl SourceCache {
 
 /// Truncate the file at `path` to nothing, making it writable first where its mode is all
 /// that refuses.
+///
+/// Only a regular file is emptied, and only the very file that was inspected: a symlink, or a
+/// path replaced between the look and the open, could otherwise point this at a file outside
+/// the cache that it has no business changing.
 // Windows has no mode bits to open up, only the read-only attribute, so clearing it there makes
 // the file writable by its owner alone rather than by everybody, which is what the lint warns of.
 #[cfg_attr(not(unix), allow(clippy::permissions_set_readonly_false))]
 fn empty_in_place(path: &Path) -> std::io::Result<()> {
-    let open = || std::fs::OpenOptions::new().write(true).open(path);
-    let file = match open() {
+    let inspected = std::fs::symlink_metadata(path)?;
+    if !inspected.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "it is not a regular file, so it is not emptied",
+        ));
+    }
+    let open = |write: bool| -> std::io::Result<std::fs::File> {
+        let file = std::fs::OpenOptions::new()
+            .read(!write)
+            .write(write)
+            .open(path)?;
+        same_file(&inspected, &file.metadata()?)?;
+        Ok(file)
+    };
+    let file = match open(true) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            let mut permissions = std::fs::metadata(path)?.permissions();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt as _;
+                // Through the handle, so the file re-moded is the one inspected.
+                let held = open(false)?;
+                let mut permissions = held.metadata()?.permissions();
                 permissions.set_mode(permissions.mode() | 0o200);
+                held.set_permissions(permissions)?;
             }
             #[cfg(not(unix))]
-            permissions.set_readonly(false);
-            std::fs::set_permissions(path, permissions)?;
-            open()?
+            {
+                let mut permissions = inspected.permissions();
+                permissions.set_readonly(false);
+                std::fs::set_permissions(path, permissions)?;
+            }
+            open(true)?
         }
         Err(error) => return Err(error),
     };
     file.set_len(0)?;
     file.sync_all()
+}
+
+/// Refuse when `opened` is not the file `inspected` described: the path was replaced between
+/// the two.
+fn same_file(inspected: &std::fs::Metadata, opened: &std::fs::Metadata) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if (inspected.dev(), inspected.ino()) != (opened.dev(), opened.ino()) {
+            return Err(std::io::Error::other(
+                "it was replaced while it was being emptied, so it is not",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (inspected, opened);
+    Ok(())
 }
 
 /// The JSON Schema of every entry this build writes under [`ENTRY_SCHEMA`]: a task's and the

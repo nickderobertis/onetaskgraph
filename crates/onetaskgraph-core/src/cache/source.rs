@@ -1598,6 +1598,48 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_entry_that_is_a_symlink_never_changes_the_file_it_points_at() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("a directory");
+        let outside = tempfile::tempdir().expect("a directory outside the cache");
+        let precious = outside.path().join("precious.json");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        std::fs::rename(entry_file(dir.path()), &precious).expect("the entry moved out");
+        std::os::unix::fs::symlink(&precious, entry_file(dir.path())).expect("the symlink");
+        let _read_only = Mode::set(&precious, 0o444);
+        let held = std::fs::read(&precious).expect("the file pointed at");
+        let Some(_refusing) = refusing(dir.path()) else {
+            return;
+        };
+
+        cache.invalidate(&id("T-1"));
+        source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("a write whose entry cannot be retired is refused");
+        assert_eq!(
+            std::fs::read(&precious).expect("the file"),
+            held,
+            "its bytes"
+        );
+        assert_eq!(
+            std::fs::metadata(&precious)
+                .expect("the file")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444,
+            "its mode"
+        );
+        assert!(
+            probe.lock().expect("the probe").writes.is_empty(),
+            "nothing was sent"
+        );
+    }
+
     /// Set in the child [`a_cache_directory_mounted_read_only_withholds_refuses_and_recovers`]
     /// runs itself as, naming the directory mounted read-only over it.
     #[cfg(target_os = "linux")]
