@@ -19,7 +19,7 @@
 #      holds the permitted set to being a set of PATHS rather than a shape a line has.
 #   3. A question it cannot answer is answered `run`. It fails toward spending the budget.
 #   4. Every path that can open a live session consults it. The paths are ENUMERATED from
-#      the workflow and the hook rather than listed here, so one added or rewired later
+#      the workflow rather than listed here, so one added or rewired later
 #      cannot silently bypass the decision.
 #   5. Each of those paths, driven: a diff the decision refuses leaves the lane reporting
 #      it was not selected and the exclusion reaching Nx, and a diff it accepts leaves
@@ -474,7 +474,7 @@ done
 
 # A file the plugin gained that git does not track yet. `git diff` does not report one, so
 # a decision reading that alone would answer `not-selected` for a diff that adds a whole
-# behaviour — and this is the local gate's own case, where a contributor runs the hook over
+# behaviour — and this is the local gate's own case, where a contributor runs the manual gate over
 # work that is not committed.
 # A `run` answer says nothing, so what proves the file was seen is the answer moving: the
 # same tree answers `not-selected` until the untracked file is there.
@@ -550,8 +550,8 @@ fi
 
 # 4. Every path that can open a live session consults the decision.
 #
-# Enumerated from the workflow, the hook and the justfile rather than listed here: a path
-# added or rewired later has to appear in one of those three, and this fails when one of
+# Enumerated from the workflow and the justfile rather than listed here: a path
+# added or rewired later has to appear in either file, and this fails when one of
 # them reaches the live lane without reading the answer.
 
 if ! (cd "$REPO" && "$PYTHON" - <<'PY'
@@ -562,7 +562,6 @@ from pathlib import Path
 
 DECISION = "scripts/live-lane-selection.sh"
 WORKFLOW = Path(".github/workflows/ci.yml")
-HOOK = Path(".githooks/pre-push")
 JUSTFILE = Path("justfile")
 
 problems = []
@@ -627,8 +626,7 @@ def reaches_decision(recipe, seen=None):
 
 
 # `just` at a command position, so a recipe named in prose or inside a diagnostic is not
-# mistaken for one that runs. The hook explains itself at length and says "just is not
-# installed" in a message; a loose match read both as invocations.
+# mistaken for one that runs. Only commands at a command position count.
 INVOCATION = re.compile(r"(?m)^[ \t]*(?:if\s+!\s+|!\s+)?just\s+([a-z][a-z0-9-]*)")
 
 
@@ -682,14 +680,6 @@ for step in credentialed:
             "decision fall back to a default base rather than the commit this run is about"
         )
 
-hook = read(HOOK, "the pre-push hook that runs the gate locally")
-consults(without_comments(hook), HOOK.as_posix())
-if "NX_BASE" not in hook:
-    problems.append(
-        f"{HOOK.as_posix()}: runs the gate without deriving a base, so it sweeps every project "
-        "and opens a live session whatever the push contains"
-    )
-
 if problems:
     print("check-live-lane-selection: a path can reach a live session without consulting the decision.", file=sys.stderr)
     for problem in problems:
@@ -704,7 +694,7 @@ fi
 #
 # The recipes are real, the decision is real and the git states are real; Nx is the
 # recorder planted above, so what a path would have asked Nx to run is readable without
-# building the workspace. A path is named by the recipe the workflow or the hook runs it
+# building the workspace. A path is named by the recipe the workflow runs it
 # through, which is what case 4 has just held them to.
 
 drive() {
@@ -808,15 +798,6 @@ NAMED
   done
 }
 
-# The pre-push path derives its base from the records git feeds the hook on stdin, so that
-# derivation is driven with real refs before the recipe is.
-pre_push_base() {
-  local head
-  head="$(git -C "$REPO" rev-parse HEAD)"
-  printf 'refs/heads/checked %s refs/heads/checked %s\n' "$head" "$BASE" \
-    | (cd "$REPO" && bash scripts/pre-push-base.sh)
-}
-
 for expectation in not-selected run; do
   if [ "$expectation" = "not-selected" ]; then
     fixture_version_only
@@ -824,16 +805,9 @@ for expectation in not-selected run; do
     fixture_plugin_source
   fi
 
-  derived="$(pre_push_base)"
-  if [ "$derived" != "$BASE" ]; then
-    fail "the pre-push path derived '$derived' from the ref git would feed it, expected $BASE"
-  fi
-
-  # The change-request path runs `just check`; the default branch and the hook run
-  # `just gate`. Case 4 holds the workflow and the hook to exactly those.
+  # CI runs check for pull requests and gate for the default branch.
   expect_path "the change-request path" check "$BASE" "$expectation"
   expect_path "the default-branch path" gate "$BASE" "$expectation"
-  expect_path "the local pre-push path" gate "$derived" "$expectation"
 
   reset_fixture
 done
@@ -868,65 +842,6 @@ HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
 # workflow's last resort is the commit before this one, whatever that is.
 PREDECESSOR="$(git -C "$REPO" rev-parse HEAD~1)"
 readonly HEAD_SHA PREDECESSOR
-
-# What the hook falls back to when the records do not answer: the merge base with the very
-# ref Nx would have compared against. Left empty when this clone has no such ref, and the
-# expectations below then hold everything about the answer except its exact value.
-DEFAULT_BASE="$(cd "$REPO" && "$PYTHON" -c '
-import json
-import sys
-
-try:
-    base = json.load(open("nx.json", encoding="utf-8")).get("defaultBase")
-except (OSError, ValueError):
-    raise SystemExit(0)
-if isinstance(base, str):
-    sys.stdout.write(base)
-')"
-FALLBACK=""
-if [ -n "$DEFAULT_BASE" ] && git -C "$REPO" rev-parse --verify --quiet "$DEFAULT_BASE^{commit}" >/dev/null 2>&1; then
-  FALLBACK="$(git -C "$REPO" merge-base "$DEFAULT_BASE" HEAD)"
-fi
-readonly DEFAULT_BASE FALLBACK
-
-expect_pre_push_base() {
-  local case_name="$1" records="$2" expected="$3" derived
-  derived="$(printf '%s' "$records" | (cd "$REPO" && bash scripts/pre-push-base.sh))" \
-    || derived="<the derivation could not be run>"
-  if [ "$expected" != "fallback" ]; then
-    [ "$derived" = "$expected" ] || fail "the pre-push base for $case_name came back as '$derived', expected $expected"
-    return
-  fi
-  if [ "$derived" = "$ZERO_SHA" ] || [ "$derived" = "$UNKNOWN_SHA" ] || [ "$derived" = "$HEAD_SHA" ]; then
-    fail "the pre-push base for $case_name came back as '$derived', which is not a commit the remote already has — the gate would compare against the wrong one"
-    return
-  fi
-  if [ -n "$derived" ] && ! git -C "$REPO" rev-parse --verify --quiet "$derived^{commit}" >/dev/null 2>&1; then
-    fail "the pre-push base for $case_name came back as '$derived', which this repository cannot resolve, so Nx would refuse it"
-    return
-  fi
-  if [ -n "$FALLBACK" ] && [ "$derived" != "$FALLBACK" ]; then
-    fail "the pre-push base for $case_name came back as '$derived', expected the merge base with $DEFAULT_BASE ($FALLBACK)"
-  fi
-}
-
-expect_pre_push_base "one ref the remote already has" \
-  "refs/heads/checked $HEAD_SHA refs/heads/checked $BASE
-" "$BASE"
-expect_pre_push_base "a branch the remote has never seen" \
-  "refs/heads/checked $HEAD_SHA refs/heads/checked $ZERO_SHA
-" fallback
-expect_pre_push_base "a predecessor this checkout does not have" \
-  "refs/heads/checked $HEAD_SHA refs/heads/checked $UNKNOWN_SHA
-" fallback
-expect_pre_push_base "two refs in one push" \
-  "refs/heads/one $HEAD_SHA refs/heads/one $BASE
-refs/heads/two $HEAD_SHA refs/heads/two $BASE
-" fallback
-expect_pre_push_base "a ref being deleted, which pushes nothing to check" \
-  "refs/heads/gone $ZERO_SHA refs/heads/gone $BASE
-" fallback
-expect_pre_push_base "no records at all" "" fallback
 
 # The default branch's own derivation is shell in the workflow, and the workflow is the only
 # place it lives — so it is read out of the step that declares it and run, rather than

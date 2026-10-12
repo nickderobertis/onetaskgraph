@@ -2,7 +2,7 @@
 # Clone this repository into a scratch tree, safely from inside a git hook.
 #
 # Git exports GIT_DIR to every hook and GIT_DIR overrides `git -C <dir>`. The gate runs
-# from .githooks/pre-push, so a guard that clones by hand never touches its scratch tree:
+# inside a caller's Git hook, so a guard that clones by hand never touches its scratch tree:
 # the checkout lands in the real repository, exits 0, and leaves the clone empty. The
 # guards that clone also stage and restore between cases, which under a hook rewrites the
 # real working copy.

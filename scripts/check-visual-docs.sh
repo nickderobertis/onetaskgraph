@@ -67,7 +67,7 @@ unusable = [value for value in lane_values if not re.fullmatch(r"[A-Za-z0-9_]+",
 if unusable or len(lane_values) != 1:
     problems.append(
         "screencomp.toml: [capture].arches must declare exactly one lane, named in "
-        "letters, digits and underscores, because the pre-push guard classifies that lane "
+        "letters, digits and underscores, because the manual screenshot guard classifies that lane "
         "on every host and only one baseline is committed; it declares "
         f"{lane_values or 'none'}"
         + (f", of which {unusable} cannot name a baseline file" if unusable else "")
@@ -101,7 +101,7 @@ for path, text in (
         )
 
 # Where the review gallery goes, declared once in [guard].gallery — the key `screencomp
-# init` scaffolds. The pre-push guard writes a directory there and .gitignore has to cover
+# init` scaffolds. The manual screenshot guard writes a directory there and .gitignore has to cover
 # it, so both are reconciled against THIS declaration rather than against each other: a
 # gallery moved here and nowhere else would otherwise leave a generated tree committed.
 declared_gallery = re.search(r'(?m)^gallery\s*=\s*"([^"]*)"', config)
@@ -109,7 +109,7 @@ gallery = declared_gallery.group(1) if declared_gallery else ""
 if not gallery or gallery.startswith("/") or ".." in gallery.split("/") or " " in gallery:
     problems.append(
         "screencomp.toml: [guard].gallery must declare a relative directory inside this "
-        "tree, with no '..' segment and no space, because the pre-push guard writes the "
+        "tree, with no '..' segment and no space, because the manual screenshot guard writes the "
         "review gallery there and .gitignore has to ignore that directory; it declares "
         + (repr(declared_gallery.group(1)) if declared_gallery else "nothing")
         + "."
@@ -149,7 +149,6 @@ for path in [
     "scripts/screenshots-guard.sh",
     "scripts/screenshots-bless.sh",
     "justfile",
-    ".githooks/pre-push",
     ".github/workflows/visual-docs.yml",
 ]:
     for line in read(path).splitlines():
@@ -424,7 +423,7 @@ for recipe in ("check", "gate", "test", "lint", "typecheck", "coverage", "format
     if reaches_capture(recipe):
         problems.append(
             f"justfile: `just {recipe}` reaches scripts/screenshots.sh. Screenshots are "
-            "informational: the capture belongs to `just screenshots`, the pre-push guard "
+            "informational: the capture belongs to `just screenshots`, the manual screenshot guard "
             "and .github/workflows/visual-docs.yml, and to nothing the gate runs."
         )
 # Every Nx target of every project, by the COMMANDS it runs rather than by the files it
@@ -465,7 +464,7 @@ for project_file in sorted(Path(".").glob("*/project.json")) + sorted(
                     f"{project_file.as_posix()}: target {name!r} runs the capture "
                     f"({command!r}). No Nx target may, because `nx affected` reaches every "
                     "one of them from the gate: the capture belongs to `just screenshots`, "
-                    "the pre-push guard and .github/workflows/visual-docs.yml."
+                    "the manual screenshot guard and .github/workflows/visual-docs.yml."
                 )
 
 if problems:

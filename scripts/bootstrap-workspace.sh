@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
 # Workspace-level setup a clean clone needs before any target can run.
 #
-# Activates the repository's own git hooks (so `git push` runs the complete gate rather
-# than discovering it in CI) and installs the judged-lint toolchain. Everything here is
+# Installs the release tooling and judged-lint toolchain. Everything here is
 # idempotent, so `just bootstrap` is safe to re-run.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-
-# Point git at the tracked hooks. Without this the pre-push gate is a file nobody runs.
-git config core.hooksPath .githooks
 
 # The pinned release-plz, into the repository-scoped tool location every script of this
 # repository resolves it from — never into the global cargo bin directory, which other
