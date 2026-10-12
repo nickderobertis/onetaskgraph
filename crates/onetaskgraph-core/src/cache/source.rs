@@ -1446,7 +1446,6 @@ mod tests {
             another_process(dir.path()).read(&id("T-1")).is_none(),
             "another process serves `v1`"
         );
-        // Once the directory takes writes again, the next one lands and is served.
         drop(refused);
         source.settle(
             &id("T-1"),
@@ -1504,7 +1503,6 @@ mod tests {
             cache.read(&id("T-1")).is_none(),
             "this process withholds it from itself"
         );
-        // A write of its own landing there gives it back.
         drop(refused);
         cache.write(&Entry {
             schema: ENTRY_SCHEMA,
@@ -1518,6 +1516,33 @@ mod tests {
         assert_eq!(
             cache.read(&id("T-1")).and_then(|entry| entry.task.version),
             Some("v2".to_owned()),
+            "the withholding process serves what it wrote"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_board_context_nothing_can_remove_or_empty_is_withheld_until_rewritten() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        cache.write_board(serde_json::json!({"option": "stale"}));
+        let refused = refusing_in(dir.path());
+        if refused.is_none() {
+            return;
+        }
+        // Stood in for as in the task entry's test above, and for the same reason.
+        cache.retire_with(&dir.path().join("board.json"), |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
+        });
+        assert!(
+            cache.board().is_none(),
+            "this process withholds it from itself"
+        );
+        drop(refused);
+        cache.write_board(serde_json::json!({"option": "fresh"}));
+        assert_eq!(
+            cache.board(),
+            Some(serde_json::json!({"option": "fresh"})),
             "the withholding process serves what it wrote"
         );
     }
