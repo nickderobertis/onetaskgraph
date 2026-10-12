@@ -210,7 +210,7 @@ fn stale_option(cache: bool) -> Value {
     cost(&cached.board.served()[before..])
 }
 
-/// A recorded figure the previous node's copy journeys wrote, when they have.
+/// A figure `copy_recopy`'s re-copy journeys recorded in this crate's telemetry, when they have.
 fn copy_figure(name: &str) -> Value {
     std::fs::read(directory().join(format!("{name}.json")))
         .ok()

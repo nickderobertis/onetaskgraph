@@ -9,7 +9,7 @@
 use onetaskgraph_github_projects::{CONTEXT_VERSION, context_shapes};
 
 /// Every context version with the digest of the task and board context shapes it publishes.
-const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[(1, 0x4e7d_0ea5_fdec_1358)];
+const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[(1, 0x8eab_f0e5_96fd_b4b8)];
 
 /// FNV-1a over `value`'s JSON, whose object keys serde_json keeps sorted.
 fn digest(value: &serde_json::Value) -> u64 {

@@ -2167,3 +2167,158 @@ fn the_typescript_sdk_pins_expects_and_clears_through_the_binary() {
     );
     assert_eq!(Cached::entries(&cached.default_dir()).len(), 0, "cleared");
 }
+
+#[test]
+fn the_human_rendering_says_when_a_write_read_first_and_what_clear_emptied() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let output = cached.run_with(&["cache", "clear"], None);
+    assert_eq!(output.status.code(), Some(0));
+    let said = stdout(&output);
+    assert!(said.contains("cleared board — 1 entries — at "), "{said}");
+    let output = cached.run_with(
+        &["task", "comment", "add", "board:T-3", "--expect", &v],
+        Some("a reply"),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("read first: the cache holds no entry"),
+        "{said}"
+    );
+    let uncached = Cached::with(&json!({"enabled": false}));
+    let output = uncached.run_with(&["cache", "clear"], None);
+    assert_eq!(stdout(&output).trim(), "no source keeps a cache");
+}
+
+/// Rewrite the one task entry under `dir` through `change`.
+fn rewrite_entry(dir: &Path, change: impl FnOnce(&mut Value)) {
+    let path = Cached::entries(dir).remove(0);
+    let mut entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    change(&mut entry);
+    std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+}
+
+#[test]
+fn a_context_another_release_wrote_is_declined_and_the_write_reads_once_instead() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    rewrite_entry(&cached.default_dir(), |entry| {
+        entry["context"]["version"] = json!(99)
+    });
+    let (written, sent) = cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "high",
+        "--expect",
+        &v,
+        "--json",
+    ]);
+    assert_eq!(sent, [graphql::ISSUE, graphql::UPDATE_FIELD_WHOLE]);
+    assert!(
+        written["fallback"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("could not take")),
+        "{written}"
+    );
+    // A board context of another version is not taken either: the write takes the task's own
+    // record, which carries what it needs.
+    let v2 = written_version(&written);
+    std::fs::write(
+        cached.default_dir().join("board.json"),
+        serde_json::to_vec(&json!({"schema": 1, "remote": "elsewhere", "context": {}})).unwrap(),
+    )
+    .unwrap();
+    let (_, sent) = cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "low",
+        "--expect",
+        &v2,
+        "--json",
+    ]);
+    assert_eq!(sent, [graphql::UPDATE_FIELD_WHOLE]);
+}
+
+#[test]
+fn an_edit_expecting_a_task_read_without_its_comments_reads_which_issue_the_comment_is_on() {
+    let cached = Cached::new();
+    let comment = cached.board.add_comment("T-3", "a comment to edit");
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--no-comments", "--json"]);
+    let v = version_of(&first);
+    let (edited, sent) = cached.ok_with(
+        &[
+            "task",
+            "comment",
+            "edit",
+            "board:T-3",
+            &comment,
+            "--expect",
+            &v,
+            "--json",
+        ],
+        Some("edited"),
+    );
+    assert_eq!(
+        sent,
+        [graphql::COMMENT_ISSUE, graphql::UPDATE_COMMENT_WHOLE],
+        "{edited}"
+    );
+    assert_eq!(edited["fallback"]["read"], true);
+    assert_eq!(edited["body"], "edited");
+}
+
+#[test]
+fn cache_clear_leaves_another_remotes_entries_another_releases_and_their_staging_alone() {
+    let cached = Cached::new();
+    cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let dir = cached.default_dir();
+    let tasks = dir.join("tasks");
+    std::fs::write(
+        tasks.join("other.json"),
+        r#"{"schema":1,"remote":"another"}"#,
+    )
+    .unwrap();
+    let ours = Cached::entries(&dir)
+        .into_iter()
+        .find(|path| !path.ends_with("other.json"))
+        .unwrap();
+    let mut later: Value = serde_json::from_slice(&std::fs::read(&ours).unwrap()).unwrap();
+    later["schema"] = json!(2);
+    std::fs::write(
+        tasks.join("later.json"),
+        serde_json::to_vec(&later).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(tasks.join(".staged-another-1-1"), "another remote's write").unwrap();
+    let (cleared, _) = cached.ok(&["cache", "clear", "--json"]);
+    assert_eq!(cleared["cleared"][0]["entries"], 1);
+    for kept in ["other.json", "later.json", ".staged-another-1-1"] {
+        assert!(tasks.join(kept).exists(), "{kept} is left alone");
+    }
+    assert!(!ours.exists(), "the store's own entry is gone");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cache_that_cannot_be_emptied_is_refused_naming_where_and_what_to_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let cached = Cached::new();
+    cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let tasks = cached.default_dir().join("tasks");
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let output = cached.run_with(&["cache", "clear", "board"], None);
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_ne!(output.status.code(), Some(0));
+    let said = stderr(&output);
+    assert!(
+        said.contains("could not be emptied") && said.contains("permissions"),
+        "{said}"
+    );
+}

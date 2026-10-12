@@ -523,7 +523,8 @@ impl SourceCache {
         let directory = path.parent().unwrap_or(&self.dir);
         std::fs::create_dir_all(directory)?;
         let staged = directory.join(format!(
-            ".staged-{}-{}",
+            ".staged-{}-{}-{}",
+            self.remote,
             std::process::id(),
             STAGED.fetch_add(1, AtomicOrdering::Relaxed)
         ));
@@ -568,7 +569,7 @@ impl SourceCache {
                 for file in listed {
                     let path = file?.path();
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if name.starts_with(".staged-") {
+                    if name.starts_with(&format!(".staged-{remote}-")) {
                         gone(std::fs::remove_file(&path))?;
                     } else if name.ends_with(".json") && ours(&path) {
                         gone(std::fs::remove_file(&path))?;

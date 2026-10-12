@@ -53,7 +53,10 @@ pub fn context_shapes() -> Value {
 struct Context {
     version: u64,
     item: Resolved,
-    comments: BTreeMap<NativeId, String>,
+    /// Every comment on the task, when a read carried them all, and `None` when none did — so
+    /// an edit of a comment the context cannot vouch for reads which issue it is on, rather than
+    /// taking an unread set for an empty one.
+    comments: Option<BTreeMap<NativeId, String>>,
 }
 
 /// The board's context: its own id and field definitions.
@@ -70,8 +73,8 @@ pub(super) struct Held {
     journal: Mutex<Option<WriteJournal>>,
     /// The comments this process read on each issue, with the body each holds.
     learnt: Mutex<BTreeMap<NativeId, BTreeMap<NativeId, String>>>,
-    /// The comments a primed context says each issue holds.
-    primed: Mutex<BTreeMap<NativeId, BTreeMap<NativeId, String>>>,
+    /// The comments a primed context says each issue holds, `None` where it read none.
+    primed: Mutex<BTreeMap<NativeId, Option<BTreeMap<NativeId, String>>>>,
 }
 
 /// A lock an earlier panic poisoned is read as it stands: what these hold is an
@@ -142,6 +145,7 @@ impl Held {
     ) -> Option<Option<String>> {
         held(&self.primed)
             .get(issue)
+            .and_then(Option::as_ref)
             .map(|comments| comments.get(comment).cloned())
     }
 }
@@ -232,10 +236,7 @@ impl GitHubProjectsSource {
         if item.kind != BoardKind::Work(ItemKind::Task) {
             return None;
         }
-        let comments = held(&self.expected.learnt)
-            .get(id)
-            .cloned()
-            .unwrap_or_default();
+        let comments = held(&self.expected.learnt).get(id).cloned();
         serde_json::to_value(Context {
             version: CONTEXT_VERSION,
             item,
@@ -273,6 +274,7 @@ impl GitHubProjectsSource {
             return false;
         }
         let mut item = context.item;
+        let named = item.named_board().map(|named| named.as_str().to_owned());
         let board = board
             .and_then(|board| serde_json::from_value::<Board>(board.clone()).ok())
             .filter(|board| board.version == CONTEXT_VERSION);
@@ -293,7 +295,9 @@ impl GitHubProjectsSource {
         cache.insert(id.clone(), item);
         drop(cache);
         held(&self.expected.primed).insert(id.clone(), context.comments);
+        // Held as this board's own fields only when they are this task's board's.
         if let Some(board) = board
+            && named.as_deref() == Some(board.fields.id.as_str())
             && let Ok(mut fields) = self.fields_cache()
             && fields.is_none()
         {

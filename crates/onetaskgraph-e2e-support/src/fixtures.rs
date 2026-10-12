@@ -1402,18 +1402,21 @@ impl GitHubBoardFields {
 
     /// Answer every mutation selecting the whole issue it wrote with only what it wrote and
     /// the parts of the issue's change token, or, with `false`, whole again.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn answer_writes_partially(&self, partially: bool) {
         self.board.lock().unwrap().partial_writes = partially;
     }
 
     /// Apply the next request carrying `operation`, and close its connection without an
     /// answer — once.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn drop_response_once(&self, operation: &'static str) {
         self.board.lock().unwrap().dropping.push(operation);
     }
 
     /// Give the `Status` option `name` a new id, as GitHub does to an option a whole-list
     /// update renames: every item in it stays, and the old id no longer resolves.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn remint_status_option(&self, name: &str) {
         let mut board = self.board.lock().unwrap();
         let option = board
@@ -1425,6 +1428,7 @@ impl GitHubBoardFields {
     }
 
     /// Give the `Priority` option `name` a new id, as [`Self::remint_status_option`] does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn remint_priority_option(&self, name: &str) {
         let mut board = self.board.lock().unwrap();
         let option = board
@@ -2916,6 +2920,7 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 }
 
 /// The plain document a whole-issue twin is answered as, or `None` for any other document.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Part of the loopback board's own request loop, which lives here for the reason `GitHubBoard` records: the shared journey table and the engine's suite drive this board too, so the board — and how it answers each document — cannot live in one plugin's suite.
 fn github_plain_of(query: &str) -> Option<&'static str> {
     use onetaskgraph_github_projects::graphql;
     [
@@ -2929,6 +2934,7 @@ fn github_plain_of(query: &str) -> Option<&'static str> {
     .find(|plain| graphql::whole_twin(plain) == Some(query))
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a whole-issue document, which belongs beside the rest of its answers for the reason `GitHubBoard` records.
 impl GitHubBoard {
     /// `data`, the answer a whole-issue twin's plain document gave, with the issue it wrote
     /// shown as a read of that issue by its own id shows it — or, while
