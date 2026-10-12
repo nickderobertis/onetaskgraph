@@ -414,11 +414,8 @@ grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml"
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
 grep -q '^      "version": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript workspace lock version; next: inspect lock mutation" >&2; exit 1; }
 grep -q '^        "@onetaskgraph/cli": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript CLI lock pin; next: inspect lock mutation" >&2; exit 1; }
-# A tracked source discovery reads, holding UTF-8 that the Windows runner's code page cannot
-# decode: 0x9d, the last byte of a closing quotation mark, is undefined in cp1252, which is
-# how `'charmap' codec can't decode byte 0x9d` once failed this test there. Off Windows the
-# checks run again through a python that decodes with cp1252 when nobody names an encoding,
-# as scripts/check-selection-code-page.sh does, so every lane can see the defect.
+# A tracked source discovery reads, holding UTF-8 that cp1252 cannot decode (0x9d). Off
+# Windows the checks also run through a python that decodes with cp1252 by default.
 printf '# \342\200\234quoted\342\200\235 \342\200\224 a tracked source that is not ASCII\n' > "$tmp/version-repo/crates/onetaskgraph/tests/non_ascii_probe.py"
 git -C "$tmp/version-repo" add crates/onetaskgraph/tests/non_ascii_probe.py
 mkdir "$tmp/code-page"
