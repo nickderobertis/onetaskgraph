@@ -1,0 +1,20 @@
+[package]
+name = "saphyr-diff"
+description = "SPIKE (serde-yaml-replacement): serde_norway against serde-saphyr over this repository's real YAML. Not for landing."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+onetaskgraph-core = { workspace = true, features = ["yaml-spike"] }
+onetaskgraph-local-md = { workspace = true, features = ["yaml-spike"] }
+onetaskgraph-plugin-api.workspace = true
+saphyr.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+tokio.workspace = true

@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# SPIKE (serde-yaml-replacement): route YAML through `yaml_backend`'s switch.
+yaml-spike = ["dep:serde-saphyr"]
+
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
@@ -16,6 +20,8 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+# SPIKE (serde-yaml-replacement): the candidate, behind `yaml-spike` alone.
+serde-saphyr = { workspace = true, optional = true }
 
 # The delete-pending probe the read path puts a refused read to, and nothing else. Windows
 # is the only platform that has the state to probe for, so this is the only platform that

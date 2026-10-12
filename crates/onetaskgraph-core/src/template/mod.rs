@@ -249,7 +249,7 @@ impl TemplateVariable {
         let value = match self.kind {
             VariableType::String | VariableType::Text => Value::String(text.to_owned()),
             _ => {
-                serde_norway::from_str(text).map_err(|error| format!("it is not YAML: {error}"))?
+                crate::yaml_backend::from_str(text).map_err(|error| format!("it is not YAML: {error}"))?
             }
         };
         self.check(&value)?;

@@ -553,7 +553,7 @@ pub fn requested_output(
     let mut layers: Vec<Layer> = readable_documents(working_directory, environment)
         .into_iter()
         .filter_map(|document| {
-            let parsed: Value = serde_norway::from_str(&document.text).ok()?;
+            let parsed: Value = crate::yaml_backend::from_str(&document.text).ok()?;
             Layer::from_document(document.path, &parsed).ok()
         })
         .collect();
@@ -584,7 +584,7 @@ pub fn load(
     let mut layers = Vec::new();
     for document in documents(working_directory, environment)? {
         let parsed: Value =
-            serde_norway::from_str(&document.text).map_err(|error| ConfigError::Syntax {
+            crate::yaml_backend::from_str(&document.text).map_err(|error| ConfigError::Syntax {
                 path: document.path.clone(),
                 message: error.to_string(),
             })?;

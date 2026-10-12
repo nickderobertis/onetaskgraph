@@ -346,7 +346,7 @@ impl TemplateAnswers {
     ///
     /// Why the answers could not be written as YAML.
     pub fn to_yaml(&self) -> Result<String, String> {
-        serde_norway::to_string(&self.0).map_err(|error| error.to_string())
+        crate::yaml_backend::to_string(&self.0).map_err(|error| error.to_string())
     }
 }
 

@@ -44,6 +44,10 @@ pub mod subprocess;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
 pub mod template;
 pub mod version;
+#[cfg(feature = "yaml-spike")]
+pub mod yaml_backend;
+#[cfg(not(feature = "yaml-spike"))]
+mod yaml_backend;
 
 pub use clock::{
     ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,

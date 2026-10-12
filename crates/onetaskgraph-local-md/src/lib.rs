@@ -99,6 +99,10 @@ pub mod change_token;
 mod probe;
 #[cfg(any(windows, test))]
 mod unlinking;
+#[cfg(feature = "yaml-spike")]
+pub mod yaml_backend;
+#[cfg(not(feature = "yaml-spike"))]
+mod yaml_backend;
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
@@ -796,7 +800,7 @@ impl LocalMdSource {
         debug_assert!(path.starts_with(&self.root));
         let (yaml, body) = Self::split_text(path, text)?;
         let front: FrontMatter =
-            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
+            crate::yaml_backend::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
         let (shared, status, depends_on, delivery, priority) = front.split();
@@ -926,7 +930,7 @@ impl LocalMdSource {
         debug_assert!(path.starts_with(&self.root));
         let (yaml, body) = Self::split_text(path, text)?;
         let front: DocumentFrontMatter =
-            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
+            crate::yaml_backend::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
         let common = self.common(Kind::Document, path, content_of(body, false), front.into())?;
@@ -1336,7 +1340,7 @@ impl TaskSource for LocalMdSource {
         };
         self.representable_status(&status)?;
         // A string always renders as a YAML scalar.
-        let rendered = serde_norway::to_string(&status.name).expect("a status word renders");
+        let rendered = crate::yaml_backend::to_string(&status.name).expect("a status word renders");
         self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
         Ok(Some(status))
     }
@@ -2002,7 +2006,7 @@ fn content_of(above: &str, sectioned: bool) -> &str {
 /// The answers block that stores `answers`, refused only when YAML cannot write them at all:
 /// whether what it writes reads back as the same values is the caller's read-back to check.
 fn answers_block(answers: &BTreeMap<String, serde_json::Value>) -> Result<String, SourceError> {
-    let yaml = serde_norway::to_string(answers).map_err(|e| SourceError::Refused {
+    let yaml = crate::yaml_backend::to_string(answers).map_err(|e| SourceError::Refused {
         message: format!(
             "cannot represent these template answers as YAML: {e}; next: give answers JSON and \
              YAML both carry"
@@ -2450,7 +2454,7 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
     };
     let project = match front_yaml(text) {
         None => None,
-        Some(yaml) => match serde_norway::from_str::<Filing>(yaml) {
+        Some(yaml) => match crate::yaml_backend::from_str::<Filing>(yaml) {
             Ok(filing) => filing.project,
             Err(_) => return false,
         },
@@ -3314,7 +3318,7 @@ impl LocalMdSource {
         let Some((_, yaml)) = block else {
             return Ok(None);
         };
-        serde_norway::from_str::<Option<BTreeMap<String, serde_json::Value>>>(yaml)
+        crate::yaml_backend::from_str::<Option<BTreeMap<String, serde_json::Value>>>(yaml)
             .map(|answers| Some(answers.unwrap_or_default()))
             .map_err(|e| SourceError::Malformed {
                 message: format!(
@@ -3792,7 +3796,7 @@ impl LocalMdSource {
         let Some(yaml) = front_yaml(&rewritten) else {
             return Err(unfronted(path));
         };
-        serde_norway::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
+        crate::yaml_backend::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
             message: format!(
                 "{}: rewriting `{key}` would leave front matter this source cannot read: {e}; \
                  next: tidy that entry of the file by hand",
@@ -3824,7 +3828,7 @@ impl LocalMdSource {
         // A string always renders as a YAML scalar, and a list of strings as JSON, which is a
         // YAML flow sequence.
         let scalar = |value: &str| {
-            serde_norway::to_string(value)
+            crate::yaml_backend::to_string(value)
                 .expect("a string renders")
                 .trim_end()
                 .to_owned()
@@ -4026,7 +4030,7 @@ impl LocalMdSource {
             delivers: delivers.iter().map(ToString::to_string).collect(),
             delivered_by: delivered_by.iter().map(ToString::to_string).collect(),
         };
-        let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
+        let yaml = crate::yaml_backend::to_string(&front).map_err(|e| SourceError::Malformed {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),
         })?;
         // The one line break that ends the rendering, whose place the closing `---` line's own
@@ -4169,7 +4173,7 @@ impl LocalMdSource {
             return Ok(Some(record));
         }
         let written = compact(value);
-        let alone = serde_norway::from_str::<BTreeMap<String, serde_json::Value>>(&format!(
+        let alone = crate::yaml_backend::from_str::<BTreeMap<String, serde_json::Value>>(&format!(
             "value: {written}"
         ));
         if alone
