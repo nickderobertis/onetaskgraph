@@ -24,7 +24,9 @@ onetaskgraph-plugin-api.workspace = true
 onebudgetspec-core.workspace = true
 regex.workspace = true
 tokio.workspace = true
-onetaskgraph-core.workspace = true
+# Its `github-projects` feature, so a Rust caller of the engine builds the loopback board
+# from the same configuration document the binary reads.
+onetaskgraph-core = { workspace = true, features = ["github-projects"] }
 onetaskgraph-local-md.workspace = true
 onetaskgraph-live.workspace = true
 onetaskgraph-github-live.workspace = true

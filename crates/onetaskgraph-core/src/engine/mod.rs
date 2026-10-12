@@ -17,6 +17,7 @@
 
 mod assets;
 pub mod boundary;
+mod cached;
 mod comment;
 mod copy;
 mod delivery;
@@ -55,8 +56,11 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use comment::{CommentList, DeletedComment, DocumentDetail, TaskDetail, TaskDetails};
+pub use comment::{
+    CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
+};
 pub(crate) use copy::malformed_links;
+pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
@@ -552,6 +556,25 @@ pub enum EngineError {
         name: String,
         /// The plugin behind it.
         kind: String,
+    },
+
+    /// `task copy --expect` named more than one task, a query, or something other than a task.
+    #[error(
+        "--expect names the version of one destination task, so it is taken by a copy of one \
+         task alone\n\
+         next: copy that one task by its id with --expect, and the others without it"
+    )]
+    ExpectOneTask,
+
+    /// `--expect` named a task of a source that keeps no local cache, which is where what an
+    /// expected write takes instead of reading lives.
+    #[error(
+        "source {name} keeps no cache, so a write cannot take what it needs from one\n\
+         next: set sources.{name}.cache.enabled to cache it, or write without --expect"
+    )]
+    NotCached {
+        /// The configured name of the source.
+        name: String,
     },
 
     /// A comment verb named a task of a source whose plugin has no comments.
@@ -1295,6 +1318,10 @@ pub struct Engine {
     routes: Routes,
     /// How the public boundary stands: active or not, the policy it asks, the term scope.
     boundary: boundary::Boundary,
+    /// The local cache of each source configured with one, by name.
+    caches: BTreeMap<SourceName, std::sync::Arc<crate::cache::SourceCache>>,
+    /// The destination version a running `task copy --expect` names, while it runs.
+    copy_expect: std::sync::Mutex<Option<String>>,
 }
 
 impl Engine {
@@ -1320,7 +1347,27 @@ impl Engine {
         clock: &SharedClock,
     ) -> Self {
         let (ready, unavailable) = resolve_available_with_clock(config, secrets, clock);
-        Self::new(
+        let mut caches = BTreeMap::new();
+        let located: BTreeMap<SourceName, crate::cache::CacheLocation> =
+            crate::cache::locations(config).into_iter().collect();
+        let ready: Vec<ResolvedSource> = ready
+            .into_iter()
+            .map(|source| match located.get(source.name()) {
+                Some(location) => {
+                    let cache = crate::cache::SourceCache::new(
+                        location.clone(),
+                        source.source().version_coverage(),
+                    );
+                    caches.insert(source.name().clone(), cache.clone());
+                    source.wrapped(|inner| {
+                        Box::new(crate::cache::CachedSource::new(inner, cache))
+                            as Box<dyn onetaskgraph_plugin_api::TaskSource>
+                    })
+                }
+                None => source,
+            })
+            .collect();
+        let mut engine = Self::new(
             ready
                 .into_iter()
                 .map(ConfiguredSource::Ready)
@@ -1332,7 +1379,9 @@ impl Engine {
         .with_boundary(boundary::Boundary::configured(
             config.write_policy(),
             &config.visibilities(),
-        ))
+        ));
+        engine.caches = caches;
+        engine
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
@@ -1344,6 +1393,8 @@ impl Engine {
             selection,
             routes: Routes::default(),
             boundary: boundary::Boundary::default(),
+            caches: BTreeMap::new(),
+            copy_expect: std::sync::Mutex::new(None),
         }
     }
 

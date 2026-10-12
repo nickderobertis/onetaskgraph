@@ -1,7 +1,9 @@
 # ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.
+from .cache_cleared import CacheCleared as CacheCleared
+from .cache_use import CacheUse as CacheUse
 from .classification import Classification as Classification
-from .comment import Comment as Comment
 from .comment_list import CommentList as CommentList
+from .comment_written import CommentWritten as CommentWritten
 from .copy_report import CopyReport as CopyReport
 from .deleted_comment import DeletedComment as DeletedComment
 from .delivered import Delivered as Delivered
@@ -10,6 +12,7 @@ from .document import Document as Document
 from .document_detail import DocumentDetail as DocumentDetail
 from .document_query import DocumentQuery as DocumentQuery
 from .effective_config import EffectiveConfig as EffectiveConfig
+from .expected_write import ExpectedWrite as ExpectedWrite
 from .failure_document import FailureDocument as FailureDocument
 from .fields_report import FieldsReport as FieldsReport
 from .global_id import GlobalId as GlobalId
@@ -32,6 +35,7 @@ from .query_response_of_search_hit import QueryResponse as QueryResponseOfSearch
 from .regenerated import Regenerated as Regenerated
 from .rendered_template import RenderedTemplate as RenderedTemplate
 from .repository_visibility import RepositoryVisibility as RepositoryVisibility
+from .source_cache_config import SourceCacheConfig as SourceCacheConfig
 from .source_failure import SourceFailure as SourceFailure
 from .source_listing import SourceListing as SourceListing
 from .source_name import SourceName as SourceName
@@ -63,9 +67,11 @@ from .write_verdict import WriteVerdict as WriteVerdict
 # private to this module rather than as a re-export. This list is what makes the
 # whole set public to one, here and through the package's own `import *`.
 __all__ = [
+    "CacheCleared",
+    "CacheUse",
     "Classification",
-    "Comment",
     "CommentList",
+    "CommentWritten",
     "CopyReport",
     "DeletedComment",
     "Delivered",
@@ -74,6 +80,7 @@ __all__ = [
     "DocumentDetail",
     "DocumentQuery",
     "EffectiveConfig",
+    "ExpectedWrite",
     "FailureDocument",
     "FieldsReport",
     "GlobalId",
@@ -96,6 +103,7 @@ __all__ = [
     "Regenerated",
     "RenderedTemplate",
     "RepositoryVisibility",
+    "SourceCacheConfig",
     "SourceFailure",
     "SourceListing",
     "SourceName",

@@ -139,7 +139,10 @@ async fn a_comment_added_is_listed_edited_and_deleted_by_the_same_engine() {
     assert_eq!(
         deleted,
         DeletedComment {
-            deleted: NativeId::from("C-3")
+            deleted: NativeId::from("C-3"),
+            result: None,
+            fallback: None,
+            spent: None,
         }
     );
     let remaining = engine.comments(&task).await.unwrap();
@@ -182,6 +185,7 @@ async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_t
         dry_run: false,
         comments: true,
         no_link: true,
+        expect: None,
     };
     let counts = |report: &CopyReport| report.items[0].comments().copied();
     let first = engine.copy(&copy).await.expect("the copy lands");

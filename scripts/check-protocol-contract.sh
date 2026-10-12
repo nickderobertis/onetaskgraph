@@ -79,6 +79,12 @@ NOT_CARRIED_REASON = (
     "hosted source before sending anything"
 )
 
+CACHE_ONLY_REASON = (
+    "not carried: §4.13e says a plugin says it to the store's local cache through "
+    "`TaskSource` and never over this protocol, and the engine keeps no cache of a "
+    "subprocess-hosted source"
+)
+
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
 NOT_METHODS = {
@@ -146,6 +152,13 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
     ),
+    "version_coverage": CACHE_ONLY_REASON,
+    "write_context": CACHE_ONLY_REASON,
+    "board_context": CACHE_ONLY_REASON,
+    "prime_write": CACHE_ONLY_REASON,
+    "unprime": CACHE_ONLY_REASON,
+    "begin_journal": CACHE_ONLY_REASON,
+    "end_journal": CACHE_ONLY_REASON,
 }
 
 # The one protocol method with no trait method behind it: it stands for building the
@@ -436,6 +449,46 @@ compare(
     "template operation not carried",
     {name for name, why in NOT_METHODS.items() if why is NOT_CARRIED_REASON},
     listed,
+    {},
+    "`NOT_METHODS`",
+)
+
+# The trait methods only the local cache calls, both ways against the list §4.13e gives of
+# them: each item's lead — the backticked names before its dash — names what it specifies.
+# `remote_identity` leads an item too, and is a `SourcePlugin` method rather than one of the
+# trait's, so it is set aside here by name.
+CACHE_LEAD = "What a plugin says to the cache, through `TaskSource` and never over this protocol"
+CACHE_PLUGIN_METHODS = {"remote_identity"}
+cache_section = section("### 4.13e The store's local cache")
+cache_lead = cache_section.find(CACHE_LEAD)
+if cache_lead < 0:
+    refuse(
+        f"§4.13e of docs/plugin-protocol.md no longer says \"{CACHE_LEAD}\", which is where "
+        "the methods CACHE_ONLY_REASON exempts are listed.",
+        "restore that paragraph and its list, or update this check.",
+    )
+cache_paragraphs = cache_section[cache_lead:].split("\n\n", 2)
+if len(cache_paragraphs) < 2:
+    refuse(
+        f"§4.13e of docs/plugin-protocol.md has no list after \"{CACHE_LEAD}\", which is "
+        "where the methods CACHE_ONLY_REASON exempts are listed.",
+        "restore that list, one `- ` item per method, after a blank line following the "
+        "paragraph.",
+    )
+cache_items = cache_paragraphs[1]
+cache_listed = set()
+for line in cache_items.splitlines():
+    if line.startswith("- "):
+        cache_listed |= set(re.findall(r"`([a-z_]+)`", line.split(" — ", 1)[0]))
+for name in sorted(CACHE_PLUGIN_METHODS - cache_listed):
+    failures.append(
+        f"§4.13e of docs/plugin-protocol.md no longer leads an item with `{name}`. Restore "
+        f"it, or drop it from CACHE_PLUGIN_METHODS."
+    )
+compare(
+    "cache method not carried",
+    {name for name, why in NOT_METHODS.items() if why is CACHE_ONLY_REASON},
+    cache_listed - CACHE_PLUGIN_METHODS,
     {},
     "`NOT_METHODS`",
 )

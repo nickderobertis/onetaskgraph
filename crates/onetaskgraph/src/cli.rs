@@ -98,6 +98,12 @@ pub enum Command {
     /// Search tasks, projects, or both.
     Search(SearchArgs),
 
+    /// Work with the local cache of the sources configured with one.
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
+
     /// Read a task template's variables, and render it from answers.
     ///
     /// A template is minijinja with YAML front matter declaring its variables. `extends`,
@@ -106,6 +112,41 @@ pub enum Command {
         #[command(subcommand)]
         command: TemplateCommand,
     },
+}
+
+/// What `onetaskgraph cache` can do.
+#[derive(Debug, Subcommand)]
+pub enum CacheCommand {
+    /// Empty one source's local cache, or every source's.
+    ///
+    /// Only the entries this store writes there are removed. The next read of a task goes to
+    /// its source and fills the cache again.
+    Clear(CacheClearArgs),
+}
+
+/// `onetaskgraph cache clear`.
+#[derive(Debug, Args)]
+pub struct CacheClearArgs {
+    /// The source whose cache to empty; every source's when left out.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `SelectionArgs::source`: a `SourceName` here would refuse a malformed name as a bad invocation under clap's wording; `main` converts it before anything is read and names the configured sources.
+    #[arg(value_name = "SOURCE")]
+    pub source: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
+}
+
+/// The version of a task a write says it knows: `--expect`.
+#[derive(Debug, Default, Args)]
+pub struct ExpectArgs {
+    /// The version of the task, as a read of it reported, that this write expects to find:
+    /// the write takes the task's ids and current values from the source's local cache at
+    /// that version or a later one, and sends only its mutations — one read first when the
+    /// cache does not hold them. Not a precondition: a person's edit to a field this write
+    /// sets is overwritten. Needs the source's `cache.enabled`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque
+    /// token, which only the source that spelled it reads; there is no narrower type.
+    #[arg(long, value_name = "VERSION")]
+    pub expect: Option<String>,
 }
 
 /// What `onetaskgraph template` can do.
@@ -741,6 +782,9 @@ pub struct TaskUpdateArgs {
     pub no_depends_on: bool,
 
     #[command(flatten)]
+    pub expect: ExpectArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 // llmlint: ignore-end[invalid_states_unrepresentable]
@@ -768,6 +812,9 @@ pub struct PrioritySetArgs {
     pub priority: PriorityArg,
 
     #[command(flatten)]
+    pub expect: ExpectArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -793,6 +840,9 @@ pub struct ContentSetArgs {
     /// Read the new content from this file, byte for byte.
     #[arg(long, value_name = "PATH")]
     pub file: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub expect: ExpectArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -838,6 +888,10 @@ pub struct MetadataSetArgs {
     #[arg(value_name = "VALUE", allow_hyphen_values = true)]
     pub value: String,
 
+    /// As `--expect` on every task write; a project's or a document's metadata takes none.
+    #[command(flatten)]
+    pub expect: ExpectArgs,
+
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
@@ -863,6 +917,9 @@ pub struct StatusSetArgs {
     /// The status category to set.
     #[arg(value_name = "CATEGORY")]
     pub category: StatusArg,
+
+    #[command(flatten)]
+    pub expect: ExpectArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -909,6 +966,9 @@ pub struct CommentAddArgs {
     pub author: Option<String>,
 
     #[command(flatten)]
+    pub expect: ExpectArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -920,6 +980,12 @@ pub struct CommentListArgs {
     /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
     #[arg(value_name = "ID")]
     pub id: String,
+
+    /// A version of the task the caller already holds, as `task show --pin` takes one.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`.
+    #[arg(long, value_name = "VERSION")]
+    pub pin: Option<String>,
 }
 
 /// `onetaskgraph task comment edit`.
@@ -940,6 +1006,9 @@ pub struct CommentEditArgs {
     pub body_file: Option<std::path::PathBuf>,
 
     #[command(flatten)]
+    pub expect: ExpectArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -955,6 +1024,9 @@ pub struct CommentDeleteArgs {
     /// The comment's own id, exactly as `list` or `add` reported it.
     #[arg(value_name = "COMMENT-ID", value_parser = native_id)]
     pub comment_id: NativeId,
+
+    #[command(flatten)]
+    pub expect: ExpectArgs,
 }
 
 /// A source's own id, as a command line hands one over.
@@ -1294,6 +1366,13 @@ pub struct TaskShowArgs {
     /// Read the record without requesting its comments.
     #[arg(long)]
     pub no_comments: bool,
+    /// A version of the task the caller already holds: answered from the source's local
+    /// cache, with no request, when it holds the task at that version or a later one — which
+    /// may predate a change nobody has read yet — and from the source otherwise.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`.
+    #[arg(long, value_name = "VERSION")]
+    pub pin: Option<String>,
 }
 
 /// `onetaskgraph task show-many`.
@@ -1307,6 +1386,12 @@ pub struct TaskShowManyArgs {
     /// Read each record without requesting its comments.
     #[arg(long)]
     pub no_comments: bool,
+    /// Pin one task's read to a version the caller holds, `<ID>=<VERSION>`, as `task show
+    /// --pin` does. Repeat for several.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `ids` above: `main` splits and qualifies each through `GlobalId::from_str` before any source is started, naming the shape it wants, where a clap value parser would report it as a bad invocation without that next action.
+    #[arg(long, value_name = "ID=VERSION")]
+    pub pin: Vec<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// `onetaskgraph task show` and `onetaskgraph project show`.
@@ -1581,6 +1666,11 @@ pub struct TaskCopyArgs {
     #[arg(long)]
     pub create: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// The version of the destination task this copy is bound to that the caller knows, as
+    /// `--expect` on every task write: the copy of one task then sends only the fields whose
+    /// value differs from that version, and no read of it.
+    #[command(flatten)]
+    pub expect: ExpectArgs,
     #[command(flatten)]
     pub copy: CopyArgs,
 }

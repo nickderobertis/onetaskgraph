@@ -28,7 +28,7 @@ use super::{
 /// be read and landed.
 pub(super) enum Slot {
     /// Decided without reading it from its source.
-    Done(CopyOutcome),
+    Done(Box<CopyOutcome>),
     /// To be read and landed.
     Read(GlobalId),
 }
@@ -36,6 +36,7 @@ pub(super) enum Slot {
 /// The outcome of an item the copy left unwritten because of `error`.
 pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     CopyOutcome {
+        expected: crate::cache::ExpectedWrite::default(),
         source,
         action: CopyAction::Failed {
             error: Failure::from(error),
@@ -59,7 +60,7 @@ impl Engine {
                 .in_hand(request, &listed, query.commented_since, running)
                 .await?
             {
-                slots.push(Slot::Done(outcome));
+                slots.push(Slot::Done(Box::new(outcome)));
             } else {
                 slots.push(Slot::Read(listed.id));
             }
@@ -169,6 +170,7 @@ impl Engine {
             )
         });
         Ok(Some(CopyOutcome {
+            expected: crate::cache::ExpectedWrite::default(),
             source: listed.id.clone(),
             action: CopyAction::Unchanged {
                 destination: landed,

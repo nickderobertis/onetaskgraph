@@ -4,9 +4,10 @@ import { dirname, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
+  CacheCleared,
   Classification,
-  Comment,
   CommentList,
+  CommentWritten,
   CopyReport,
   DeletedComment,
   DocumentDetail,
@@ -72,6 +73,10 @@ export type DocumentFilterOptions = Omit<FilterOptions, "statuses">;
 // repositories named, none at all for `[]`, and every one the store's policy knows of when left
 // out. Every verb that writes takes it, and passes it to the binary unchanged.
 export type WriteOptions = { termScope?: string[] };
+// The version of the task a write says it knows, as a read of it reported: the write takes the
+// task's ids and current values from the source's local cache instead of reading it. Not a
+// precondition — see `docs/plugin-protocol.md`.
+export type ExpectOptions = { expect?: string };
 export type CopyOptions = WriteOptions & {
   matchBy?: string;
   recreate?: boolean;
@@ -95,10 +100,12 @@ export type CopyQueryOptions = {
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
-export type TaskCopyOptions = CopyOptions & CopyQueryOptions & { create?: boolean };
+export type TaskCopyOptions = CopyOptions & CopyQueryOptions & ExpectOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
-export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) & WriteOptions;
+export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
+  WriteOptions &
+  ExpectOptions;
 export type CommentAddOptions = CommentBodyOptions & { author?: string };
 // Where `extends`, `include` and `import` names resolve: these directories, in order, and never
 // the working directory unless it is one of them.
@@ -151,17 +158,18 @@ export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // binary byte for byte and replaces the content; `statusName` is the status's own word, for a
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
 // cleared — and one left out is not named.
-export type TaskUpdateOptions = WriteOptions & {
-  title?: string;
-  bodyFile?: string;
-  status?: StatusCategory;
-  statusName?: string;
-  priority?: Priority;
-  metadata?: Record<string, JsonValue>;
-  removeMetadata?: string[];
-  delivers?: string[];
-  dependsOn?: string[];
-};
+export type TaskUpdateOptions = WriteOptions &
+  ExpectOptions & {
+    title?: string;
+    bodyFile?: string;
+    status?: StatusCategory;
+    statusName?: string;
+    priority?: Priority;
+    metadata?: Record<string, JsonValue>;
+    removeMetadata?: string[];
+    delivers?: string[];
+    dependsOn?: string[];
+  };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
 export type RenderOptions = TemplateSourceOptions &
@@ -211,6 +219,8 @@ export class OnetaskgraphValidationError extends Error {
 // which is checked against the binary on every generation: see tests/generator.test.ts.
 export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeSchemas>> = {
   "config show": "EffectiveConfig",
+  // What emptying the local cache of one source, or of every source, emptied.
+  "cache clear": "CacheCleared",
   "sources list": "SourceListings",
   "sources status-options": "StatusOptionsReport",
   "sources fields": "FieldsReport",
@@ -221,9 +231,9 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task show-many": "TaskDetails",
   "task deps": "QueryResponseOfQualifiedEdge",
   "task copy": "CopyReport",
-  "task comment add": "Comment",
+  "task comment add": "CommentWritten",
   "task comment list": "CommentList",
-  "task comment edit": "Comment",
+  "task comment edit": "CommentWritten",
   "task comment delete": "DeletedComment",
   "task status set": "TaskStatusSet",
   "task priority set": "TaskPrioritySet",
@@ -284,6 +294,7 @@ const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
     (command) =>
       command !== "config show" &&
+      command !== "cache clear" &&
       command !== "sources list" &&
       command !== "sources fields" &&
       command !== "sources route" &&
@@ -467,6 +478,7 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   dependsOn: "--depends-on",
   // `[]` is sent as `--term-scope-empty`, which is how an empty scope is spelled.
   termScope: "--term-scope",
+  expect: "--expect",
 };
 
 // A string option, refused unless it is one: anything else would reach the binary as its string
@@ -497,11 +509,12 @@ export function taskUpdateFlags(options: unknown): string[] {
     );
   }
   const args: string[] = [];
-  const scalars: readonly ("title" | "status" | "statusName" | "priority")[] = [
+  const scalars: readonly ("title" | "status" | "statusName" | "priority" | "expect")[] = [
     "title",
     "status",
     "statusName",
     "priority",
+    "expect",
   ];
   for (const name of scalars) {
     if (options[name] !== undefined) {
@@ -782,13 +795,27 @@ function termScopeFlags(method: string, options: { termScope?: unknown }): strin
   return scope.flatMap((repository) => ["--term-scope", repository]);
 }
 
+function expectFlags(method: string, options: { expect?: unknown }): string[] {
+  if (options.expect === undefined) return [];
+  return ["--expect", stringOption(method, "expect", options.expect)];
+}
+
+function pinFlags(method: string, pin: unknown): string[] {
+  if (pin === undefined) return [];
+  return ["--pin", stringOption(method, "pin", pin)];
+}
+
 // The flags `taskCopy` sends for `options`, beside the ids and `--to`: exported so the tests can
 // reconcile them against the binary's own `task copy --help`.
 export function taskCopyFlags(options: TaskCopyOptions): string[] {
   if (options.create !== undefined && typeof options.create !== "boolean") {
     throw new TypeError("taskCopy: create must be a boolean");
   }
-  return [...copyFlags("taskCopy", options), ...(options.create ? ["--create"] : [])];
+  return [
+    ...copyFlags("taskCopy", options),
+    ...(options.create ? ["--create"] : []),
+    ...expectFlags("taskCopy", options),
+  ];
 }
 
 function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
@@ -837,6 +864,13 @@ export class OnetaskgraphClient {
   }
   configShow(): Promise<EffectiveConfig> {
     return this.run("config show", []);
+  }
+  // Empty the local cache of `source`, or of every source configured with one.
+  cacheClear(source?: string): Promise<CacheCleared> {
+    return this.run(
+      "cache clear",
+      source === undefined ? [] : [stringOption("cacheClear", "source", source)],
+    );
   }
   sourcesList(): Promise<SourceListings> {
     return this.run("sources list", []);
@@ -907,9 +941,11 @@ export class OnetaskgraphClient {
     }
     return this.run("task list", args);
   }
+  // `pin` is a version of the task the caller holds: a source keeping a local cache answers
+  // from it, with no request, when it holds the task at that version or a later one.
   taskShow(
     id: string,
-    options: Pick<QueryOptions, "allowPartial"> & { noComments?: boolean } = {},
+    options: Pick<QueryOptions, "allowPartial"> & { noComments?: boolean; pin?: string } = {},
   ): Promise<TaskDetail> {
     if (options.noComments !== undefined && typeof options.noComments !== "boolean") {
       throw new TypeError("taskShow: noComments must be a boolean");
@@ -918,59 +954,103 @@ export class OnetaskgraphClient {
       id,
       ...(options.allowPartial ? ["--allow-partial"] : []),
       ...(options.noComments ? ["--no-comments"] : []),
+      ...pinFlags("taskShow", options.pin),
     ]);
   }
   // Several tasks at once, each as `taskShow` answers it, in the order given. An id that
   // cannot be read carries why in its own detail's `errors`, which the binary reports with
   // exit 4 — a whole answer with part of it missing — so this resolves rather than throws.
-  taskShowMany(ids: string[], options: { noComments?: boolean } = {}): Promise<TaskDetails> {
+  // `pins` maps a task's qualified id to a version of it the caller holds, as `taskShow`'s
+  // `pin` does for one.
+  taskShowMany(
+    ids: string[],
+    options: { noComments?: boolean; pins?: Record<string, string> } = {},
+  ): Promise<TaskDetails> {
     if (options.noComments !== undefined && typeof options.noComments !== "boolean") {
       throw new TypeError("taskShowMany: noComments must be a boolean");
     }
-    return this.run("task show-many", [...ids, ...(options.noComments ? ["--no-comments"] : [])]);
+    if (options.pins !== undefined && !isPlainObject(options.pins)) {
+      throw new TypeError(
+        "taskShowMany: pins is not an object; next: pass a plain object of id to version",
+      );
+    }
+    const pins: string[] = [];
+    for (const [id, version] of Object.entries(options.pins ?? {})) {
+      pins.push("--pin", `${id}=${stringOption("taskShowMany", "pins", version)}`);
+    }
+    return this.run("task show-many", [
+      ...ids,
+      ...(options.noComments ? ["--no-comments"] : []),
+      ...pins,
+    ]);
   }
-  taskCommentAdd(id: string, options: CommentAddOptions): Promise<Comment> {
+  taskCommentAdd(id: string, options: CommentAddOptions): Promise<CommentWritten> {
     const { args, input } = bodyArguments(options);
     if (options.author !== undefined) args.push("--author", options.author);
     args.push(...termScopeFlags("taskCommentAdd", options));
+    args.push(...expectFlags("taskCommentAdd", options));
     return this.run("task comment add", [id, ...args], input);
   }
-  taskCommentList(id: string): Promise<CommentList> {
-    return this.run("task comment list", [id]);
+  taskCommentList(id: string, options: { pin?: string } = {}): Promise<CommentList> {
+    return this.run("task comment list", [id, ...pinFlags("taskCommentList", options.pin)]);
   }
-  taskCommentEdit(id: string, commentId: string, options: CommentBodyOptions): Promise<Comment> {
+  taskCommentEdit(
+    id: string,
+    commentId: string,
+    options: CommentBodyOptions,
+  ): Promise<CommentWritten> {
     const { args, input } = bodyArguments(options);
     args.push(...termScopeFlags("taskCommentEdit", options));
+    args.push(...expectFlags("taskCommentEdit", options));
     return this.run("task comment edit", [id, commentId, ...args], input);
   }
-  taskCommentDelete(id: string, commentId: string): Promise<DeletedComment> {
-    return this.run("task comment delete", [id, commentId]);
+  taskCommentDelete(
+    id: string,
+    commentId: string,
+    options: ExpectOptions = {},
+  ): Promise<DeletedComment> {
+    return this.run("task comment delete", [
+      id,
+      commentId,
+      ...expectFlags("taskCommentDelete", options),
+    ]);
   }
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options: WriteOptions = {},
+    options: WriteOptions & ExpectOptions = {},
   ): Promise<TaskStatusSet> {
-    return this.run("task status set", [id, category, ...termScopeFlags("taskStatusSet", options)]);
+    return this.run("task status set", [
+      id,
+      category,
+      ...termScopeFlags("taskStatusSet", options),
+      ...expectFlags("taskStatusSet", options),
+    ]);
   }
   taskPrioritySet(
     id: string,
     priority: Priority,
-    options: WriteOptions = {},
+    options: WriteOptions & ExpectOptions = {},
   ): Promise<TaskPrioritySet> {
     return this.run("task priority set", [
       id,
       priority,
       ...termScopeFlags("taskPrioritySet", options),
+      ...expectFlags("taskPrioritySet", options),
     ]);
   }
   // `file` is read by the binary byte for byte, and its bytes replace the task's content.
-  taskContentSet(id: string, file: string, options: WriteOptions = {}): Promise<TaskContentSet> {
+  taskContentSet(
+    id: string,
+    file: string,
+    options: WriteOptions & ExpectOptions = {},
+  ): Promise<TaskContentSet> {
     return this.run("task content set", [
       id,
       "--file",
       file,
       ...termScopeFlags("taskContentSet", options),
+      ...expectFlags("taskContentSet", options),
     ]);
   }
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
@@ -978,13 +1058,14 @@ export class OnetaskgraphClient {
     id: string,
     key: string,
     value: string,
-    options: WriteOptions = {},
+    options: WriteOptions & ExpectOptions = {},
   ): Promise<MetadataSet> {
     return this.run("task metadata set", [
       id,
       key,
       value,
       ...termScopeFlags("taskMetadataSet", options),
+      ...expectFlags("taskMetadataSet", options),
     ]);
   }
   // One targeted update of one task: at least one field has to be named.

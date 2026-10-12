@@ -78,23 +78,25 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
-onetaskgraph task show <ID> [--no-comments]
-onetaskgraph task show-many <ID>... [--no-comments]
+onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
+onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
-onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME]
-onetaskgraph task comment list   <ID>
-onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH]
-onetaskgraph task comment delete <ID> <COMMENT-ID>
+                       [--expect VERSION]        # one task, bound to a caching destination
+onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
+onetaskgraph task comment list   <ID> [--pin VERSION]
+onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
+onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
-onetaskgraph task priority set <ID> none|urgent|high|medium|low
-onetaskgraph task content set <ID> --file PATH
-onetaskgraph task metadata set <ID> <KEY> <VALUE>
+                             [--expect VERSION]
+onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
+onetaskgraph task content set <ID> --file PATH [--expect VERSION]
+onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION]
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
-                         [--term-scope REPOSITORY... | --term-scope-empty]
+                         [--expect VERSION] [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--template FILE [--search-path DIR]... | --template-loader FILE
                           | --body-file PATH]      # none of the three: the body on stdin
@@ -141,6 +143,7 @@ onetaskgraph template variables <FILE> [--search-path DIR]... | --template-loade
 onetaskgraph template render <FILE> [--search-path DIR]... | --template-loader FILE
                              [--answers FILE] [--var NAME=VALUE]...
 
+onetaskgraph cache clear [SOURCE]                # empty one source's local cache, or all
 onetaskgraph config show                         # every setting and the layer it came from
 onetaskgraph schema                              # the JSON Schema bundle both SDKs use
 ```
@@ -1049,6 +1052,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dry_run: false,
         comments: false,
         no_link: false,
+        expect: None,
     }).await?;
 
     let outcome = &report.items[0];
@@ -1149,6 +1153,92 @@ sources:
         done:        { task: Done,            project: Completed }
         cancelled:   Canceled
 ```
+
+### A local cache of a remote source
+
+A source reading a remote — a GitHub Projects board, a Linear team — can keep a **local cache**
+of its tasks on this host, so a read the store already knows is unchanged costs no request:
+
+```yaml
+sources:
+  board:
+    plugin: github-projects
+    config: { owner: acme, project_number: 7, token_env: GH_PROJECTS_TOKEN }
+    cache:
+      enabled: true          # off unless set
+      dir: .cache/board      # optional; a relative path is measured from this document
+```
+
+Both settings take every layer every setting takes: `ONETASKGRAPH_SOURCES__BOARD__CACHE__ENABLED`
+and `__DIR` in the environment, `--set sources.board.cache.enabled=false` on a command line, a
+later layer over an earlier one. Without `dir` the cache lives under
+`${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>`, the digest naming the plugin and the
+remote — the board's endpoint, owner and number, or Linear's endpoint and team — so every
+process on the host configuring the same remote shares one cache: the command line, both
+SDKs, and a Rust caller of the engine. A source with no remote, such as a folder of Markdown,
+ignores the setting. Each task is one file, written whole to a staging file and renamed into
+place, with no lock; it holds the task's `version`, its fields, its metadata, its comments,
+its assets and its forward edges under an entry schema version, and a reader that does not
+know that schema version, or cannot parse the entry, reads the task from its source instead
+and never fails on it. Releases of different ages share the directory that way. Nothing
+expires by age. `onetaskgraph cache clear [<SOURCE>]` empties one source's cache, or every
+source's, removing only the entries this store wrote there.
+
+**The freshness rule.** The cache is keyed on the change token a task's `version` carries
+(`docs/plugin-protocol.md` §4.13d), and it **never adds a request and never serves stale
+data**: a served entry is never older than the version the caller pinned, and never a version
+the store cannot vouch for. Freshness comes only from a token the store already holds — the
+cache never asks a source whether something changed:
+
+- **Within one command**, the version a listing, a search or a `--commented-since` result
+  carries pins the reads that follow it in that command, so a `project copy`, a `task copy` by
+  query, or an engine caller's `task_details` after a `tasks` listing reads only the tasks
+  whose listed version is not already cached.
+- **Across commands**, a caller pins a read with a version it already holds: `task show <ID>
+  --pin VERSION`, `task comment list <ID> --pin VERSION`, and `task show-many <ID>... --pin
+  <ID>=VERSION` (repeatable). A pinned read of a task the cache holds at that version or a
+  later one sends **no request**; otherwise it makes the one read it always made, and refreshes
+  the entry. **A pin means "at least as fresh as the version I hold", not "current"**: a pinned
+  read answered from the cache can predate a change at the source nobody has read yet.
+- An entry older than the pin — one a racing writer left — is never served, and neither is
+  one the source cannot put in order beside it.
+- An **unpinned** read by id, a plain `task show <ID>`, reads the source as it always did, and
+  refreshes the entry.
+- A part of a task the source's token does not cover is cached but never served: every Linear
+  read today, whose tasks carry no token, and a GitHub task changed within the minute before
+  its read, or a draft. The read goes to the source and says why.
+
+Every read from a caching source carries `cache: {"served": "cache" | "remote", "bypassed":
+null | "<reason>"}` in its JSON, and a source keeping no cache carries no such member. A
+command's `spent` counts only the requests it really sent.
+
+**A write keeps the cache current from its own response** — `task comment add`, `edit` and
+`delete`, a copy onto the caching source, and `task metadata`, `status`, `priority`, `update`
+and `content`. It advances the entry only to what that response vouches for: the whole task,
+comments included, at the version the response determines. A response showing only the fields
+it wrote leaves the entry unserved, because a person's concurrent edit to another field, or a
+new comment, can share that version; so does one that determines no version. The entry is
+taken out of service before the write is sent, so no other process is served it once the write
+lands; a cache directory that will not let it be removed, emptied or made writable refuses the
+write, naming the directory, before anything is sent.
+
+**`--expect VERSION`** on a write says the caller knows the task at that version: the write
+takes the task's node id, the board's field and option ids and the current values it compares
+against from the cache, at that version or a later one, and sends **only its mutations** —
+each field it changes and nothing else, so a person's concurrent edit to a field it does not
+set is never touched. Its JSON carries `result: {"version", "parts": [{"part", "outcome",
+"fields"}]}` built from the mutations' own responses, each part `landed`, `rejected` with the
+backend's error, or `unknown` when its answer was lost — never sent again, because that could
+apply it twice. When the cache does not hold what the write needs, it reads once and then
+writes, and says so as `fallback: {"read": true, "reason": …}`, counted in `spent`. **It is
+not a conditional write**: neither GitHub nor Linear takes a precondition, so a person's edit
+to a field the write *does* set, made after the caller's read, is overwritten. The one request
+the cache can add is the first write after a board option it kept was renamed or deleted: the
+refused mutation, one read that refreshes the board's kept ids, and that part once more.
+
+The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
+one, keeps one entry per task, and is shared and cleared freely. To keep an exact version of a
+task, copy it into a folder of Markdown of your own with `task copy`.
 
 ### Status mapping
 

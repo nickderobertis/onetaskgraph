@@ -71,6 +71,18 @@ impl ResolvedSource {
     pub fn source(&self) -> &dyn TaskSource {
         self.source.as_ref()
     }
+
+    /// The same source, behind `wrap` — the store's local cache of it, which forwards
+    /// everything it does not answer itself, so the kind it reports is still the plugin's.
+    pub(crate) fn wrapped(
+        self,
+        wrap: impl FnOnce(Box<dyn TaskSource>) -> Box<dyn TaskSource>,
+    ) -> Self {
+        Self {
+            name: self.name,
+            source: wrap(self.source),
+        }
+    }
 }
 
 /// One configured source that could not be built at all.

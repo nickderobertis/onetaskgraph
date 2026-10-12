@@ -465,6 +465,7 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         dry_run: false,
         comments: false,
         no_link: false,
+        expect: None,
     }
 }
 

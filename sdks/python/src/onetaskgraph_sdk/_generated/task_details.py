@@ -117,6 +117,11 @@ class Repository(RootModel[str]):
     ]
 
 
+class Served(StrEnum):
+    ServedCache = "cache"
+    ServedRemote = "remote"
+
+
 class SourceErrorConfig(BaseModel):
     kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
@@ -256,6 +261,16 @@ class Asset(BaseModel):
         ),
     ] = None
     sha256: Annotated[str, Field(description="The lowercase hex SHA-256 of its bytes.")]
+
+
+class CacheUse(BaseModel):
+    bypassed: Annotated[
+        str | None,
+        Field(
+            description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
+        ),
+    ] = None
+    served: Annotated[Served, Field(description="Where it was answered from.")]
 
 
 class CommentOrigin(BaseModel):
@@ -446,6 +461,12 @@ class TaskDetail(BaseModel):
         list[Asset] | None,
         Field(
             description="The image assets the task holds, in the order its content first references them —\n`[]` for a task that holds none.\n\n**Absent** for a task that was not found, and for one whose assets could not be read —\nthe failure then in the response's `errors`."
+        ),
+    ] = None
+    cache: Annotated[
+        CacheUse | None,
+        Field(
+            description='How the read used its source\'s local cache: `{"served": "cache" | "remote",\n"bypassed": null | "<reason>"}` — absent for a source keeping none, and for an id\nnaming no configured source.'
         ),
     ] = None
     comments: Annotated[

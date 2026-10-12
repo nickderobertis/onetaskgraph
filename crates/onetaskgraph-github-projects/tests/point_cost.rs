@@ -74,6 +74,16 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
     (graphql::DELETE_COMMENT, 1),
+    // The whole-issue twins an expected write sends in place of the document beside each, so
+    // the store's cache can take what their responses show: each selects what `ISSUE_DETAIL`
+    // does, and costs the one point it does.
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These five are new documents, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; the ceiling on what the cache spends is the `github-cache-points-not-above-uncached` budget's, judged by onebudgetspec.
+    (graphql::ADD_COMMENT_WHOLE, 1),
+    (graphql::UPDATE_COMMENT_WHOLE, 1),
+    (graphql::UPDATE_ISSUE_WHOLE, 1),
+    (graphql::UPDATE_FIELD_WHOLE, 1),
+    (graphql::CLEAR_FIELD_WHOLE, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
     (graphql::STATUS_OPTIONS_UPDATE, 1),
 ];

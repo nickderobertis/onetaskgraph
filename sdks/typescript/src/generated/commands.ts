@@ -42,6 +42,7 @@ export const binaryCommands = [
   "document answers",
   "label list",
   "search",
+  "cache clear",
   "template variables",
   "template render"
 ] as const;

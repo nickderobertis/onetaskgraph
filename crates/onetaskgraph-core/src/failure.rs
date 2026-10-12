@@ -63,6 +63,10 @@ pub fn classify(cause: Option<&SourceError>) -> FailureClass {
 pub struct FailureDocument {
     /// Why the command failed.
     pub failure: Failure,
+    /// What a write made with `--expect` that failed came to, part by part — its `result`,
+    /// its `fallback` and what it `spent` — absent for every other failure.
+    #[serde(flatten)]
+    pub expected: crate::cache::ExpectedWrite,
 }
 
 /// Why one command failed.
@@ -214,6 +218,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::NoDocuments { name, .. } => {
             ("no-documents".to_owned(), configured(name), None)
         }
+        EngineError::NotCached { name } => ("not-cached".to_owned(), configured(name), None),
+        EngineError::ExpectOneTask => ("expect-one-task".to_owned(), None, None),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {
             ("no-comments".to_owned(), configured(name), None)
         }

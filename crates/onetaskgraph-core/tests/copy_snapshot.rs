@@ -290,6 +290,7 @@ fn copy() -> CopyRequest {
         dry_run: false,
         comments: true,
         no_link: true,
+        expect: None,
     }
 }
 

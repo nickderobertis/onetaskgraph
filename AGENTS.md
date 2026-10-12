@@ -83,7 +83,9 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; and `SourceError`.
+  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the local-cache types
+  `Coverage`, `VersionCoverage`, `WriteJournal`, `JournalEntry`, `RequestKind`, `PartOutcome`,
+  `Shown` and `WholeTask`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -157,6 +159,18 @@ variant, because in-memory compensation for those is sound. Do not conflate the 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
+
+**One named exception: the local cache of a remote source, and only where a configuration
+turns it on.** `sources.<name>.cache.enabled` (off unless set) keeps a GitHub board's or a
+Linear source's tasks under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
+`cache.dir`, keyed on the change token alone and served only at the version a caller pinned
+or a later one (`crates/onetaskgraph-core/src/cache/`, README "A local cache of a remote
+source"). It is the one write of a user's work outside its plugin, asked for in configuration
+rather than assumed, and it never answers a read the token cannot vouch for. The mechanisms
+below hold everything else to the rule: with `cache.enabled` unset nothing is written
+anywhere, and `no_persistence.rs` still proves it; with it set, the GitHub Projects suite's
+`with_caching_on_the_cache_directory_is_the_only_place_a_file_changes` proves only the cache
+directory changes.
 
 **A destination write is not a cache, and the difference is stated rather than assumed.**
 A destination write is at the user's explicit request, names its destination, goes through
@@ -1040,6 +1054,16 @@ them do; this is the inventory of what is owed, not a status board.
     its edit is written afresh; a dry run counts what the copy then writes and sends no write;
     and a stdio peer predating `comment_copies` and `task_details` is sent each copy as a marked
     comment, never the methods it did not declare, and reads back every origin.
+
+99. With a source's `cache.enabled` on a loopback GitHub board, a pinned `task show`, `task
+    comment list` and `task show-many` of a task cached at that version or a later one sends
+    nothing, and one cached older, incomparably or not at all, or unpinned, makes the one read;
+    a write advances the entry only to what its own response shows whole, and an `--expect`
+    write sends only its mutations, falling back to one read — and, for a re-minted option,
+    the one named extra request — reporting each part `landed`, `rejected` or `unknown`; the
+    settings take every layer, `cache clear` empties what it names, an entry another release
+    wrote or a racing writer left behind is a miss, the command line, both SDKs and a Rust
+    caller share one cache, and a Linear source's reads are bypassed, saying why.
 
 ## The public boundary
 

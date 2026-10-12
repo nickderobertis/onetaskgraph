@@ -234,6 +234,7 @@ async fn disposable_task_and_document_asset_copies() {
                 dry_run: false,
                 comments: false,
                 no_link: false,
+                expect: None,
             };
             let report = engine
                 .copy(&request)

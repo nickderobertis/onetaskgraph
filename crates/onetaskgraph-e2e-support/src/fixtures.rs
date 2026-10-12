@@ -1143,6 +1143,19 @@ struct GitHubBoard {
     /// The most rows one page of an issue search answers with, fewer than it was asked for —
     /// as GitHub may — or `None` to answer as many as asked.
     search_page_rows: Option<usize>,
+    /// Whether a mutation selecting the whole issue it wrote is answered with only what it
+    /// wrote and the parts of the issue's change token — the response a store's cache must
+    /// not take for the whole issue.
+    partial_writes: bool,
+    /// Operations whose next request is applied and then answered with nothing at all: the
+    /// connection is closed with no response, as a lost answer leaves a caller.
+    dropping: Vec<&'static str>,
+    /// Operations whose next request is refused as naming a node id that does not resolve.
+    refusing_stale: Vec<&'static str>,
+    /// Members of the issue a whole-issue document's answer leaves out.
+    omitting: Vec<&'static str>,
+    /// Connections of the issue, by pointer, a whole-issue document's answer says go on.
+    truncating: Vec<&'static str>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1393,6 +1406,70 @@ impl GitHubBoardFields {
             .retain(|option| option["name"] != json!(name));
     }
 
+    /// Answer every mutation selecting the whole issue it wrote with only what it wrote and
+    /// the parts of the issue's change token, or, with `false`, whole again.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn answer_writes_partially(&self, partially: bool) {
+        self.board.lock().unwrap().partial_writes = partially;
+    }
+
+    /// Answer every whole-issue document with `members` of the issue left out, as a response
+    /// that did not select them would.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn omit_from_writes(&self, members: &[&'static str]) {
+        self.board.lock().unwrap().omitting = members.to_vec();
+    }
+
+    /// Answer every whole-issue document with each connection `connections` points at —
+    /// `/labels`, `/comments`, `/projectItems/nodes/0/fieldValues` — saying it has another
+    /// page, as a response holding only the first page of a longer one would.
+    pub fn truncate_in_writes(&self, connections: &[&'static str]) {
+        self.board.lock().unwrap().truncating = connections.to_vec();
+    }
+
+    /// Refuse the next request carrying `operation` as GitHub refuses one naming a node id that
+    /// no longer resolves — an id a cache kept going stale — once, writing nothing.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn refuse_as_stale_once(&self, operation: &'static str) {
+        self.board.lock().unwrap().refusing_stale.push(operation);
+    }
+
+    /// Apply the next request carrying `operation`, and close its connection without an
+    /// answer — once.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn drop_response_once(&self, operation: &'static str) {
+        self.board.lock().unwrap().dropping.push(operation);
+    }
+
+    /// Give the `Status` option `name` a new id, as GitHub does to an option a whole-list
+    /// update renames: every item in it stays, and the old id no longer resolves.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn remint_status_option(&self, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .status_options
+            .iter_mut()
+            .find(|option| option["name"] == json!(name))
+            .expect("the option to re-mint exists");
+        option["id"] = json!(format!("{}-reminted", option["id"].as_str().unwrap()));
+    }
+
+    /// Give the `Priority` option `name` a new id, as [`Self::remint_status_option`] does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn remint_priority_option(&self, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .priority_options
+            .as_mut()
+            .and_then(|options| {
+                options
+                    .iter_mut()
+                    .find(|option| option["name"] == json!(name))
+            })
+            .expect("the option to re-mint exists");
+        option["id"] = json!(format!("{}-reminted", option["id"].as_str().unwrap()));
+    }
+
     /// Change an option's display casing without changing its identity.
     pub fn rename_option(&self, from: &str, to: &str) {
         let mut board = self.board.lock().unwrap();
@@ -1607,6 +1684,12 @@ impl GitHubBoardFields {
         let mut board = self.board.lock().unwrap();
         board.find(&json!(id))["body"] = json!(body);
         board.touch_issue(&json!(id));
+    }
+
+    /// Give one issue the creation time GitHub reports for it, which no edit moves; an issue
+    /// given none reports `null`.
+    pub fn set_created_at(&self, id: &str, at: &str) {
+        self.board.lock().unwrap().find(&json!(id))["createdAt"] = json!(at);
     }
 
     /// Reopen one closed issue, as a person reopening it on GitHub would.
@@ -2142,7 +2225,7 @@ impl GitHubBoard {
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "number":github_number(item["id"].as_str().unwrap()),
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
-               "createdAt":null,"updatedAt":item["updatedAt"],
+               "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
                "relationshipEvents":{"totalCount":self.timeline_count(item)},
                "state":item["state"],
@@ -2548,6 +2631,11 @@ fn github_projects_board_at(
         repository_visibility: std::collections::BTreeMap::new(),
         hooks: Vec::new(),
         search_page_rows: None,
+        partial_writes: false,
+        dropping: Vec::new(),
+        refusing_stale: Vec::new(),
+        omitting: Vec::new(),
+        truncating: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -2642,7 +2730,19 @@ fn github_projects_board_at(
                     .position(|operation| query.contains(operation))
                     .map(|at| owed_failures.remove(at))
             });
-            let body = if let Some(operation) = owed {
+            let stale = {
+                let mut held = board.lock().unwrap();
+                held.refusing_stale
+                    .iter()
+                    .position(|operation| query.contains(operation))
+                    .map(|at| held.refusing_stale.remove(at))
+            };
+            let body = if let Some(operation) = stale {
+                json!({"data":Value::Null,
+                       "errors":[{"message":format!(
+                           "Could not resolve to a node with the global id of '{operation}'")}]})
+                .to_string()
+            } else if let Some(operation) = owed {
                 // The operation is named in the message so a journey can tell *which*
                 // failure reached the caller — a copy whose write failed and whose tidy-up
                 // then failed too has two, and which one it reports is the behaviour.
@@ -2651,7 +2751,14 @@ fn github_projects_board_at(
                            "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
             } else {
-                let data = github_answer(&board, query, &variables);
+                // A document selecting the whole issue it writes is answered as its plain twin
+                // is, and then with that issue as a read of it by its own id shows it.
+                let plain = github_plain_of(query);
+                let data = github_answer(&board, plain.unwrap_or(query), &variables);
+                let data = match plain {
+                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                    None => data,
+                };
                 let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
                 if owed.is_empty() {
                     json!({ "data": data }).to_string()
@@ -2683,6 +2790,25 @@ fn github_projects_board_at(
             };
             for hook in due {
                 (hook.change)(&hooked);
+            }
+            let dropped = {
+                let mut held = board.lock().unwrap();
+                match held
+                    .dropping
+                    .iter()
+                    .position(|operation| query.contains(operation))
+                {
+                    Some(at) => {
+                        held.dropping.remove(at);
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if dropped {
+                // Applied, and never answered: the caller cannot know which.
+                drop(stream);
+                continue;
             }
             let date = board
                 .lock()
@@ -2839,6 +2965,120 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
                    "description":option["description"]})
         })
         .collect()
+}
+
+/// The plain document a whole-issue twin is answered as, or `None` for any other document.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Part of the loopback board's own request loop, which lives here for the reason `GitHubBoard` records: the shared journey table and the engine's suite drive this board too, so the board — and how it answers each document — cannot live in one plugin's suite.
+fn github_plain_of(query: &str) -> Option<&'static str> {
+    use onetaskgraph_github_projects::graphql;
+    // Read off the plugin's own pairing, so a twin it adds is answered here without a second
+    // list to keep in step.
+    graphql::DOCUMENTS
+        .iter()
+        .map(|(document, _)| *document)
+        .find(|plain| graphql::whole_twin(plain) == Some(query))
+}
+
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a whole-issue document, which belongs beside the rest of its answers for the reason `GitHubBoard` records.
+impl GitHubBoard {
+    /// `data`, the answer a whole-issue twin's plain document gave, with the issue it wrote
+    /// shown as a read of that issue by its own id shows it — or, while
+    /// [`GitHubBoardFields::answer_writes_partially`] holds, only the parts of its change token.
+    fn whole(&self, query: &str, mut data: Value, variables: &Value) -> Value {
+        use onetaskgraph_github_projects::graphql;
+        let first = json!(100);
+        let (at, issue): (&str, Value) = if query == graphql::ADD_COMMENT_WHOLE {
+            (
+                "/addComment/subject",
+                variables["input"]["subjectId"].clone(),
+            )
+        } else if query == graphql::UPDATE_COMMENT_WHOLE {
+            let comment = variables["input"]["id"].clone();
+            let issue = self
+                .comments
+                .iter()
+                .find(|held| held["id"] == comment)
+                .map_or(Value::Null, |held| held["issue"].clone());
+            ("/updateIssueComment/issueComment/issue", issue)
+        } else if query == graphql::UPDATE_ISSUE_WHOLE {
+            ("/updateIssue/issue", variables["input"]["id"].clone())
+        } else {
+            let key = if query == graphql::UPDATE_FIELD_WHOLE {
+                "updateProjectV2ItemFieldValue"
+            } else {
+                "clearProjectV2ItemFieldValue"
+            };
+            let item = variables["input"]["itemId"].clone();
+            let issue = self
+                .items
+                .iter()
+                .find(|held| held["item"] == item)
+                .map_or(Value::Null, |held| held["id"].clone());
+            let at: &'static str = if key == "updateProjectV2ItemFieldValue" {
+                "/updateProjectV2ItemFieldValue/projectV2Item/content"
+            } else {
+                "/clearProjectV2ItemFieldValue/projectV2Item/content"
+            };
+            (at, issue)
+        };
+        let mut node = self.detail_node(&issue, &Value::Null, &first, true);
+        if self.partial_writes && node.is_object() {
+            let token = |key: &str| node.get(key).cloned().unwrap_or(Value::Null);
+            let mut kept = json!({
+                "__typename": token("__typename"),
+                "id": token("id"),
+                "updatedAt": token("updatedAt"),
+                "commentCount": token("commentCount"),
+                "relationshipEvents": token("relationshipEvents"),
+                "repository": token("repository"),
+                "projectItems": {"nodes": node["projectItems"]["nodes"].as_array().map(|nodes| {
+                    nodes.iter().map(|membership| json!({
+                        "id": membership["id"],
+                        "updatedAt": membership["updatedAt"],
+                        "project": membership["project"],
+                        // The values on the board item, which a field write is answered with.
+                        "fieldValues": membership["fieldValues"],
+                    })).collect::<Vec<_>>()
+                })},
+            });
+            for written in ["title", "body", "state"] {
+                if variables["input"].get(written).is_some()
+                    || (written == "state" && variables["input"].get("stateInput").is_some())
+                {
+                    kept[written] = token(written);
+                }
+            }
+            node = kept;
+        }
+        if let Some(members) = node.as_object_mut() {
+            for member in &self.omitting {
+                members.remove(*member);
+            }
+        }
+        for connection in &self.truncating {
+            if let Some(info) = node.pointer_mut(&format!("{connection}/pageInfo")) {
+                info["hasNextPage"] = json!(true);
+            }
+        }
+        let Some((parent, leaf)) = at.rsplit_once('/') else {
+            return data;
+        };
+        if let Some(holder) = data.pointer_mut(parent).filter(|holder| holder.is_object()) {
+            match holder.get_mut(leaf) {
+                Some(existing) if existing.is_object() => {
+                    if let (Some(existing), Some(node)) =
+                        (existing.as_object_mut(), node.as_object())
+                    {
+                        for (key, value) in node {
+                            existing.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                _ => holder[leaf] = node,
+            }
+        }
+        data
+    }
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
@@ -3349,15 +3589,25 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         } else {
             board.options()
         };
-        let option = input["value"]["singleSelectOptionId"].as_str().map(|id| {
-            options
+        let option = match input["value"]["singleSelectOptionId"].as_str() {
+            Some(id) => match options
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|option| option["id"] == id)
-                .expect("an option this board has")["name"]
-                .clone()
-        });
+            {
+                Some(option) => Some(option["name"].clone()),
+                // An option id the field no longer has — deleted, or re-minted by a rename —
+                // is refused as GitHub refuses it, and nothing is written.
+                None => {
+                    board.owed_errors.push(format!(
+                        "The single select option Id does not belong to the field: {id}"
+                    ));
+                    return json!({ "updateProjectV2ItemFieldValue": null });
+                }
+            },
+            None => None,
+        };
         let text = input["value"]["text"].clone();
         let projected = board
             .text_fields

@@ -19,11 +19,13 @@ use onetaskgraph_plugin_api::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::Spent;
 use super::assets;
 use super::boundary::{Exposure, Held};
 use super::fetch::{fits, unrepeated};
 use super::{Answer, ConfiguredSource, Engine, EngineError, Qualified, delivery};
 use crate::GlobalId;
+use crate::cache::{CacheUse, WriteFallback, WriteResult};
 use crate::plan::{QueryPlan, QueryResponse, SourceFailure};
 use crate::resolve::ResolvedSource;
 
@@ -35,6 +37,9 @@ use crate::resolve::ResolvedSource;
 pub struct CommentList {
     /// The task's comments in the order they were written. Empty when it has none.
     pub comments: Vec<Comment>,
+    /// How the read used its source's local cache — absent for a source keeping none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheUse>,
 }
 
 /// What `task comment delete` answers with: the id of the comment it removed.
@@ -42,6 +47,40 @@ pub struct CommentList {
 pub struct DeletedComment {
     /// The id the comment was removed under, exactly as `list` reported it.
     pub deleted: NativeId,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
+}
+
+/// What `task comment add` and `task comment edit` answer with: the comment as its source now
+/// holds it — its id and its address among it, so a caller never needs a lookup for either —
+/// and what an expected write came to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CommentWritten {
+    /// The comment.
+    #[serde(flatten)]
+    pub comment: Comment,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// One task as `task show` reports it: the response every show verb answers with, and the
@@ -71,6 +110,11 @@ pub struct TaskDetail {
     /// the failure then in the response's `errors`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets: Option<Vec<Asset>>,
+    /// How the read used its source's local cache: `{"served": "cache" | "remote",
+    /// "bypassed": null | "<reason>"}` — absent for a source keeping none, and for an id
+    /// naming no configured source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheUse>,
 }
 
 /// One document as `document show` reports it: the response every show verb answers with,
@@ -162,6 +206,7 @@ impl Engine {
                         ),
                         comments: None,
                         assets: None,
+                        cache: None,
                     })
                     .collect(),
             };
@@ -206,6 +251,7 @@ impl Engine {
                     },
                     comments: None,
                     assets: None,
+                    cache: None,
                 })
                 .collect();
         };
@@ -284,6 +330,7 @@ impl Engine {
                 response,
                 comments,
                 assets,
+                cache: self.cache_use(id),
             });
         }
         details
@@ -337,6 +384,7 @@ impl Engine {
             response,
             comments: None,
             assets,
+            cache: self.cache_use(id),
         })
     }
 
@@ -367,11 +415,94 @@ impl Engine {
     /// [`EngineError::SourceFailed`] when the source could not answer.
     pub async fn comments(&self, task: &GlobalId) -> Result<CommentList, EngineError> {
         let source = self.commented(&task.source)?;
-        match walk(source, &task.native).await {
-            Ok(Some(comments)) => Ok(CommentList { comments }),
+        // A caching source's comments are read beside the task, in the one request its detail
+        // read costs, so the read carries the task's version: what keys the entry it refreshes,
+        // and what a pin is held to.
+        let walked = if self.caches(&task.source) {
+            let walked = walk_detail(source, &task.native).await;
+            // The task's assets complete its entry, as a `task show` of it does, so a later
+            // pinned read of either is answered whole. The source answers them from the read
+            // just made, or from the entry itself, and a failure here costs only the entry.
+            if matches!(walked, Ok(Some(_))) {
+                let _ = source.source().task_assets(&task.native).await;
+            }
+            walked
+        } else {
+            walk(source, &task.native).await
+        };
+        match walked {
+            Ok(Some(comments)) => Ok(CommentList {
+                comments,
+                cache: self.cache_use(task),
+            }),
             Ok(None) => Err(no_such_task(task)),
             Err(error) => Err(failed(source, error)),
         }
+    }
+
+    /// [`task_detail`](Self::task_detail), answered from `id`'s source's local cache when it
+    /// holds the task at `pin` or a later version — see [`Engine::pin`].
+    ///
+    /// # Errors
+    ///
+    /// As [`task_detail`](Self::task_detail).
+    pub async fn task_detail_pinned(
+        &self,
+        id: &GlobalId,
+        pin: Option<&str>,
+    ) -> Result<TaskDetail, EngineError> {
+        if let Some(pin) = pin {
+            self.pin(id, pin);
+        }
+        self.task_detail(id).await
+    }
+
+    /// [`task_without_comments`](Self::task_without_comments), pinned as
+    /// [`task_detail_pinned`](Self::task_detail_pinned) is.
+    ///
+    /// # Errors
+    ///
+    /// As [`task`](Self::task).
+    pub async fn task_without_comments_pinned(
+        &self,
+        id: &GlobalId,
+        pin: Option<&str>,
+    ) -> Result<TaskDetail, EngineError> {
+        if let Some(pin) = pin {
+            self.pin(id, pin);
+        }
+        self.task_without_comments(id).await
+    }
+
+    /// [`task_details`](Self::task_details), with each id `pins` names pinned to the version
+    /// it gives — see [`Engine::pin`].
+    pub async fn task_details_pinned(
+        &self,
+        ids: &[GlobalId],
+        comments: bool,
+        pins: &[(GlobalId, String)],
+    ) -> TaskDetails {
+        for (id, version) in pins {
+            self.pin(id, version);
+        }
+        self.task_details(ids, comments).await
+    }
+
+    /// [`comments`](Self::comments), pinned as [`task_detail_pinned`](Self::task_detail_pinned)
+    /// is.
+    ///
+    /// # Errors
+    ///
+    /// As [`comments`](Self::comments).
+    pub async fn comments_pinned(
+        &self,
+        task: &GlobalId,
+        pin: Option<&str>,
+    ) -> Result<CommentList, EngineError> {
+        if let Some(pin) = pin {
+            self.pin(task, pin);
+        }
+        self.comments(task).await
     }
 
     /// Add one comment to a task, answering with the comment as its source now holds it.
@@ -446,7 +577,15 @@ impl Engine {
     ) -> Result<DeletedComment, EngineError> {
         let source = self.writable_comments(&task.source)?;
         match source.source().delete_comment(&task.native, comment).await {
-            Ok(Some(deleted)) => Ok(DeletedComment { deleted }),
+            Ok(Some(deleted)) => {
+                let (result, fallback, spent) = self.expected_parts(task);
+                Ok(DeletedComment {
+                    deleted,
+                    result,
+                    fallback,
+                    spent,
+                })
+            }
             Ok(None) => Err(missing(source, task, comment).await),
             Err(error) => Err(failed(source, error)),
         }
@@ -513,6 +652,37 @@ async fn walk(
         return Ok(None);
     };
     walk_from(source, task, first, limit).await
+}
+
+/// [`walk`], starting from the task's detail read rather than its first comment page alone.
+async fn walk_detail(
+    source: &ResolvedSource,
+    task: &NativeId,
+) -> Result<Option<Vec<Comment>>, SourceError> {
+    let limit = source.source().capabilities().max_page_size.max(1);
+    let request = PageRequest {
+        cursor: None,
+        limit,
+    };
+    let read = source
+        .source()
+        .get_task_details(std::slice::from_ref(task), Some(&request))
+        .await;
+    // One answer, about this task, held to the very check a copy's detail read of one task
+    // is: another number of answers, or one about another task, would put some other read's
+    // comments under it.
+    let read = super::copy::single_detail(task, read)?;
+    match read {
+        Some(TaskDetailRead {
+            comments: Some(first),
+            ..
+        }) => match first? {
+            Some(first) => walk_from(source, task, first, limit).await,
+            None => Ok(None),
+        },
+        Some(_) => walk(source, task).await,
+        None => Ok(None),
+    }
 }
 
 /// [`walk`], from a first page already in hand — the one a detail read carried beside the

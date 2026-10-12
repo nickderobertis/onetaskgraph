@@ -143,6 +143,16 @@ fn report_visibility_reads() {
     let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the journeys recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_cache_points() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read_cache_points(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 #[test]
 fn report_metadata_fields() {
     let Some(budget) = selected() else {
@@ -442,6 +452,46 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+/// What `cache_budget` recorded for `budget`, refused unless it is that journey's recording at
+/// its workload with every sequence measured in both modes, and its figure the largest
+/// difference among them.
+fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
+    use super::cache_budget::{SEQUENCES, WORKLOAD};
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("workload does not match the four-sequence board workload".into());
+    }
+    let figure = value["value"]
+        .as_i64()
+        .ok_or("missing whole-number figure")?;
+    let mut largest = i64::MIN;
+    for sequence in SEQUENCES {
+        let measured = &value["sequences"][sequence];
+        // A point count is a whole number of points spent, never negative, and small enough
+        // that the difference of two cannot overflow.
+        let points = |mode: &str| {
+            measured[mode]["points"]
+                .as_u64()
+                .and_then(|points| i64::try_from(points).ok())
+        };
+        let (Some(on), Some(off)) = (points("on"), points("off")) else {
+            return Err(format!(
+                "sequence {sequence} is not measured in both modes as whole point counts"
+            ));
+        };
+        let difference = on
+            .checked_sub(off)
+            .ok_or("a sequence's point counts are out of range")?;
+        largest = largest.max(difference);
+    }
+    if largest != figure {
+        return Err("the figure is not the largest difference the sequences record".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = i32::try_from(figure).map_err(|_| "the figure is out of range")?;
     Ok((f64::from(figure), detail))
 }
 

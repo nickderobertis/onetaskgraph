@@ -15,6 +15,7 @@
 #![deny(missing_docs)]
 
 mod asset;
+mod cache;
 mod capability;
 mod clock;
 mod comment;
@@ -34,6 +35,10 @@ pub use asset::{
     Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
     AssetsWritten, asset_references, asset_sha256, assetless, body_digest, is_sha256,
     rewrite_asset_references, serve_asset_references,
+};
+pub use cache::{
+    Coverage, JournalEntry, PartOutcome, RequestKind, Shown, VersionCoverage, WholeTask,
+    WriteJournal,
 };
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};

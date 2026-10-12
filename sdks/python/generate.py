@@ -27,9 +27,10 @@ RESPONSE_ROOTS = {
     "task_show_many": "TaskDetails",
     "task_deps": "QueryResponseOfQualifiedEdge",
     "task_copy": "CopyReport",
-    "task_comment_add": "Comment",
+    # The comment as written, with what a write made with `expect` came to beside it.
+    "task_comment_add": "CommentWritten",
     "task_comment_list": "CommentList",
-    "task_comment_edit": "Comment",
+    "task_comment_edit": "CommentWritten",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
     "task_priority_set": "TaskPrioritySet",
@@ -56,6 +57,8 @@ RESPONSE_ROOTS = {
     # Where an item written to a source would land, read from configuration alone.
     "sources_route": "SourceRoute",
     "config_show": "EffectiveConfig",
+    # What emptying the local cache of one source, or of every source, emptied.
+    "cache_clear": "CacheCleared",
     "template_variables": "TemplateVariables",
     "template_render": "RenderedTemplate",
     # A created task as `task show` answers with it, and a created document as `document show`.
@@ -122,6 +125,12 @@ CONTRACT_ROOTS = {
     "RepositoryVisibility",
     "PublicWriteInput",
     "WriteVerdict",
+    # The local cache of a remote source: a source's `cache` setting, how a read used the
+    # cache, and what a write made with `expect` came to — named, because a caller branches on
+    # each.
+    "SourceCacheConfig",
+    "CacheUse",
+    "ExpectedWrite",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -157,6 +166,8 @@ OPTION_TYPES = {
     "depends_on": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "direction": "choices",
     "explain": "bool",
+    # The version of a task a write says it knows, as a read of it reported.
+    "expect": "VersionToken",
     "file": "str",
     "group_by": "str",
     "id": "str",
@@ -175,6 +186,8 @@ OPTION_TYPES = {
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
     "page_size": "int",
+    # A version of the task a read is pinned to, as a read of it reported.
+    "pin": "VersionToken",
     "priority": "choice_list",
     "project": "str",
     "recreate": "bool",
@@ -217,6 +230,7 @@ OPTION_PLACEHOLDERS = {
     "depends_on": "ID",
     "direction": "DIRECTION",
     "explain": None,
+    "expect": "VERSION",
     "file": "PATH",
     "group_by": "KEY",
     "id": "DOC",
@@ -235,6 +249,7 @@ OPTION_PLACEHOLDERS = {
     "not_label": "L",
     "page": "TOKEN",
     "page_size": "N",
+    "pin": "VERSION",
     "priority": "PRIORITY",
     "project": "P",
     "recreate": None,
@@ -288,6 +303,10 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
         "metadata": OptionShape(
             type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
         )
+    },
+    # `task show-many` pins each of several tasks, `<ID>=<VERSION>`, where `task show` pins one.
+    ("task", "show-many"): {
+        "pin": OptionShape(type="list[str] | tuple[str, ...]", placeholder="ID=VERSION")
     },
     # `task update` names one status and one priority, the ones it writes.
     ("task", "update"): {
@@ -728,6 +747,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("template", "variables" | "render"):
             return ("file",)
+        case ("cache", "clear"):
+            return ("source",)
         case ("task" | "project" | "document", "create"):
             return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
@@ -779,6 +800,11 @@ ANSWERS_COMMANDS = {
 # binary is started: see `_template_file` below. It is optional, because `--template-loader`
 # names the template in its place.
 TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
+
+# The commands whose one operand may be left out, which generated methods default to `None`:
+# a template's file, which `--template-loader` stands in for, and the source `cache clear`
+# empties, which is every source's cache when left out.
+OPTIONAL_OPERAND_COMMANDS = TEMPLATE_FILE_COMMANDS | {("cache", "clear")}
 
 # The repeated options generated methods check are strings before the binary is started: see
 # `_strings` below.
@@ -835,6 +861,13 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "table of its own: a verb whose operand was named in one place and forgotten in the",
         "other generates a method that cannot do what it is named for, and nothing would say",
         "so until the binary refused the invocation.",
+        '"""',
+        "",
+        "type VersionToken = str",
+        '"""A task\'s change token, its `version`, exactly as a read of it reported it.',
+        "",
+        "Opaque: only the source that spelled one reads inside it. A read pinned to one, and a",
+        "write expecting one, hand it back to the binary as it came.",
         '"""',
         "",
         "_ANSWERS = TypeAdapter(dict[str, JsonValue])",
@@ -989,7 +1022,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         if command in ANSWERS_COMMANDS:
             body = [*body, "answers: Mapping[str, JsonValue] | None = None"]
-        optional = command in TEMPLATE_FILE_COMMANDS
+        optional = command in OPTIONAL_OPERAND_COMMANDS
         parameters = (
             [
                 f"{positional}: {positional_types.get(positional, 'str')}"

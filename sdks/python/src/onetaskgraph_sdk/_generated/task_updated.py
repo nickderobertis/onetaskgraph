@@ -149,6 +149,82 @@ class UpdatedField(StrEnum):
     UpdatedFieldDependsOn = "depends-on"
 
 
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
+    ]
+
+
+class WritePartLanded(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    outcome: Literal["landed"]
+
+
+class WritePartRejected(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    outcome: Literal["rejected"]
+    stale: Annotated[
+        bool,
+        Field(
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+        ),
+    ] = False
+
+
+class WritePartUnknown(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
+    ]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart], Field(description="One per mutation sent, in the order sent.")
+    ]
+    version: Annotated[
+        str | None,
+        Field(
+            description="The task's version after the write, where the last response determines it."
+        ),
+    ] = None
+
+
 class DeliveredWritten(BaseModel):
     deliverer: Annotated[
         GlobalId,
@@ -384,7 +460,19 @@ class TaskUpdated(BaseModel):
             description="As `set_task_status` reports it; re-evaluated whenever `status` or `delivers` was\nnamed, empty otherwise."
         ),
     ]
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+        ),
+    ] = None
     id: Annotated[GlobalId, Field(description="The task updated.")]
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+        ),
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(

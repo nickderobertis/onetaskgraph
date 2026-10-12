@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, JsonValue, RootModel
 
 
 class BudgetSpent(BaseModel):
@@ -102,6 +102,82 @@ class StatusCategory(StrEnum):
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"
     StatusCategoryUnknown = "unknown"
+
+
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
+    ]
+
+
+class WritePartLanded(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    outcome: Literal["landed"]
+
+
+class WritePartRejected(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    outcome: Literal["rejected"]
+    stale: Annotated[
+        bool,
+        Field(
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+        ),
+    ] = False
+
+
+class WritePartUnknown(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
+    ]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart], Field(description="One per mutation sent, in the order sent.")
+    ]
+    version: Annotated[
+        str | None,
+        Field(
+            description="The task's version after the write, where the last response determines it."
+        ),
+    ] = None
 
 
 class DeliveredWritten(BaseModel):
@@ -210,13 +286,31 @@ class Placement(BaseModel):
 
 
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
         ),
     ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
     action: Literal["created"]
     comments: Annotated[
         CommentCounts | None,
@@ -245,13 +339,31 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
 
 
 class CopyOutcomeUpdated(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
         ),
     ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
     action: Literal["updated"]
     comments: Annotated[
         CommentCounts | None,
@@ -268,13 +380,31 @@ class CopyOutcomeUpdated(BaseModel):
 
 
 class CopyOutcomeUnchanged(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
         ),
     ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
     action: Literal["unchanged"]
     comments: Annotated[
         CommentCounts | None,
@@ -297,25 +427,61 @@ class CopyOutcomeUnchanged(BaseModel):
 
 
 class CopyOutcomeOrphaned(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
         ),
     ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
     action: Literal["orphaned"]
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
 
 
 class CopyOutcomeFailed(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
         ),
     ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
     action: Literal["failed"]
     error: Annotated[
         Failure,

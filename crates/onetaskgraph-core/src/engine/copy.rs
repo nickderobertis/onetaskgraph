@@ -42,6 +42,7 @@ mod comments;
 mod query;
 mod record;
 mod snapshot;
+pub(super) use snapshot::single as single_detail;
 
 use query::{Slot, failed};
 
@@ -58,6 +59,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::cache::ExpectedWrite;
 use crate::config::Placement;
 use crate::resolve::ResolvedSource;
 use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
@@ -127,6 +129,15 @@ pub struct CopyRequest {
     /// own `onetaskgraph.origin`, so leaving the source untouched costs a later copy nothing
     /// but that lookup.
     pub no_link: bool,
+    /// The version of the destination task the caller says it knows — `--expect`.
+    ///
+    /// Taken by a copy of one task bound to one destination task: the write takes that task's
+    /// ids and current values from the destination's local cache, at that version or a later
+    /// one, instead of reading it, and sends only the fields whose value differs. Its outcome
+    /// then reports [`CopyOutcome::expected`]. Refused, before anything is read, beside more
+    /// than one item, a query, a project or a document, and onto a destination keeping no
+    /// cache.
+    pub expect: Option<String>,
 }
 
 /// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
@@ -428,6 +439,10 @@ pub struct CopyOutcome {
     /// not placed at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<Placement>,
+    /// What the write of an item copied with `--expect` came to: its `result`, its
+    /// `fallback` and what it `spent` — absent for every other item.
+    #[serde(flatten)]
+    pub expected: ExpectedWrite,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -1486,6 +1501,7 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        let _expecting = self.expecting_copy(request)?;
         // Before anything is read: `--create` says there is nothing to look for, and the other
         // two say how to look.
         if request.create {
@@ -1629,7 +1645,7 @@ impl Engine {
                 for slot in slots {
                     let id = match slot {
                         Slot::Done(outcome) => {
-                            placed.push(Some(outcome));
+                            placed.push(Some(*outcome));
                             continue;
                         }
                         Slot::Read(id) => id,
@@ -3000,6 +3016,7 @@ impl Engine {
                     continue;
                 }
                 orphans.push(CopyOutcome {
+                    expected: ExpectedWrite::default(),
                     source: origin,
                     action: CopyAction::Orphaned {
                         destination: GlobalId::new(destination.name().clone(), task.id.clone()),
@@ -4257,6 +4274,7 @@ impl Engine {
             source: item.source.clone(),
             action,
             placed: item.placed.clone(),
+            expected: ExpectedWrite::default(),
         };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to
@@ -4323,11 +4341,14 @@ impl Engine {
             )
             .await?,
         );
+        let expected = self.take_expected(&written).unwrap_or_default();
         if let Some(plan) = &item.comment_plan {
             self.write_comments(destination, &written.native, plan, journal)
                 .await?;
         }
-        Ok((outcome(reached(Some(written), changed)), prior))
+        let mut landed = outcome(reached(Some(written), changed));
+        landed.expected = expected;
+        Ok((landed, prior))
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -4750,6 +4771,7 @@ impl Engine {
         let mut held_comments = None;
         let held = match kind {
             Level::Task if comments && destination.source().capabilities().comments.is_native() => {
+                self.expect_copied(destination.name(), id);
                 let mut whole = None;
                 for _ in 0..2 {
                     let Some(read) = snapshot::first(destination, id)
@@ -4785,12 +4807,15 @@ impl Engine {
                 held_comments = Some(whole.comments);
                 Some(Item::Task(Box::new(whole.task)))
             }
-            Level::Task => destination
-                .source()
-                .get_task(id)
-                .await
-                .map_err(|error| refused(destination, error))?
-                .map(|task| Item::Task(Box::new(task))),
+            Level::Task => {
+                self.expect_copied(destination.name(), id);
+                destination
+                    .source()
+                    .get_task(id)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .map(|task| Item::Task(Box::new(task)))
+            }
             Level::Project => destination
                 .source()
                 .get_project(id)
@@ -5021,7 +5046,7 @@ pub(super) async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering
 /// A source's two readings are a plugin's word, so they are held to [`Metering`]'s contract
 /// before either is believed, and a pair that breaks it is that source not metering — see
 /// [`difference`].
-pub(super) fn spent_between(
+pub(crate) fn spent_between(
     before: &[Option<Metering>],
     after: &[Option<Metering>],
 ) -> Option<Spent> {

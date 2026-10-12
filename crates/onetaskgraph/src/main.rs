@@ -19,11 +19,11 @@ use std::sync::OnceLock;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
-    CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope, Delivered, DeliveryOutcome,
-    DependencyRequest, DocumentFilters, DocumentRequest, Engine, Environment, Failure,
-    FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken,
-    Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector, QueryResponse, RenderedRecord,
-    SearchRequest, SourceFailure, TaskRequest,
+    CommentWritten, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope, Delivered,
+    DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine, Environment,
+    ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy,
+    OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
+    QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
@@ -35,10 +35,10 @@ use onetaskgraph_status_options::{
 use serde::Serialize;
 
 use crate::cli::{
-    Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs, DependencyArgs,
-    DocumentCommand, DocumentFilterArgs, FilterArgs, GraphFormat, LabelCommand, MetadataCommand,
-    MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand, SelectionArgs, ShowArgs,
-    SourcesCommand, StatusCommand, TaskCommand,
+    CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs,
+    DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs, GraphFormat,
+    LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand,
+    SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`.
@@ -136,6 +136,11 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
     if output == OutputFormat::Json {
         let document = FailureDocument {
             failure: failure.clone(),
+            expected: FAILED_WRITE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .unwrap_or_default(),
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.
@@ -162,6 +167,32 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::PluginServe { .. } => unreachable!("plugin serving is dispatched before config"),
         Command::Schema => {
             emit(out, schema_bundle()?.trim_end(), "the schema bundle")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Cache {
+            command: CacheCommand::Clear(args),
+        } => {
+            let source = args
+                .source
+                .as_deref()
+                .map(|name| {
+                    SourceName::new(name.to_owned()).map_err(|error| {
+                        Failure::decided(
+                            "invalid-source-name",
+                            format!(
+                                "{name}: {error}\n\
+                                 next: name a configured source — `onetaskgraph sources list` \
+                                 reports them."
+                            ),
+                        )
+                    })
+                })
+                .transpose()?;
+            let cleared = onetaskgraph_core::cache::clear(&loaded.config, source.as_ref())
+                .map_err(|message| Failure::decided("cache-not-cleared", message))?;
+            let rendered = rendering(loaded, &cleared, render::cache_cleared, "the cache")?;
+            emit(out, rendered.trim_end(), "the cache")?;
             Ok(EXIT_OK)
         }
 
@@ -326,14 +357,15 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: TaskCommand::Show(args),
         } => {
             let id = qualified(&args.item.id)?;
+            let pin = args.pin.as_deref();
             let detail = if args.no_comments {
                 engine(loaded)
-                    .task_without_comments(&id)
+                    .task_without_comments_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
             } else {
                 engine(loaded)
-                    .task_detail(&id)
+                    .task_detail_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
             };
@@ -360,7 +392,14 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 .iter()
                 .map(|id| qualified(id))
                 .collect::<Result<Vec<_>, _>>()?;
-            let details = engine(loaded).task_details(&ids, !args.no_comments).await;
+            let pins = args
+                .pin
+                .iter()
+                .map(|pin| pinned(pin))
+                .collect::<Result<Vec<_>, _>>()?;
+            let details = engine(loaded)
+                .task_details_pinned(&ids, !args.no_comments, &pins)
+                .await;
             let rendered = match loaded.config.output() {
                 OutputFormat::Json => json(&details, "the tasks")?,
                 OutputFormat::Text => render::task_details(&ids, &details),
@@ -380,10 +419,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 },
         } => {
             let task = qualified(&args.id)?;
-            let set = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let set = engine
                 .set_task_status(&task, args.category.category())
                 .await
-                .map_err(|error| Failure::from(&error))?;
+                .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::status_set, "the status")?;
             emit(out, rendered.trim_end(), "the status")?;
             Ok(delivery_exit(&set.delivered))
@@ -396,10 +436,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 },
         } => {
             let task = qualified(&args.id)?;
-            let set = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let set = engine
                 .set_task_priority(&task, args.priority.priority())
                 .await
-                .map_err(|error| Failure::from(&error))?;
+                .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::priority_set, "the priority")?;
             emit(out, rendered.trim_end(), "the priority")?;
             Ok(EXIT_OK)
@@ -415,10 +456,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             // write that could not be read reaches no source.
             let task = qualified(&args.id)?;
             let content = content(&args.file)?;
-            let set = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let set = engine
                 .set_task_content(&task, &content)
                 .await
-                .map_err(|error| Failure::from(&error))?;
+                .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::content_set, "the content")?;
             emit(out, rendered.trim_end(), "the content")?;
             Ok(EXIT_OK)
@@ -539,6 +581,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
             request.create = args.create;
             request.comments = args.comments;
+            request.expect.clone_from(&args.expect.expect);
             copy(out, loaded, &request).await
         }
 
@@ -759,6 +802,49 @@ static CLOCK: OnceLock<SharedClock> = OnceLock::new();
 /// dispatched: one command line is one process, so it is that command's, and every engine
 /// the command builds checks its writes against it.
 static TERM_SCOPE: OnceLock<Option<Vec<String>>> = OnceLock::new();
+
+/// What a write made with `--expect` that then failed came to, for the failure document the
+/// command answers with — its parts' outcomes are what a caller acts on, the failure or not.
+static FAILED_WRITE: std::sync::Mutex<Option<ExpectedWrite>> = std::sync::Mutex::new(None);
+
+/// The engine a write of `id` runs on, expecting the version `expect` names when it names one.
+fn expecting(loaded: &Loaded, id: &GlobalId, expect: &ExpectArgs) -> Result<Engine, Failure> {
+    let engine = engine(loaded);
+    if let Some(version) = &expect.expect {
+        engine
+            .expect(id, version)
+            .map_err(|error| Failure::from(&error))?;
+    }
+    Ok(engine)
+}
+
+/// The failure an expected write on `engine` came to, keeping what its parts came to for the
+/// failure document.
+fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Failure {
+    if let Some(expected) = engine.take_last_expected() {
+        *FAILED_WRITE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(expected);
+    }
+    Failure::from(error)
+}
+
+/// `<ID>=<VERSION>`, as `task show-many --pin` takes it.
+fn pinned(pin: &str) -> Result<(GlobalId, String), Failure> {
+    let Some((id, version)) = pin
+        .split_once('=')
+        .filter(|(_, version)| !version.is_empty())
+    else {
+        return Err(Failure::decided(
+            "invalid-pin",
+            format!(
+                "--pin {pin:?} is not `<ID>=<VERSION>`\n\
+                 next: give the task's qualified id, `=`, and the version a read of it reported."
+            ),
+        ));
+    };
+    Ok((qualified(id)?, version.to_owned()))
+}
 
 fn engine(loaded: &Loaded) -> Engine {
     Engine::build_with_clock(
@@ -1025,16 +1111,18 @@ async fn comment(
                 author: args.author.clone(),
             };
             let task = qualified(&args.id)?;
-            let added = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let added = engine
                 .add_comment(&task, &comment)
                 .await
-                .map_err(|error| Failure::from(&error))?;
-            rendering(loaded, &added, render::comment, "the comment")?
+                .map_err(|error| write_failed(&engine, &error))?;
+            let added = written_comment(&engine, &task, added);
+            rendering(loaded, &added, render::comment_written, "the comment")?
         }
         CommentCommand::List(args) => {
             let task = qualified(&args.id)?;
             let listed = engine(loaded)
-                .comments(&task)
+                .comments_pinned(&task, args.pin.as_deref())
                 .await
                 .map_err(|error| Failure::from(&error))?;
             rendering(loaded, &listed, render::comments, "the comments")?
@@ -1042,23 +1130,44 @@ async fn comment(
         CommentCommand::Edit(args) => {
             let body = body(args.body_file.as_deref())?;
             let task = qualified(&args.id)?;
-            let edited = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let edited = engine
                 .edit_comment(&task, &args.comment_id, &body)
                 .await
-                .map_err(|error| Failure::from(&error))?;
-            rendering(loaded, &edited, render::comment, "the comment")?
+                .map_err(|error| write_failed(&engine, &error))?;
+            let edited = written_comment(&engine, &task, edited);
+            rendering(loaded, &edited, render::comment_written, "the comment")?
         }
         CommentCommand::Delete(args) => {
             let task = qualified(&args.id)?;
-            let deleted = engine(loaded)
+            let engine = expecting(loaded, &task, &args.expect)?;
+            let deleted = engine
                 .delete_comment(&task, &args.comment_id)
                 .await
-                .map_err(|error| Failure::from(&error))?;
+                .map_err(|error| write_failed(&engine, &error))?;
             rendering(loaded, &deleted, render::deleted, "the deletion")?
         }
     };
     emit(out, rendered.trim_end(), "the comment")?;
     Ok(EXIT_OK)
+}
+
+/// A comment a verb wrote, with what an expected write of it came to.
+fn written_comment(
+    engine: &Engine,
+    task: &GlobalId,
+    comment: onetaskgraph_plugin_api::Comment,
+) -> CommentWritten {
+    let (result, fallback, spent) = match engine.take_expected(task) {
+        Some(expected) => (expected.result, expected.fallback, expected.spent),
+        None => (None, None, None),
+    };
+    CommentWritten {
+        comment,
+        result,
+        fallback,
+        spent,
+    }
 }
 
 /// One answer, in the format the configuration asks for.
@@ -1163,10 +1272,11 @@ fn content(path: &std::path::Path) -> Result<String, Failure> {
 /// and calls the one public method, so a copy typed at a shell and a copy a Rust caller
 /// makes cannot answer differently.
 async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> Result<u8, Failure> {
-    let report = engine(loaded)
+    let engine = engine(loaded);
+    let report = engine
         .copy(request)
         .await
-        .map_err(|error| Failure::from(&error))?;
+        .map_err(|error| write_failed(&engine, &error))?;
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::copied(&report),
         OutputFormat::Json => json(&report, "the copy")?,
@@ -1205,13 +1315,22 @@ async fn metadata_set(
     let id = qualified(&args.id)?;
     let key = metadata_key(&args.key)?;
     let value = metadata_value(&args.value)?;
-    let engine = engine(loaded);
+    if args.expect.expect.is_some() && record != MetadataRecord::Task {
+        return Err(Failure::decided(
+            "expect-one-task",
+            "--expect names the version of a task, and a project's or a document's metadata \
+             is written without one\n\
+             next: leave --expect out"
+                .to_owned(),
+        ));
+    }
+    let engine = expecting(loaded, &id, &args.expect)?;
     let set = match record {
         MetadataRecord::Task => engine.set_task_metadata(&id, &key, &value).await,
         MetadataRecord::Project => engine.set_project_metadata(&id, &key, &value).await,
         MetadataRecord::Document => engine.set_document_metadata(&id, &key, &value).await,
     }
-    .map_err(|error| Failure::from(&error))?;
+    .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &set, render::metadata_set, "the metadata key")?;
     emit(out, rendered.trim_end(), "the metadata key")?;
     Ok(EXIT_OK)
@@ -1308,6 +1427,7 @@ fn copy_request(
         // request it builds.
         comments: false,
         no_link: args.no_link,
+        expect: None,
     })
 }
 
@@ -1823,6 +1943,7 @@ mod tests {
                 "document answers",
                 "label list",
                 "search",
+                "cache clear",
                 "template variables",
                 "template render"
             ])

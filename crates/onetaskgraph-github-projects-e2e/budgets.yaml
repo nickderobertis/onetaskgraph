@@ -63,3 +63,13 @@ budgets:
     unit: requests
     direction: max
     threshold: 204
+  - id: github-cache-points-not-above-uncached
+    description: >-
+      An inner measure of the shared board token that no check may spend: the largest difference, cache on minus cache off, in GitHub GraphQL points across four realistic verb sequences against a loopback board, priced with the plugin's own table. It protects every manager's share of that token from quota the cache adds; the stale-option fallback is recorded beside it and kept out.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with (report_visibility_reads, report_metadata_fields); this one follows it, and its task names that pattern. The entry reads only the telemetry the journeys recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_cache_points", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 0

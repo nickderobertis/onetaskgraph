@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, Field, RootModel
@@ -16,6 +17,21 @@ class NativeId(RootModel[str]):
             description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
         ),
     ]
+
+
+class Served(StrEnum):
+    ServedCache = "cache"
+    ServedRemote = "remote"
+
+
+class CacheUse(BaseModel):
+    bypassed: Annotated[
+        str | None,
+        Field(
+            description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
+        ),
+    ] = None
+    served: Annotated[Served, Field(description="Where it was answered from.")]
 
 
 class CommentOrigin(BaseModel):
@@ -74,6 +90,12 @@ class Comment(BaseModel):
 
 
 class CommentList(BaseModel):
+    cache: Annotated[
+        CacheUse | None,
+        Field(
+            description="How the read used its source's local cache — absent for a source keeping none."
+        ),
+    ] = None
     comments: Annotated[
         list[Comment],
         Field(

@@ -13,9 +13,9 @@ use crate::{
     DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
     MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, Visibility, WriteSupport,
-    WriteTarget, assetless, commentless, documentless, unwritable, unwritable_field,
-    unwritable_metadata,
+    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
+    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
+    unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -91,6 +91,74 @@ pub trait TaskSource: Send + Sync {
     /// unchanged. A source whose token says which of two versions is the later overrides it.
     fn order_versions(&self, a: &str, b: &str) -> Option<Ordering> {
         (a == b).then_some(Ordering::Equal)
+    }
+
+    /// Which parts of a task this source's [`Task::version`] vouches for, which is what the
+    /// store's local cache may serve a task's parts from.
+    ///
+    /// Defaulted to no part, which keeps the cache from ever serving what a token was never
+    /// promised to cover: a source overrides it only for the parts its token covers, as
+    /// `docs/plugin-protocol.md` §4.13d states them.
+    fn version_coverage(&self) -> VersionCoverage {
+        VersionCoverage::none(format!(
+            "the {} plugin does not declare that its change token covers a task",
+            self.kind()
+        ))
+    }
+
+    /// What this source holds about task `id` — the item it read last in this process — that
+    /// a later write expecting that version of it could take instead of reading it again, or
+    /// `None` when it holds nothing of the kind.
+    ///
+    /// Opaque to the engine, which keeps it beside the cached task and hands it back through
+    /// [`prime_write`](Self::prime_write). Defaulted to `None`: a source whose writes read
+    /// nothing first has nothing to keep.
+    fn write_context(&self, id: &NativeId) -> Option<serde_json::Value> {
+        let _ = id;
+        None
+    }
+
+    /// What this source holds about the container every task of it shares — a board's field
+    /// and option ids — that a write could take instead of reading it, or `None`.
+    ///
+    /// Defaulted to `None`, on the terms of [`write_context`](Self::write_context).
+    fn board_context(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Hold `context`, which [`write_context`](Self::write_context) gave for task `id` at a
+    /// version the caller expects it still at, and `board`, which
+    /// [`board_context`](Self::board_context) gave, so the next write of `id` takes them
+    /// instead of reading — answering whether it took them.
+    ///
+    /// A context this source cannot read is not taken, and the write then reads as it always
+    /// does. Defaulted to taking nothing.
+    fn prime_write(
+        &self,
+        id: &NativeId,
+        context: &serde_json::Value,
+        board: Option<&serde_json::Value>,
+    ) -> bool {
+        let _ = (id, context, board);
+        false
+    }
+
+    /// Drop whatever [`prime_write`](Self::prime_write) took for `id`, and the board context
+    /// with it, so the next write of it reads afresh.
+    fn unprime(&self, id: &NativeId) {
+        let _ = id;
+    }
+
+    /// Start recording every request this source sends, for [`end_journal`](Self::end_journal).
+    ///
+    /// The engine opens one journal around one write at a time. Defaulted to recording
+    /// nothing.
+    fn begin_journal(&self) {}
+
+    /// Stop recording, answering with every request sent since
+    /// [`begin_journal`](Self::begin_journal) — or `None` for a source that records none.
+    fn end_journal(&self) -> Option<WriteJournal> {
+        None
     }
 
     /// Whether the source is answering right now.
@@ -1237,6 +1305,19 @@ pub trait SourcePlugin: Send + Sync + 'static {
     // own copy of.
     fn document_relative_paths(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// What names the remote store a source built from `config` reads — a board's owner and
+    /// number, a Linear endpoint and team — or `None` for a source with no remote.
+    ///
+    /// The store's local cache of a remote source lives under a digest of this, so every
+    /// process configuring the same remote shares one cache and no two remotes share one.
+    /// Defaulted to `None`, which is what a source keeping its work on this machine — a
+    /// folder of Markdown — answers: it has nothing to cache, and its cache setting is
+    /// ignored. A `config` this plugin would refuse answers `None` too.
+    fn remote_identity(&self, config: &serde_json::Value) -> Option<String> {
+        let _ = config;
+        None
     }
 }
 

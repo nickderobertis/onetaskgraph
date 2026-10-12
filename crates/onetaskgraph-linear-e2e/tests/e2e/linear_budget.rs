@@ -505,6 +505,7 @@ fn measure_linear_requests_per_status_write_warm() {
                     dry_run: false,
                     comments: false,
                     no_link: false,
+                    expect: None,
                 })
                 .await
                 .expect("the copy lands");
@@ -923,6 +924,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
                     dry_run: false,
                     comments: false,
                     no_link: false,
+                    expect: None,
                 })
                 .await
                 .expect("the copy lands");

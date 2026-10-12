@@ -21,8 +21,10 @@ use onetaskgraph_plugin_api::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::Spent;
 use super::boundary::{Exposure, Held};
 use super::{ConfiguredSource, Engine, EngineError, Qualified};
+use crate::cache::{WriteFallback, WriteResult};
 use crate::resolve::ResolvedSource;
 use crate::{Failure, GlobalId};
 
@@ -36,6 +38,18 @@ pub struct TaskStatusSet {
     /// One entry per task it delivers, or dropped, that this write re-evaluated. Empty when
     /// it delivers nothing.
     pub delivered: Vec<Delivered>,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// What keeping one delivered task in step with one deliverer came to.
@@ -136,6 +150,9 @@ impl Engine {
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(no_such_task)?;
         let status = task.status.clone();
+        // Taken before the delivered tasks are kept in step, which reads and writes other
+        // tasks and none of them this write's own.
+        let (result, fallback, spent) = self.expected_parts(id);
         let delivers = targets(&task.delivers, &id.source);
         let delivered = self
             .deliver(
@@ -150,6 +167,9 @@ impl Engine {
             id: id.clone(),
             status,
             delivered,
+            result,
+            fallback,
+            spent,
         })
     }
 

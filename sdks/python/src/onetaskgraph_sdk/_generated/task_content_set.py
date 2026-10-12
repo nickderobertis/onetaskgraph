@@ -4,9 +4,24 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, JsonValue, RootModel
+
+
+class BudgetSpent(BaseModel):
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    lower_bound: Annotated[
+        bool,
+        Field(
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+        ),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
 class GlobalId(RootModel[str]):
@@ -18,5 +33,115 @@ class GlobalId(RootModel[str]):
     ]
 
 
+class Spent(BaseModel):
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+
+
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
+    ]
+
+
+class WritePartLanded(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    outcome: Literal["landed"]
+
+
+class WritePartRejected(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    outcome: Literal["rejected"]
+    stale: Annotated[
+        bool,
+        Field(
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+        ),
+    ] = False
+
+
+class WritePartUnknown(BaseModel):
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
+    ]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart], Field(description="One per mutation sent, in the order sent.")
+    ]
+    version: Annotated[
+        str | None,
+        Field(
+            description="The task's version after the write, where the last response determines it."
+        ),
+    ] = None
+
+
 class TaskContentSet(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+        ),
+    ] = None
     id: Annotated[GlobalId, Field(description="The task whose content was replaced.")]
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+        ),
+    ] = None
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
+        ),
+    ] = None

@@ -18,9 +18,10 @@ use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
 use crate::boundary::{PublicWriteInput, RepositoryVisibility, WriteVerdict};
+use crate::cache::{CacheCleared, CacheUse, ExpectedWrite};
 use crate::config::{
-    EffectiveConfig, Origin, OutputFormat, Placement, Setting, SourceRoute, SourceVisibility,
-    WritePolicyConfig,
+    EffectiveConfig, Origin, OutputFormat, Placement, Setting, SourceCacheConfig, SourceRoute,
+    SourceVisibility, WritePolicyConfig,
 };
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
@@ -29,12 +30,12 @@ use crate::template::{
     VariableType,
 };
 use crate::{
-    CommentList, CopyAction, CopyLink, CopyOutcome, CopyReport, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, DocumentDetail, Failure, FailureClass, FailureDocument, GlobalId, MetadataSet,
-    PageToken, Predicate, ProjectGraph, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
-    QueryResponse, Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
-    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
-    TemplateAnswers,
+    CommentList, CommentWritten, CopyAction, CopyLink, CopyOutcome, CopyReport, CopyVia,
+    DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
+    FailureDocument, GlobalId, MetadataSet, PageToken, Predicate, ProjectGraph, Qualified,
+    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, Regenerated, SearchHit, SearchKind,
+    SourceFailure, SourceListing, SourcePlan, TaskContentSet, TaskDetail, TaskDetails,
+    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -50,7 +51,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 36;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 37;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -253,6 +254,15 @@ pub fn schema_bundle() -> Value {
     roots.insert("RepositoryVisibility", schema_for!(RepositoryVisibility));
     roots.insert("PublicWriteInput", schema_for!(PublicWriteInput));
     roots.insert("WriteVerdict", schema_for!(WriteVerdict));
+
+    // The local cache of a remote source: how a source is configured with one, what `cache
+    // clear` answers with, how a read used one, and what a write made with `--expect` came
+    // to — named, because a caller pinning a read or expecting a write branches on each.
+    roots.insert("SourceCacheConfig", schema_for!(SourceCacheConfig));
+    roots.insert("CacheCleared", schema_for!(CacheCleared));
+    roots.insert("CacheUse", schema_for!(CacheUse));
+    roots.insert("ExpectedWrite", schema_for!(ExpectedWrite));
+    roots.insert("CommentWritten", schema_for!(CommentWritten));
 
     // A `linear` source's configuration, as a root of its own as well as under
     // `plugin_config`: both SDKs are generated from the roots, and a caller writing a
