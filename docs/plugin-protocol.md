@@ -1254,7 +1254,8 @@ subprocess-hosted plugin has no remote identity, so the engine keeps no cache of
 - `remote_identity`, on `SourcePlugin` — what names the remote it reads, which the cache
   directory is a digest of.
 - `write_context` and `board_context` — opaque records the cache keeps beside a task and
-  beside the board, which `prime_write` takes back for a write expecting that version.
+  beside the board, which `prime_write` takes back for a write expecting that version, and
+  `unprime` drops again so the next write reads afresh.
 - `begin_journal` and `end_journal` — every request sent while one write runs, each with what it
   came to and, for a mutation, the version and the whole task its own response shows.
 

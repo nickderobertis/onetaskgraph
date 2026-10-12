@@ -79,6 +79,12 @@ NOT_CARRIED_REASON = (
     "hosted source before sending anything"
 )
 
+CACHE_ONLY_REASON = (
+    "not carried: §4.13e says a plugin says it to the store's local cache through "
+    "`TaskSource` and never over this protocol, and the engine keeps no cache of a "
+    "subprocess-hosted source"
+)
+
 # Trait methods the protocol deliberately does not carry as methods of its own, each with
 # the reason. A method missing from BOTH this map and the document's table is drift.
 NOT_METHODS = {
@@ -146,6 +152,13 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
     ),
+    "version_coverage": CACHE_ONLY_REASON,
+    "write_context": CACHE_ONLY_REASON,
+    "board_context": CACHE_ONLY_REASON,
+    "prime_write": CACHE_ONLY_REASON,
+    "unprime": CACHE_ONLY_REASON,
+    "begin_journal": CACHE_ONLY_REASON,
+    "end_journal": CACHE_ONLY_REASON,
 }
 
 # The one protocol method with no trait method behind it: it stands for building the
