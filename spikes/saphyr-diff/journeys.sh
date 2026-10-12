@@ -36,7 +36,7 @@ run_all() {
     local log="$out/journeys-$label-$package.log" own="$flags"
     # local-md does not depend on core: it takes the feature by its own name.
     if [ "$package" = onetaskgraph-local-md ]; then own="${flags//onetaskgraph-core\//}"; fi
-    # shellcheck disable=SC2086
+    # shellcheck disable=SC2086 # $own, $targets and $filters are flag lists, split on purpose.
     cargo test -p "$package" $own --locked $targets -- $filters >"$log" 2>&1
     grep -E '^test .* \.\.\. FAILED$' "$log" | sed -E 's/^test (.*) \.\.\. FAILED$/\1/' \
       | while IFS= read -r name; do printf '%s|%s|%s\n' "$package" "$targets" "$name"; done >>"$failed"
@@ -56,7 +56,7 @@ journeys() {
   # Today's build, and only the tests that failed above, each by its exact name.
   cargo test --quiet -p onetaskgraph --all-features --locked --no-run >"$out/journeys-norway-build.log" 2>&1
   while IFS='|' read -r package targets name; do
-    # shellcheck disable=SC2086
+    # shellcheck disable=SC2086 # $targets is a list of --test flags, split on purpose.
     if cargo test -p "$package" --locked $targets -- --exact "$name" >"$out/journeys-norway-one.log" 2>&1 \
       && grep -qE '^test result: ok\. 1 passed' "$out/journeys-norway-one.log"; then
       printf 'journeys (%s): FAILS on serde-saphyr, passes on serde_norway: %s %s\n' "$label" "$package" "$name"
