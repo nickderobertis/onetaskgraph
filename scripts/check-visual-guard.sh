@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Drive the REAL pre-push screenshot guard through every outcome it owes.
-#
-# The guard is the local half of the strict visual gate, and every one of its decisions is
-# one nothing else can catch: a guard that stopped blocking on drift would let a capture
-# reach the workflow already wrong, and one that captured on a push that cannot change a
-# shot would put a release build in front of every push. So this drives
-# scripts/screenshots-guard.sh itself, in a scratch clone, with the two third-party
-# subprocesses stubbed at the seam — the way scripts/check-pre-push-provisioning.sh stubs
-# `just` — and asserts what the guard did with each answer.
-#
+# Drive the real manual screenshot range guard through its success and refusal paths.
 # What is stubbed is screencomp (whose classification is screencomp's own to test) and the
 # capture (whose bytes the committed baseline gates and which costs a release build). What
 # is real is the guard, the clone, the git history, the ref records and the diff.
@@ -51,8 +42,7 @@ scratch_clone "$ROOT" "$CLONE" || fatal \
   "could not clone this repository into $CLONE" \
   "check 'git status' here and the free space on \$TMPDIR, then rerun"
 # The clone carries HEAD, and what is under test is the guard as it is right now — so the
-# WORKING tree's tracked files go over the top of it, exactly as
-# scripts/check-pre-push-provisioning.sh does with the hook. The clone still supplies the
+# WORKING tree's tracked files go over the top of it. The clone still supplies the
 # `.git` directory the ranges below are computed in.
 #
 # A function because it has to be done AGAIN after any case that moves the clone's branch:
@@ -201,9 +191,7 @@ fail() {
 captured() { [ -f "$MARKERS/captured" ]; }
 called() { [ -f "$MARKERS/$1.args" ]; }
 
-# 1. No ref records: nothing is being pushed. This is also what keeps
-#    scripts/check-pre-push-provisioning.sh, which drives the real hook with an empty
-#    stdin, from paying for a capture it is not about.
+# 1. No ref records or explicit range: nothing to compare.
 run_guard "" "$STUB_BIN:$PATH" 3 3
 [ "$GUARD_STATUS" -eq 0 ] || fail "with no ref records the guard refused the push:"
 captured && fail "with no ref records the guard captured anyway:"
@@ -227,13 +215,13 @@ called manifest && fail "an unchanged capture still rewrote the committed baseli
 
 # 4. Relevant, and the capture drifts: the push is blocked, the baseline and the gallery
 #    are regenerated so the new bytes can be committed deliberately, and the message says
-#    where to look and how to bypass it on purpose.
+#    where to look and how to retry the capture manually.
 run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 3
 [ "$GUARD_STATUS" -eq 0 ] && fail "a drifted capture did NOT block the push:"
 captured || fail "the guard reported drift without capturing:"
 called manifest || fail "the guard blocked on drift without refreshing the baseline:"
 called gallery || fail "the guard blocked on drift without building the review gallery:"
-for term in "shots/review/index.html" "--no-verify" "SCREENSHOTS CHANGED"; do
+for term in "shots/review/index.html" "just screenshots" "SCREENSHOTS CHANGED"; do
   grep -qF -- "$term" <<<"$GUARD_OUTPUT" \
     || fail "the drift refusal never mentions '$term', so the reader is not told what to do:"
 done
@@ -334,70 +322,6 @@ overlay_working_tree || fatal "could not re-apply the working tree over $CLONE" 
 write_capture_stub || fatal "could not restore the stub capture in $CLONE" \
   "check the permissions of \$TMPDIR, then rerun"
 
-# 9. The hook itself. It reads git's ref records ONCE into a variable and replays them to
-#    two consumers — the base the gate selects against, and the guard's range — so a change
-#    that dropped either half would leave the gate sweeping every project or the guard
-#    blind, and neither shows up in the guard's own cases above. This drives the REAL
-#    .githooks/pre-push in a clone of its own, with `just`, the provisioner and the guard
-#    stubbed: provisioning is scripts/check-pre-push-provisioning.sh's subject, and a real
-#    `just gate` here would be this repository's whole gate run from inside itself.
-readonly HOOK_CLONE="$scratch/hook-repo"
-scratch_clone "$ROOT" "$HOOK_CLONE" || fatal \
-  "could not clone this repository into $HOOK_CLONE" \
-  "check 'git status' here and the free space on \$TMPDIR, then rerun"
-copy_tracked_files "$ROOT" "$HOOK_CLONE" || fatal \
-  "could not copy $ROOT's tracked files over the clone at $HOOK_CLONE" \
-  "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
-
-readonly HOOK_MARKERS="$scratch/hook-markers"
-mkdir -p "$HOOK_MARKERS" || fatal "could not create $HOOK_MARKERS" \
-  "check the permissions of \$TMPDIR, then rerun"
-cat > "$HOOK_CLONE/scripts/provision-gate.sh" <<STUB
-#!/usr/bin/env bash
-exit 0
-STUB
-cat > "$HOOK_CLONE/scripts/screenshots-guard.sh" <<STUB
-#!/usr/bin/env bash
-set -euo pipefail
-cat > "$HOOK_MARKERS/guard.stdin"
-printf '%s\n' "\${NX_BASE:-unset}" > "$HOOK_MARKERS/guard.nx-base"
-STUB
-readonly HOOK_STUB_BIN="$scratch/hook-bin"
-mkdir -p "$HOOK_STUB_BIN" || fatal "could not create $HOOK_STUB_BIN" \
-  "check the permissions of \$TMPDIR, then rerun"
-cat > "$HOOK_STUB_BIN/just" <<STUB
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$HOOK_MARKERS/gate"
-STUB
-chmod +x "$HOOK_CLONE/scripts/provision-gate.sh" \
-  "$HOOK_CLONE/scripts/screenshots-guard.sh" "$HOOK_STUB_BIN/just" || fatal \
-  "could not make the hook stubs executable" "check the permissions of \$TMPDIR, then rerun"
-
-# From INSIDE the clone, because the hook finds its root with `git rev-parse
-# --show-toplevel`: run from anywhere else and it would cd to whichever repository the
-# working directory belongs to and drive that one's gate and guard instead.
-hook_records="refs/heads/main $(git -C "$HOOK_CLONE" rev-parse HEAD) refs/heads/main $REMOTE_SHA"
-hook_output="$(cd "$HOOK_CLONE" && printf '%s\n' "$hook_records" \
-  | env -u CI PATH="$HOOK_STUB_BIN:$PATH" bash .githooks/pre-push 2>&1)" \
-  && hook_status=0 || hook_status=$?
-
-if [ "$hook_status" -ne 0 ]; then
-  GUARD_OUTPUT="$hook_output"
-  fail "the real hook refused a push whose gate and guard both succeed:"
-fi
-if ! grep -qF "gate" "$HOOK_MARKERS/gate" 2>/dev/null; then
-  GUARD_OUTPUT="$hook_output"
-  fail "the hook never ran 'just gate', so the bar it already had has stopped running:"
-fi
-if [ "$(cat "$HOOK_MARKERS/guard.stdin" 2>/dev/null)" != "$hook_records" ]; then
-  GUARD_OUTPUT="$hook_output"
-  fail "the hook did not replay git's ref records to the screenshot guard, which then has no range and captures nothing whatever the push carries:"
-fi
-if [ "$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null)" != "$REMOTE_SHA" ]; then
-  GUARD_OUTPUT="$hook_output"
-  fail "the hook did not derive the gate's base from those same records (the guard saw NX_BASE=$(cat "$HOOK_MARKERS/guard.nx-base" 2>/dev/null), expected $REMOTE_SHA):"
-fi
-
 # 10. A ref being deleted pushes nothing to capture.
 run_guard "refs/heads/gone 0000000000000000000000000000000000000000 refs/heads/gone $REMOTE_SHA" \
   "$STUB_BIN:$PATH" 3 3
@@ -457,6 +381,8 @@ run_guard "$RECORDS" "$STUB_BIN:$PATH" 3 0
 called classify && fail "a failed capture was classified anyway:"
 grep -qF "screenshots-tools" <<<"$GUARD_OUTPUT" \
   || fail "a failed capture did not name how to provision the renderer:"
+grep -qF "Retry manually with: just screenshots" <<<"$GUARD_OUTPUT" \
+  || fail "the capture failure did not name the manual retry command:"
 STUB_CAPTURE_FAILS=""
 
 # 16. `screencomp classify` failing for anything but drift: this script's exit codes are its
@@ -510,26 +436,6 @@ grep -qF "shots/review/index.html" <<<"$GUARD_OUTPUT" \
 grep -qF "git diff" <<<"$GUARD_OUTPUT" \
   || fail "a gallery page that was never written did not name the other way to review the change:"
 STUB_GALLERY_EMPTY=""
-
-# And the hook with a stdin it cannot read at all. An empty read there looks exactly like
-# pushing nothing — the gate would select against a default base and the guard would capture
-# nothing — so it refuses instead, and says nothing has been checked.
-# A write-only stdin, which is a descriptor that EXISTS and cannot be read: closing fd 0
-# instead would leave the read blocking on whatever the shell put there, which is a hang
-# rather than a case.
-hook_output="$(cd "$HOOK_CLONE" && env -u CI PATH="$HOOK_STUB_BIN:$PATH" \
-  bash .githooks/pre-push 0>/dev/null 2>&1)" && hook_status=0 || hook_status=$?
-if [ "$hook_status" -eq 0 ]; then
-  GUARD_OUTPUT="$hook_output"
-  fail "the hook accepted a push whose ref records it could not read:"
-else
-  for term in "could not be read" "has been checked"; do
-    grep -qF -- "$term" <<<"$hook_output" || {
-      GUARD_OUTPUT="$hook_output"
-      fail "an unreadable stdin was refused without saying '$term', so it reads as a rejection of the push:"
-    }
-  done
-fi
 
 # 19. A changed path holding a byte outside printable ASCII reaches screencomp as its own
 #     bytes. `git diff --name-only` QUOTES such a path — it arrives as

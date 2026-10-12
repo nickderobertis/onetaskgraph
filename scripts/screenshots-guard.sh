@@ -1,32 +1,20 @@
 #!/usr/bin/env bash
-# The local half of the STRICT screenshot gate, run by .githooks/pre-push after the gate.
+# Manual screenshot comparison for a Git revision range.
+# Re-capture when the range matches [guard].paths in screencomp.toml; drift refreshes
+# the baseline and review gallery and returns failure for the contributor to review.
+# CI independently verifies committed captures. No Git hook invokes this script.
 #
-# screenshots/AGENTS.md, "The strict gate, and how its local half is activated", is what
-# this implements: re-capture only when what is being pushed matches [guard].paths in
-# screencomp.toml, and on drift refresh the baseline, build a review gallery and block.
-#
-# It reads the ref records git feeds a pre-push hook on STDIN — the hook hands on what it
-# read — and does nothing at all when there are none: no records is nothing being pushed,
-# which is also what keeps scripts/check-pre-push-provisioning.sh, which drives the real
-# hook with an empty stdin, from paying for a capture it is not about.
-# SCREENCOMP_GUARD_RANGE names a range directly instead, for the checks that drive this.
-#
-# It never prints `onevcs: host-prerequisite:`. That marker is the pinned release-plz's
-# alone (AGENTS.md; scripts/check-pre-push-provisioning.sh holds the hook to exactly one
-# line of it when that tool is missing and to none when it is there) — it tells the engine
-# on this host to stop retrying, and a missing screenshot renderer is not that: the
-# workflow still gates the capture, so this warns loudly and lets the push through.
-#
-# Usage: scripts/screenshots-guard.sh < <the pre-push ref records>
-# Exit codes: 0 when there is nothing to check or the capture is unchanged; 1 on drift
-# (the push is blocked) or when a capture this guard needed could not be made.
+# Usage: SCREENCOMP_GUARD_RANGE=origin/main..HEAD bash scripts/screenshots-guard.sh
+# Alternatively, supply four-field Git ref records on stdin. Empty stdin does no work.
+# Exit codes: 0 for an unchanged capture or nothing to check; 1 on drift or capture failure.
+# A missing renderer is a warning, never the provisioning host-prerequisite marker.
 #
 # llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] three commands of the `scripts` project enumerate that one directory; screenshots/AGENTS.md, "Where this machinery lives", is why.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" && cd "$ROOT" || {
-  echo "pre-push: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
-  echo "pre-push: next: run it from a checkout of this repository, as .githooks/pre-push does" >&2
+  echo "screenshots-guard: could not resolve and enter this repository's root from ${BASH_SOURCE[0]}, and every path below is relative to it" >&2
+  echo "screenshots-guard: next: run it from a checkout of this repository, with SCREENCOMP_GUARD_RANGE naming the revisions to compare" >&2
   exit 1
 }
 readonly ROOT
@@ -50,8 +38,8 @@ esac
 # its own CI job, so refuse loudly rather than classifying against the wrong one.
 LANE="$(sed -n 's/^arches *= *\[ *"\([^"]*\)" *\].*/\1/p' screencomp.toml)"
 if ! [[ "$LANE" =~ ^[A-Za-z0-9_]+$ ]]; then
-  echo "pre-push: expected exactly one lane in [capture].arches of screencomp.toml" >&2
-  echo "pre-push: next: restore the single lane there, or give a second lane its own baseline and CI job" >&2
+  echo "screenshots-guard: expected exactly one lane in [capture].arches of screencomp.toml" >&2
+  echo "screenshots-guard: next: restore the single lane there, or give a second lane its own baseline and CI job" >&2
   exit 1
 fi
 readonly LANE
@@ -70,8 +58,8 @@ GALLERY="$(sed -n 's/^gallery *= *"\([^"]*\)".*/\1/p' screencomp.toml)"
 # leave this guard with nowhere it may write.
 case "${GALLERY:-/}" in
   /* | *..* | *' '*)
-    echo "pre-push: [guard].gallery in screencomp.toml is '${GALLERY:-none}', which is not a relative path inside this tree — the review gallery is written there and .gitignore has to cover it" >&2
-    echo "pre-push: next: set it to a directory under this repository, as 'shots/review', and make sure .gitignore ignores that directory" >&2
+    echo "screenshots-guard: [guard].gallery in screencomp.toml is '${GALLERY:-none}', which is not a relative path inside this tree — the review gallery is written there and .gitignore has to cover it" >&2
+    echo "screenshots-guard: next: set it to a directory under this repository, as 'shots/review', and make sure .gitignore ignores that directory" >&2
     exit 1
     ;;
 esac
@@ -100,14 +88,14 @@ if [ -n "${SCREENCOMP_GUARD_RANGE:-}" ]; then
   before="${SCREENCOMP_GUARD_RANGE%%..*}"
   after="${SCREENCOMP_GUARD_RANGE##*..}"
   if [ "$before..$after" != "$SCREENCOMP_GUARD_RANGE" ] || [ -z "$before" ] || [ -z "$after" ]; then
-    echo "pre-push: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', which is not two revisions joined by '..'" >&2
-    echo "pre-push: next: name a range, as in 'origin/main..HEAD', or unset it to use what git is pushing" >&2
+    echo "screenshots-guard: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', which is not two revisions joined by '..'" >&2
+    echo "screenshots-guard: next: name a range, as in 'origin/main..HEAD', or unset it to use what git is pushing" >&2
     exit 1
   fi
   for endpoint in "$before" "$after"; do
     git rev-parse --verify --quiet "$endpoint^{commit}" >/dev/null 2>&1 || {
-      echo "pre-push: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', and '$endpoint' is not a commit this repository can resolve" >&2
-      echo "pre-push: next: name two resolvable revisions, or unset it to use what git is pushing" >&2
+      echo "screenshots-guard: SCREENCOMP_GUARD_RANGE is '$SCREENCOMP_GUARD_RANGE', and '$endpoint' is not a commit this repository can resolve" >&2
+      echo "screenshots-guard: next: name two resolvable revisions, or unset it to use what git is pushing" >&2
       exit 1
     }
   done
@@ -127,16 +115,16 @@ else
     # swallowed by the fourth.
     read -r _local_ref local_sha _remote_ref remote_sha extra <<<"$record"
     if [ -z "${remote_sha:-}" ] || [ -n "${extra:-}" ]; then
-      echo "pre-push: the screenshot guard skipped a ref record that is not the four fields git writes: '$record'" >&2
-      echo "pre-push: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
+      echo "screenshots-guard: the screenshot guard skipped a ref record that is not the four fields git writes: '$record'" >&2
+      echo "screenshots-guard: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
       continue
     fi
     if [[ "$local_sha" =~ $zero ]]; then
       continue # a branch being deleted pushes nothing to capture
     fi
     if ! resolves "$local_sha"; then
-      echo "pre-push: the screenshot guard cannot read '$local_sha' as a commit of this repository, so it skipped this ref." >&2
-      echo "pre-push: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
+      echo "screenshots-guard: the screenshot guard cannot read '$local_sha' as a commit of this repository, so it skipped this ref." >&2
+      echo "screenshots-guard: next: nothing to do if the push succeeds; the visual-docs workflow gates the capture either way." >&2
       continue
     fi
     if [[ "$remote_sha" =~ $zero ]] || ! resolves "$remote_sha"; then
@@ -180,16 +168,16 @@ fi
 changed=""
 for range in "${ranges[@]+"${ranges[@]}"}"; do
   listing="$(git diff -z --name-only "$range" | tr '\n' '\001' | tr '\0' '\n')" || {
-    echo "pre-push: git could not list what '$range' changes, so this push was not evaluated against the screenshots." >&2
-    echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
+    echo "screenshots-guard: git could not list what '$range' changes, so this push was not evaluated against the screenshots." >&2
+    echo "screenshots-guard: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
     exit 1
   }
   changed+="$listing"$'\n'
 done
 for tree in "${whole_trees[@]+"${whole_trees[@]}"}"; do
   listing="$(git ls-tree -r -z --name-only "$tree" | tr '\n' '\001' | tr '\0' '\n')" || {
-    echo "pre-push: git could not list the files '$tree' carries, so this push was not evaluated against the screenshots." >&2
-    echo "pre-push: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
+    echo "screenshots-guard: git could not list the files '$tree' carries, so this push was not evaluated against the screenshots." >&2
+    echo "screenshots-guard: next: read git's diagnostic above; the visual-docs workflow still gates the capture." >&2
     exit 1
   }
   changed+="$listing"$'\n'
@@ -210,13 +198,13 @@ case "${SCREENCOMP_GUARD_REQUIRE:-}" in
   "" | 0 | false | no) required=0 ;;
   1 | true | yes) required=1 ;;
   *)
-    echo "pre-push: SCREENCOMP_GUARD_REQUIRE is '$SCREENCOMP_GUARD_REQUIRE', which is neither true nor false, so whether a missing screencomp refuses this push is undecided" >&2
-    echo "pre-push: next: set it to 1 or 0 (or unset it, which is 0), then push again" >&2
+    echo "screenshots-guard: SCREENCOMP_GUARD_REQUIRE is '$SCREENCOMP_GUARD_REQUIRE', which is neither true nor false, so whether a missing screencomp refuses this push is undecided" >&2
+    echo "screenshots-guard: next: set it to 1 or 0 (or unset it, which is 0), then rerun the manual comparison" >&2
     exit 1
     ;;
 esac
 if ! command -v screencomp >/dev/null 2>&1; then
-  echo "pre-push: screencomp is not on PATH, so the screenshot guard cannot evaluate this push — install it (https://github.com/nickderobertis/screencomp#install), or set SCREENCOMP_GUARD_REQUIRE=1 to refuse here instead; the visual-docs workflow still gates the capture." >&2
+  echo "screenshots-guard: screencomp is not on PATH, so the screenshot guard cannot evaluate this push — install it (https://github.com/nickderobertis/screencomp#install), or set SCREENCOMP_GUARD_REQUIRE=1 to refuse here instead; the visual-docs workflow still gates the capture." >&2
   [ "$required" -eq 1 ] && exit 1
   exit 0
 fi
@@ -228,8 +216,8 @@ fi
 # reader exits before draining reports printf's SIGPIPE as the pipeline's status, and this
 # branches on that status. A redirection has one status, screencomp's own.
 changed_list="$(mktemp)" || {
-  echo "pre-push: could not create the temporary file the changed-path list is handed to screencomp in." >&2
-  echo "pre-push: next: check the permissions of \$TMPDIR and 'df -h' for free space, then push again." >&2
+  echo "screenshots-guard: could not create the temporary file the changed-path list is handed to screencomp in." >&2
+  echo "screenshots-guard: next: check the permissions of \$TMPDIR and 'df -h' for free space, then rerun the manual comparison." >&2
   exit 1
 }
 trap 'rm -f "$changed_list"' EXIT
@@ -238,12 +226,12 @@ trap 'rm -f "$changed_list"' EXIT
 # redirection message and no next action, which reads as the guard having gone wrong
 # rather than as the disk being full.
 printf '%s\n' "$changed" > "$changed_list" || {
-  echo "pre-push: could not write the changed-path list into $changed_list, so screencomp was not asked whether this push touches a shot." >&2
-  echo "pre-push: next: check the permissions of \$TMPDIR and 'df -h' for free space, then push again." >&2
+  echo "screenshots-guard: could not write the changed-path list into $changed_list, so screencomp was not asked whether this push touches a shot." >&2
+  echo "screenshots-guard: next: check the permissions of \$TMPDIR and 'df -h' for free space, then rerun the manual comparison." >&2
   exit 1
 }
 if [ "$capture_without_asking" -eq 1 ]; then
-  echo "pre-push: a path in this push carries a newline, which screencomp's newline-delimited scope input cannot express, so the screenshot guard captured rather than ask about a name it would have to mangle first." >&2
+  echo "screenshots-guard: a path in this push carries a newline, which screencomp's newline-delimited scope input cannot express, so the screenshot guard captured rather than ask about a name it would have to mangle first." >&2
   scope_status=3
 else
   set +e
@@ -255,7 +243,7 @@ case "$scope_status" in
   0) exit 0 ;;
   3) : ;;
   *)
-    echo "pre-push: 'screencomp scope' failed (exit $scope_status), so the screenshot guard is skipped — check that screencomp is current; the visual-docs workflow still gates this." >&2
+    echo "screenshots-guard: 'screencomp scope' failed (exit $scope_status), so the screenshot guard is skipped — check that screencomp is current; the visual-docs workflow still gates this." >&2
     exit 0
     ;;
 esac
@@ -264,9 +252,9 @@ esac
 # is what says a multi-minute step is under way, and a push this guard lets through has
 # nothing to report. Only a refusal speaks.
 if ! SHOTS_OUT="$CURRENT/$LANE" bash scripts/screenshots.sh; then
-  echo "pre-push: the screenshot capture failed, so this push cannot be evaluated against" >&2
-  echo "pre-push: $MANIFEST. Read the diagnostic above; 'just screenshots-tools' provisions" >&2
-  echo "pre-push: the pinned renderer. Bypass deliberately with: git push --no-verify" >&2
+  echo "screenshots-guard: the screenshot capture failed, so this push cannot be evaluated against" >&2
+  echo "screenshots-guard: $MANIFEST. Read the diagnostic above; 'just screenshots-tools' provisions" >&2
+  echo "screenshots-guard: the pinned renderer. Retry manually with: just screenshots" >&2
   exit 1
 fi
 
@@ -280,9 +268,9 @@ if [ "$status" -eq 0 ]; then
   # going on is the outcome. Only a refusal has more to say.
   exit 0
 elif [ "$status" -ne 3 ]; then
-  echo "pre-push: 'screencomp classify' failed (exit $status), so this push was not evaluated" >&2
-  echo "pre-push: against $MANIFEST." >&2
-  echo "pre-push: next: read its diagnostic above, check that screencomp is current, then push again." >&2
+  echo "screenshots-guard: 'screencomp classify' failed (exit $status), so this push was not evaluated" >&2
+  echo "screenshots-guard: against $MANIFEST." >&2
+  echo "screenshots-guard: next: read its diagnostic above, check that screencomp is current, then rerun the manual comparison." >&2
   # 1 rather than screencomp's own status: this script's exit codes are its own contract,
   # and passing a third party's through would make an unknown number the hook's answer.
   exit 1
@@ -291,8 +279,8 @@ fi
 # On drift the baseline and the gallery are regenerated before the push is refused, so
 # that saying "yes, that is the new output" is one `git add` rather than a second run.
 if ! screencomp manifest --input "$CURRENT" --arch "$LANE" --output "$MANIFEST"; then
-  echo "pre-push: the capture drifted and the refreshed baseline could not be written to $MANIFEST." >&2
-  echo "pre-push: next: read the diagnostic above, then run 'just screenshots-bless' by hand and commit it." >&2
+  echo "screenshots-guard: the capture drifted and the refreshed baseline could not be written to $MANIFEST." >&2
+  echo "screenshots-guard: next: read the diagnostic above, then run 'just screenshots-bless' by hand and commit it." >&2
   exit 1
 fi
 # A zero exit says the tool ran; the refusal below tells a reader to commit a FILE, and it
@@ -300,31 +288,31 @@ fi
 # have something in it before it is named. Nothing deeper: the manifest's shape is
 # screencomp's to parse, and a malformed one fails the next push with its diagnostic.
 if [ ! -s "$MANIFEST" ]; then
-  echo "pre-push: 'screencomp manifest' succeeded but left no readable $MANIFEST, which is the refreshed baseline the refusal below names." >&2
-  echo "pre-push: next: check the permissions of the shots/baseline directory, then run 'just screenshots-bless' by hand and commit it." >&2
+  echo "screenshots-guard: 'screencomp manifest' succeeded but left no readable $MANIFEST, which is the refreshed baseline the refusal below names." >&2
+  echo "screenshots-guard: next: check the permissions of the shots/baseline directory, then run 'just screenshots-bless' by hand and commit it." >&2
   exit 1
 fi
 if ! screencomp gallery --input "$CURRENT" --arch "$LANE" \
   --output "$GALLERY" --title "Pre-push screenshot review" >/dev/null; then
-  echo "pre-push: the capture drifted and the review gallery could not be built at $GALLERY." >&2
-  echo "pre-push: next: read the diagnostic above; the refreshed baseline and the README images are written, so 'git diff' is the other way to review them." >&2
+  echo "screenshots-guard: the capture drifted and the review gallery could not be built at $GALLERY." >&2
+  echo "screenshots-guard: next: read the diagnostic above; the refreshed baseline and the README images are written, so 'git diff' is the other way to review them." >&2
   exit 1
 fi
 # The refusal below names $GALLERY/index.html as the thing to open, so a zero exit that
 # left no such file would send a reader to a path that is not there.
 if [ ! -s "$GALLERY/index.html" ]; then
-  echo "pre-push: 'screencomp gallery' succeeded but left no readable $GALLERY/index.html, which is the page the refusal below names." >&2
-  echo "pre-push: next: review the drift with 'git diff docs/screenshots' instead, and report the gallery step to screencomp." >&2
+  echo "screenshots-guard: 'screencomp gallery' succeeded but left no readable $GALLERY/index.html, which is the page the refusal below names." >&2
+  echo "screenshots-guard: next: review the drift with 'git diff docs/screenshots' instead, and report the gallery step to screencomp." >&2
   exit 1
 fi
 
 {
   echo
-  echo "  SCREENSHOTS CHANGED — push blocked for review"
+  echo "  SCREENSHOTS CHANGED — review required"
   echo "  Review the rendered gallery: $GALLERY/index.html"
   echo "  The refreshed baseline and README images are already written."
-  echo "  If intended: git add $MANIFEST docs/screenshots && git commit, then push again."
-  echo "  If not: investigate the diff. Bypass deliberately with: git push --no-verify"
+  echo "  If intended: git add $MANIFEST docs/screenshots && git commit."
+  echo "  If not: investigate the diff. Retry manually with: just screenshots"
   echo
 } >&2
 exit 1

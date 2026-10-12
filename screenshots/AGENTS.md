@@ -9,7 +9,7 @@
 Deterministic SVGs of this CLI's **real** output, gated by
 [screencomp](https://github.com/nickderobertis/screencomp). Informational, like a bench —
 **never part of `just check` or `just gate`**; `.github/workflows/visual-docs.yml` owns the
-comparison in CI, and `.githooks/pre-push` owns the local half.
+comparison in CI, and contributors run local capture and review commands manually.
 
 ## What it is
 
@@ -160,25 +160,13 @@ baseline after an **intended** change, which is then committed together with
 Committed: the digest baseline and the images the README embeds. Regenerated and ignored:
 every other tree under `shots/`.
 
-## The strict gate, and how its local half is activated
+## CI verification and local review
 
-CI fails on a capture that has drifted. Locally the same comparison runs from **the
-pre-push hook this repository already had** — activated by
-`scripts/bootstrap-workspace.sh` setting `core.hooksPath`, which is unchanged — and
-*after* the complete gate that hook already ran, so the bar for a push is what it always
-was plus one refusal of its own. Drift refreshes the baseline and blocks the push, which
-is what makes new bytes a deliberate commit rather than a red workflow after the fact.
-
-A missing screencomp is a loud skip and never the `onevcs: host-prerequisite:` marker:
-that one belongs to the pinned release-plz, because it tells the engine driving this host
-to stop retrying, and a missing renderer is not that.
-`scripts/check-visual-guard.sh` is what keeps any of this from quietly stopping, and
-`scripts/check-visual-guard-detached.sh` runs it and its sibling again from a **detached**
-checkout — the shape `actions/checkout` leaves and no developer machine has. A scratch
-clone taken from one of those inherits no branches, so it has no `origin/HEAD` and no
-`@{-1}` for `git checkout -` to resolve; both differences read as the subject having
-broken rather than as the runner being shaped differently, and neither is visible from a
-checkout that is on a branch.
+CI fails on a capture that has drifted. Pushes do not capture, classify, refresh a
+baseline or write a gallery. Use `just screenshots` to capture and
+`just screenshots-bless` to refresh an intended baseline change before committing.
+The manual range guard remains available through `scripts/screenshots-guard.sh`.
+Its focused tests also run from a detached checkout, matching CI's checkout shape.
 
 ## Changing the screenshots
 

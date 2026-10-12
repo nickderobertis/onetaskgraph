@@ -67,7 +67,6 @@
       "inputs": [
         "default",
         "{workspaceRoot}/screencomp.toml",
-        "{workspaceRoot}/.githooks/pre-push",
         "{workspaceRoot}/scripts/screenshots-guard.sh",
         "{workspaceRoot}/scripts/screenshots-freeze.sh",
         "{workspaceRoot}/scripts/screenshots-bless.sh",
@@ -76,7 +75,7 @@
         "{workspaceRoot}/scripts/check-visual-tools.sh",
         "{workspaceRoot}/shots/baseline/*.json"
       ],
-      "//": "Uncached and serial for the reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob describes. The first drives the real pre-push guard and hook with screencomp and the capture stubbed at the subprocess seam; the second drives the renderer resolver and the baseline writer against a stand-in tool location and installer, reaching no network; the third runs both again from a DETACHED checkout, the shape actions/checkout leaves and no developer machine has. Each script's own header says what it covers. The detached run is last because the two it drives report their own failures first."
+      "//": "Uncached and serial for the reason the workspace project's own test target is: each of the three clones this repository into a scratch tree, which no input glob describes. The first drives the real manual screenshot guard with screencomp and the capture stubbed at the subprocess seam; the second drives the renderer resolver and the baseline writer against a stand-in tool location and installer, reaching no network; the third runs both again from a DETACHED checkout, the shape actions/checkout leaves and no developer machine has. Each script's own header says what it covers. The detached run is last because the two it drives report their own failures first."
     },
     "coverage": {
       "executor": "nx:noop",

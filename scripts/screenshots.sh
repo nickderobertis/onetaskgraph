@@ -62,7 +62,7 @@ done
 unset _variable
 
 # The one [capture].arches lane, read from screencomp.toml so the lane is declared in
-# exactly one place — the same file the pre-push guard reads it from.
+# exactly one place — the same file the manual range guard reads it from.
 LANE="$(sed -n 's/^arches *= *\[ *"\([^"]*\)" *\].*/\1/p' screencomp.toml)"
 if ! [[ "$LANE" =~ ^[A-Za-z0-9_]+$ ]]; then
   echo "screenshots: expected exactly one lane in [capture].arches of screencomp.toml; got: [${LANE:-none}]" >&2
@@ -240,7 +240,7 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/home/.config" "$STAGE/tmp" \
 # from the committed baseline: macOS resolves /tmp through a symlink to /private/tmp, and
 # the binary canonicalizes what it prints. Refused rather than captured, because bytes no
 # baseline can match are worse than no capture at all — CI's Linux container is where the
-# baseline is made, and the pre-push guard says so when it skips.
+# baseline is made, and the manual range guard says so when it skips.
 staged="$(cd "$STAGE" && pwd -P)"
 if [ "$staged" != "$STAGE" ]; then
   echo "screenshots: $STAGE resolves to $staged on this machine, so every shot carrying a path would differ from the committed baseline" >&2

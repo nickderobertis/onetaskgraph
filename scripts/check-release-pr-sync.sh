@@ -48,7 +48,7 @@ trap 'rm -rf "$scratch"' EXIT
 readonly scratch
 
 # Git exports GIT_DIR to every hook and GIT_DIR overrides `git -C`; the gate runs from
-# .githooks/pre-push, so every git command below has to be asked in a stripped environment
+# a caller's Git hook, so every git command below has to be asked in a stripped environment
 # or it answers about — and commits into — the repository the hook was invoked for.
 #
 # The path below is built from $ROOT at run time, so ShellCheck cannot follow it to decide
