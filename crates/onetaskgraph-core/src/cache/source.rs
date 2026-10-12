@@ -1153,7 +1153,6 @@ mod tests {
         /// task, and whether another process could read the task's entry at that moment.
         writes: Vec<(bool, bool)>,
         primed: std::collections::HashSet<NativeId>,
-        /// How many times it was primed.
         primings: usize,
     }
 
