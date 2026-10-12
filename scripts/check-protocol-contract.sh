@@ -467,8 +467,15 @@ if cache_lead < 0:
         "the methods CACHE_ONLY_REASON exempts are listed.",
         "restore that paragraph and its list, or update this check.",
     )
-# The paragraph that leads the list, then the list itself.
-cache_items = cache_section[cache_lead:].split("\n\n", 2)[1]
+cache_paragraphs = cache_section[cache_lead:].split("\n\n", 2)
+if len(cache_paragraphs) < 2:
+    refuse(
+        f"§4.13e of docs/plugin-protocol.md has no list after \"{CACHE_LEAD}\", which is "
+        "where the methods CACHE_ONLY_REASON exempts are listed.",
+        "restore that list, one `- ` item per method, after a blank line following the "
+        "paragraph.",
+    )
+cache_items = cache_paragraphs[1]
 cache_listed = set()
 for line in cache_items.splitlines():
     if line.startswith("- "):
