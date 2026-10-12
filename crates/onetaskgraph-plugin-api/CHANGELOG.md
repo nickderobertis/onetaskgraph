@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.5.0...onetaskgraph-plugin-api-v0.6.0) - 2026-10-12
+
+### Added
+
+- *(cache)* [**breaking**] cache remote items and comments per source, served only against a token in hand ([#3595](https://github.com/nickderobertis/onetaskgraph/pull/3595))
+
 ## [0.5.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.4.0...onetaskgraph-plugin-api-v0.5.0) - 2026-10-12
 
 ### Added
