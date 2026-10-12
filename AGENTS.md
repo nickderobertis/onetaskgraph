@@ -168,7 +168,9 @@ or a later one (`crates/onetaskgraph-core/src/cache/`, README "A local cache of 
 source"). It is the one write of a user's work outside its plugin, asked for in configuration
 rather than assumed, and it never answers a read the token cannot vouch for. The mechanisms
 below hold everything else to the rule: with `cache.enabled` unset nothing is written
-anywhere, and `no_persistence.rs` still proves it.
+anywhere, and `no_persistence.rs` still proves it; with it set, the GitHub Projects suite's
+`with_caching_on_the_cache_directory_is_the_only_place_a_file_changes` proves only the cache
+directory changes.
 
 **A destination write is not a cache, and the difference is stated rather than assumed.**
 A destination write is at the user's explicit request, names its destination, goes through

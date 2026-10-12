@@ -194,6 +194,34 @@ fn sequences(cache: bool) -> Vec<Value> {
 
 /// The stale-option fallback, with the cache on and off: a priority write after the option it
 /// names was re-minted.
+/// The refresh read a written task costs when its write's response cannot vouch for a version,
+/// as against GitHub itself, where a response is stamped in the second of the change it made:
+/// an expected write answered before its task settles, then a read pinned to the version the
+/// caller held, which the cache cannot answer and the board does.
+fn refresh_after_unsettled_write() -> Value {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let version = version_of(&first);
+    cached.board.read_as_it_changes(true);
+    let (written, _) = cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "high",
+        "--expect",
+        &version,
+        "--json",
+    ]);
+    let unvouched = written["result"]["version"].is_null();
+    cached.board.read_as_it_changes(false);
+    let before = cached.board.served().len();
+    cached.ok(&["task", "show", "board:T-3", "--pin", &version, "--json"]);
+    let mut refresh = cost(&cached.board.served()[before..]);
+    refresh["version_unvouched"] = json!(unvouched);
+    refresh
+}
+
 fn stale_option(cache: bool) -> Value {
     let cached = Cached::with(&json!({"enabled": cache}));
     let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
@@ -246,6 +274,7 @@ fn the_cache_spends_no_more_board_points_than_no_cache_across_the_four_sequences
         add(&mut total_on, &on[index]);
     }
     let stale = json!({"on": stale_option(true), "off": stale_option(false)});
+    let refresh = refresh_after_unsettled_write();
     let recopy = json!({
         "unchanged_recopy_beyond_listing": copy_figure("github-copy-recopy-unchanged"),
         "five_changed_recopy": copy_figure("github-copy-recopy-five-changed"),
@@ -255,9 +284,10 @@ fn the_cache_spends_no_more_board_points_than_no_cache_across_the_four_sequences
          {figure}; per sequence {}; all four, off {total_off} and on {total_on}; the \
          stale-option fallback, the cache's one named exception and outside the figure: {stale}; \
          otg-copy-comments' recorded re-copies: {recopy}; a written task whose response vouches \
-         for no version costs one refresh read at its next pinned read — on this loopback {} of \
-         forty comment writes, against GitHub itself every one, which the pass's verifying read \
-         already makes",
+         for no version costs one refresh read at its next pinned read, measured on a write \
+         answered before its task settled as against GitHub itself: {refresh} — on this \
+         loopback {} of forty comment writes were left so, against GitHub itself every one, \
+         which the pass's verifying read already makes",
         Value::Object(breakdown.clone()),
         on[3]["writes_left_unvouched"]
     );
@@ -272,6 +302,7 @@ fn the_cache_spends_no_more_board_points_than_no_cache_across_the_four_sequences
             "workload": WORKLOAD,
             "sequences": Value::Object(breakdown),
             "stale_option": stale,
+            "refresh_read_per_written_item": refresh,
             "recopy": recopy,
         }))
         .expect("JSON"),
