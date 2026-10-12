@@ -5,6 +5,7 @@
 //! `serde_norway` and once on `serde-saphyr`, over real documents and synthetic edge cases,
 //! and prints every difference by document kind. `run.sh` beside this is the one command.
 
+mod probe;
 mod report;
 mod synthetic;
 mod trees;
@@ -1089,6 +1090,7 @@ async fn main() {
     for kind in &kinds {
         out.push_str(&kind.render());
     }
+    out.push_str(&probe::run());
     out.push_str(&timing(&args));
     print!("{out}");
     fs::write(args.out.join("report.txt"), &out).expect("write report");

@@ -185,6 +185,8 @@ pub fn malformed_records() -> Vec<(String, &'static str, String)> {
         t("merge key in metadata", "tasks", "---\ntitle: x\nmetadata:\n  a.b: &v {k: 1}\n  c.d:\n    <<: *v\n---\n"),
         t("yes in metadata", "tasks", "---\ntitle: x\nmetadata:\n  a.b: yes\n---\n"),
         t("octal in metadata", "tasks", "---\ntitle: x\nmetadata:\n  a.b: 010\n---\n"),
+        t("null key in metadata", "tasks", "---\ntitle: x\nmetadata: {null: null}\n---\n"),
+        t("one metadata key spelled plain and quoted", "tasks", "---\ntitle: x\nmetadata:\n  a.b: 1\n  \"a.b\": 2\n---\n"),
         t("timestamp in metadata", "tasks", "---\ntitle: x\nmetadata:\n  a.b: 2026-10-12\n---\n"),
         t("unknown field on a project", "projects", "---\ntitle: x\nowner: me\n---\n"),
         t("empty front matter", "tasks", "---\n---\nbody\n"),
