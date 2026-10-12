@@ -11,6 +11,7 @@ authors.workspace = true
 [features]
 # SPIKE (serde-yaml-replacement): route YAML through `yaml_backend`'s switch.
 yaml-spike = ["dep:serde-saphyr"]
+yaml-spike-compat = ["yaml-spike"]
 
 [dependencies]
 async-trait.workspace = true

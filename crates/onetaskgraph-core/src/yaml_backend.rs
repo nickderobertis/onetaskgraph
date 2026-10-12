@@ -73,6 +73,17 @@ mod switch {
         }
     }
 
+    pub use onetaskgraph_local_md::yaml_backend::{compat_de, compat_ser};
+
+    fn fallback_de() -> Option<fn() -> serde_saphyr::Options> {
+        cfg!(feature = "yaml-spike-compat").then_some(compat_de as fn() -> serde_saphyr::Options)
+    }
+
+    fn fallback_ser() -> Option<fn() -> serde_saphyr::SerializerOptions> {
+        cfg!(feature = "yaml-spike-compat")
+            .then_some(compat_ser as fn() -> serde_saphyr::SerializerOptions)
+    }
+
     /// Either crate's error, as the text it displays.
     #[derive(Debug)]
     pub struct Error(String);
@@ -94,7 +105,7 @@ mod switch {
         match selected() {
             Backend::Norway => serde_norway::from_str(text).map_err(|e| Error(e.to_string())),
             Backend::Saphyr => {
-                let options = *DE_OPTIONS.lock().expect("unpoisoned");
+                let options = DE_OPTIONS.lock().expect("unpoisoned").or_else(fallback_de);
                 match options {
                     Some(options) => serde_saphyr::from_str_with_options(text, options()),
                     None => serde_saphyr::from_str(text),
@@ -113,7 +124,7 @@ mod switch {
         match selected() {
             Backend::Norway => serde_norway::to_string(value).map_err(|e| Error(e.to_string())),
             Backend::Saphyr => {
-                let options = *SER_OPTIONS.lock().expect("unpoisoned");
+                let options = SER_OPTIONS.lock().expect("unpoisoned").or_else(fallback_ser);
                 match options {
                     Some(options) => serde_saphyr::to_string_with_options(&value, options()),
                     None => serde_saphyr::to_string(&value),

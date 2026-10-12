@@ -71,6 +71,44 @@ mod switch {
         }
     }
 
+    /// Deserializer options chosen to reproduce `serde_norway` where an option can — the
+    /// harness's `compat` profile, and what a build with `yaml-spike-compat` reads with.
+    #[must_use]
+    pub fn compat_de() -> serde_saphyr::Options {
+        serde_saphyr::options! {
+            // `yes`/`no`/`on`/`off`/`y`/`n` stay strings, as YAML 1.2 and serde_norway read
+            // them — and as serde_norway writes them, unquoted.
+            strict_booleans: true,
+            // `<<` is an ordinary key, as serde_norway reads it.
+            merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+            // A repeated key: the later value, as serde_norway gives a map. (A struct's
+            // repeated field too, which serde_norway refuses: no one policy does both.)
+            duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
+            // The error alone, on one line, as serde_norway's — no source snippet.
+            with_snippet: false,
+        }
+    }
+
+    /// Serializer options chosen to reproduce `serde_norway` where an option can.
+    #[must_use]
+    pub fn compat_ser() -> serde_saphyr::SerializerOptions {
+        serde_saphyr::ser_options! {
+            // Never fold a long single-line string into `>-`, as serde_norway never does.
+            folded_wrap_chars: usize::MAX,
+        }
+    }
+
+    /// The options a call uses when nothing selected any: the compat profile in a build with
+    /// `yaml-spike-compat`, else serde-saphyr's defaults.
+    fn fallback_de() -> Option<fn() -> serde_saphyr::Options> {
+        cfg!(feature = "yaml-spike-compat").then_some(compat_de as fn() -> serde_saphyr::Options)
+    }
+
+    fn fallback_ser() -> Option<fn() -> serde_saphyr::SerializerOptions> {
+        cfg!(feature = "yaml-spike-compat")
+            .then_some(compat_ser as fn() -> serde_saphyr::SerializerOptions)
+    }
+
     /// Either crate's error, as the text it displays.
     #[derive(Debug)]
     pub struct Error(String);
@@ -92,7 +130,7 @@ mod switch {
         match selected() {
             Backend::Norway => serde_norway::from_str(text).map_err(|e| Error(e.to_string())),
             Backend::Saphyr => {
-                let options = *DE_OPTIONS.lock().expect("unpoisoned");
+                let options = DE_OPTIONS.lock().expect("unpoisoned").or_else(fallback_de);
                 match options {
                     Some(options) => serde_saphyr::from_str_with_options(text, options()),
                     None => serde_saphyr::from_str(text),
@@ -111,7 +149,7 @@ mod switch {
         match selected() {
             Backend::Norway => serde_norway::to_string(value).map_err(|e| Error(e.to_string())),
             Backend::Saphyr => {
-                let options = *SER_OPTIONS.lock().expect("unpoisoned");
+                let options = SER_OPTIONS.lock().expect("unpoisoned").or_else(fallback_ser);
                 match options {
                     Some(options) => serde_saphyr::to_string_with_options(&value, options()),
                     None => serde_saphyr::to_string(&value),

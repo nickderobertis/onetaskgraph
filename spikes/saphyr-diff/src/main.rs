@@ -65,27 +65,8 @@ enum Profile {
     Compat,
 }
 
-/// Deserializer options chosen to reproduce `serde_norway` where an option can.
-fn compat_de() -> serde_saphyr::Options {
-    serde_saphyr::options! {
-        // `yes`/`no`/`on`/`off`/`y`/`n` stay strings, as YAML 1.2 and serde_norway read them.
-        strict_booleans: true,
-        // `<<` is an ordinary key, as serde_norway reads it.
-        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
-        // A repeated key: the later value, as serde_norway gives a map or a `serde_json::Value`.
-        duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
-        // The error alone, one line, as serde_norway's — no source snippet.
-        with_snippet: false,
-    }
-}
-
-/// Serializer options chosen to reproduce `serde_norway` where an option can.
-fn compat_ser() -> serde_saphyr::SerializerOptions {
-    serde_saphyr::ser_options! {
-        // Never fold a long single-line string into `>-`, as serde_norway never does.
-        folded_wrap_chars: usize::MAX,
-    }
-}
+/// The compat profile is defined once, in local-md's backend, which core's re-exports.
+use onetaskgraph_local_md::yaml_backend::{compat_de, compat_ser};
 
 fn saphyr_options(profile: Profile) -> serde_saphyr::Options {
     match profile {
