@@ -549,14 +549,18 @@ impl SourceCache {
     /// included, loses nothing else. An entry of a schema this build does not know is another
     /// release's, and is left for that release to clear.
     fn empty(dir: &Path, remote: &str) -> std::io::Result<u64> {
-        let ours = |path: &Path| -> bool {
-            std::fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                .is_some_and(|value| {
-                    value.get("schema").and_then(Value::as_u64) == Some(u64::from(ENTRY_SCHEMA))
-                        && value.get("remote").and_then(Value::as_str) == Some(remote)
-                })
+        // A file is the store's when it reads whole as one of its entries, of its schema, for
+        // this remote — never by a member or two it happens to share with one.
+        let read = |path: &Path| std::fs::read(path).ok();
+        let task_entry = |path: &Path| {
+            read(path)
+                .and_then(|bytes| serde_json::from_slice::<Entry>(&bytes).ok())
+                .is_some_and(|entry| entry.schema == ENTRY_SCHEMA && entry.remote == remote)
+        };
+        let board_entry = |path: &Path| {
+            read(path)
+                .and_then(|bytes| serde_json::from_slice::<BoardEntry>(&bytes).ok())
+                .is_some_and(|entry| entry.schema == ENTRY_SCHEMA && entry.remote == remote)
         };
         let gone = |result: std::io::Result<()>| match result {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
@@ -571,7 +575,7 @@ impl SourceCache {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
                     if name.starts_with(&format!(".staged-{remote}-")) {
                         gone(std::fs::remove_file(&path))?;
-                    } else if name.ends_with(".json") && ours(&path) {
+                    } else if name.ends_with(".json") && task_entry(&path) {
                         gone(std::fs::remove_file(&path))?;
                         entries += 1;
                     }
@@ -581,7 +585,7 @@ impl SourceCache {
             Err(error) => return Err(error),
         }
         let board = dir.join("board.json");
-        if ours(&board) {
+        if board_entry(&board) {
             gone(std::fs::remove_file(&board))?;
         }
         Ok(entries)

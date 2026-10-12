@@ -2322,3 +2322,114 @@ fn a_cache_that_cannot_be_emptied_is_refused_naming_where_and_what_to_check() {
         "{said}"
     );
 }
+
+#[test]
+fn an_entry_missing_what_a_read_needs_is_not_served_to_it() {
+    // Cached without its comments: a pinned read wanting them reads.
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--no-comments", "--json"]);
+    let v = version_of(&first);
+    let (_, sent) = cached.ok(&[
+        "task",
+        "show",
+        "board:T-3",
+        "--no-comments",
+        "--pin",
+        &v,
+        "--json",
+    ]);
+    assert_eq!(sent, Vec::<String>::new(), "what it holds is served");
+    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+    assert_eq!(sent, [ONE_READ], "the comments it lacks are read");
+    assert_eq!(served_by(&shown), from_remote());
+
+    // More comments than one page holds: the read could not carry them all, so the entry
+    // holds none and a pinned read of them reads.
+    let long = Cached::new();
+    for n in 0..101 {
+        long.board.add_comment("T-4", &format!("note {n}"));
+    }
+    let (first, _) = long.ok(&["task", "show", "board:T-4", "--json"]);
+    assert_eq!(first["comments"].as_array().unwrap().len(), 101);
+    let v = version_of(&first);
+    let (shown, sent) = long.ok(&["task", "show", "board:T-4", "--pin", &v, "--json"]);
+    assert!(!sent.is_empty(), "the comments are read again");
+    assert_eq!(served_by(&shown), from_remote());
+    assert_eq!(shown["comments"].as_array().unwrap().len(), 101);
+}
+
+#[test]
+fn an_expected_write_the_cache_holds_only_older_or_unordered_reads_once_then_writes() {
+    for (name, later) in [("older", true), ("incomparable", false)] {
+        let cached = Cached::new();
+        let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        let held = version_of(&first);
+        let expect = if later {
+            // A listing reads the board and writes no entry: it hands the caller a later
+            // version than the one cached.
+            cached
+                .board
+                .edit_title("T-3", "changed since it was cached");
+            let (listed, _) = cached.ok(&["task", "list", "--source", "board", "--json"]);
+            listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["id"] == "board:T-3")
+                .unwrap()["item"]["version"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        } else {
+            held.replace("nickderobertis/onetaskgraph", "acme/other")
+        };
+        let (written, sent) = cached.ok(&[
+            "task",
+            "priority",
+            "set",
+            "board:T-3",
+            "high",
+            "--expect",
+            &expect,
+            "--json",
+        ]);
+        assert_eq!(
+            sent,
+            [graphql::ISSUE, graphql::UPDATE_FIELD_WHOLE],
+            "{name}"
+        );
+        assert!(
+            written["fallback"]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("older version")),
+            "{name}: {written}"
+        );
+    }
+}
+
+#[test]
+fn the_python_sdk_pins_expects_and_clears_through_the_binary() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let before = cached.board.served().len();
+    let script = "many=await c.task_show_many(ids=[task],pin=[f'{task}={pin}'])\n \
+                  written=await c.task_priority_set(id=task,priority='high',expect=pin)\n \
+                  cleared=await c.cache_clear(source='board')\n \
+                  every=await c.cache_clear()\n \
+                  import json\n \
+                  print(json.dumps({'many':many.model_dump(mode='json'),'written':written.model_dump(mode='json'),'cleared':cleared.model_dump(mode='json'),'every':every.model_dump(mode='json')}))";
+    let answered = sdk(&cached, false, script, "board:T-3", Some(&v));
+    assert_eq!(answered["many"]["details"][0]["cache"]["served"], "cache");
+    assert_eq!(
+        answered["written"]["result"]["parts"][0]["outcome"],
+        "landed"
+    );
+    assert_eq!(answered["cleared"]["cleared"][0]["source"], "board");
+    assert_eq!(answered["every"]["cleared"][0]["entries"], 0);
+    let sent: Vec<String> = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    assert_eq!(sent, [graphql::UPDATE_FIELD_WHOLE]);
+}

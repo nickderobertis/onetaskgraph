@@ -148,12 +148,53 @@ pub struct JournalEntry {
     /// Each field the part set, with the value the response shows it holding.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fields: BTreeMap<String, Value>,
-    /// The task's version after this request, when its response determines it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// The whole task, when the response carried every part an entry holds at `version`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub whole: Option<Box<WholeTask>>,
+    /// What the response showed of the task afterwards.
+    #[serde(default)]
+    pub shown: Shown,
+}
+
+/// What one response showed of the task a write left behind.
+///
+/// One value rather than a version beside an optional whole task, so a whole task always
+/// carries the version it is at: [`Shown::Whole`]'s own `task.version`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "shown", rename_all = "kebab-case")]
+pub enum Shown {
+    /// Nothing that determines the task's version.
+    #[default]
+    Nothing,
+    /// The task's version, and not every part an entry holds at it.
+    Version {
+        /// The version.
+        version: String,
+    },
+    /// The whole task, every part an entry holds, at its own `task.version` — never built for
+    /// a task without one.
+    Whole {
+        /// The task.
+        task: Box<WholeTask>,
+    },
+}
+
+impl Shown {
+    /// The version the response determines, if it does.
+    #[must_use]
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            Self::Nothing => None,
+            Self::Version { version } => Some(version),
+            Self::Whole { task } => task.task.version.as_deref(),
+        }
+    }
+
+    /// The whole task, when the response carried it.
+    #[must_use]
+    pub fn whole(&self) -> Option<&WholeTask> {
+        match self {
+            Self::Whole { task } => Some(task),
+            Self::Nothing | Self::Version { .. } => None,
+        }
+    }
 }
 
 /// Every request a source sent between [`TaskSource::begin_journal`] and

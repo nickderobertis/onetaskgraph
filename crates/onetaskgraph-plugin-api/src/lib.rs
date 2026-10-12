@@ -37,7 +37,8 @@ pub use asset::{
     rewrite_asset_references, serve_asset_references,
 };
 pub use cache::{
-    Coverage, JournalEntry, PartOutcome, RequestKind, VersionCoverage, WholeTask, WriteJournal,
+    Coverage, JournalEntry, PartOutcome, RequestKind, Shown, VersionCoverage, WholeTask,
+    WriteJournal,
 };
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};

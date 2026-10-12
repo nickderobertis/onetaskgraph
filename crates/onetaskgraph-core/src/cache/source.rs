@@ -446,7 +446,7 @@ impl CachedSource {
         };
         let last = journal.mutations().last();
         let landed_last = last.filter(|entry| entry.outcome == PartOutcome::Landed);
-        match landed_last.and_then(|entry| entry.whole.as_deref()) {
+        match landed_last.and_then(|entry| entry.shown.whole()) {
             Some(whole) if whole.task.version.is_some() => {
                 self.cache.write(&Entry {
                     schema: ENTRY_SCHEMA,
@@ -465,7 +465,7 @@ impl CachedSource {
         }
         ExpectedWrite {
             result: Some(WriteResult {
-                version: landed_last.and_then(|entry| entry.version.clone()),
+                version: landed_last.and_then(|entry| entry.shown.version().map(str::to_owned)),
                 parts: journal
                     .mutations()
                     .map(|entry| WritePart {

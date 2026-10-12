@@ -9515,7 +9515,17 @@ struct BoardFields {
 /// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
 /// refused where it is read, and one an item names blank is read as not named at all.
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(try_from = "String")]
 struct BoardId(String);
+
+impl TryFrom<String> for BoardId {
+    type Error = String;
+
+    /// The same refusal [`BoardId::parse`] makes, for an id read back from a kept context.
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        Self::parse(&id).map_err(|error| error.to_string())
+    }
+}
 
 /// Where one write left its item, for the record the rest of the command reads it out of.
 ///

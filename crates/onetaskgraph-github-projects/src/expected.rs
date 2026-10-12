@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    AssetUploads, JournalEntry, NativeId, PartOutcome, Repository, RequestKind, SourceError,
+    AssetUploads, JournalEntry, NativeId, PartOutcome, Repository, RequestKind, Shown, SourceError,
     WholeTask, WriteJournal,
 };
 use serde::{Deserialize, Serialize};
@@ -270,7 +270,12 @@ impl GitHubProjectsSource {
         let Ok(context) = serde_json::from_value::<Context>(context.clone()) else {
             return false;
         };
-        if context.version != CONTEXT_VERSION || context.item.id != *id {
+        // Only a task of this board primes a task's write: a context naming a project or a
+        // document is not one this write may take.
+        if context.version != CONTEXT_VERSION
+            || context.item.id != *id
+            || context.item.kind != BoardKind::Work(ItemKind::Task)
+        {
             return false;
         }
         let mut item = context.item;
@@ -335,15 +340,20 @@ impl GitHubProjectsSource {
             },
             outcome: outcome(sent),
             fields: BTreeMap::new(),
-            version: None,
-            whole: None,
+            shown: Shown::Nothing,
         };
         if mutation && let Ok(data) = sent {
             let (issue, fields) = read_back(document, variables, data);
             entry.fields = fields;
             if let Some(issue) = issue {
-                entry.version = self.token_of(issue);
-                entry.whole = self.whole_of(issue, entry.version.as_deref()).map(Box::new);
+                let version = self.token_of(issue);
+                entry.shown = match (self.whole_of(issue, version.as_deref()), version) {
+                    (Some(task), Some(_)) => Shown::Whole {
+                        task: Box::new(task),
+                    },
+                    (None, Some(version)) => Shown::Version { version },
+                    (_, None) => Shown::Nothing,
+                };
                 // What a response vouches for is the issue's state now, so a comment learnt
                 // on it is learnt afresh rather than added to what was read before.
                 if let Some(id) = issue.get("id").and_then(Value::as_str) {
