@@ -74,6 +74,14 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
     (graphql::DELETE_COMMENT, 1),
+    // The whole-issue twins an expected write sends in place of the document beside each, so
+    // the store's cache can take what their responses show: each selects what `ISSUE_DETAIL`
+    // does, and costs the one point it does.
+    (graphql::ADD_COMMENT_WHOLE, 1),
+    (graphql::UPDATE_COMMENT_WHOLE, 1),
+    (graphql::UPDATE_ISSUE_WHOLE, 1),
+    (graphql::UPDATE_FIELD_WHOLE, 1),
+    (graphql::CLEAR_FIELD_WHOLE, 1),
     (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
     (graphql::STATUS_OPTIONS_UPDATE, 1),
 ];
