@@ -1921,8 +1921,10 @@ fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
     let copy = |folder: &str| {
         let root = cached.sandbox.project().join(folder);
         std::fs::create_dir_all(root.join("tasks")).unwrap();
-        cached.ok(&["task", "list", "--source", "board", "--json"]);
+        let setting = format!("sources.plans.config.root={}", root.display());
         cached.ok(&[
+            "--set",
+            &setting,
             "--set",
             "sources.plans.config.status_mapping.Shipped=done",
             "project",
@@ -1930,34 +1932,56 @@ fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
             "board:P-1",
             "--to",
             "plans",
+            "--comments",
             "--no-link",
             "--json",
         ])
     };
-    let (_, first) = copy("plans");
-    // Fill the cache with every task of the project.
-    cached.ok(&["task", "show-many", "board:T-1", "board:T-2", "--json"]);
-    std::fs::remove_dir_all(cached.sandbox.project().join("plans/tasks")).unwrap();
-    std::fs::remove_dir_all(cached.sandbox.project().join("plans/projects")).ok();
-    let (_, second) = copy("plans");
-    let reads = |sent: &[String]| {
-        sent.iter()
-            .filter(|document| {
-                [
-                    graphql::ISSUE,
-                    graphql::ISSUE_DETAIL,
-                    graphql::ISSUE_DETAILS,
-                    graphql::ISSUE_COPY_DETAILS,
-                ]
-                .contains(&document.as_str())
-            })
-            .count()
-    };
-    assert!(
-        reads(&second) <= reads(&first),
-        "a cached task is not read again: first {first:?}, second {second:?}"
+    // Cold: the project's tasks are loaded with their comments and edges, and cached.
+    let (first, sent) = copy("first-copy");
+    let loaded = batched(
+        &sent
+            .iter()
+            .map(|document| (document.clone(), Value::Null))
+            .collect::<Vec<_>>(),
+        "",
     );
-    assert!(second.len() <= first.len());
+    let _ = loaded;
+    assert!(
+        sent.contains(&graphql::ISSUE_COPY_DETAILS.to_owned()),
+        "{sent:?}"
+    );
+    // Into another folder holding none of them: the listing pins each task to the version it
+    // carries, the cache holds every one at it, and none is loaded again.
+    // T-2 was cached whole; T-1 records far ends of other sources beside its own, so the
+    // cache holds no complete page of its edges and it alone is loaded again.
+    let before = cached.board.served().len();
+    let (second, _) = copy("second-copy");
+    let served = cached.board.served()[before..].to_vec();
+    assert_eq!(
+        batched(&served, graphql::ISSUE_COPY_DETAILS),
+        ["T-1"],
+        "only the task the cache could not answer is loaded"
+    );
+    assert_eq!(
+        first["items"].as_array().unwrap().len(),
+        second["items"].as_array().unwrap().len()
+    );
+    let files = |folder: &str| {
+        let mut texts: Vec<String> =
+            std::fs::read_dir(cached.sandbox.project().join(folder).join("tasks"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+                .collect();
+        texts.sort();
+        texts
+    };
+    assert_eq!(
+        files("first-copy"),
+        files("second-copy"),
+        "the cached copy lands the same tasks"
+    );
 }
 
 /// A command that had to fail: its exit code, and what it said on stderr.
@@ -2611,4 +2635,90 @@ fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the
             "{member}"
         );
     }
+}
+
+#[test]
+fn a_stale_id_retry_that_is_refused_too_reports_both_and_is_never_sent_a_third_time() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    cached.board.remint_priority_option("High");
+    // The stale mutation is answered with GitHub's refusal of the old option; the retry after
+    // the read is refused as well.
+    cached
+        .board
+        .refuse_after("updateProjectV2ItemFieldValue(input:$input)", 1);
+    let before = cached.board.served().len();
+    let output = cached.run_with(
+        &[
+            "task",
+            "priority",
+            "set",
+            "board:T-3",
+            "high",
+            "--expect",
+            &v,
+            "--json",
+        ],
+        None,
+    );
+    assert_ne!(output.status.code(), Some(0));
+    let sent: Vec<String> = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            graphql::UPDATE_FIELD_WHOLE,
+            graphql::ISSUE,
+            graphql::UPDATE_FIELD_WHOLE
+        ],
+        "no third attempt"
+    );
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    let reported = parts(&failure);
+    assert_eq!(reported.len(), 2, "{failure}");
+    assert!(
+        reported.iter().all(|(_, outcome)| outcome == "rejected"),
+        "{failure}"
+    );
+    assert_eq!(failure["fallback"]["read"], true);
+    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+    assert_eq!(sent, [ONE_READ], "the entry was left unserved");
+    assert_eq!(
+        shown["items"][0]["item"]["priority"], "urgent",
+        "nothing landed"
+    );
+}
+
+#[test]
+fn the_human_rendering_of_an_expected_delete_says_it_read_first() {
+    let cached = Cached::new();
+    let comment = cached.board.add_comment("T-3", "to be removed");
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    cached.ok(&["cache", "clear", "--json"]);
+    let output = cached.run_with(
+        &[
+            "task",
+            "comment",
+            "delete",
+            "board:T-3",
+            &comment,
+            "--expect",
+            &v,
+        ],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains(&format!("deleted comment {comment}")),
+        "{said}"
+    );
+    assert!(
+        said.contains("read first: the cache holds no entry"),
+        "{said}"
+    );
 }

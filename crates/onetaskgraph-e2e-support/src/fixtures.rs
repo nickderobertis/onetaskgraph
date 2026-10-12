@@ -2955,15 +2955,12 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Part of the loopback board's own request loop, which lives here for the reason `GitHubBoard` records: the shared journey table and the engine's suite drive this board too, so the board — and how it answers each document — cannot live in one plugin's suite.
 fn github_plain_of(query: &str) -> Option<&'static str> {
     use onetaskgraph_github_projects::graphql;
-    [
-        graphql::ADD_COMMENT,
-        graphql::UPDATE_COMMENT,
-        graphql::UPDATE_ISSUE,
-        graphql::UPDATE_FIELD,
-        graphql::CLEAR_FIELD,
-    ]
-    .into_iter()
-    .find(|plain| graphql::whole_twin(plain) == Some(query))
+    // Read off the plugin's own pairing, so a twin it adds is answered here without a second
+    // list to keep in step.
+    graphql::DOCUMENTS
+        .iter()
+        .map(|(document, _)| *document)
+        .find(|plain| graphql::whole_twin(plain) == Some(query))
 }
 
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a whole-issue document, which belongs beside the rest of its answers for the reason `GitHubBoard` records.

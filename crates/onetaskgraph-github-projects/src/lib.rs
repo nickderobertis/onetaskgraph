@@ -647,7 +647,7 @@ pub mod accounting;
 mod assets;
 pub mod change_token;
 mod expected;
-pub use expected::{CONTEXT_VERSION, context_shapes};
+pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod visibility;
 
 use accounting::Accounting;

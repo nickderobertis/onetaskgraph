@@ -465,7 +465,10 @@ impl GitHubProjectsSource {
 }
 
 /// Every member of an issue a response has to carry for the store's entry to take it whole.
-const WHOLE_MEMBERS: [&str; 13] = [
+///
+/// `tests/context.rs` reconciles it against the issue fragment every read selects, so a member
+/// the reader comes to need is one this list has to name.
+pub const WHOLE_MEMBERS: [&str; 13] = [
     "/id",
     "/title",
     "/body",
