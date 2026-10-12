@@ -1140,8 +1140,19 @@ mod tests {
     struct Answering {
         inner: InMemorySource,
         answer: Task,
-        /// How many priority writes reached it.
-        writes: Arc<std::sync::atomic::AtomicUsize>,
+        /// What it saw of each write that reached it, and which tasks it is primed for.
+        probe: Arc<std::sync::Mutex<Probe>>,
+        /// Another process's view of the cache, read at each write.
+        watching: Arc<SourceCache>,
+    }
+
+    /// What the source beneath a caching one saw.
+    #[derive(Default)]
+    struct Probe {
+        /// For each priority write that reached it, in order: whether it was primed for the
+        /// task, and whether another process could read the task's entry at that moment.
+        writes: Vec<(bool, bool)>,
+        primed: std::collections::HashSet<NativeId>,
     }
 
     #[async_trait::async_trait]
@@ -1160,12 +1171,25 @@ mod tests {
         }
         async fn set_task_priority(
             &self,
-            _id: &NativeId,
+            id: &NativeId,
             priority: Priority,
         ) -> Result<Option<Priority>, SourceError> {
-            self.writes
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let visible = self.watching.read(id).is_some();
+            let mut probe = self.probe.lock().expect("the probe");
+            let primed = probe.primed.contains(id);
+            probe.writes.push((primed, visible));
             Ok(Some(priority))
+        }
+        fn prime_write(&self, id: &NativeId, _context: &Value, _board: Option<&Value>) -> bool {
+            self.probe
+                .lock()
+                .expect("the probe")
+                .primed
+                .insert(id.clone());
+            true
+        }
+        fn unprime(&self, id: &NativeId) {
+            self.probe.lock().expect("the probe").primed.remove(id);
         }
         async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
             self.inner.get_project(id).await
@@ -1241,15 +1265,11 @@ mod tests {
         (source, cache)
     }
 
-    /// [`cached`], with how many priority writes reached the source beneath it.
+    /// [`cached`], with what the source beneath it saw.
     fn counting(
         dir: &std::path::Path,
         answer: Task,
-    ) -> (
-        CachedSource,
-        Arc<SourceCache>,
-        Arc<std::sync::atomic::AtomicUsize>,
-    ) {
+    ) -> (CachedSource, Arc<SourceCache>, Arc<std::sync::Mutex<Probe>>) {
         let cache = SourceCache::new(
             CacheLocation {
                 dir: dir.to_path_buf(),
@@ -1260,13 +1280,14 @@ mod tests {
         let inner = Answering {
             inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
             answer,
-            writes: Arc::default(),
+            probe: Arc::default(),
+            watching: another_process(dir),
         };
-        let writes = inner.writes.clone();
+        let probe = inner.probe.clone();
         (
             CachedSource::new(Box::new(inner), cache.clone()),
             cache,
-            writes,
+            probe,
         )
     }
 
@@ -1364,7 +1385,7 @@ mod tests {
             comments: Some(Vec::new()),
             assets: None,
             edges: None,
-            context: None,
+            context: Some(serde_json::json!({"node": "I_1"})),
         });
         assert!(cache.read(&id("T-1")).is_some(), "the entry starts served");
     }
@@ -1633,41 +1654,47 @@ mod tests {
     /// under the read-only mount of `dir`.
     #[cfg(target_os = "linux")]
     async fn read_only_child(dir: &std::path::Path) {
-        let (source, cache, writes) = counting(dir, task("T-1", "v1"));
+        let (source, cache, probe) = counting(dir, task("T-1", "v1"));
         assert!(cache.read(&id("T-1")).is_some(), "the entry can be read");
         assert!(cache.board().is_some(), "the board can be read");
 
+        // An expected write primes the source from the entry, then cannot retire it: it is
+        // refused unsent, and the source is primed no longer.
+        cache.expect(&id("T-1"), "v1");
+        let refused = source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("an expected write is refused");
+        assert!(
+            refused.to_string().contains(&dir.display().to_string()),
+            "{refused}"
+        );
+        {
+            let probe = probe.lock().expect("the probe");
+            assert!(probe.writes.is_empty(), "nothing was sent");
+            assert!(probe.primed.is_empty(), "the source was unprimed");
+        }
+
         // Nothing can take them out of service on disk, so this process withholds them from
-        // itself, and another process can still read them.
+        // itself, and another process can still read them — which is why a plain write is
+        // refused too.
         cache.invalidate(&id("T-1"));
         cache.drop_board();
         assert!(entry_file(dir).exists() && dir.join("board.json").exists());
         assert!(cache.read(&id("T-1")).is_none(), "the entry is withheld");
         assert!(cache.board().is_none(), "the board is withheld");
         assert!(another_process(dir).read(&id("T-1")).is_some());
-
-        // Which is why a write is refused before it is sent, expected or not.
-        let refused = source
+        source
             .set_task_priority(&id("T-1"), Priority::High)
             .await
             .expect_err("a plain write is refused");
         assert!(
-            refused.to_string().contains(&dir.display().to_string()),
-            "{refused}"
-        );
-        cache.expect(&id("T-1"), "v1");
-        source
-            .set_task_priority(&id("T-1"), Priority::High)
-            .await
-            .expect_err("an expected write is refused");
-        assert_eq!(
-            writes.load(std::sync::atomic::Ordering::SeqCst),
-            0,
+            probe.lock().expect("the probe").writes.is_empty(),
             "nothing was sent"
         );
 
-        // Writable again, the next write is sent as a plain one — the refused write's
-        // expectation did not outlive it — and what this process writes is served again.
+        // Writable again, the next write is a plain one — neither the refused write's priming
+        // nor its expectation outlived it — and what this process writes is served again.
         let lifted = std::process::Command::new("umount")
             .arg(dir)
             .status()
@@ -1677,7 +1704,11 @@ mod tests {
             .set_task_priority(&id("T-1"), Priority::High)
             .await
             .expect("the write is sent");
-        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            probe.lock().expect("the probe").writes,
+            [(false, false)],
+            "one write, unprimed"
+        );
         assert!(
             cache.take_expected(&id("T-1")).is_none(),
             "the write was not taken for the refused expected one"
@@ -1697,5 +1728,27 @@ mod tests {
         );
         cache.write_board(serde_json::json!({"option": "fresh"}));
         assert_eq!(cache.board(), Some(serde_json::json!({"option": "fresh"})));
+    }
+
+    #[tokio::test]
+    async fn a_write_is_sent_only_once_no_other_process_can_read_its_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        for expected in [false, true] {
+            let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+            held_at_v1(&cache);
+            if expected {
+                cache.expect(&id("T-1"), "v1");
+            }
+            source
+                .set_task_priority(&id("T-1"), Priority::High)
+                .await
+                .expect("the write is sent");
+            assert_eq!(
+                probe.lock().expect("the probe").writes,
+                [(expected, false)],
+                "at the moment the write was sent, another process could not read the entry \
+                 (expected: {expected})"
+            );
+        }
     }
 }
