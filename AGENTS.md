@@ -335,7 +335,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   still gate that platform.
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
-  builds dev and test at `debug = 1`; nothing in the tree names a target directory of its
+  builds dev and test at `debug = 0`, with no debuginfo; nothing in the tree names a target directory of its
   own. The Rust e2e suites, both SDKs' tests and generators and the distribution
   journey all spawn `target/debug/onetaskgraph`, and the binary crate's `test` target once
   kept a private directory because another target's `cargo build` could replace that file
