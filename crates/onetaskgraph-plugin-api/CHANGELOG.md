@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.4.0...onetaskgraph-plugin-api-v0.5.0) - 2026-10-12
+
+### Added
+
+- *(copy)* [**breaking**] carry comments, skip items unchanged since the last copy, and copy by query ([#3593](https://github.com/nickderobertis/onetaskgraph/pull/3593))
+
 ## [0.3.12](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.3.11...onetaskgraph-plugin-api-v0.3.12) - 2026-10-10
 
 ### Added
