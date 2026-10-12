@@ -1677,6 +1677,12 @@ impl GitHubBoardFields {
         board.touch_issue(&json!(id));
     }
 
+    /// Give one issue the creation time GitHub reports for it, which no edit moves; an issue
+    /// given none reports `null`.
+    pub fn set_created_at(&self, id: &str, at: &str) {
+        self.board.lock().unwrap().find(&json!(id))["createdAt"] = json!(at);
+    }
+
     /// Reopen one closed issue, as a person reopening it on GitHub would.
     pub fn reopen(&self, id: &str) {
         let mut board = self.board.lock().unwrap();
@@ -2210,7 +2216,7 @@ impl GitHubBoard {
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "number":github_number(item["id"].as_str().unwrap()),
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
-               "createdAt":null,"updatedAt":item["updatedAt"],
+               "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
                "relationshipEvents":{"totalCount":self.timeline_count(item)},
                "state":item["state"],

@@ -106,8 +106,8 @@ fn a_response_is_whole_only_when_it_carries_every_member_the_issue_fragment_sele
         "updatedAt",
         "projectItems",
     ];
-    // Nothing a cached task reports is derived from these.
-    let unread = ["__typename", "number", "createdAt"];
+    // The reader decides on this before any member, and a task reports nothing from it.
+    let unread = ["__typename"];
     let required: Vec<&str> = WHOLE_MEMBERS
         .iter()
         .map(|member| {

@@ -2606,8 +2606,16 @@ fn the_default_cache_lives_under_home_without_xdg_cache_home_and_nowhere_without
 
 #[test]
 fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the_whole_task() {
-    for member in ["labels", "body", "comments", "parent"] {
+    for member in [
+        "labels",
+        "body",
+        "comments",
+        "parent",
+        "createdAt",
+        "number",
+    ] {
         let cached = Cached::new();
+        cached.board.set_created_at("T-3", CREATED_AT);
         let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
         let v = version_of(&first);
         cached.board.omit_from_writes(&[member]);
@@ -2634,8 +2642,15 @@ fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the
             shown["items"][0]["item"]["labels"][0]["name"], "bug",
             "{member}"
         );
+        assert_eq!(
+            shown["items"][0]["item"]["created_at"], CREATED_AT,
+            "{member}"
+        );
     }
 }
+
+/// When the loopback's issue `T-3` was created, in the spelling a task's JSON reports it.
+const CREATED_AT: &str = "2026-01-02T03:04:05Z";
 
 #[test]
 fn a_stale_id_retry_that_is_refused_too_reports_both_and_is_never_sent_a_third_time() {

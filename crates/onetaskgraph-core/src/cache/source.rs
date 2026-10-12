@@ -470,7 +470,12 @@ impl CachedSource {
         };
         let last = journal.mutations().last();
         let landed_last = last.filter(|entry| entry.outcome == PartOutcome::Landed);
-        match landed_last.and_then(|entry| entry.shown.whole()) {
+        // Taken only when it is this write's own task: a response showing another task says
+        // nothing about this one, whose entry is then left unserveable.
+        let whole = landed_last
+            .and_then(|entry| entry.shown.whole())
+            .filter(|whole| whole.task().id == *id);
+        match whole {
             Some(whole) => {
                 self.cache.write(&Entry {
                     schema: ENTRY_SCHEMA,
@@ -563,7 +568,8 @@ impl TaskSource for CachedSource {
             Err(miss) => {
                 let read = self.inner.get_task(id).await;
                 match &read {
-                    Ok(Some(task)) => {
+                    // Recorded only for the task it is about, as a batched detail read is.
+                    Ok(Some(task)) if task.id == *id => {
                         self.missed(id, &miss, task.version.as_deref());
                         self.remember(task, None);
                     }
@@ -1104,5 +1110,205 @@ impl TaskSource for CachedSource {
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
         self.inner.visibility(target).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use onetaskgraph_in_memory::{InMemoryConfig, InMemorySource};
+    use onetaskgraph_plugin_api::{JournalEntry, RequestKind, Shown, StatusCategory, WholeTask};
+
+    use super::super::CacheLocation;
+    use super::*;
+
+    /// An in-memory source whose read by id answers `answer`, whatever id it was asked for.
+    struct Answering {
+        inner: InMemorySource,
+        answer: Task,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSource for Answering {
+        fn kind(&self) -> &'static str {
+            self.inner.kind()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn health(&self) -> Result<Health, SourceError> {
+            self.inner.health().await
+        }
+        async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
+            Ok(Some(self.answer.clone()))
+        }
+        async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+            self.inner.get_project(id).await
+        }
+        async fn query_tasks(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Task>, SourceError> {
+            self.inner.query_tasks(query, page).await
+        }
+        async fn query_projects(
+            &self,
+            query: &ProjectQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Project>, SourceError> {
+            self.inner.query_projects(query, page).await
+        }
+        async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+            self.inner.labels(page).await
+        }
+        async fn task_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.task_dependencies(id, direction, page).await
+        }
+        async fn project_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.project_dependencies(id, direction, page).await
+        }
+    }
+
+    fn id(value: &str) -> NativeId {
+        NativeId::from(value)
+    }
+
+    fn task(of: &str, version: &str) -> Task {
+        Task {
+            version: Some(version.to_owned()),
+            id: id(of),
+            key: None,
+            title: format!("Task {of}"),
+            content: None,
+            status: Status {
+                category: StatusCategory::Todo,
+                name: "Todo".to_owned(),
+            },
+            priority: Priority::None,
+            labels: Vec::new(),
+            project: None,
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: BTreeMap::new(),
+            repositories: Vec::new(),
+            delivers: Vec::new(),
+            delivered_by: Vec::new(),
+            classification: Default::default(),
+        }
+    }
+
+    /// A caching source over a source whose every read by id answers `answer`, in `dir`.
+    fn cached(dir: &std::path::Path, answer: Task) -> (CachedSource, Arc<SourceCache>) {
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+        );
+        let inner = Answering {
+            inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+            answer,
+        };
+        (CachedSource::new(Box::new(inner), cache.clone()), cache)
+    }
+
+    #[tokio::test]
+    async fn a_read_answered_with_another_task_writes_no_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-2", "v2"));
+        source.get_task(&id("T-1")).await.expect("the read");
+        assert!(cache.read(&id("T-1")).is_none());
+        assert!(cache.read(&id("T-2")).is_none());
+        assert!(!cache.command().read.contains_key(&id("T-1")));
+    }
+
+    #[tokio::test]
+    async fn a_read_answered_with_its_own_task_writes_its_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-1", "v1"));
+        source.get_task(&id("T-1")).await.expect("the read");
+        assert_eq!(
+            cache.read(&id("T-1")).and_then(|entry| entry.task.version),
+            Some("v1".to_owned())
+        );
+    }
+
+    fn journal(shown: Task) -> WriteJournal {
+        WriteJournal {
+            requests: vec![JournalEntry {
+                part: "issue".to_owned(),
+                kind: RequestKind::Mutation,
+                outcome: PartOutcome::Landed,
+                fields: BTreeMap::new(),
+                shown: Shown::Whole {
+                    task: Box::new(
+                        WholeTask::new(shown, Vec::new(), Vec::new(), None).expect("a version"),
+                    ),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn a_write_whose_response_shows_another_task_advances_no_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-1", "v1"));
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-1", "v1"),
+            comments: Some(Vec::new()),
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        let written = source.settle(
+            &id("T-1"),
+            Some(&journal(task("T-2", "v2"))),
+            String::new(),
+            None,
+            None,
+        );
+        assert!(
+            cache.read(&id("T-1")).is_none(),
+            "this task's entry is left unserveable"
+        );
+        assert!(
+            cache.read(&id("T-2")).is_none(),
+            "nothing is written for the other task"
+        );
+        assert_eq!(written.result.map(|result| result.parts.len()), Some(1));
+    }
+
+    #[test]
+    fn a_write_whose_response_shows_its_own_task_whole_advances_its_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-1", "v1"));
+        source.settle(
+            &id("T-1"),
+            Some(&journal(task("T-1", "v2"))),
+            String::new(),
+            None,
+            None,
+        );
+        assert_eq!(
+            cache.read(&id("T-1")).and_then(|entry| entry.task.version),
+            Some("v2".to_owned())
+        );
     }
 }

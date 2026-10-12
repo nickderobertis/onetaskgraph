@@ -468,11 +468,13 @@ impl GitHubProjectsSource {
 ///
 /// `tests/context.rs` reconciles it against the issue fragment every read selects, so a member
 /// the reader comes to need is one this list has to name.
-pub const WHOLE_MEMBERS: [&str; 13] = [
+pub const WHOLE_MEMBERS: [&str; 15] = [
     "/id",
+    "/number",
     "/title",
     "/body",
     "/url",
+    "/createdAt",
     "/state",
     "/stateReason",
     "/repository",
