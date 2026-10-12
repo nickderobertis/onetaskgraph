@@ -1273,12 +1273,12 @@ stamped seconds after the change it made, so the entry is left unserveable and t
 refreshes it. Every write without `--expect` leaves its task's entry unserveable.
 
 **An entry is taken out of service before its write is sent, or the write is not sent.** The
-store removes the task's entry first — or, where the cache directory refuses that, empties the
-file in place, making it writable when only its mode refuses — so no other process pinned to
-the old version is served it once the write lands. An entry nothing can remove, empty or
-re-mode (a read-only mount, another owner's file) refuses the write with
-`{"kind": "config"}`, naming the entry and the directory, before any request is sent; an entry
-no process can open is served to none and refuses nothing.
+store removes the task's entry first — or, on a Unix host where the cache directory refuses
+that, empties the file in place, making it writable when only its mode refuses, and never
+through a symlink — so no other process pinned to the old version is served it once the write
+lands. An entry nothing can remove or empty (a read-only mount, another owner's file, a
+symlink) refuses the write, naming the entry and the directory, before any request is sent; an
+entry no process can open is served to none and refuses nothing.
 
 #### `--expect`: a write that sends only its mutations
 

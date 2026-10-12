@@ -695,12 +695,30 @@ impl SourceCache {
 ///
 /// Only a regular file is emptied, and only the very file that was inspected: a symlink, or a
 /// path replaced between the look and the open, could otherwise point this at a file outside
-/// the cache that it has no business changing.
-// Windows has no mode bits to open up, only the read-only attribute, so clearing it there makes
-// the file writable by its owner alone rather than by everybody, which is what the lint warns of.
-#[cfg_attr(not(unix), allow(clippy::permissions_set_readonly_false))]
+/// the cache that it has no business changing. That is checked by device and inode, which only
+/// a Unix host offers, so elsewhere nothing is emptied: an entry its directory will not let go
+/// is withheld, and its task's writes refused, instead.
 fn empty_in_place(path: &Path) -> std::io::Result<()> {
-    let inspected = std::fs::symlink_metadata(path)?;
+    #[cfg(unix)]
+    {
+        empty_inspected(path, &std::fs::symlink_metadata(path)?)
+    }
+    #[cfg(not(unix))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!(
+                "{} cannot be emptied in place on this platform",
+                path.display()
+            ),
+        ))
+    }
+}
+
+/// [`empty_in_place`], of the file `inspected` describes, refusing whatever else `path` opens.
+#[cfg(unix)]
+fn empty_inspected(path: &Path, inspected: &std::fs::Metadata) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     if !inspected.file_type().is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -712,50 +730,28 @@ fn empty_in_place(path: &Path) -> std::io::Result<()> {
             .read(!write)
             .write(write)
             .open(path)?;
-        same_file(&inspected, &file.metadata()?)?;
+        let opened = file.metadata()?;
+        if (inspected.dev(), inspected.ino()) != (opened.dev(), opened.ino()) {
+            return Err(std::io::Error::other(
+                "it was replaced while it was being emptied, so it is not",
+            ));
+        }
         Ok(file)
     };
     let file = match open(true) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                // Through the handle, so the file re-moded is the one inspected.
-                let held = open(false)?;
-                let mut permissions = held.metadata()?.permissions();
-                permissions.set_mode(permissions.mode() | 0o200);
-                held.set_permissions(permissions)?;
-            }
-            #[cfg(not(unix))]
-            {
-                let mut permissions = inspected.permissions();
-                permissions.set_readonly(false);
-                std::fs::set_permissions(path, permissions)?;
-            }
+            // Through the handle, so the file re-moded is the one inspected.
+            let held = open(false)?;
+            let mut permissions = held.metadata()?.permissions();
+            permissions.set_mode(permissions.mode() | 0o200);
+            held.set_permissions(permissions)?;
             open(true)?
         }
         Err(error) => return Err(error),
     };
     file.set_len(0)?;
     file.sync_all()
-}
-
-/// Refuse when `opened` is not the file `inspected` described: the path was replaced between
-/// the two.
-fn same_file(inspected: &std::fs::Metadata, opened: &std::fs::Metadata) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        if (inspected.dev(), inspected.ino()) != (opened.dev(), opened.ino()) {
-            return Err(std::io::Error::other(
-                "it was replaced while it was being emptied, so it is not",
-            ));
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = (inspected, opened);
-    Ok(())
 }
 
 /// The JSON Schema of every entry this build writes under [`ENTRY_SCHEMA`]: a task's and the

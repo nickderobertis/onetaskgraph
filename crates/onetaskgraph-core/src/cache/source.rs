@@ -1454,6 +1454,7 @@ mod tests {
         Some(mode)
     }
 
+    #[cfg(unix)]
     fn entry_file(dir: &std::path::Path) -> std::path::PathBuf {
         dir.join("tasks")
             .join(format!("{}.json", super::super::digest("T-1")))
@@ -1580,24 +1581,6 @@ mod tests {
         );
     }
 
-    /// Runs on every host; on Windows, where a file's read-only attribute refuses its removal,
-    /// it is what drives clearing that attribute before the file is emptied.
-    #[test]
-    fn an_entry_marked_read_only_is_still_taken_out_of_service() {
-        let dir = tempfile::tempdir().expect("a directory");
-        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
-        held_at_v1(&cache);
-        let path = entry_file(dir.path());
-        let mut permissions = std::fs::metadata(&path).expect("the entry").permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions).expect("read-only");
-        cache.invalidate(&id("T-1"));
-        assert!(
-            another_process(dir.path()).read(&id("T-1")).is_none(),
-            "another process serves it"
-        );
-    }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn an_entry_that_is_a_symlink_never_changes_the_file_it_points_at() {
@@ -1637,6 +1620,27 @@ mod tests {
         assert!(
             probe.lock().expect("the probe").writes.is_empty(),
             "nothing was sent"
+        );
+    }
+
+    /// The path is swapped for another file between the look and the open, which no test can
+    /// time, so the look is handed in: another file's, standing for the one the path held when
+    /// it was inspected.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_replaced_after_it_was_inspected_is_never_emptied() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let looked_at = dir.path().join("looked-at.json");
+        let replacement = dir.path().join("replacement.json");
+        std::fs::write(&looked_at, b"{}").expect("the file looked at");
+        std::fs::write(&replacement, b"a person's file").expect("the replacement");
+        let inspected = std::fs::symlink_metadata(&looked_at).expect("the look");
+        let refused = super::super::empty_inspected(&replacement, &inspected)
+            .expect_err("the replacement is not emptied");
+        assert!(refused.to_string().contains("replaced"), "{refused}");
+        assert_eq!(
+            std::fs::read(&replacement).expect("the replacement"),
+            b"a person's file"
         );
     }
 
