@@ -2722,3 +2722,81 @@ fn the_human_rendering_of_an_expected_delete_says_it_read_first() {
         "{said}"
     );
 }
+
+#[test]
+fn every_typescript_sdk_write_forwards_expect_and_sends_only_its_mutation() {
+    let cached = Cached::new();
+    let body = cached.sandbox.subdirectory("bodies").join("content.md");
+    std::fs::write(&body, "rewritten through the sdk\n").unwrap();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let before = cached.board.served().len();
+    let script = format!(
+        "const file = {}; const steps = []; let expect = pin; \
+         const step = (name, written) => {{ steps.push({{name, result: written.result, \
+           fallback: written.fallback ?? null}}); expect = written.result.version; return written; }}; \
+         const added = step('add', await client.taskCommentAdd(id, {{body: 'a reply', expect}})); \
+         step('edit', await client.taskCommentEdit(id, added.id, {{body: 'a corrected reply', expect}})); \
+         step('status', await client.taskStatusSet(id, 'in-progress', {{expect}})); \
+         step('content', await client.taskContentSet(id, file, {{expect}})); \
+         step('metadata', await client.taskMetadataSet(id, 'caller.note', '\"kept\"', {{expect}})); \
+         step('update', await client.taskUpdate(id, {{title: 'Gamma, by the sdk', expect}})); \
+         const deleted = await client.taskCommentDelete(id, added.id, {{expect}}); \
+         steps.push({{name: 'delete', result: deleted.result, fallback: deleted.fallback ?? null}}); \
+         console.log(JSON.stringify(steps));",
+        serde_json::to_string(&body).unwrap()
+    );
+    let steps = sdk(&cached, true, &script, "board:T-3", Some(&v));
+    for step in steps.as_array().unwrap() {
+        assert_eq!(step["result"]["parts"][0]["outcome"], "landed", "{step}");
+        assert_eq!(
+            step["fallback"],
+            Value::Null,
+            "{step}: sent only its mutation"
+        );
+    }
+    let sent: Vec<String> = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            graphql::ADD_COMMENT_WHOLE,
+            graphql::UPDATE_COMMENT_WHOLE,
+            graphql::UPDATE_FIELD_WHOLE,
+            graphql::UPDATE_ISSUE_WHOLE,
+            graphql::UPDATE_ISSUE_WHOLE,
+            graphql::UPDATE_ISSUE_WHOLE,
+            graphql::DELETE_COMMENT,
+        ],
+        "one mutation per write, and no read"
+    );
+}
+
+#[test]
+fn an_expected_priority_clear_sends_only_the_clear_and_advances_the_entry() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let (written, sent) = cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "none",
+        "--expect",
+        &v,
+        "--json",
+    ]);
+    assert_eq!(sent, [graphql::CLEAR_FIELD_WHOLE]);
+    assert_eq!(written["priority"], "none");
+    let next = written_version(&written);
+    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &next, "--json"]);
+    assert_eq!(
+        sent,
+        Vec::<String>::new(),
+        "the cleared task is served at its version"
+    );
+    assert_eq!(shown["items"][0]["item"]["priority"], "none");
+}
