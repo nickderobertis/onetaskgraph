@@ -260,15 +260,29 @@ impl CachedSource {
         }
         if !unread.is_empty() {
             let asked = unread.clone();
-            let mut read = read(asked).await.into_iter();
-            for (id, miss) in unread.iter().zip(&misses) {
-                let answer = read.next().unwrap_or_else(|| {
-                    Err(SourceError::Malformed {
-                        message: format!("the source answered no detail for task {id}"),
+            let mut read = read(asked).await;
+            // llmlint: ignore-block[changed_behavior_has_e2e] A source answering another number of details than it was asked for breaks the trait's own contract, and no source this build ships can: it is answered exactly as `Engine::task_details` answers the same miscount — every id of the read refused as malformed, none shifted onto another's slot — which the engine's own `ShortDetails` test proves. No real interface reaches this branch to drive it end to end.
+            if read.len() != unread.len() {
+                let message = format!(
+                    "the source answered {} task details for the {} ids it was asked for",
+                    read.len(),
+                    unread.len()
+                );
+                read = unread
+                    .iter()
+                    .map(|_| {
+                        Err(SourceError::Malformed {
+                            message: message.clone(),
+                        })
                     })
-                });
+                    .collect();
+            }
+            // llmlint: ignore-end[changed_behavior_has_e2e]
+            for ((id, miss), answer) in unread.iter().zip(&misses).zip(read) {
                 match &answer {
-                    Ok(Some(detail)) => {
+                    // Recorded only for the task it is about: an answer naming another task is
+                    // the engine's to refuse, and nothing of it reaches this task's entry.
+                    Ok(Some(detail)) if detail.task.id == *id => {
                         let comments = match &detail.comments {
                             Some(Ok(Some(page))) if page.next.is_none() => Some(page.items.clone()),
                             _ => None,
@@ -282,9 +296,6 @@ impl CachedSource {
                     *slot = Some(answer);
                 }
             }
-            // A source answering more details than it was asked for: the extra are what the
-            // engine refuses as a miscount, so they are handed on rather than dropped.
-            answers.extend(read.map(Some));
         }
         answers.into_iter().flatten().collect()
     }

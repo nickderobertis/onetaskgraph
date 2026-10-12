@@ -2800,3 +2800,20 @@ fn an_expected_priority_clear_sends_only_the_clear_and_advances_the_entry() {
     );
     assert_eq!(shown["items"][0]["item"]["priority"], "none");
 }
+
+#[test]
+fn cache_clear_removes_a_staging_file_this_remote_left_behind() {
+    let cached = Cached::new();
+    cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let dir = cached.default_dir();
+    // The default directory is named for the remote's digest, which this store's staging
+    // files carry: one a killed write left behind.
+    let remote = dir.file_name().unwrap().to_string_lossy().into_owned();
+    let abandoned = dir.join("tasks").join(format!(".staged-{remote}-1-1"));
+    std::fs::write(&abandoned, "half a write").unwrap();
+    cached.ok(&["cache", "clear", "board", "--json"]);
+    assert!(
+        !abandoned.exists(),
+        "this remote's abandoned staging file is removed"
+    );
+}
