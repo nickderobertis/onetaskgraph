@@ -132,6 +132,7 @@ pub fn run() -> String {
     read_case::<Value>(&mut out, "`[bracketed] title` as a list --var", "[bracketed] title\n");
     read_case::<Map>(&mut out, "a next-line character", "value: \"a\u{85}b\"\n");
     // Writes.
+    write_case(&mut out, "a plain string", &json!({"status": "todo"}));
     write_case(&mut out, "a string with `: `", &json!({"title": "Design: adopt the cost release"}));
     write_case(&mut out, "an empty string", &json!({"summary": ""}));
     write_case(&mut out, "a timestamp-shaped string", &json!({"approved_at": "2026-09-07T11:56:15.785012+00:00"}));
