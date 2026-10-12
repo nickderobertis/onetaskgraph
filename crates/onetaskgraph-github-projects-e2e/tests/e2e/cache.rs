@@ -1755,3 +1755,190 @@ fn every_verb_the_cache_does_not_serve_answers_and_costs_exactly_what_it_does_wi
         assert_eq!(with, without, "`{}`", verb.join(" "));
     }
 }
+
+#[test]
+fn every_write_whose_response_shows_only_what_it_wrote_leaves_its_new_version_unserved() {
+    let writes: [(&str, &[&str]); 7] = [
+        ("comment add", &["task", "comment", "add", "board:T-3"]),
+        ("comment edit", &["task", "comment", "edit", "board:T-3"]),
+        (
+            "priority",
+            &["task", "priority", "set", "board:T-3", "high"],
+        ),
+        (
+            "status",
+            &["task", "status", "set", "board:T-3", "in-progress"],
+        ),
+        (
+            "content",
+            &["task", "content", "set", "board:T-3", "--file"],
+        ),
+        (
+            "metadata",
+            &[
+                "task",
+                "metadata",
+                "set",
+                "board:T-3",
+                "caller.note",
+                "\"kept\"",
+            ],
+        ),
+        (
+            "update",
+            &["task", "update", "board:T-3", "--priority", "low"],
+        ),
+    ];
+    for (name, arguments) in writes {
+        let cached = Cached::new();
+        let comment = cached
+            .board
+            .add_comment("T-3", "the comment an edit rewrites");
+        let body = cached.sandbox.subdirectory("bodies").join("content.md");
+        std::fs::write(&body, "rewritten\n").expect("a body file");
+        let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        let v1 = version_of(&first);
+        // Between the caller's read and its write, a person edits the labels — which no write
+        // here sets — and comments.
+        cached.board.set_labels("T-3", &["bug", "a-persons-label"]);
+        cached.board.add_comment("T-3", "a person's comment");
+        cached.board.answer_writes_partially(true);
+        let mut full: Vec<String> = arguments.iter().map(|word| (*word).to_owned()).collect();
+        match name {
+            "comment edit" => full.push(comment.clone()),
+            "content" => full.push(body.to_string_lossy().into_owned()),
+            _ => {}
+        }
+        full.extend(["--expect".to_owned(), v1.clone(), "--json".to_owned()]);
+        let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+        let stdin = name
+            .starts_with("comment")
+            .then_some("written by the caller");
+        let (written, _) = cached.ok_with(&refs, stdin);
+        let v2 = written_version(&written);
+        cached.board.answer_writes_partially(false);
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
+        assert_eq!(sent, [ONE_READ], "{name}: the entry is not served at {v2}");
+        assert_eq!(served_by(&shown), from_remote(), "{name}");
+        let labels: Vec<&str> = shown["items"][0]["item"]["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|label| label["name"].as_str().unwrap())
+            .collect();
+        assert!(labels.contains(&"a-persons-label"), "{name}: {labels:?}");
+        assert!(
+            shown["comments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|comment| comment["body"] == "a person's comment"),
+            "{name}: the person's comment is there"
+        );
+    }
+}
+
+#[test]
+fn a_bound_copy_whose_response_shows_the_task_whole_advances_the_entry_and_one_that_does_not_leaves_it()
+ {
+    for partially in [false, true] {
+        let cached = Cached::new();
+        let (landed, version) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+        let native = landed.split_once(':').unwrap().1.to_owned();
+        retitle(&cached, "Bound, retitled", "high");
+        cached.board.add_comment(&native, "a person's comment");
+        cached.board.answer_writes_partially(partially);
+        let (copied, _) = cached.ok(&[
+            "task",
+            "copy",
+            "plans:B-1",
+            "--to",
+            "board",
+            "--expect",
+            &version,
+            "--json",
+        ]);
+        cached.board.answer_writes_partially(false);
+        let next = written_version(&copied["items"][0]);
+        let (shown, sent) = cached.ok(&["task", "show", &landed, "--pin", &next, "--json"]);
+        if partially {
+            assert_eq!(sent, [ONE_READ], "partial: not served at its version");
+        } else {
+            assert_eq!(sent, Vec::<String>::new(), "whole: served at its version");
+        }
+        assert_eq!(shown["items"][0]["item"]["title"], "Bound, retitled");
+        assert_eq!(shown["comments"][0]["body"], "a person's comment");
+    }
+}
+
+#[test]
+fn a_github_task_with_no_change_token_is_read_every_time_and_says_why() {
+    let cached = Cached::new();
+    // Read in the very second it changed: GitHub's token waits for a task to settle.
+    cached.board.read_as_it_changes(true);
+    cached.board.edit_title("T-3", "changing right now");
+    for _ in 0..2 {
+        let (shown, sent) = cached.ok(&[
+            "task",
+            "show",
+            "board:T-3",
+            "--pin",
+            "gh2|anything",
+            "--json",
+        ]);
+        assert_eq!(sent, [ONE_READ]);
+        assert_eq!(shown["cache"]["served"], "remote");
+        assert!(
+            shown["cache"]["bypassed"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("no change token")),
+            "{shown}"
+        );
+        assert!(shown["items"][0]["item"].get("version").is_none());
+    }
+}
+
+#[test]
+fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
+    let cached = Cached::new();
+    let copy = |folder: &str| {
+        let root = cached.sandbox.project().join(folder);
+        std::fs::create_dir_all(root.join("tasks")).unwrap();
+        cached.ok(&["task", "list", "--source", "board", "--json"]);
+        cached.ok(&[
+            "--set",
+            "sources.plans.config.status_mapping.Shipped=done",
+            "project",
+            "copy",
+            "board:P-1",
+            "--to",
+            "plans",
+            "--no-link",
+            "--json",
+        ])
+    };
+    let (_, first) = copy("plans");
+    // Fill the cache with every task of the project.
+    cached.ok(&["task", "show-many", "board:T-1", "board:T-2", "--json"]);
+    std::fs::remove_dir_all(cached.sandbox.project().join("plans/tasks")).unwrap();
+    std::fs::remove_dir_all(cached.sandbox.project().join("plans/projects")).ok();
+    let (_, second) = copy("plans");
+    let reads = |sent: &[String]| {
+        sent.iter()
+            .filter(|document| {
+                [
+                    graphql::ISSUE,
+                    graphql::ISSUE_DETAIL,
+                    graphql::ISSUE_DETAILS,
+                    graphql::ISSUE_COPY_DETAILS,
+                ]
+                .contains(&document.as_str())
+            })
+            .count()
+    };
+    assert!(
+        reads(&second) <= reads(&first),
+        "a cached task is not read again: first {first:?}, second {second:?}"
+    );
+    assert!(second.len() <= first.len());
+}
