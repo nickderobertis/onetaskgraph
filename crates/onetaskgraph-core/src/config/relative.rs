@@ -56,14 +56,18 @@ pub fn resolve_document_relative_paths(settings: &mut Merged) -> Result<(), Conf
         let Origin::File { path: document } = &setting.origin else {
             continue;
         };
-        let Some((source, field)) = source_config_field(&setting.key) else {
-            continue;
-        };
-        let Some(declared) = declared_paths_of(settings, source) else {
-            continue;
-        };
-        if !declared.contains(&field.as_str()) {
-            continue;
+        // A source's cache directory is the store's own path rather than its plugin's, so it
+        // is rebased whatever plugin the source names.
+        if !is_cache_dir(&setting.key) {
+            let Some((source, field)) = source_config_field(&setting.key) else {
+                continue;
+            };
+            let Some(declared) = declared_paths_of(settings, source) else {
+                continue;
+            };
+            if !declared.contains(&field.as_str()) {
+                continue;
+            }
         }
         let Some(raw) = setting.value.as_str() else {
             continue;
@@ -169,6 +173,12 @@ pub(super) fn supplying_document_dir(
              under a directory whose name is valid UTF-8.",
         )
     })
+}
+
+/// Whether `key` is one source's `cache.dir`.
+fn is_cache_dir(key: &SettingPath) -> bool {
+    matches!(key.segments(), [sources, _, cache, dir]
+        if sources == "sources" && cache == "cache" && dir == "dir")
 }
 
 /// `("work", "root")` for `sources.work.config.root`, and nothing for any other key.

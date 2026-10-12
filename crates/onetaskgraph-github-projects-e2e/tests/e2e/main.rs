@@ -12,6 +12,7 @@
 use onetaskgraph_e2e_support::{common, fixtures};
 
 mod boundary;
+mod cache;
 mod copy_cost;
 mod copy_recopy;
 mod copy_unsettled;

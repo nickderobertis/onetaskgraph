@@ -90,6 +90,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         dry_run: false,
         comments: false,
         no_link: false,
+        expect: None,
     }
 }
 

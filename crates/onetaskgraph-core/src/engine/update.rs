@@ -24,6 +24,7 @@ use super::delivery::{Delivered, qualified_task, source_failed, targets};
 use super::narrow::holds_priority;
 use super::{Engine, EngineError};
 use crate::GlobalId;
+use crate::cache::{WriteFallback, WriteResult};
 
 /// What `task update` answers with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -42,6 +43,14 @@ pub struct TaskUpdated {
     /// never zero, when the source does not meter its own requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
 }
 
 impl Engine {
@@ -154,12 +163,15 @@ impl Engine {
             Vec::new()
         };
         let spent = spent_between(&before, &readings(&[source]).await);
+        let (result, fallback, _) = self.expected_parts(id);
         Ok(TaskUpdated {
             id: id.clone(),
             task: qualified_task(id.clone(), outcome.task).item,
             written: outcome.written,
             delivered,
             spent,
+            result,
+            fallback,
         })
     }
 }

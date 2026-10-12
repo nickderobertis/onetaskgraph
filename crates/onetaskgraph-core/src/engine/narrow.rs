@@ -13,10 +13,12 @@ use onetaskgraph_plugin_api::Priority;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::Spent;
 use super::boundary::{Exposure, Held};
 use super::delivery::source_failed;
 use super::{Engine, EngineError};
 use crate::GlobalId;
+use crate::cache::{WriteFallback, WriteResult};
 use crate::resolve::ResolvedSource;
 
 /// What `task priority set` answers with.
@@ -26,6 +28,18 @@ pub struct TaskPrioritySet {
     pub id: GlobalId,
     /// Its priority as its source reads it back after the write.
     pub priority: Priority,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// What `task content set` answers with.
@@ -33,6 +47,18 @@ pub struct TaskPrioritySet {
 pub struct TaskContentSet {
     /// The task whose content was replaced.
     pub id: GlobalId,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 impl Engine {
@@ -77,9 +103,13 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        let (result, fallback, spent) = self.expected_parts(id);
         Ok(TaskPrioritySet {
             id: id.clone(),
             priority: read,
+            result,
+            fallback,
+            spent,
         })
     }
 
@@ -117,7 +147,13 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        Ok(TaskContentSet { id: id.clone() })
+        let (result, fallback, spent) = self.expected_parts(id);
+        Ok(TaskContentSet {
+            id: id.clone(),
+            result,
+            fallback,
+            spent,
+        })
     }
 }
 

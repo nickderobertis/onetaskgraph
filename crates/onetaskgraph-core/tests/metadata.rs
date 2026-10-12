@@ -276,6 +276,9 @@ async fn each_verb_sets_one_key_and_answers_with_what_the_source_holds() {
             key: review.clone(),
             value: json!({"approved": true}),
             location: None,
+            result: None,
+            fallback: None,
+            spent: None,
         }
     );
     let project = engine

@@ -766,7 +766,41 @@ pub fn comments(list: &CommentList) -> String {
 
 /// What a delete removed.
 pub fn deleted(deleted: &DeletedComment) -> String {
-    format!("deleted comment {}\n", deleted.deleted)
+    let mut rendered = format!("deleted comment {}\n", deleted.deleted);
+    rendered.push_str(&fell_back(deleted.fallback.as_ref()));
+    rendered
+}
+
+/// A comment a verb wrote, and whether its write had to read first.
+pub fn comment_written(written: &onetaskgraph_core::CommentWritten) -> String {
+    let mut rendered = comment(&written.comment);
+    rendered.push_str(&fell_back(written.fallback.as_ref()));
+    rendered
+}
+
+/// The line an expected write that read its target first adds, saying why — nothing for one
+/// that sent only its mutations.
+fn fell_back(fallback: Option<&onetaskgraph_core::WriteFallback>) -> String {
+    fallback.map_or_else(String::new, |fallback| {
+        format!("read first: {}\n", fallback.reason)
+    })
+}
+
+/// What `cache clear` emptied.
+pub fn cache_cleared(cleared: &onetaskgraph_core::CacheCleared) -> String {
+    if cleared.cleared.is_empty() {
+        return "no source keeps a cache\n".to_owned();
+    }
+    cleared
+        .cleared
+        .iter()
+        .map(|cache| {
+            format!(
+                "cleared {} — {} entries — at {}\n",
+                cache.source, cache.entries, cache.dir
+            )
+        })
+        .collect()
 }
 
 /// One document in full, body last.

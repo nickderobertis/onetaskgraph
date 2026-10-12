@@ -1230,6 +1230,94 @@ and every task read from a response carrying no `Date`, has no token and is read
 it settles, the next read gives it one. Every reader that keys on this token inherits the
 rule — a copy's skip, and the board cache built on the same token.
 
+### 4.13e The store's local cache
+
+A source configured with `cache.enabled` (README, "A local cache of a remote source") has its
+tasks kept on the host the engine runs on, keyed on the `version` of §4.13d and on nothing
+else. The rule it may never break is that **it never adds a request and never serves stale
+data**: an entry is served only when the version a caller pinned — explicitly, or by a listing
+in the same command — is that entry's version or an earlier one, by the source's own
+`order_versions`, and never when the two are `incomparable`. Nothing asks a source whether a
+task changed. **A pin means "at least as fresh as the version I hold", not "current"**, so a
+pinned read answered from the cache can predate a change at the source nobody has read yet;
+that is the contract, and a caller wanting the source's present state reads unpinned.
+
+What a plugin says to the cache, through `TaskSource` and never over this protocol — a
+subprocess-hosted plugin has no remote identity, so the engine keeps no cache of it:
+
+- `version_coverage` — which parts of a task its token covers: the task's own fields, and its
+  comments. A part it does not cover is written to the cache and never served; the read goes
+  to the source and its `cache.bypassed` says why. `github-projects` covers both, as the table
+  of §4.13d states member by member; a task it gives no token — a draft, one changed within
+  the minute before its read — is read every time. `linear` covers neither until its
+  credentialed lane proves `Issue.updatedAt` moves for every change kind.
+- `remote_identity`, on `SourcePlugin` — what names the remote it reads, which the cache
+  directory is a digest of.
+- `write_context` and `board_context` — opaque records the cache keeps beside a task and
+  beside the board, which `prime_write` takes back for a write expecting that version.
+- `begin_journal` and `end_journal` — every request sent while one write runs, each with what it
+  came to and, for a mutation, the version and the whole task its own response shows.
+
+**A write advances an entry only to what its own response vouches for.** An entry holds the
+whole task — fields, metadata, comments, assets — at one version, so it moves to a write's
+version only when that write's last response carries every one of those parts at that
+version. A response carrying only the fields it wrote, with a version, leaves the entry
+unserveable: a person's concurrent edit to another field, or a new comment, can share that
+version, and an entry labelled with it that lacked them would be served stale. A response that
+determines no version leaves it unserveable too. A `github-projects` write made with `--expect`
+selects the whole issue in its last mutation's payload for exactly this
+(`graphql::whole_twin`); `deleteIssueComment` answers with nothing about the issue, so a
+comment delete never advances an entry. **Against GitHub itself a write's `result.version` is
+normally `null`**: the token waits for a task to settle (§4.13d), and a mutation's response is
+stamped seconds after the change it made, so the entry is left unserveable and the next read
+refreshes it. Every write without `--expect` leaves its task's entry unserveable.
+
+#### `--expect`: a write that sends only its mutations
+
+`--expect VERSION` on `task comment add|edit|delete`, `task update`, `task priority set`, `task
+status set`, `task metadata set`, `task content set`, and a `task copy` of one task onto a
+caching source, says the caller knows the task at that version. The write takes from the cache
+entry at that version or a later one what it would otherwise read: the issue's node id, its
+board item, the board's field and option ids — kept once per board — the comments on the issue
+and the current values its rule compares against. It then sends **only its mutation
+requests**, and only the fields whose value differs from the expected version: `task priority`
+sends the priority alone, `task status` the status alone, and `task update` and a bound copy
+each field that differs among title, body, status, priority, labels and metadata. A person's
+concurrent edit to a field the write does not set is never touched.
+
+| Verb, with `--expect` and the task and its board cached | Requests |
+| --- | --- |
+| comment add, edit or delete | 1: ADD_COMMENT, UPDATE_COMMENT or DELETE_COMMENT — no ISSUE, no COMMENT_ISSUE |
+| priority, status (no close or reopen), content, metadata | 1: the one mutation |
+| update, bound copy | one per part whose fields differ: UPDATE_FIELDS, then UPDATE_ISSUE |
+| any of them, after `cache clear` or with the entry older than expected | one read (ISSUE), then the mutations above |
+| any of them, a cached option or id re-minted since it was cached | the refused mutation, one ISSUE read, and that part once more |
+
+**The one named exception to "the cache never adds a request".** When a board option was
+deleted or renamed after the cache kept its id — `sources fields --apply` re-mints an option it
+renames — GitHub refuses the mutation that sends it. The write then makes one read, which
+refreshes the board's cached field and option ids so the same stale option cannot recur, and
+sends the refused part once more: one request more than the write without a cache, and only on
+the first write after the option moved. A part that already landed is not sent again, and
+nothing is retried a second time.
+
+**Its result comes from the mutations' own responses.** The write's JSON carries `result:
+{"version", "parts": [{"part", "outcome", "fields"}]}`: each mutation sent, `landed`,
+`rejected` with the backend's error, or `unknown` when the request left and no answer came back
+— never sent again, because that could apply it twice — with each field it set and the value
+its response shows, and the task's version after the write where the last response determines
+it. No read is made to build or confirm it. A write that had to read first says so as
+`fallback: {"read": true, "reason"}`, and `spent` counts that read. A failed write's failure
+document carries the same members, so a caller tells a whole write, a partial one and an
+ambiguous one apart.
+
+**`--expect` is a cost and id contract, not a conditional write.** Neither GitHub's
+`updateIssue` and `updateProjectV2ItemFieldValue` nor Linear's `issueUpdate` accepts a
+precondition, so a person's edit to a field the write sets, landing between the caller's read
+and the mutation, is overwritten. A write whose rule depends on a value a person may change is
+the caller's to sequence: the store compares against the version the caller expects, and never
+re-reads it behind the caller's back.
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one

@@ -83,7 +83,9 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; and `SourceError`.
+  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the local-cache types
+  `Coverage`, `VersionCoverage`, `WriteJournal`, `JournalEntry`, `RequestKind`, `PartOutcome`
+  and `WholeTask`; and `SourceError`.
   **It depends on no other crate of this workspace.**
 - **`onetaskgraph-core`** — the engine, plus the reporting types `QueryResponse`,
   `QueryPlan`, `SourcePlan`, `Predicate`, `PageToken`, `SourceFailure` and `GlobalId`.
@@ -157,6 +159,16 @@ variant, because in-memory compensation for those is sound. Do not conflate the 
 Nothing of a user's work is stored, cached, indexed or mirrored outside the plugin that
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
+
+**One named exception: the local cache of a remote source, and only where a configuration
+turns it on.** `sources.<name>.cache.enabled` (off unless set) keeps a GitHub board's or a
+Linear source's tasks under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
+`cache.dir`, keyed on the change token alone and served only at the version a caller pinned
+or a later one (`crates/onetaskgraph-core/src/cache/`, README "A local cache of a remote
+source"). It is the one write of a user's work outside its plugin, asked for in configuration
+rather than assumed, and it never answers a read the token cannot vouch for. The mechanisms
+below hold everything else to the rule: with `cache.enabled` unset nothing is written
+anywhere, and `no_persistence.rs` still proves it.
 
 **A destination write is not a cache, and the difference is stated rather than assumed.**
 A destination write is at the user's explicit request, names its destination, goes through

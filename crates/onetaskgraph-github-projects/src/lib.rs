@@ -634,8 +634,8 @@ use onetaskgraph_plugin_api::{
     NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
     SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
     StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport,
-    system_clock,
+    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, VersionCoverage,
+    WriteJournal, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -646,6 +646,7 @@ use serde_json::{Value, json};
 pub mod accounting;
 mod assets;
 pub mod change_token;
+mod expected;
 mod visibility;
 
 use accounting::Accounting;
@@ -1420,6 +1421,102 @@ pub mod graphql {
     /// Removes one issue comment. Its payload carries nothing about the comment it removed.
     pub const DELETE_COMMENT: &str = r#"mutation($input:DeleteIssueCommentInput!){deleteIssueComment(input:$input){clientMutationId}}"#;
 
+    /// What a mutation of a write the store's cache expects selects of the issue it wrote:
+    /// everything [`ISSUE_DETAIL`] reads of it, so its response shows the task whole — its
+    /// change token's every part and the first page of its comments.
+    ///
+    /// Sent **only** while that write runs, in place of the document named beside each
+    /// below, so every other write's documents, prices and request counts are what they
+    /// were. GitHub's token waits for a task to settle (`change_token::SETTLED`), and a
+    /// mutation's response is stamped seconds after the change it made, so against GitHub
+    /// itself a response rarely determines a version; the cache is then left unserveable
+    /// for the task, and its next read refreshes it.
+    macro_rules! whole_issue {
+        () => {
+            concat!(
+                r#"__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{"#,
+                issue_comment!(),
+                r#"}pageInfo{hasNextPage endCursor}}}"#
+            )
+        };
+    }
+
+    /// The variables every document of `whole_issue!` declares beside its own.
+    macro_rules! whole_variables {
+        () => {
+            concat!(
+                r#",$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+                relationship_events_variable!()
+            )
+        };
+    }
+
+    /// [`ADD_COMMENT`], selecting the whole issue commented on.
+    pub const ADD_COMMENT_WHOLE: &str = concat!(
+        r#"mutation($input:AddCommentInput!"#,
+        whole_variables!(),
+        r#"){addComment(input:$input){subject{id "#,
+        whole_issue!(),
+        r#"} commentEdge{node{"#,
+        issue_comment!(),
+        r#"}}}}"#,
+        board_issue!()
+    );
+    /// [`UPDATE_COMMENT`], selecting the whole issue the comment is on.
+    pub const UPDATE_COMMENT_WHOLE: &str = concat!(
+        r#"mutation($input:UpdateIssueCommentInput!"#,
+        whole_variables!(),
+        r#"){updateIssueComment(input:$input){issueComment{"#,
+        issue_comment!(),
+        r#" issue{"#,
+        whole_issue!(),
+        r#"}}}}"#,
+        board_issue!()
+    );
+    /// [`UPDATE_ISSUE`], selecting the whole issue updated.
+    pub const UPDATE_ISSUE_WHOLE: &str = concat!(
+        r#"mutation($input:UpdateIssueInput!"#,
+        whole_variables!(),
+        r#"){updateIssue(input:$input){issue{id "#,
+        whole_issue!(),
+        r#"}}}"#,
+        board_issue!()
+    );
+    /// [`UPDATE_FIELD`], selecting the whole issue behind the board item written.
+    pub const UPDATE_FIELD_WHOLE: &str = concat!(
+        r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        whole_variables!(),
+        r#"){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{"#,
+        whole_issue!(),
+        r#"}}}}"#,
+        board_issue!()
+    );
+    /// [`CLEAR_FIELD`], selecting the whole issue behind the board item cleared.
+    pub const CLEAR_FIELD_WHOLE: &str = concat!(
+        r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        whole_variables!(),
+        r#"){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{"#,
+        whole_issue!(),
+        r#"}}}}"#,
+        board_issue!()
+    );
+
+    /// The document sent in `document`'s place while a write the store's cache expects runs,
+    /// when it has one.
+    #[must_use]
+    pub fn whole_twin(document: &str) -> Option<&'static str> {
+        [
+            (ADD_COMMENT, ADD_COMMENT_WHOLE),
+            (UPDATE_COMMENT, UPDATE_COMMENT_WHOLE),
+            (UPDATE_ISSUE, UPDATE_ISSUE_WHOLE),
+            (UPDATE_FIELD, UPDATE_FIELD_WHOLE),
+            (CLEAR_FIELD, CLEAR_FIELD_WHOLE),
+        ]
+        .into_iter()
+        .find(|(plain, _)| *plain == document)
+        .map(|(_, whole)| whole)
+    }
+
     /// Every document above, with what this source is doing when it sends one.
     ///
     /// One list rather than a `match` beside the constants: a rate-limit diagnostic has to
@@ -1429,7 +1526,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 35] = [
+    pub const DOCUMENTS: [(&str, &str); 40] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1489,6 +1586,26 @@ pub mod graphql {
         (ADD_COMMENT, "adding a comment"),
         (UPDATE_COMMENT, "editing a comment"),
         (DELETE_COMMENT, "deleting a comment"),
+        (
+            ADD_COMMENT_WHOLE,
+            "adding a comment, answered with the whole issue",
+        ),
+        (
+            UPDATE_COMMENT_WHOLE,
+            "editing a comment, answered with the whole issue",
+        ),
+        (
+            UPDATE_ISSUE_WHOLE,
+            "updating an issue, answered with it whole",
+        ),
+        (
+            UPDATE_FIELD_WHOLE,
+            "writing a board field, answered with the whole issue",
+        ),
+        (
+            CLEAR_FIELD_WHOLE,
+            "clearing a board field, answered with the whole issue",
+        ),
     ];
 }
 
@@ -2339,7 +2456,7 @@ impl MetadataField {
 }
 
 /// What one item's `Priority` field says, read through this instance's mapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum HeldPriority {
     /// A priority this source reports: an option the mapping names, or no value (`none`).
     Read(Priority),
@@ -2443,6 +2560,14 @@ pub struct Plugin;
 impl SourcePlugin for Plugin {
     fn kind(&self) -> &'static str {
         KIND
+    }
+    /// The endpoint, the owner and the board's number: what names one board.
+    fn remote_identity(&self, config: &Value) -> Option<String> {
+        let config: GitHubProjectsConfig = serde_json::from_value(config.clone()).ok()?;
+        Some(format!(
+            "{}\n{}\n{}",
+            config.endpoint, config.owner, config.project_number
+        ))
     }
     fn config_schema(&self) -> Schema {
         schema_for!(GitHubProjectsConfig)
@@ -3006,6 +3131,9 @@ pub struct GitHubProjectsSource {
     /// source's reads and writes — adds up one accounting instead of two. See
     /// [`accounting`] for what a record carries and what a session's spend is and is not.
     ledger: Arc<Accounting>,
+    /// What [`expected`] holds for a write the store's cache expects: the journal while one is
+    /// open, the issues primed from the cache, and the comments known on each.
+    expected: expected::Held,
 }
 
 /// GitHub's closed single-select color vocabulary.
@@ -4126,6 +4254,7 @@ impl GitHubProjectsSource {
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
+            expected: expected::Held::default(),
         })
     }
 
@@ -4152,11 +4281,30 @@ impl GitHubProjectsSource {
     /// attempt. A duplicate write would come from replaying one of those, and none is
     /// replayed.
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        if !self.expected.journaling() {
+            return self.graphql_sent(query, variables).await;
+        }
+        // While a write the store's cache expects runs, its mutations select the whole issue
+        // they leave behind, so the response vouches for what the cache keeps — and every
+        // request is recorded, so the write's parts are reported from their own responses.
+        let (query, variables) = match graphql::whole_twin(query) {
+            Some(twin) => (twin, expected::whole_variables(variables)),
+            None => (query, variables),
+        };
+        let sent = self.graphql_sent(query, variables.clone()).await;
+        self.journal(query, &variables, &sent).await;
+        sent
+    }
+
+    /// One document sent, retried while GitHub asks for a wait, exactly as asked.
+    async fn graphql_sent(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
         if is_mutation(query)
             && ![
                 graphql::ADD_COMMENT,
                 graphql::UPDATE_COMMENT,
                 graphql::DELETE_COMMENT,
+                graphql::ADD_COMMENT_WHOLE,
+                graphql::UPDATE_COMMENT_WHOLE,
             ]
             .contains(&query)
         {
@@ -8556,6 +8704,9 @@ impl GitHubProjectsSource {
             (true, true) => Some(Err(self.draft_has_no_comments(id))),
             (true, false) => Some(comment_page(node, &id.0, after).map(Some)),
         };
+        if commented && !draft && after.is_none() {
+            self.expected.learn_comments(id, node);
+        }
         Ok(Some(TaskDetailRead { task, comments }))
     }
 
@@ -8581,6 +8732,11 @@ impl GitHubProjectsSource {
         issue: &NativeId,
         comment: &NativeId,
     ) -> Result<Option<String>, SourceError> {
+        // A write the store's cache expects knows which comments its issue held, and their
+        // bodies, at the version it expects: what this read would answer.
+        if let Some(primed) = self.expected.primed_comment(issue, comment) {
+            return Ok(primed);
+        }
         let asked = self
             .graphql(graphql::COMMENT_ISSUE, json!({"id":comment.0}))
             .await;
@@ -9317,7 +9473,7 @@ struct Board {
 /// under and which far ends it names by reading each of them by its own id; this is the
 /// half of the board those reads cannot carry, and holding no item is what keeps it from
 /// ever being asked whether an item is there.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct BoardFields {
     id: BoardId,
     fields: Value,
@@ -9327,7 +9483,7 @@ struct BoardFields {
 ///
 /// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
 /// refused where it is read, and one an item names blank is read as not named at all.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct BoardId(String);
 
 /// Where one write left its item, for the record the rest of the command reads it out of.
@@ -9379,7 +9535,10 @@ impl Board {
 }
 
 /// One board item, resolved into everything this source reports about it.
-#[derive(Clone)]
+///
+/// Serializable because it is what [`TaskSource::write_context`] hands the store's cache and
+/// [`TaskSource::prime_write`] takes back — see [`expected`].
+#[derive(Clone, Serialize, Deserialize)]
 struct Resolved {
     item_id: String,
     id: NativeId,
@@ -9814,7 +9973,7 @@ impl Incoming<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ContentKind {
     DraftIssue,
     Issue,
@@ -9828,7 +9987,7 @@ enum ContentKind {
 /// board's three answers in one value is what makes every place that asks "which is this?"
 /// answer all three, rather than a `document: bool` beside a `kind` that means nothing for
 /// two thirds of the board.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum BoardKind {
     /// An issue whose title begins [`DESIGN_TITLE_PREFIX`].
     Document,
@@ -9956,6 +10115,29 @@ impl TaskSource for GitHubProjectsSource {
     }
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
+    }
+    /// Every part: §4.13d of `docs/plugin-protocol.md` states, member by member, the change
+    /// each part of the token moves for, comments included.
+    fn version_coverage(&self) -> VersionCoverage {
+        VersionCoverage::whole()
+    }
+    fn write_context(&self, id: &NativeId) -> Option<Value> {
+        self.context_of(id)
+    }
+    fn board_context(&self) -> Option<Value> {
+        self.board_context_held()
+    }
+    fn prime_write(&self, id: &NativeId, context: &Value, board: Option<&Value>) -> bool {
+        self.prime(id, context, board)
+    }
+    fn unprime(&self, id: &NativeId) {
+        self.unprime_held(id);
+    }
+    fn begin_journal(&self) {
+        self.expected.begin();
+    }
+    fn end_journal(&self) -> Option<WriteJournal> {
+        Some(self.expected.end())
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {

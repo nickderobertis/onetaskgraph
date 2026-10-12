@@ -82,9 +82,16 @@ pub struct SourceConfig {
     document_dir: Option<DocumentDir>,
     routes: Vec<Route>,
     visibility: SourceVisibility,
+    cache: SourceCacheConfig,
 }
 
 impl SourceConfig {
+    /// Whether, and where, the store keeps a local cache of this source's tasks.
+    #[must_use]
+    pub fn cache(&self) -> &SourceCacheConfig {
+        &self.cache
+    }
+
     /// Who this configuration declares can read the source.
     ///
     /// A declaration, not the source's reality: a source declared private receives an item
@@ -149,6 +156,30 @@ struct SourceShape {
     routes: Value,
     #[serde(default)]
     visibility: SourceVisibility,
+    #[serde(default)]
+    cache: SourceCacheConfig,
+}
+
+/// Whether the store keeps a local cache of one source's tasks, and where: `cache` beside
+/// `plugin` and `config` in its entry.
+///
+/// The cache is per host and shared by every process configuring the same remote — the
+/// command line, both SDKs and a Rust caller of the engine — and it is keyed on the change
+/// token a source gives each task, so it is served only at the version a caller holds or a
+/// later one. `README.md`, under "A local cache of a remote source", states its rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceCacheConfig {
+    /// Whether the cache is on. Off unless set.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The directory the cache lives in. By default
+    /// `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest of the source's remote>`; a
+    /// relative path a configuration document supplies is measured from that document's
+    /// directory. Ignored by a source with no remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub dir: Option<std::path::PathBuf>,
 }
 
 /// Who a configuration declares can read one source: `visibility` beside `plugin` and
@@ -268,6 +299,9 @@ pub struct Config {
     interactive: bool,
     sources: BTreeMap<SourceName, SourceConfig>,
     write_policy: Option<WritePolicyConfig>,
+    /// The directory every source's cache defaults to living under, read from the
+    /// environment the configuration was loaded in: `$XDG_CACHE_HOME`, or `$HOME/.cache`.
+    cache_home: Option<std::path::PathBuf>,
 }
 
 /// The document's own shape, before the checks serde cannot make.
@@ -369,6 +403,7 @@ impl Config {
                     document_dir: None,
                     routes,
                     visibility: source.visibility,
+                    cache: source.cache,
                 },
             );
         }
@@ -390,6 +425,7 @@ impl Config {
             interactive: shape.interactive,
             sources,
             write_policy: shape.write_policy,
+            cache_home: None,
         };
         // Here rather than at the call site, so "a `Config` exists" means "every block in
         // it satisfies the schema its own plugin declares". Checked once at the boundary,
@@ -443,6 +479,23 @@ impl Config {
     #[must_use]
     pub fn visibilities(&self) -> BTreeMap<SourceName, SourceVisibility> {
         visibilities_of(&self.sources)
+    }
+
+    /// The directory every source's cache defaults to living under, when the environment
+    /// the configuration was loaded in names one.
+    ///
+    /// `None` for a configuration built by [`Config::from_document`], which reads no
+    /// environment; [`Self::with_cache_home`] states one.
+    #[must_use]
+    pub fn cache_home(&self) -> Option<&Path> {
+        self.cache_home.as_deref()
+    }
+
+    /// The same configuration, with every source's cache defaulting to live under `home`.
+    #[must_use]
+    pub fn with_cache_home(mut self, home: Option<std::path::PathBuf>) -> Self {
+        self.cache_home = home;
+        self
     }
 
     /// Which sources answer when a command names none, or `None` for every one.
@@ -598,7 +651,8 @@ pub fn load(
     // handed values and no origins, so this is the only layer that can tell a path a
     // document supplied from one the environment or a flag did. See [`relative`].
     resolve_document_relative_paths(&mut merged)?;
-    let mut config = Config::from_document(unflatten(&merged))?;
+    let mut config =
+        Config::from_document(unflatten(&merged))?.with_cache_home(cache_home(environment));
     for (name, source) in &mut config.sources {
         if source.plugin == PluginKind::Subprocess {
             source.document_dir = relative::supplying_document_dir(&merged, name.as_str())?;
@@ -614,6 +668,16 @@ pub fn load(
         config,
         secrets,
     })
+}
+
+/// `$XDG_CACHE_HOME`, or `$HOME/.cache`, or nothing when neither is set — the XDG rule
+/// [`discovery`] applies to configuration, applied to the cache.
+#[must_use]
+pub fn cache_home(environment: &Environment) -> Option<std::path::PathBuf> {
+    if let Some(xdg) = environment.non_empty("XDG_CACHE_HOME") {
+        return Some(std::path::PathBuf::from(xdg));
+    }
+    Some(std::path::PathBuf::from(environment.non_empty("HOME")?).join(".cache"))
 }
 
 /// The refusal of a source whose `plugin:` names no kind this build compiled.

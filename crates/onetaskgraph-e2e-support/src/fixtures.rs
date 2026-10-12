@@ -1143,6 +1143,13 @@ struct GitHubBoard {
     /// The most rows one page of an issue search answers with, fewer than it was asked for —
     /// as GitHub may — or `None` to answer as many as asked.
     search_page_rows: Option<usize>,
+    /// Whether a mutation selecting the whole issue it wrote is answered with only what it
+    /// wrote and the parts of the issue's change token — the response a store's cache must
+    /// not take for the whole issue.
+    partial_writes: bool,
+    /// Operations whose next request is applied and then answered with nothing at all: the
+    /// connection is closed with no response, as a lost answer leaves a caller.
+    dropping: Vec<&'static str>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1391,6 +1398,45 @@ impl GitHubBoardFields {
             .unwrap()
             .status_options
             .retain(|option| option["name"] != json!(name));
+    }
+
+    /// Answer every mutation selecting the whole issue it wrote with only what it wrote and
+    /// the parts of the issue's change token, or, with `false`, whole again.
+    pub fn answer_writes_partially(&self, partially: bool) {
+        self.board.lock().unwrap().partial_writes = partially;
+    }
+
+    /// Apply the next request carrying `operation`, and close its connection without an
+    /// answer — once.
+    pub fn drop_response_once(&self, operation: &'static str) {
+        self.board.lock().unwrap().dropping.push(operation);
+    }
+
+    /// Give the `Status` option `name` a new id, as GitHub does to an option a whole-list
+    /// update renames: every item in it stays, and the old id no longer resolves.
+    pub fn remint_status_option(&self, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .status_options
+            .iter_mut()
+            .find(|option| option["name"] == json!(name))
+            .expect("the option to re-mint exists");
+        option["id"] = json!(format!("{}-reminted", option["id"].as_str().unwrap()));
+    }
+
+    /// Give the `Priority` option `name` a new id, as [`Self::remint_status_option`] does.
+    pub fn remint_priority_option(&self, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        let option = board
+            .priority_options
+            .as_mut()
+            .and_then(|options| {
+                options
+                    .iter_mut()
+                    .find(|option| option["name"] == json!(name))
+            })
+            .expect("the option to re-mint exists");
+        option["id"] = json!(format!("{}-reminted", option["id"].as_str().unwrap()));
     }
 
     /// Change an option's display casing without changing its identity.
@@ -2548,6 +2594,8 @@ fn github_projects_board_at(
         repository_visibility: std::collections::BTreeMap::new(),
         hooks: Vec::new(),
         search_page_rows: None,
+        partial_writes: false,
+        dropping: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -2651,7 +2699,14 @@ fn github_projects_board_at(
                            "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
             } else {
-                let data = github_answer(&board, query, &variables);
+                // A document selecting the whole issue it writes is answered as its plain twin
+                // is, and then with that issue as a read of it by its own id shows it.
+                let plain = github_plain_of(query);
+                let data = github_answer(&board, plain.unwrap_or(query), &variables);
+                let data = match plain {
+                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                    None => data,
+                };
                 let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
                 if owed.is_empty() {
                     json!({ "data": data }).to_string()
@@ -2683,6 +2738,25 @@ fn github_projects_board_at(
             };
             for hook in due {
                 (hook.change)(&hooked);
+            }
+            let dropped = {
+                let mut held = board.lock().unwrap();
+                match held
+                    .dropping
+                    .iter()
+                    .position(|operation| query.contains(operation))
+                {
+                    Some(at) => {
+                        held.dropping.remove(at);
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if dropped {
+                // Applied, and never answered: the caller cannot know which.
+                drop(stream);
+                continue;
             }
             let date = board
                 .lock()
@@ -2839,6 +2913,109 @@ fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<V
                    "description":option["description"]})
         })
         .collect()
+}
+
+/// The plain document a whole-issue twin is answered as, or `None` for any other document.
+fn github_plain_of(query: &str) -> Option<&'static str> {
+    use onetaskgraph_github_projects::graphql;
+    [
+        graphql::ADD_COMMENT,
+        graphql::UPDATE_COMMENT,
+        graphql::UPDATE_ISSUE,
+        graphql::UPDATE_FIELD,
+        graphql::CLEAR_FIELD,
+    ]
+    .into_iter()
+    .find(|plain| graphql::whole_twin(plain) == Some(query))
+}
+
+impl GitHubBoard {
+    /// `data`, the answer a whole-issue twin's plain document gave, with the issue it wrote
+    /// shown as a read of that issue by its own id shows it — or, while
+    /// [`GitHubBoardFields::answer_writes_partially`] holds, only the parts of its change token.
+    fn whole(&self, query: &str, mut data: Value, variables: &Value) -> Value {
+        use onetaskgraph_github_projects::graphql;
+        let first = json!(100);
+        let (at, issue): (&str, Value) = if query == graphql::ADD_COMMENT_WHOLE {
+            (
+                "/addComment/subject",
+                variables["input"]["subjectId"].clone(),
+            )
+        } else if query == graphql::UPDATE_COMMENT_WHOLE {
+            let comment = variables["input"]["id"].clone();
+            let issue = self
+                .comments
+                .iter()
+                .find(|held| held["id"] == comment)
+                .map_or(Value::Null, |held| held["issue"].clone());
+            ("/updateIssueComment/issueComment/issue", issue)
+        } else if query == graphql::UPDATE_ISSUE_WHOLE {
+            ("/updateIssue/issue", variables["input"]["id"].clone())
+        } else {
+            let key = if query == graphql::UPDATE_FIELD_WHOLE {
+                "updateProjectV2ItemFieldValue"
+            } else {
+                "clearProjectV2ItemFieldValue"
+            };
+            let item = variables["input"]["itemId"].clone();
+            let issue = self
+                .items
+                .iter()
+                .find(|held| held["item"] == item)
+                .map_or(Value::Null, |held| held["id"].clone());
+            let at: &'static str = if key == "updateProjectV2ItemFieldValue" {
+                "/updateProjectV2ItemFieldValue/projectV2Item/content"
+            } else {
+                "/clearProjectV2ItemFieldValue/projectV2Item/content"
+            };
+            (at, issue)
+        };
+        let mut node = self.detail_node(&issue, &Value::Null, &first, true);
+        if self.partial_writes && node.is_object() {
+            let token = |key: &str| node.get(key).cloned().unwrap_or(Value::Null);
+            let mut kept = json!({
+                "__typename": token("__typename"),
+                "id": token("id"),
+                "updatedAt": token("updatedAt"),
+                "commentCount": token("commentCount"),
+                "relationshipEvents": token("relationshipEvents"),
+                "repository": token("repository"),
+                "projectItems": {"nodes": node["projectItems"]["nodes"].as_array().map(|nodes| {
+                    nodes.iter().map(|membership| json!({
+                        "id": membership["id"],
+                        "updatedAt": membership["updatedAt"],
+                        "project": membership["project"],
+                    })).collect::<Vec<_>>()
+                })},
+            });
+            for written in ["title", "body", "state"] {
+                if variables["input"].get(written).is_some()
+                    || (written == "state" && variables["input"].get("stateInput").is_some())
+                {
+                    kept[written] = token(written);
+                }
+            }
+            node = kept;
+        }
+        let Some((parent, leaf)) = at.rsplit_once('/') else {
+            return data;
+        };
+        if let Some(holder) = data.pointer_mut(parent).filter(|holder| holder.is_object()) {
+            match holder.get_mut(leaf) {
+                Some(existing) if existing.is_object() => {
+                    if let (Some(existing), Some(node)) =
+                        (existing.as_object_mut(), node.as_object())
+                    {
+                        for (key, value) in node {
+                            existing.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                _ => holder[leaf] = node,
+            }
+        }
+        data
+    }
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
@@ -3349,15 +3526,25 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         } else {
             board.options()
         };
-        let option = input["value"]["singleSelectOptionId"].as_str().map(|id| {
-            options
+        let option = match input["value"]["singleSelectOptionId"].as_str() {
+            Some(id) => match options
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|option| option["id"] == id)
-                .expect("an option this board has")["name"]
-                .clone()
-        });
+            {
+                Some(option) => Some(option["name"].clone()),
+                // An option id the field no longer has — deleted, or re-minted by a rename —
+                // is refused as GitHub refuses it, and nothing is written.
+                None => {
+                    board.owed_errors.push(format!(
+                        "The single select option Id does not belong to the field: {id}"
+                    ));
+                    return json!({ "updateProjectV2ItemFieldValue": null });
+                }
+            },
+            None => None,
+        };
         let text = input["value"]["text"].clone();
         let projected = board
             .text_fields

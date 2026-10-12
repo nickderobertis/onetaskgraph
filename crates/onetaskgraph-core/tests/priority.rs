@@ -46,6 +46,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         dry_run: false,
         comments: false,
         no_link: false,
+        expect: None,
     }
 }
 
@@ -205,6 +206,9 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
         TaskPrioritySet {
             id: id("work:T-1"),
             priority: Priority::High,
+            result: None,
+            fallback: None,
+            spent: None,
         }
     );
     assert_eq!(
@@ -212,7 +216,12 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
             .set_task_content(&id("work:T-1"), "new body\n")
             .await
             .expect("sets"),
-        TaskContentSet { id: id("work:T-1") }
+        TaskContentSet {
+            id: id("work:T-1"),
+            result: None,
+            fallback: None,
+            spent: None,
+        }
     );
     assert!(matches!(
         engine

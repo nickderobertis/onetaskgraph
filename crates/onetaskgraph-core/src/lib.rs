@@ -27,6 +27,7 @@
 ))]
 #![deny(missing_docs)]
 
+pub mod cache;
 mod clock;
 pub mod config;
 
@@ -45,16 +46,19 @@ pub mod subprocess;
 pub mod template;
 pub mod version;
 
+pub use cache::{
+    CacheCleared, CacheUse, ExpectedWrite, Served, WriteFallback, WritePart, WriteResult,
+};
 pub use clock::{
     ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,
     process_clock,
 };
-pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
+pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceCacheConfig, SourceConfig};
 pub use engine::boundary;
 pub use engine::{
-    Body, BudgetSpent, CommentCounts, CommentList, ConfiguredSource, CopyAction, CopyItems,
-    CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment,
-    Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
+    Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, ConfiguredSource, CopyAction,
+    CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia,
+    DeletedComment, Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
     DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
     LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION,
     Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified,

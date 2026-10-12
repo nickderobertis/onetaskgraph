@@ -36,6 +36,7 @@ pub(super) enum Slot {
 /// The outcome of an item the copy left unwritten because of `error`.
 pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     CopyOutcome {
+        expected: crate::cache::ExpectedWrite::default(),
         source,
         action: CopyAction::Failed {
             error: Failure::from(error),
@@ -169,6 +170,7 @@ impl Engine {
             )
         });
         Ok(Some(CopyOutcome {
+            expected: crate::cache::ExpectedWrite::default(),
             source: listed.id.clone(),
             action: CopyAction::Unchanged {
                 destination: landed,

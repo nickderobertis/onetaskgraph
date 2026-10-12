@@ -14,10 +14,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::Spent;
 use super::boundary::{Exposure, Held};
 use super::delivery::source_failed;
 use super::{Engine, EngineError};
 use crate::GlobalId;
+use crate::cache::{WriteFallback, WriteResult};
 use crate::resolve::ResolvedSource;
 
 /// What `task`, `project` and `document metadata set` answer with.
@@ -33,6 +35,18 @@ pub struct MetadataSet {
     /// Where the source reports the record to be, left out when it does not say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Location>,
+    /// What each mutation an expected write sent came to — present when the write was made
+    /// with `--expect` on a source that reports its writes' parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<WriteResult>,
+    /// That an expected write read its target first, and why — absent when it sent only its
+    /// mutations, and for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<WriteFallback>,
+    /// What an expected write spent at the sources that meter their own requests, its
+    /// fallback read included — absent for a write made without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 impl Engine {
@@ -66,7 +80,9 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        answer(source, id, key, &task.metadata, task.location)
+        let mut set = answer(source, id, key, &task.metadata, task.location)?;
+        (set.result, set.fallback, set.spent) = self.expected_parts(id);
+        Ok(set)
     }
 
     /// Set one key of one project's metadata, and nothing else about it.
@@ -183,5 +199,8 @@ fn answer(
         key: key.clone(),
         value,
         location,
+        result: None,
+        fallback: None,
+        spent: None,
     })
 }

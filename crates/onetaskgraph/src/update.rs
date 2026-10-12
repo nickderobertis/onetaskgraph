@@ -16,7 +16,7 @@ use onetaskgraph_plugin_api::{
 use crate::cli::TaskUpdateArgs;
 use crate::rendered::metadata_entry;
 use crate::template::refused;
-use crate::{delivery_exit, emit, engine, qualified, render, rendering};
+use crate::{delivery_exit, emit, expecting, qualified, render, rendering, write_failed};
 
 /// `task update`: apply the update, then write what it came to — and exit `4` when a task it
 /// delivers could not be kept in step with it.
@@ -36,10 +36,11 @@ pub(crate) async fn update_task(
              `onetaskgraph task update --help` describes each.",
         ));
     }
-    let updated = engine(loaded)
+    let engine = expecting(loaded, &id, &args.expect)?;
+    let updated = engine
         .update_task(&id, &update)
         .await
-        .map_err(|error| Failure::from(&error))?;
+        .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &updated, render::task_updated, "the update")?;
     emit(out, rendered.trim_end(), "the update")?;
     Ok(delivery_exit(&updated.delivered))
