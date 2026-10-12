@@ -2649,6 +2649,39 @@ fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the
     }
 }
 
+#[test]
+fn a_response_carrying_its_token_but_only_a_first_page_of_one_connection_is_not_taken_whole() {
+    for connection in ["/labels", "/comments", "/projectItems/nodes/0/fieldValues"] {
+        let cached = Cached::new();
+        let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        let v = version_of(&first);
+        cached.board.truncate_in_writes(&[connection]);
+        let (written, _) = cached.ok(&[
+            "task",
+            "priority",
+            "set",
+            "board:T-3",
+            "high",
+            "--expect",
+            &v,
+            "--json",
+        ]);
+        let v2 = written_version(&written);
+        cached.board.truncate_in_writes(&[]);
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
+        assert_eq!(
+            sent,
+            [ONE_READ],
+            "with {connection} going on, the entry is not served at {v2}"
+        );
+        assert_eq!(served_by(&shown), from_remote());
+        assert_eq!(
+            shown["items"][0]["item"]["priority"], "high",
+            "{connection}"
+        );
+    }
+}
+
 /// When the loopback's issue `T-3` was created, in the spelling a task's JSON reports it.
 const CREATED_AT: &str = "2026-01-02T03:04:05Z";
 

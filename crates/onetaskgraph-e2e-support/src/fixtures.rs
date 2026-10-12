@@ -1154,6 +1154,8 @@ struct GitHubBoard {
     refusing_stale: Vec<&'static str>,
     /// Members of the issue a whole-issue document's answer leaves out.
     omitting: Vec<&'static str>,
+    /// Connections of the issue, by pointer, a whole-issue document's answer says go on.
+    truncating: Vec<&'static str>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1416,6 +1418,13 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn omit_from_writes(&self, members: &[&'static str]) {
         self.board.lock().unwrap().omitting = members.to_vec();
+    }
+
+    /// Answer every whole-issue document with each connection `connections` points at —
+    /// `/labels`, `/comments`, `/projectItems/nodes/0/fieldValues` — saying it has another
+    /// page, as a response holding only the first page of a longer one would.
+    pub fn truncate_in_writes(&self, connections: &[&'static str]) {
+        self.board.lock().unwrap().truncating = connections.to_vec();
     }
 
     /// Refuse the next request carrying `operation` as GitHub refuses one naming a node id that
@@ -2626,6 +2635,7 @@ fn github_projects_board_at(
         dropping: Vec::new(),
         refusing_stale: Vec::new(),
         omitting: Vec::new(),
+        truncating: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -3043,6 +3053,11 @@ impl GitHubBoard {
         if let Some(members) = node.as_object_mut() {
             for member in &self.omitting {
                 members.remove(*member);
+            }
+        }
+        for connection in &self.truncating {
+            if let Some(info) = node.pointer_mut(&format!("{connection}/pageInfo")) {
+                info["hasNextPage"] = json!(true);
             }
         }
         let Some((parent, leaf)) = at.rsplit_once('/') else {
