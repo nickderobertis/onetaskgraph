@@ -2,7 +2,8 @@
 # SPIKE (serde-yaml-replacement, not for landing): the one command that runs the differential
 # harness and prints every difference between serde_norway and serde-saphyr, by document kind.
 #
-#   spikes/saphyr-diff/run.sh            # the harness over real documents and synthetic cases
+#   spikes/saphyr-diff/run.sh            # the harness over real documents and synthetic cases,
+#                                        # once per serde-saphyr option profile (default, compat)
 #   spikes/saphyr-diff/run.sh --journeys # and the byte-for-byte suites on a serde-saphyr build
 #   spikes/saphyr-diff/run.sh --deny     # and cargo-deny / cargo-tree over the candidates
 #
@@ -33,10 +34,16 @@ printf 'inputs: %s configurations, %s templates, %s answers files (unique by con
   "$(wc -l <"$scratch/configs.txt")" "$(wc -l <"$scratch/templates.txt")" "$(wc -l <"$scratch/answers.txt")" "$store"
 
 cd "$repo"
-cargo run -q --release -p saphyr-diff -- \
-  --store "$store" --scratch "$scratch/work" --out "$out" \
-  --configs "$scratch/configs.txt" --templates "$scratch/templates.txt" --answers "$scratch/answers.txt"
-echo "report: $out/report.txt, $out/diffs.json"
+# Every profile: `default` is serde-saphyr as it ships; `compat` sets the options that
+# reproduce today's behaviour where an option can (src/main.rs names each and why).
+cargo build -q --release -p saphyr-diff
+for profile in ${SAPHYR_DIFF_PROFILES:-default compat}; do
+  mkdir -p "$out/$profile"
+  "$repo/target/release/saphyr-diff" --profile "$profile" \
+    --store "$store" --scratch "$scratch/work-$profile" --out "$out/$profile" \
+    --configs "$scratch/configs.txt" --templates "$scratch/templates.txt" --answers "$scratch/answers.txt"
+  echo "report ($profile): $out/$profile/report.txt, $out/$profile/diffs.json"
+done
 
 for flag in "$@"; do
   case "$flag" in

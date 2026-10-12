@@ -18,7 +18,7 @@ default = []
 github-projects = ["dep:onetaskgraph-github-projects"]
 linear = ["dep:onetaskgraph-linear"]
 # SPIKE (serde-yaml-replacement): route YAML through `yaml_backend`'s switch.
-yaml-spike = ["dep:serde-saphyr"]
+yaml-spike = ["dep:serde-saphyr", "onetaskgraph-local-md/yaml-spike"]
 
 # The engine may depend on every plugin; no plugin may depend back. Registering a new
 # plugin here is what lets a configuration name it.

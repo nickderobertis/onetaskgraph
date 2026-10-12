@@ -55,6 +55,60 @@ fn both<T>(mut f: impl FnMut() -> T) -> (T, T) {
     (before, after)
 }
 
+/// Which serde-saphyr options the candidate runs with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    /// `Options::default()` and `SerializerOptions::default()`.
+    Default,
+    /// The options that reproduce today's behaviour where an option can: see [`compat_de`]
+    /// and [`compat_ser`].
+    Compat,
+}
+
+/// Deserializer options chosen to reproduce `serde_norway` where an option can.
+fn compat_de() -> serde_saphyr::Options {
+    serde_saphyr::options! {
+        // `yes`/`no`/`on`/`off`/`y`/`n` stay strings, as YAML 1.2 and serde_norway read them.
+        strict_booleans: true,
+        // `<<` is an ordinary key, as serde_norway reads it.
+        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+        // A repeated key: the later value, as serde_norway gives a map or a `serde_json::Value`.
+        duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
+        // The error alone, one line, as serde_norway's — no source snippet.
+        with_snippet: false,
+    }
+}
+
+/// Serializer options chosen to reproduce `serde_norway` where an option can.
+fn compat_ser() -> serde_saphyr::SerializerOptions {
+    serde_saphyr::ser_options! {
+        // Never fold a long single-line string into `>-`, as serde_norway never does.
+        folded_wrap_chars: usize::MAX,
+    }
+}
+
+fn saphyr_options(profile: Profile) -> serde_saphyr::Options {
+    match profile {
+        Profile::Default => serde_saphyr::Options::default(),
+        Profile::Compat => compat_de(),
+    }
+}
+
+fn apply(profile: Profile) {
+    use onetaskgraph_core::yaml_backend as core;
+    use onetaskgraph_local_md::yaml_backend as md;
+    match profile {
+        Profile::Default => {
+            core::saphyr_options(None, None);
+            md::saphyr_options(None, None);
+        }
+        Profile::Compat => {
+            core::saphyr_options(Some(compat_de), Some(compat_ser));
+            md::saphyr_options(Some(compat_de), Some(compat_ser));
+        }
+    }
+}
+
 struct NoSecrets;
 impl SecretResolver for NoSecrets {
     fn get(&self, _var: &str) -> Option<SecretString> {
@@ -63,6 +117,7 @@ impl SecretResolver for NoSecrets {
 }
 
 struct Args {
+    profile: Profile,
     store: PathBuf,
     scratch: PathBuf,
     configs: Vec<PathBuf>,
@@ -94,6 +149,11 @@ fn args() -> Args {
             .unwrap_or_else(|| panic!("--{k} is required"))
     };
     Args {
+        profile: match found.get("profile").map_or("default", String::as_str) {
+            "default" => Profile::Default,
+            "compat" => Profile::Compat,
+            other => panic!("--profile {other}: use default or compat"),
+        },
         store: get("store").into(),
         scratch: get("scratch").into(),
         configs: list(&get("configs")),
@@ -225,6 +285,7 @@ fn matter_of(source: &str) -> Option<String> {
 }
 
 fn front_matter(args: &Args) -> Kind {
+    let options = || saphyr_options(args.profile);
     let mut kind = Kind::new(
         "template front matter (template/front_matter.rs — schema-less walk over serde_norway::Value today)",
     );
@@ -251,13 +312,13 @@ fn front_matter(args: &Args) -> Kind {
         let candidates: [(&str, Result<Vec<String>, String>); 3] = [
             (
                 "serde_json::Value (no preserve_order)",
-                serde_saphyr::from_str::<Value>(matter)
+                serde_saphyr::from_str_with_options::<Value>(matter, options())
                     .map(|v| trees::project_json(&v))
                     .map_err(|e| e.to_string()),
             ),
             (
                 "serde_json::Value + preserve_order",
-                serde_saphyr::from_str::<trees::Ordered>(matter)
+                serde_saphyr::from_str_with_options::<trees::Ordered>(matter, options())
                     .map(|v| trees::project_ordered(&v))
                     .map_err(|e| e.to_string()),
             ),
@@ -753,11 +814,12 @@ async fn splices(args: &Args, reads: &[Read]) -> Kind {
     scalars.dedup();
     for (text, class) in scalars {
         kind.count(&format!("{class} rendered as a scalar"));
-        let (a, b) = both(|| {
-            onetaskgraph_local_md::yaml_backend::to_string(text.as_str())
-                .map(|s| s.trim_end().to_owned())
-                .map_err(|e| e.to_string())
+        let (whole_a, whole_b) = both(|| {
+            onetaskgraph_local_md::yaml_backend::to_string(text.as_str()).map_err(|e| e.to_string())
         });
+        // What the splice writes: the rendering less its trailing line break.
+        let trim = |r: &Result<String, String>| r.clone().map(|s| s.trim_end().to_owned());
+        let (a, b) = (trim(&whole_a), trim(&whole_b));
         if a != b {
             kind.diff(
                 format!("{class}: {text:?}"),
@@ -767,22 +829,19 @@ async fn splices(args: &Args, reads: &[Read]) -> Kind {
                 shown(&b),
             );
         }
-        // Whatever each wrote has to read back as the text, through the other crate too.
-        if let Ok(written) = &b {
+        // What saphyr wrote, whole, has to read back as the text through either crate.
+        if let Ok(written) = &whole_b {
             let (back_a, back_b) = both(|| {
-                onetaskgraph_local_md::yaml_backend::from_str::<BTreeMap<String, Value>>(&format!(
-                    "title: {written}"
-                ))
-                .map(|m| m.get("title").cloned())
-                .map_err(|e| e.to_string())
+                onetaskgraph_local_md::yaml_backend::from_str::<Value>(written)
+                    .map_err(|e| e.to_string())
             });
-            let want = Ok(Some(Value::String(text.clone())));
+            let want = Ok(Value::String(text.clone()));
             if back_a != want || back_b != want {
                 kind.diff(
                     format!("{class}: {text:?}"),
                     "round trip of saphyr's scalar",
                     "saphyr's scalar does not read back as the text",
-                    format!("norway reads {back_a:?}"),
+                    format!("saphyr wrote {written:?}; norway reads {back_a:?}"),
                     format!("saphyr reads {back_b:?}"),
                 );
             }
@@ -989,7 +1048,8 @@ fn timing(args: &Args) -> String {
         let _: serde_norway::Value = serde_norway::from_str(&doc).expect("parses");
     });
     let saphyr_value = time(&|| {
-        let _: Value = serde_saphyr::from_str(&doc).expect("parses");
+        let _: Value = serde_saphyr::from_str_with_options(&doc, saphyr_options(args.profile))
+            .expect("parses");
     });
     let saphyr_tree = time(&|| {
         let _ = <saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(&doc).expect("parses");
@@ -1009,6 +1069,7 @@ fn timing(args: &Args) -> String {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = args();
+    apply(args.profile);
     fs::create_dir_all(&args.scratch).expect("scratch");
     fs::create_dir_all(&args.out).expect("out");
     // The store is read through a copy: nothing the plugin does touches the real one.
@@ -1034,8 +1095,15 @@ async fn main() {
 
     let mut out = String::new();
     out.push_str(&format!(
-        "saphyr-diff: serde_norway {} vs serde-saphyr {} (saphyr {} for the node tree), default options\n",
-        "0.9.42", "1.3.0", "0.2.1"
+        "saphyr-diff: serde_norway {} vs serde-saphyr {} (saphyr {} for the node tree), profile {:?}{}\n",
+        "0.9.42",
+        "1.3.0",
+        "0.2.1",
+        args.profile,
+        match args.profile {
+            Profile::Default => " — Options::default(), SerializerOptions::default()".to_owned(),
+            Profile::Compat => " — Options { strict_booleans: true, merge_keys: AsOrdinary, duplicate_keys: LastWins, with_snippet: false }, SerializerOptions { folded_wrap_chars: usize::MAX }".to_owned(),
+        }
     ));
     for kind in &kinds {
         out.push_str(&kind.render());
